@@ -81,15 +81,19 @@ There are no `apps/`, `packages/`, `services/`, `infrastructure/`, `agents/`, `c
 
 ## Technology stack
 
-The Master Playbook documents technology directions, but no technology has been ADR-approved or implemented in this repository. Documented directions must not be treated as implementation decisions.
+The Master Playbook defines technologies at different authority levels. No technology is implemented in this repository, and no approved ADR record was discovered. The absence of an ADR does not make an explicit Master Playbook requirement optional: ADRs govern genuinely open decisions and approved architecture changes; they must not silently downgrade or override an explicit Playbook requirement.
 
 | Status | Discovery result |
 |---|---|
-| Documented / recommended | LangGraph for AI workflow orchestration; CCXT behind an exchange abstraction; PostgreSQL as an initial relational system-of-record direction; Next.js, React, and TypeScript as potential frontend technologies; and an event broker or Redis evaluated by workload. Docker and infrastructure-as-code are documented future infrastructure concerns. |
+| Explicit target / intended technology | LangGraph for AI workflow orchestration. |
+| Explicit implementation direction with boundary | CCXT or the approved exchange abstraction is the exchange-integration direction. CCXT must remain behind the abstraction; raw CCXT calls must not be spread throughout the platform. |
+| Recommended initial direction | PostgreSQL is the initial relational system-of-record direction. The detailed relational/time-series persistence topology remains subject to governance. |
+| Potential technology | Next.js, React, and TypeScript are potential frontend technologies where the Playbook labels them as potential. |
+| Open architectural decisions | Event-streaming product, detailed persistence topology, production data vendors, authentication provider, deployment/cloud topology, secrets manager, production LLM/provider mix, and the other items in `docs/cross-cutting/14-open-decisions.md` require governance when a decision is necessary. |
 | ADR-approved | None. No approved ADR record or ADR directory was discovered. |
 | Implemented | None. No application dependency manifest, application source, infrastructure definition, container configuration, or runtime integration exists. |
 
-Four PowerShell governance scripts exist: `setup-branch-rulesets.ps1` and `docs/copilot-team/03-github-workflow/scripts/{apply-issue-labels,create-issues,create-labels}.ps1`. They do not constitute platform implementation. Technology decisions including persistence topology, event streaming, data providers, exchange scope, authentication, hosting, and secrets management remain open where not determined by the documented directions.
+Four PowerShell governance scripts exist: `setup-branch-rulesets.ps1` and `docs/copilot-team/03-github-workflow/scripts/{apply-issue-labels,create-issues,create-labels}.ps1`. They do not constitute platform implementation.
 
 ## Existing modules
 
