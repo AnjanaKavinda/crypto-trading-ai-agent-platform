@@ -149,7 +149,7 @@ The following governance conflicts have **not** been resolved silently:
 
 1. **ADRs versus cross-cutting controls.** `README.md` and `AGENTS.md` rank `docs/cross-cutting/**` above approved ADRs. `docs/audit/COMPLETENESS-AUDIT.md` ranks approved ADRs above cross-cutting artifacts. This becomes material when an ADR and a cross-cutting control differ.
 2. **Intra-playbook source order.** `docs/playbook/START-HERE.md` places the Copilot bootstrap before relevant split Chat files and reserves the complete master for cross-checking. `docs/audit/COMPLETENESS-AUDIT.md` places the complete master ahead of split Chats and does not include the bootstrap. This can produce inconsistent resolution of a bootstrap/master/Chat discrepancy.
-3. **Stale cross-cutting path.** `docs/audit/COMPLETENESS-AUDIT.md` refers to `02-cross-cutting/**`, while the validated repository path is `docs/cross-cutting/**`.
+3. **Incorrect cross-cutting path.** `docs/audit/COMPLETENESS-AUDIT.md` refers to `02-cross-cutting/**`, while the validated repository path is `docs/cross-cutting/**`.
 
 **Affected components:** all future implementation tasks that depend on an ADR, a cross-cutting artifact, the bootstrap, a split Chat, or the complete master to resolve a difference.
 
