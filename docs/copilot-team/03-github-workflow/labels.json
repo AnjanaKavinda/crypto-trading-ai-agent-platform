@@ -1,130 +1,162 @@
 [
   {
     "name": "agent:architect",
-    "color": "ededed"
+    "color": "5319E7",
+    "description": "Platform Architect agent"
   },
   {
     "name": "agent:backend-foundation",
-    "color": "ededed"
+    "color": "1D76DB",
+    "description": "Backend/Foundation agent"
   },
   {
     "name": "agent:trading-intelligence",
-    "color": "ededed"
+    "color": "0E8A16",
+    "description": "Trading Intelligence agent"
   },
   {
     "name": "agent:qa-security-review",
-    "color": "ededed"
+    "color": "B60205",
+    "description": "QA/Security/Review agent"
   },
   {
     "name": "phase:governance",
-    "color": "ededed"
+    "color": "6F42C1",
+    "description": "Governance, discovery, ADRs, readiness"
   },
   {
     "name": "phase:foundation",
-    "color": "ededed"
+    "color": "0366D6",
+    "description": "Repository/backend/platform foundation"
   },
   {
     "name": "phase:contracts",
-    "color": "ededed"
+    "color": "0052CC",
+    "description": "Contracts, schemas, interfaces"
   },
   {
     "name": "phase:data",
-    "color": "ededed"
+    "color": "1B7C9C",
+    "description": "Market and alternative data"
   },
   {
     "name": "phase:analysis",
-    "color": "ededed"
+    "color": "2EA44F",
+    "description": "Analytical intelligence"
   },
   {
     "name": "phase:orchestration",
-    "color": "ededed"
+    "color": "008672",
+    "description": "Agent orchestration and handoffs"
   },
   {
     "name": "phase:strategy",
-    "color": "ededed"
+    "color": "FBCA04",
+    "description": "Strategy, signals, evidence, NO_TRADE"
   },
   {
     "name": "phase:validation",
-    "color": "ededed"
+    "color": "F9D0C4",
+    "description": "Backtesting and quantitative validation"
   },
   {
     "name": "phase:risk",
-    "color": "ededed"
+    "color": "D93F0B",
+    "description": "Risk and portfolio management"
   },
   {
     "name": "phase:approval-execution",
-    "color": "ededed"
+    "color": "B60205",
+    "description": "Approval and execution"
   },
   {
     "name": "phase:safety",
-    "color": "ededed"
+    "color": "D73A4A",
+    "description": "Safety, security, audit, recovery"
   },
   {
     "name": "phase:frontend",
-    "color": "ededed"
+    "color": "A2EEEF",
+    "description": "Frontend and trader UX"
   },
   {
     "name": "phase:learning",
-    "color": "ededed"
+    "color": "7057FF",
+    "description": "Adaptive intelligence and learning"
   },
   {
     "name": "phase:testing-ops",
-    "color": "ededed"
+    "color": "000000",
+    "description": "Testing, operations, readiness"
   },
   {
     "name": "risk:low",
-    "color": "ededed"
+    "color": "C2E0C6",
+    "description": "Low risk"
   },
   {
     "name": "risk:medium",
-    "color": "ededed"
+    "color": "FBCA04",
+    "description": "Medium risk"
   },
   {
     "name": "risk:high",
-    "color": "ededed"
+    "color": "D93F0B",
+    "description": "High risk"
   },
   {
     "name": "risk:blocked-live-trading",
-    "color": "ededed"
+    "color": "B60205",
+    "description": "Live trading must remain blocked"
   },
   {
     "name": "type:docs",
-    "color": "ededed"
+    "color": "0075CA",
+    "description": "Documentation"
   },
   {
     "name": "type:architecture",
-    "color": "ededed"
+    "color": "5319E7",
+    "description": "Architecture or ADR"
   },
   {
     "name": "type:contract",
-    "color": "ededed"
+    "color": "0052CC",
+    "description": "Contract or schema"
   },
   {
     "name": "type:backend",
-    "color": "ededed"
+    "color": "1D76DB",
+    "description": "Backend/platform"
   },
   {
     "name": "type:analysis",
-    "color": "ededed"
+    "color": "2EA44F",
+    "description": "Trading intelligence/analysis"
   },
   {
     "name": "type:test",
-    "color": "ededed"
+    "color": "BFDADC",
+    "description": "Testing/validation"
   },
   {
     "name": "type:security",
-    "color": "ededed"
+    "color": "B60205",
+    "description": "Security/safety"
   },
   {
     "name": "type:ci",
-    "color": "ededed"
+    "color": "0E8A16",
+    "description": "CI/CD automation"
   },
   {
     "name": "type:frontend",
-    "color": "ededed"
+    "color": "A2EEEF",
+    "description": "Frontend/UX"
   },
   {
     "name": "type:learning",
-    "color": "ededed"
+    "color": "7057FF",
+    "description": "Learning/adaptive intelligence"
   }
 ]
