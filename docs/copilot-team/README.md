@@ -1,33 +1,16 @@
-# Copilot 4-Agent Startup Instructions v1.0
+# Copilot Team v2.2 — Documentation Index
 
-This package gives you a controlled way to start the **Enterprise-Grade Supervised Autonomous Crypto Trading Platform** using **4 GitHub Copilot agents**.
+Use this folder as the human-readable operating manual for the four-agent GitHub Copilot development team.
 
-It is designed to work with your **Master Playbook v2.2** and the Copilot-ready Markdown package.
+1. `00-start-here/` — startup order and pre-implementation checks.
+2. `01-setup/` — repository, Copilot, custom-agent and environment setup.
+3. `02-agents/` — four-agent operating model and role definitions.
+4. `03-github-workflow/` — branching, PR, handoff, merge rules, labels and scripts.
+5. `04-issues/` — authoritative 183-issue backlog, execution order and dependencies.
+6. `05-prompts/` — bootstrap and per-agent task/review prompts.
+7. `06-safety/` — non-negotiable safety, live-trading, secrets and high-risk policies.
+8. `07-roadmap/` — roadmap, milestones and phase gates.
+9. `08-checklists/` — architecture, security, PR, foundation and readiness checklists.
+10. `09-templates/` — ADR, issue, PR, review and risk-acceptance templates.
 
-## Goal
-
-Start the project safely with four controlled development roles:
-
-1. Architect Agent
-2. Backend/Foundation Agent
-3. AI-Trading Intelligence Agent
-4. QA/Security/Review Agent
-
-The purpose is not to create an uncontrolled AI coding swarm. The purpose is to run a supervised software-development workflow where every Copilot task is small, reviewed, tested, and aligned with the playbook.
-
-## How to use this package
-
-1. Create a new GitHub repository.
-2. Copy your Master Playbook v2.2 package into the repository.
-3. Copy the files from this instruction package into the same repository.
-4. Create the recommended GitHub labels.
-5. Create Issues 001–008 first.
-6. Assign only one narrow issue at a time to Copilot.
-7. Review every pull request manually.
-8. Do not implement live trading until all safety, risk, approval, audit, paper trading, and governance prerequisites are complete.
-
-## Important warning
-
-Do not ask Copilot to “build the full system.” That will cause scope drift.
-
-Instead, use issues, branches, PRs, tests, and manual review.
+Repository-executable Copilot configuration is intentionally separate under the package's `repository-root/` directory. Install it at the actual Git repository root.

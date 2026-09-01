@@ -1,0 +1,2 @@
+# Live Trading Gates
+Live trading is disabled until later readiness governance approves it. At minimum require validated data/signal/evidence/quant validation, deterministic risk, authenticated exact-parameter human approval, final validation, safety/readiness checks, order idempotency, audit, and reconciliation. Unknown account/exchange/order state cannot trigger blind retry. Testnet/paper readiness does not equal live readiness.

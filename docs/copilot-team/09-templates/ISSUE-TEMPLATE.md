@@ -1,39 +1,39 @@
-# Issue Template
+---
+name: Agent Task
+description: Controlled task for one Copilot development agent
+title: ""
+labels: []
+assignees: []
+---
+# Objective
 
-## Agent
+# Primary agent
+- [ ] Platform Architect
+- [ ] Backend/Foundation Engineer
+- [ ] Trading Intelligence Engineer
+- [ ] QA/Security/Review Agent
 
-Architect | Backend/Foundation | AI-Trading Intelligence | QA/Security/Review
+# Required reading
+- `.github/copilot-instructions.md`
+- `AGENTS.md`
+- Relevant `docs/playbook/**`
+- Relevant `docs/cross-cutting/**`
+- Approved ADRs/contracts
 
-## Objective
+# Dependencies
 
-State one clear outcome.
+# In scope
 
-## Required reading
+# Out of scope
 
-- .github/copilot-instructions.md
-- AGENTS.md
-- docs/master-playbook/**
-- relevant contracts
+# Acceptance criteria
+- [ ] Scope complete
+- [ ] Contracts/boundaries preserved
+- [ ] Tests/validation complete
+- [ ] Security/safety/failure behavior addressed
+- [ ] Docs/ADR/version/traceability updated where needed
+- [ ] Risks/deferred work recorded
+- [ ] No secrets/unrelated changes
 
-## Tasks
-
-1.
-2.
-3.
-
-## Constraints
-
-- No live trading unless explicitly authorized.
-- No real credentials.
-- No fabricated performance data.
-- No architecture changes without ADR.
-
-## Acceptance criteria
-
-- [ ]
-- [ ]
-- [ ]
-
-## Deliverables
-
-List files to create/update.
+# Safety invariants
+No approval = no live execution. Deterministic risk remains authoritative. AI output is untrusted until validated. NO_TRADE is valid. Learning cannot directly change production execution/risk.

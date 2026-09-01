@@ -1,0 +1,99 @@
+{
+  "source_docx": "Enterprise-Grade-Supervised-Autonomous-Crypto-Trading-Platform-Master-Playbook-v2.2.docx",
+  "source_docx_sha256": "41f87926304d7ac77b02ed15d7781f5b842617fc236a3e82f598b1fa22b233c3",
+  "complete_markdown_sha256": "91fe6d8580e53ed70285edca25f8f9ea85a73e07bac424c278f86b12e9f7339e",
+  "complete_markdown_lines": 52240,
+  "chat_files": [
+    {
+      "file": "01-specification/01-chat-1-product-requirements-system-constitution.md",
+      "source_start_line": 3199,
+      "source_end_line": 5750,
+      "lines": 2552,
+      "bytes": 33848
+    },
+    {
+      "file": "01-specification/02-chat-2-enterprise-system-architecture.md",
+      "source_start_line": 5751,
+      "source_end_line": 8794,
+      "lines": 3044,
+      "bytes": 37545
+    },
+    {
+      "file": "01-specification/03-chat-3-multi-ai-agent-trading-intelligence.md",
+      "source_start_line": 8795,
+      "source_end_line": 12311,
+      "lines": 3517,
+      "bytes": 41648
+    },
+    {
+      "file": "01-specification/04-chat-4-market-data-data-engineering.md",
+      "source_start_line": 12312,
+      "source_end_line": 15711,
+      "lines": 3400,
+      "bytes": 38125
+    },
+    {
+      "file": "01-specification/05-chat-5-analysis-meta-analysis-engine.md",
+      "source_start_line": 15712,
+      "source_end_line": 18625,
+      "lines": 2914,
+      "bytes": 42053
+    },
+    {
+      "file": "01-specification/06-chat-6-strategy-signal-evidence-qualification.md",
+      "source_start_line": 18626,
+      "source_end_line": 21435,
+      "lines": 2810,
+      "bytes": 39487
+    },
+    {
+      "file": "01-specification/07-chat-7-quant-validation-anti-overfitting.md",
+      "source_start_line": 21436,
+      "source_end_line": 24457,
+      "lines": 3022,
+      "bytes": 42469
+    },
+    {
+      "file": "01-specification/08-chat-8-risk-portfolio-position-sizing.md",
+      "source_start_line": 24458,
+      "source_end_line": 27275,
+      "lines": 2818,
+      "bytes": 40358
+    },
+    {
+      "file": "01-specification/09-chat-9-human-approval-execution-exchanges.md",
+      "source_start_line": 27276,
+      "source_end_line": 30579,
+      "lines": 3304,
+      "bytes": 45256
+    },
+    {
+      "file": "01-specification/10-chat-10-safety-security-observability-recovery.md",
+      "source_start_line": 30580,
+      "source_end_line": 34287,
+      "lines": 3708,
+      "bytes": 52890
+    },
+    {
+      "file": "01-specification/11-chat-11-frontend-dashboard-trader-ux.md",
+      "source_start_line": 34288,
+      "source_end_line": 38411,
+      "lines": 4124,
+      "bytes": 54832
+    },
+    {
+      "file": "01-specification/12-chat-12-implementation-roadmap-copilot-protocol.md",
+      "source_start_line": 38412,
+      "source_end_line": 42957,
+      "lines": 4546,
+      "bytes": 63051
+    },
+    {
+      "file": "01-specification/13-chat-13-adaptive-intelligence-learning.md",
+      "source_start_line": 42958,
+      "source_end_line": 52240,
+      "lines": 9283,
+      "bytes": 126669
+    }
+  ]
+}

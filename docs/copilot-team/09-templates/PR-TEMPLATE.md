@@ -1,49 +1,33 @@
-# Pull Request Template
+# Pull Request
 
-## Linked issue
+## Issue
 
-Closes #
+## Agent
 
-## Agent role
+## Objective / Why
 
-Architect | Backend/Foundation | AI-Trading Intelligence | QA/Security/Review
+## Relevant playbook / contracts / ADRs
 
-## Summary
-
-What changed?
-
-## Why
-
-Why was this needed?
+## What changed
 
 ## Files changed
 
-- 
+## Architecture impact
 
-## Playbook / contract references
+## Security / safety / risk impact
 
-- 
+## Tests and validation
 
-## Tests
+## Failure behavior
 
-- [ ] Unit tests
-- [ ] Integration tests
-- [ ] Contract tests
-- [ ] CI passes
+## Known risks / limitations
 
-## Safety / security review
+## Intentionally deferred
 
-- [ ] No live trading added
-- [ ] No real credentials added
-- [ ] No LLM-to-exchange execution path added
-- [ ] Human approval not bypassed
-- [ ] Risk validation not bypassed
-- [ ] No fabricated performance data
-
-## Intentionally not implemented
-
-State what this PR does not do.
-
-## Risks / remaining work
-
--
+## Acceptance criteria
+- [ ] Issue scope satisfied
+- [ ] Contracts/boundaries preserved
+- [ ] Tests pass
+- [ ] No secrets/unrelated changes
+- [ ] Documentation/traceability updated as needed
+- [ ] High-risk changes received required human review
