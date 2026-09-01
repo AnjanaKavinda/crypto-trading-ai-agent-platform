@@ -81,7 +81,15 @@ There are no `apps/`, `packages/`, `services/`, `infrastructure/`, `agents/`, `c
 
 ## Technology stack
 
-No application technology stack has been selected or implemented. The only executable repository artifact discovered is the repository-administration script `setup-branch-rulesets.ps1`; it does not constitute platform implementation. Technology choices remain open decisions, including persistence, event streaming, data providers, exchange scope, authentication, hosting, and secrets management.
+The Master Playbook documents technology directions, but no technology has been ADR-approved or implemented in this repository. Documented directions must not be treated as implementation decisions.
+
+| Status | Discovery result |
+|---|---|
+| Documented / recommended | LangGraph for AI workflow orchestration; CCXT behind an exchange abstraction; PostgreSQL as an initial relational system-of-record direction; Next.js, React, and TypeScript as potential frontend technologies; and an event broker or Redis evaluated by workload. Docker and infrastructure-as-code are documented future infrastructure concerns. |
+| ADR-approved | None. No approved ADR record or ADR directory was discovered. |
+| Implemented | None. No application dependency manifest, application source, infrastructure definition, container configuration, or runtime integration exists. |
+
+Four PowerShell governance scripts exist: `setup-branch-rulesets.ps1` and `docs/copilot-team/03-github-workflow/scripts/{apply-issue-labels,create-issues,create-labels}.ps1`. They do not constitute platform implementation. Technology decisions including persistence topology, event streaming, data providers, exchange scope, authentication, hosting, and secrets management remain open where not determined by the documented directions.
 
 ## Existing modules
 
@@ -89,7 +97,9 @@ None. Application implementation has not started.
 
 ## Existing agents
 
-No runtime agents are implemented. Runtime-agent responsibilities are specified in the cross-cutting responsibility matrix only.
+`.github/agents/**` contains four development-agent profiles: Platform Architect, Backend/Foundation Engineer, Trading Intelligence Engineer, and QA/Security/Review Agent. These profiles govern Copilot development work and are distinct from runtime trading agents.
+
+No root/runtime `agents/**` implementation exists. Runtime-agent responsibilities are specified in the cross-cutting responsibility matrix only.
 
 ## Existing orchestration
 
@@ -159,6 +169,10 @@ The following governance conflicts have **not** been resolved silently:
 
 No conflict was found with the core safety invariants: live trading remains disabled; approval and deterministic-risk gates remain required; AI has no direct execution authority; and `NO_TRADE` remains valid.
 
+## Required governance action
+
+Before any task relies on a disputed source order, the human architecture owner must approve a canonical precedence order for the Master Playbook upgrade layer, bootstrap, complete master, split Chat files, cross-cutting artifacts, and approved ADRs. The approved order and the `02-cross-cutting/**` path correction must then be recorded in a separate governance change. Issue 001 intentionally records this required action without deciding it.
+
 ## Failure behavior
 
 This discovery task creates no runtime critical path. For future implementation, `docs/cross-cutting/11-failure-recovery-matrix.md` is the governing failure behavior: missing/stale data results in `NO_TRADE`; unavailable risk, uncertain/expired approval, or unavailable exchange before an order results in no execution; and an uncertain exchange response is `UNKNOWN` and must be reconciled rather than blindly retried.
@@ -169,18 +183,19 @@ For governance, an unresolved material authoritative-source conflict must stop i
 
 Follow the existing dependency-led sequence:
 
-1. Resolve the documented authoritative-source precedence conflicts.
-2. Complete specification-readiness and ADR-foundation work.
-3. Establish requirements traceability and contract governance.
-4. Materialize approved domain/event contracts and test/CI foundations.
-5. Add configuration/environment isolation and audit/event infrastructure.
-6. Proceed to research-mode market-data and data-quality foundations.
+1. Complete **Backlog Issue 002 — Specification completeness and non-loss audit**, which depends on Issue 001.
+2. Resolve the documented authoritative-source precedence conflicts through the required governance action before a task relies on them.
+3. Complete ADR-foundation work.
+4. Establish requirements traceability and contract governance.
+5. Materialize approved domain/event contracts and test/CI foundations.
+6. Add configuration/environment isolation and audit/event infrastructure.
+7. Proceed to research-mode market-data and data-quality foundations.
 
 Do not advance to risk, approval, exchange abstraction, paper execution, testnet, or live capability outside their approved dependency and release gates.
 
 ## First implementation slice
 
-The next slice must be the backlog-approved specification-readiness/ADR-foundation work after human review of this report and the documented precedence ambiguity. It must remain documentation/governance-only unless the approved issue explicitly authorizes a bounded implementation foundation.
+The next slice is **Backlog Issue 002 — Specification completeness and non-loss audit**. It depends on Issue 001 and remains documentation/governance-only. It must map original features to the full-source Markdown and identify unresolved extraction or formatting anomalies without making application, architecture, contract, or Master Playbook changes.
 
 ## Validation evidence
 
@@ -197,7 +212,7 @@ No executable behavior, secrets, credentials, contracts, risk rules, approval ru
 
 ## Deferred work
 
-- Human resolution of the intra-playbook precedence ambiguity.
+- Human completion of the required governance action for authoritative-source precedence.
 - ADR foundation and all open architectural decisions.
 - Application, test, CI, security, observability, and audit implementation.
 - Any research, paper, testnet, or live trading capability.
