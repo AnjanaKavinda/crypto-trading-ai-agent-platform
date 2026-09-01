@@ -1,0 +1,130 @@
+[
+  {
+    "name": "agent:architect",
+    "color": "ededed"
+  },
+  {
+    "name": "agent:backend-foundation",
+    "color": "ededed"
+  },
+  {
+    "name": "agent:trading-intelligence",
+    "color": "ededed"
+  },
+  {
+    "name": "agent:qa-security-review",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:governance",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:foundation",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:contracts",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:data",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:analysis",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:orchestration",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:strategy",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:validation",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:risk",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:approval-execution",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:safety",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:frontend",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:learning",
+    "color": "ededed"
+  },
+  {
+    "name": "phase:testing-ops",
+    "color": "ededed"
+  },
+  {
+    "name": "risk:low",
+    "color": "ededed"
+  },
+  {
+    "name": "risk:medium",
+    "color": "ededed"
+  },
+  {
+    "name": "risk:high",
+    "color": "ededed"
+  },
+  {
+    "name": "risk:blocked-live-trading",
+    "color": "ededed"
+  },
+  {
+    "name": "type:docs",
+    "color": "ededed"
+  },
+  {
+    "name": "type:architecture",
+    "color": "ededed"
+  },
+  {
+    "name": "type:contract",
+    "color": "ededed"
+  },
+  {
+    "name": "type:backend",
+    "color": "ededed"
+  },
+  {
+    "name": "type:analysis",
+    "color": "ededed"
+  },
+  {
+    "name": "type:test",
+    "color": "ededed"
+  },
+  {
+    "name": "type:security",
+    "color": "ededed"
+  },
+  {
+    "name": "type:ci",
+    "color": "ededed"
+  },
+  {
+    "name": "type:frontend",
+    "color": "ededed"
+  },
+  {
+    "name": "type:learning",
+    "color": "ededed"
+  }
+]

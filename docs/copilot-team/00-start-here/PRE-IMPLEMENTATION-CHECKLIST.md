@@ -1,0 +1,13 @@
+# Pre-Implementation Checklist
+- [ ] `docs/playbook/**` contains full Chat 1–13 source.
+- [ ] `docs/cross-cutting/**` contains registries/matrices/traceability artifacts.
+- [ ] `.github/copilot-instructions.md` installed.
+- [ ] `.github/agents/*.agent.md` installed and selectable.
+- [ ] `.github/instructions/*.instructions.md` installed.
+- [ ] Root `AGENTS.md` installed.
+- [ ] Issue/PR templates installed.
+- [ ] No old summarized playbook remains in authoritative search paths.
+- [ ] Labels reviewed.
+- [ ] 183-issue backlog reviewed but not blindly executed.
+- [ ] Issue 001 is the first agent task.
+- [ ] Live trading remains disabled.

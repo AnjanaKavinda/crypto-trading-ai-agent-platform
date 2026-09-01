@@ -1,17 +1,24 @@
-# Crypto Trading Multi-AI Agent Playbook v2.2 - Copilot Package
+# Enterprise-Grade Supervised Autonomous Crypto Trading Platform — Full-Source Markdown Playbook v2.2
 
-This package is the Copilot-ready implementation package derived from `MASTER-PLAYBOOK-v2.2.docx`.
+This package is a **faithful, implementation-ready Markdown decomposition** of the uploaded v2.2 DOCX.
 
-## How to use this package
+The previous Copilot package contained short summaries (typically about 1–2 KB per chat). This package keeps the complete source content split by Chat 1–13.
 
-1. Treat `/00-master/MASTER-PLAYBOOK-v2.2.docx` as the source of truth.
-2. Use `/00-master/MASTER-CONSTITUTION.md` as the always-loaded implementation constitution.
-3. Use `/01-specification/*.md` for focused phase context.
-4. Use `/02-contracts/*.md` before generating shared DTOs, schemas, events, APIs, database models, or integrations.
-5. Use `/03-agents/*.md` before implementing LangGraph nodes, agents, tools, prompts, memory, or model routing.
-6. Use `/04-copilot/00-copilot-bootstrap.md` as the first prompt in GitHub Copilot.
-7. Start with repository discovery. Do not implement trading code before discovery and gap analysis.
+## Contents
 
-## Non-negotiable instruction for Copilot
+- `START-HERE.md`
+- `00-master/00-UPGRADE-LAYERS-v2.0-v2.2.md`
+- `00-master/01-MASTER-COPILOT-IMPLEMENTATION-BOOTSTRAP.md`
+- `00-master/MASTER-PLAYBOOK-v2.2-COMPLETE.md`
+- `01-specification/` — full Chat 1–13 sections
+- `02-guidance/PACKAGE-COMPARISON.md`
+- `03-reference/SOURCE-INTEGRITY.json`
 
-Do not simplify this platform into a trading bot. Do not remove features because implementation is complex. Do not bypass the human approval gate. Do not allow AI agents to directly execute trades. Do not represent historical win rate as future probability.
+## Full master size
+
+- 52,240 Markdown lines
+- 714,859 bytes
+
+## Source policy
+
+The uploaded DOCX remains the source baseline. These Markdown files are derived from it using Pandoc conversion and split by the actual `Master Prompt — Chat N` boundaries.

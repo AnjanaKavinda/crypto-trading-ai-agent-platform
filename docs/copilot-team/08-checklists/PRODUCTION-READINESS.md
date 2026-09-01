@@ -1,0 +1,2 @@
+# Production Readiness Checklist
+Production/live readiness is intentionally late-stage. Require complete automated/manual critical safety tests, reconciliation/idempotency/failure recovery, security review, observability/runbooks/rollback, approved risk/execution policies, paper/testnet evidence, current validation, human governance approval and an explicit live-enablement ADR. Never infer readiness from passing unit tests alone.
