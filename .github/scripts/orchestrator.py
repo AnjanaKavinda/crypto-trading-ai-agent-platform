@@ -145,9 +145,10 @@ def can_dispatch(key: str, active_keys: Iterable[str]) -> bool:
 
 
 def review_is_current(review: Mapping[str, Any], head_sha: str, *, author: str,
-                      controller: str) -> bool:
+                      controller: str, authorized_reviewers: Iterable[str] = ()) -> bool:
     return (review.get("state") == "APPROVED" and review.get("commit_id") == head_sha
             and isinstance(review.get("user"), str) and bool(review.get("user").strip())
+            and review.get("user") in set(authorized_reviewers)
             and review.get("user") not in {author, controller}
             and review.get("independent") is True)
 
@@ -243,13 +244,17 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
     conclusions = pr.get("checks", {})
     if any(conclusions.get(name) != "success" for name in required_checks):
         raise GovernanceError("required check is missing or unsuccessful")
+    reviews = list(reviews)
     if not any(review_is_current(review, pr["head_sha"], author=pr.get("author", ""),
-                                  controller=controller) for review in reviews):
+                                  controller=controller,
+                                  authorized_reviewers=pr.get("authorized_reviewers", ()))
+               for review in reviews):
         raise GovernanceError("current-head independent approval is required")
     if high_risk_review_required(high_risk_text):
         roles = {review.get("role") for review in reviews
                  if review_is_current(review, pr["head_sha"], author=pr.get("author", ""),
-                                      controller=controller)}
+                                      controller=controller,
+                                      authorized_reviewers=pr.get("authorized_reviewers", ()))}
         if not set(required_reviewer_roles).issubset(roles):
             raise GovernanceError("high-risk reviewer escalation is incomplete")
     return True

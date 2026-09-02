@@ -16,8 +16,8 @@ class GovernanceTests(unittest.TestCase):
         validate_transition("workflow:ready", "workflow:agent-running")
         with self.assertRaises(GovernanceError): validate_transition("workflow:complete", "workflow:ready")
     def test_reviews_retries_secrets_and_protection(self):
-        self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"old","user":"reviewer"}, "new", author="bot", controller="controller"))
-        self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"new","independent":True}, "new", author="bot", controller="controller"))
+        self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"old","user":"reviewer"}, "new", author="bot", controller="controller", authorized_reviewers=["reviewer"]))
+        self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"new","independent":True}, "new", author="bot", controller="controller", authorized_reviewers=["reviewer"]))
         self.assertTrue(correction_allowed(2, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         self.assertFalse(correction_allowed(4, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         with self.assertRaises(GovernanceError): safe_content("token=supersecret")
@@ -29,6 +29,7 @@ class GovernanceTests(unittest.TestCase):
                  "body": "Canonical backlog: 004", "dependencies": [], "active_issues": []}
         self.assertEqual(validate_issue(issue, dependency_status={})["base_branch"], "dev")
         pr = {"issue_id": 10, "base": "dev", "head_sha": "abc", "author": "copilot",
+              "authorized_reviewers": ["human"],
               "checks": {"ci": "success"}}
         self.assertTrue(validate_pr(pr, issue_id=10, required_checks=["ci"],
                                     reviews=[{"state":"APPROVED", "commit_id":"abc",

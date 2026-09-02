@@ -12,7 +12,10 @@ jobs:
   governance:
     runs-on: ubuntu-latest
     steps:
+      # Validate the trusted base-branch controller, never PR-modified automation.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
       - name: Validate controller rules
         run: python .github/scripts/test_orchestrator.py
       - name: Human merge gate
