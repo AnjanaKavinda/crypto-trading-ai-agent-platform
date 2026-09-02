@@ -8,10 +8,9 @@ contradict an approved contract or cross-cutting artifact.
 
 ## Register
 
-No decision-specific ADR has been proposed or accepted.
-
 | ID | Title | Status | Date | Owner / approver | Open decision | Contracts | Supersedes | Superseded by |
 |---|---|---|---|---|---|---|---|---|
+| ADR-0001 | [Governed Copilot development orchestration](ADR-0001-governed-copilot-development-orchestration.md) | Proposed | 2026-09-02 | Platform Architect / Pending | — | None | — | — |
 
 ## Creating an ADR
 
