@@ -16,7 +16,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
-      - name: Validate controller rules
-        run: python .github/scripts/test_orchestrator.py
+      - name: Fetch trusted PR governance inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" > /tmp/pr.json
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" > /tmp/reviews.json
+          gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/status" > /tmp/status.json
+          gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs" > /tmp/checks.json
+      - name: Enforce current-head governance
+        env:
+          GOVERNED_BASE: dev
+          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+        run: python .github/scripts/run-pr-governance.py /tmp/pr.json /tmp/reviews.json /tmp/status.json /tmp/checks.json
       - name: Human merge gate
-        run: echo "Ready-to-merge is not merge authorization; no approval or merge capability is granted."
+        run: echo "Governance passed; ready-to-merge is not merge authorization. Human merge remains required."
