@@ -9,8 +9,8 @@ implementation is merged.
 
 It governs GitHub Copilot development work, not runtime trading agents. It
 does not implement a controller, GitHub Actions workflow, script, auto-merge,
-runtime contract, or trading capability. `dev` is the base branch for normal
-backlog work. `main` remains stable and reviewed.
+runtime contract, or trading capability. `dev` is the governed default base
+branch for normal backlog and Copilot work. `main` remains stable and reviewed.
 
 ## V1 authority and boundaries
 
@@ -62,7 +62,10 @@ of the following:
    by an authorized human owner or approved automation identity. Unauthorized
    issue-body or label changes block dispatch and require human review.
 2. The issue body has a complete objective, acceptance criteria, boundaries,
-   relevant authoritative references, and an explicit base branch of `dev`.
+   and relevant authoritative references. The controller resolves an
+   unspecified base branch to `dev`. If an issue explicitly requests another
+   base branch, a recorded human-approved exception is required; an
+   unauthorized, missing, conflicting, or ambiguous override blocks dispatch.
 3. The canonical backlog number is resolved from the issue body and/or the
    catalog mapping—not from the GitHub issue number. The mapping evidence and
    resolved canonical number are recorded. If they disagree or are absent,
@@ -128,7 +131,7 @@ prompt.
 |---|---|---|---|
 | `workflow:ready` | All eligibility gates pass; no active dispatch | `agent-running`, `blocked`, `human-decision-required` | Dispatch only after durable audit recording. |
 | `workflow:agent-running` | Copilot assignment is confirmed | `review`, `changes-requested`, `blocked`, `human-decision-required` | Detect the linked PR and monitor bounded execution. |
-| `workflow:review` | PR exists and deterministic checks have completed successfully | `changes-requested`, `ready-to-merge`, `blocked`, `human-decision-required` | Require independent QA/Security review where applicable. |
+| `workflow:review` | PR exists and deterministic checks have completed successfully | `changes-requested`, `ready-to-merge`, `blocked`, `human-decision-required` | Require at least one independent review for every Copilot-generated PR, plus applicable high-risk reviews. |
 | `workflow:changes-requested` | A deterministic check or authorized independent review requests correction | `agent-running`, `blocked`, `human-decision-required` | Start only a bounded, deduplicated correction dispatch. |
 | `workflow:ready-to-merge` | Required checks and independent review pass; scope and audit evidence are complete | `complete`, `changes-requested`, `blocked`, `human-decision-required` | Await a human decision; never merge automatically. |
 | `workflow:blocked` | A fail-closed gate fails or state is unsafe/unknown | `human-decision-required` | Preserve evidence; make no automatic forward transition. |
@@ -141,16 +144,20 @@ All transitions not listed are illegal and must be rejected and audited.
 ## PR, checks, review, and correction behavior
 
 The controller identifies the PR through the recorded dispatch/issue
-relationship and verifies its base branch is `dev`. Missing, multiple,
-unlinked, or unexpected-base PRs block progression. It verifies required
-deterministic checks and records their names, runs, conclusions, and commit
-SHA. A failed, missing, cancelled, stale, or unknown required check blocks
-progression.
+relationship and verifies its base branch is `dev`, unless a recorded
+human-approved exception applies. Missing, multiple, unlinked, unexpected-base,
+unauthorized-override, or ambiguous-override PRs block progression. It verifies
+required deterministic checks and records their names, runs, conclusions, and
+commit SHA. A failed, missing, cancelled, stale, or unknown required check
+blocks progression.
 
-An independent reviewer must be resolved from the appropriate review
-requirements. The implementing agent cannot self-approve or self-merge.
-Review findings are classified as blocker, major, minor, or informational.
-Blockers and unresolved majors transition to `workflow:changes-requested` or
+Every Copilot-generated PR requires at least one completed independent review
+before `workflow:ready-to-merge`. The reviewer must not be the implementing
+agent or session. High-risk QA/Security/Architect reviews remain additional
+mandatory gates where applicable; they do not replace the universal independent
+review. The implementing agent cannot self-approve or self-merge. Review
+findings are classified as blocker, major, minor, or informational. Blockers
+and unresolved majors transition to `workflow:changes-requested` or
 `workflow:human-decision-required`; they cannot reach
 `workflow:ready-to-merge`.
 

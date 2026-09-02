@@ -30,9 +30,10 @@ Eligibility and dependency validation → agent resolution → Copilot assignmen
 and bounded correction → READY_FOR_HUMAN_MERGE → human approval and merge
 ```
 
-Normal backlog work uses `dev` as its base branch. The human architecture owner
-confirmed that `dev`, not the stale `develop` reference, is the integration
-branch for this repository.
+Normal backlog work defaults to `dev` as its base branch. The human
+architecture owner confirmed that `dev`, not the stale `develop` reference, is
+the integration branch for this repository. An explicitly requested different
+base branch requires a human-approved exception.
 
 ## Alternatives
 
@@ -103,8 +104,10 @@ still blocks dispatch and requires human architecture review.
 - A follow-up implementation issue must implement the documented controller
   contract, labels, state persistence, audit events, checks, review integration,
   and least-privilege permissions.
-- The controller must use `dev` as the normal base branch and must not create
-  or use `develop`.
+- The controller must resolve an unspecified normal-work base branch to `dev`.
+  An explicit different base branch requires a human-approved exception; the
+  controller must block an unauthorized or ambiguous override. It must not
+  create or use `develop`.
 - The controller must never auto-merge or bypass required independent review.
 - Backlog Issue 004, GitHub `AnjanaKavinda/crypto-trading-ai-agent-platform#6`,
   is reserved as the first V1 pilot after this ADR is accepted and the
