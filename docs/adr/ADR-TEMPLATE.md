@@ -40,7 +40,8 @@ owner approves it.
 ## Reasoning
 
 Explain why the decision is preferred, including compatibility with the Master
-Playbook and approved governing artifacts.
+Playbook and any identified contract or cross-cutting implications. Report any
+material conflict for human architecture review rather than assigning precedence.
 
 ## Consequences
 

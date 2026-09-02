@@ -77,7 +77,7 @@ AGENTS.md
 README.md
 ```
 
-There are no `apps/`, `packages/`, `services/`, `infrastructure/`, `agents/`, `contracts/`, or `tests/` implementation directories. At the time of this Issue 001 inspection, there was no `docs/adr/` directory or approved ADR record. Issue 003 subsequently established the ADR foundation at `docs/adr/`; it does not create an approved decision-specific ADR.
+There are no `apps/`, `packages/`, `services/`, `infrastructure/`, `agents/`, `contracts/`, or `tests/` implementation directories. There is also no `docs/adr/` directory or approved ADR record yet.
 
 ## Technology stack
 
@@ -145,12 +145,12 @@ The current task matches the documented first task: repository discovery only. N
 
 No shared-contract change is required. The existing Domain Contract Registry remains authoritative; it defines the target contracts and their owner/invariant boundaries. The Event Contract Registry, responsibility/handoff/permission matrices, evidence and provenance graphs, state-machine registry, version registry, audit matrix, failure-recovery matrix, test traceability matrix, requirements traceability, open decisions, and Definition of Done are all present.
 
-No approved ADRs were discovered. `docs/cross-cutting/14-open-decisions.md` correctly records decisions that must not be invented during implementation. The ADR foundation was outside this Issue 001 scope and was subsequently established by Issue 003; open decisions still require their own proposed and human-approved ADR when needed.
+No approved ADRs were discovered. `docs/cross-cutting/14-open-decisions.md` correctly records decisions that must not be invented during implementation. An ADR foundation remains a later implementation prerequisite, not scope for this issue.
 
 ## Architectural gaps
 
 1. **No implementation foundation exists.** Application, contracts-as-code, tests, CI, configuration, persistence, audit, and observability must be introduced only through subsequent approved backlog issues.
-2. **No decision-specific ADR exists.** Issue 003 established the ADR register and template; open technology and operating decisions still require ADR treatment and human approval when a later issue needs a decision.
+2. **No ADR register exists.** Open technology and operating decisions must receive ADR treatment when a later issue needs a decision.
 3. **Missing governance implementation.** No `CODEOWNERS` file or CI workflow exists. The latter is expected before the planned CI-foundation issue; the former is a low-priority governance gap because the completeness audit describes a template but none is present.
 
 ## Architectural risks

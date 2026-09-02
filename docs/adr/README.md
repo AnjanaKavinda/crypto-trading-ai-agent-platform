@@ -3,7 +3,8 @@
 This directory is the canonical register for Architecture Decision Records (ADRs).
 ADRs record approved architectural choices, material architecture changes, and the
 disposition of alternatives. They do not override an explicit Master Playbook
-requirement, approved contract, or unresolved authoritative-source conflict.
+requirement or resolve an authoritative-source conflict. An ADR must not silently
+contradict an approved contract or cross-cutting artifact.
 
 ## Register
 
@@ -14,8 +15,7 @@ No decision-specific ADR has been proposed or accepted.
 
 ## Creating an ADR
 
-1. Confirm the decision is not already explicitly required by the Master Playbook
-   or an approved governing artifact.
+1. Confirm the decision is not already explicitly required by the Master Playbook.
 2. For an open decision, link the record in
    [`../cross-cutting/14-open-decisions.md`](../cross-cutting/14-open-decisions.md).
 3. Copy [`ADR-TEMPLATE.md`](ADR-TEMPLATE.md) to
@@ -42,7 +42,7 @@ Accepted → Superseded
 
 - **Proposed:** documented for review; it is not implementation authority.
 - **Accepted:** approved by the human repository owner and eligible to guide
-  implementation subject to higher-authority requirements and contracts.
+  implementation. It does not override an explicit Master Playbook requirement.
 - **Rejected:** not approved; it must not be implemented as an architecture
   decision.
 - **Superseded:** an accepted ADR replaced by a later accepted ADR. Both records
@@ -62,11 +62,12 @@ execution, reconciliation, strategy promotion, and live-trading configuration.
 
 If an implementation depends on a missing, proposed, rejected, superseded, or
 materially ambiguous ADR, it must stop and seek human architecture review.
-Likewise, an unresolved material conflict among the Playbook, cross-cutting
-artifacts, ADRs, or governance instructions must be reported and must not be
-resolved by an ADR until the human owner approves the applicable source
-precedence. This is governance failure behavior; it introduces no runtime
-execution path.
+Likewise, an unresolved material conflict among an ADR, a contract, a
+cross-cutting artifact, the Playbook, or governance instructions must be
+reported and require human architecture review. While OD-0024 remains unresolved,
+this foundation does not declare ADRs or contracts/cross-cutting artifacts to be
+the higher authority. This is governance failure behavior; it introduces no
+runtime execution path.
 
 ## When an ADR is required
 
