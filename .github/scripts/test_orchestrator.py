@@ -10,9 +10,40 @@ spec.loader.exec_module(pr_governance)
 
 class GovernanceTests(unittest.TestCase):
     def test_mapping_is_not_github_number(self):
-        self.assertEqual(resolve_canonical_number("GitHub issue #6\nCanonical backlog: 004")[0], 4)
+        self.assertEqual(resolve_canonical_number("# Issue 004 — Requirements traceability baseline")[0], 4)
+        self.assertEqual(parse_dependencies("# Issue 004 — x\n\n## Dependencies\n002\n\n## Objective\nx"), [2])
+        mapping = build_canonical_mapping([
+            {"number": 4, "body": "# Issue 002 — complete"},
+            {"number": 6, "body": "# Issue 004 — pilot"},
+        ])
+        self.assertEqual(resolve_dependency_github_numbers([2], mapping), [4])
+        with self.assertRaises(GovernanceError):
+            parse_dependencies("## Dependencies\nuntrusted prose")
+        mapped = resolve_dependency_github_numbers(parse_dependencies(
+            "# Issue 004 — pilot\n\n## Dependencies\n002"), mapping)
+        self.assertEqual(mapped, [4])
+        self.assertTrue(dependencies_complete(mapped, {4: "closed"}))
+        self.assertEqual(parse_catalog_titles(
+            "| 004 | 00 Governance | Architect Agent | Requirements traceability baseline | Chat 1 |"),
+            {4: "Requirements traceability baseline"})
+        self.assertEqual(parse_catalog_dependencies(
+            "| 004 | 00 Governance | Architect Agent | Requirements traceability baseline | Chat 1 | 002 |"),
+            {4: [2]})
+        self.assertEqual(parse_catalog_dependencies(
+            "| 010 | 00 Governance | Architect Agent | Readiness | Chats 1–13 | 003-009 |"),
+            {10: [3, 4, 5, 6, 7, 8, 9]})
+        self.assertEqual(parse_dependencies(
+            "## Dependencies\nUse issue catalog dependency order; Architect may refine during planning."),
+            [])
+        self.assertEqual(resolve_canonical_number(
+            "# Issue 004 — Requirements traceability baseline")[0], 4)
     def test_ambiguous_mapping_blocks(self):
         with self.assertRaises(GovernanceError): resolve_canonical_number("Backlog Issue 004; Backlog Issue 005")
+        with self.assertRaises(GovernanceError):
+            build_canonical_mapping([{"number": 4, "body": "# Issue 002 — a"},
+                                     {"number": 9, "body": "# Issue 002 — b"}])
+        with self.assertRaises(GovernanceError):
+            resolve_dependency_github_numbers([2], {})
     def test_agent_mapping(self):
         self.assertEqual(resolve_agent(["agent:architect"]), "Platform Architect")
         for labels in ([], ["agent:architect", "agent:backend-foundation"], ["agent:unknown"]):

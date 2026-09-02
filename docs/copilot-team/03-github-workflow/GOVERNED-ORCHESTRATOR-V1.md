@@ -27,6 +27,9 @@ Repository variables `GOVERNED_DISPATCH_ACTORS`, `GOVERNED_REVIEWERS`,
 `GOVERNED_PR_AUTHORS`, `GOVERNED_REQUIRED_CHECKS`,
 `GOVERNED_REVIEWER_ROLES`, and `GOVERNED_REQUIRED_REVIEWER_ROLES` are required
 for automatic operation. Missing or unverifiable values fail closed.
+`GOVERNED_PILOT_ENABLED` must remain unset/false until the human owner
+explicitly activates the reserved canonical Issue 004 pilot after this
+implementation is merged.
 
 The implementation maps canonical backlog identifiers from issue content,
 defaults normal work to `dev`, validates the four supported agent labels,

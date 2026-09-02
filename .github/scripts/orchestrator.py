@@ -65,6 +65,7 @@ def resolve_agent(labels: Iterable[str]) -> str:
 def resolve_canonical_number(body: str, catalog: Mapping[int, Any] | None = None) -> tuple[int, str]:
     safe_content(body)
     patterns = [
+        r"(?im)^\s*#\s*issue\s+0*(\d{1,3})\s*(?:[—-]|$)",
         r"(?im)^\s*(?:canonical\s+)?backlog(?:\s+issue|\s+number)?\s*[:#-]\s*0*(\d{1,3})\b",
         r"(?i)\b(?:backlog\s+issue|canonical\s+backlog)\s+#?\s*0*(\d{1,3})\b",
     ]
@@ -76,6 +77,75 @@ def resolve_canonical_number(body: str, catalog: Mapping[int, Any] | None = None
         raise GovernanceError("canonical backlog mapping is absent or ambiguous")
     number = found.pop()
     return number, f"issue-body/catalog:{number:03d}"
+
+
+def parse_dependencies(body: str) -> list[int]:
+    safe_content(body)
+    match = re.search(r"(?ims)^\s*##\s+dependencies\s*$([\s\S]*?)(?=^\s*##\s+|\Z)", body)
+    if not match:
+        return []
+    section = match.group(1).strip()
+    if section.lower().startswith("use issue catalog dependency order"):
+        return []
+    values = re.findall(r"(?<!\d)0*(\d{1,3})(?!\d)", section)
+    if not values:
+        if section.lower() in {"none", "n/a", "not applicable"}:
+            return []
+        raise GovernanceError("dependencies section is present but ambiguous")
+    return [int(value) for value in values]
+
+
+def parse_catalog_titles(text: str) -> dict[int, str]:
+    """Read canonical numbers and titles from the approved catalog table."""
+    result = {}
+    for line in text.splitlines():
+        match = re.match(r"\|\s*(\d{3})\s*\|[^|]*\|[^|]*\|\s*([^|]+?)\s*\|", line)
+        if match:
+            result[int(match.group(1))] = match.group(2).strip()
+    return result
+
+
+def parse_catalog_dependencies(text: str) -> dict[int, list[int]]:
+    result = {}
+    for line in text.splitlines():
+        match = re.match(r"\|\s*(\d{3})\s*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|\s*([^|]*)\|", line)
+        if match:
+            result[int(match.group(1))] = []
+            for token in re.findall(r"(?<!\d)0*(\d{1,3})(?:\s*-\s*0*(\d{1,3}))?(?!\d)",
+                                    match.group(2)):
+                start, end = token
+                result[int(match.group(1))].extend(
+                    range(int(start), int(end or start) + 1))
+    return result
+
+
+def build_canonical_mapping(issues: Iterable[Mapping[str, Any]],
+                            catalog_titles: Mapping[int, str] | None = None) -> dict[int, int]:
+    mapping: dict[int, int] = {}
+    for issue in issues:
+        try:
+            canonical, _ = resolve_canonical_number(str(issue.get("body") or ""))
+        except GovernanceError:
+            continue
+        if catalog_titles and issue.get("title", "").strip() != catalog_titles.get(canonical):
+            continue
+        if issue.get("pull_request"):
+            continue
+        number = int(issue["number"])
+        if canonical in mapping and mapping[canonical] != number:
+            raise GovernanceError("canonical-to-GitHub mapping is ambiguous")
+        mapping[canonical] = number
+    return mapping
+
+
+def resolve_dependency_github_numbers(dependencies: Iterable[int],
+                                      canonical_to_github: Mapping[int, int]) -> list[int]:
+    result = []
+    for canonical in dependencies:
+        if canonical not in canonical_to_github:
+            raise GovernanceError(f"canonical dependency {canonical:03d} has no mapping")
+        result.append(canonical_to_github[canonical])
+    return result
 
 
 def dependencies_complete(dependencies: Iterable[int], status: Mapping[int, str]) -> bool:

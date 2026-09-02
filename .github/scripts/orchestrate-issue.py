@@ -11,7 +11,9 @@ from pathlib import Path
 
 from orchestrator import (
     AppendOnlyAudit, GovernanceError, build_launch_prompt, can_dispatch,
-    create_dispatch_request, validate_issue, verify_protections,
+    build_canonical_mapping, parse_catalog_dependencies, parse_catalog_titles,
+    create_dispatch_request, parse_dependencies, resolve_canonical_number,
+    resolve_dependency_github_numbers, validate_issue, verify_protections,
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
@@ -29,6 +31,13 @@ def gh_mutate(*args: str) -> object:
 
 def gh_delete(*args: str) -> object:
     return gh("--method", "DELETE", *args)
+
+
+def gh_paginated(path: str) -> list[dict]:
+    result = subprocess.run(["gh", "api", "--paginate", "--slurp", path],
+                            check=True, text=True, capture_output=True)
+    pages = json.loads(result.stdout or "[]")
+    return [item for page in pages for item in page]
 
 
 def assign_copilot(repository: str, issue_id: str, prompt: str, agent: str,
@@ -55,17 +64,34 @@ def main() -> int:
         Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["issue"]["number"])
     root = f"repos/{repository}"
     issue = gh(f"{root}/issues/{issue_id}")
+    catalog_path = Path(__file__).parents[2] / "docs/copilot-team/04-issues/ISSUE-CATALOG.md"
+    catalog_titles = parse_catalog_titles(catalog_path.read_text(encoding="utf-8"))
+    catalog_dependencies = parse_catalog_dependencies(catalog_path.read_text(encoding="utf-8"))
     allowed_actors = {item for item in os.environ.get("GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
     if not allowed_actors or os.environ.get("GITHUB_ACTOR") not in allowed_actors:
         raise GovernanceError("dispatch actor is not on the governed allowlist")
     labels = [item["name"] for item in issue.get("labels", [])]
     body = issue.get("body") or ""
-    dependency_text = os.environ.get("DEPENDENCIES", "")
-    match = re.search(r"(?im)^\s*dependencies\s*:\s*([^\n]+)", issue.get("body") or "")
-    dependency_text = dependency_text or (match.group(1) if match else "")
-    dependencies = [int(value) for value in re.findall(r"\b\d{1,3}\b", dependency_text)]
+    current_canonical, _ = resolve_canonical_number(issue.get("body") or "")
+    body_dependencies = parse_dependencies(issue.get("body") or "")
+    expected_dependencies = catalog_dependencies.get(current_canonical)
+    if expected_dependencies is None or (
+            body_dependencies and body_dependencies != expected_dependencies):
+        raise GovernanceError("issue dependencies do not match approved catalog")
+    dependencies = expected_dependencies
     ownership = [label.split(":", 1)[1] for label in labels if label.startswith("ownership:")]
-    open_issues = gh(f"{root}/issues?state=open&per_page=100")
+    open_issues = gh_paginated(f"{root}/issues?state=all&per_page=100")
+    canonical_to_github = build_canonical_mapping(open_issues, catalog_titles)
+    if canonical_to_github.get(4) != 6:
+        raise GovernanceError("canonical Issue 004 mapping must resolve to GitHub issue #6")
+    if issue.get("title", "").strip() != catalog_titles.get(current_canonical):
+        raise GovernanceError("issue title does not match approved canonical catalog")
+    if current_canonical == 4 and int(issue_id) != 6:
+        raise GovernanceError("canonical Issue 004 is reserved for GitHub issue #6")
+    if current_canonical == 4 and os.environ.get("GOVERNED_PILOT_ENABLED") != "true":
+        raise GovernanceError("canonical Issue 004 pilot requires explicit human activation")
+    dependency_github_numbers = resolve_dependency_github_numbers(
+        dependencies, canonical_to_github)
     active_issues = [{"state": item.get("state"),
                       "owned": [label["name"].split(":", 1)[1] for label in item.get(
                           "labels", []) if label["name"].startswith("ownership:")]}
@@ -104,9 +130,9 @@ def main() -> int:
         }
     verify_protections(protection)
     dependency_status = {}
-    for number in dependencies:
+    for canonical, number in zip(dependencies, dependency_github_numbers):
         dependency_issue = gh(f"{root}/issues/{number}")
-        dependency_status[number] = "closed" if dependency_issue.get("state") == "closed" else "open"
+        dependency_status[canonical] = "closed" if dependency_issue.get("state") == "closed" else "open"
     eligibility = validate_issue(issue_input, dependency_status=dependency_status)
     prompt, prompt_hash = build_launch_prompt(
         {**issue_input, "canonical_backlog": eligibility["canonical_backlog"]},
