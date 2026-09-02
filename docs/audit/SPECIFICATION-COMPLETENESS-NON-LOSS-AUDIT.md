@@ -16,9 +16,9 @@ The checked source set is:
 
 The source DOCX is identified by SHA-256 in the integrity manifest, but is not present in this repository. Accordingly, this audit verifies non-loss between the complete Markdown conversion and its Chat decomposition; it does not claim an independently reproducible DOCX-to-Markdown comparison.
 
-## Feature-to-full-source mapping
+## Chat coverage mapping
 
-The original feature areas are represented by one contiguous source range each. The feature names and source ranges below are from the package comparison and integrity manifest.
+The original Chat feature areas are represented by one contiguous source range each. The feature names and source ranges below are from the package comparison and integrity manifest.
 
 | Chat | Original feature area | Full-source Markdown | Complete Markdown lines | Source lines | Result |
 |---:|---|---|---:|---:|---|
@@ -37,6 +37,53 @@ The original feature areas are represented by one contiguous source range each. 
 | 13 | Adaptive Intelligence, Self-Awareness & Experience Learning | `docs/playbook/01-specification/13-chat-13-adaptive-intelligence-learning.md` | 42958–52240 | 9,283 | Mapped |
 
 The 13 ranges are contiguous from line 3199 through line 52240. The pre-Chat material remains in the upgrade-layer and bootstrap Markdown files and is not represented as a Chat 14.
+
+## Material capability mapping
+
+This compact matrix maps substantive original capabilities rather than merely the 13 Chat areas. Section references are headings in the named full-source Chat file unless a split-file line range is explicitly given. A `Mapped` status means the capability is present in the declared source range and in the corresponding split Markdown after the SLA-002 normalization.
+
+| Capability | Owning Chat | Full-source Markdown | Source section / reference | Status | Anomaly / reference |
+|---|---:|---|---|---|---|
+| Operating-mode isolation: Research, Paper, and Live Supervised | 1 | `01-chat-1-product-requirements-system-constitution.md` | `4. SYSTEM OPERATING MODES` | Mapped | — |
+| AI analysis versus deterministic authority | 1 | `01-chat-1-product-requirements-system-constitution.md` | `2.1 AI is an analyst, not an unrestricted trader`; `6. AGENT AND SERVICE BOUNDARIES` | Mapped | — |
+| Human approval required and parameter override revalidation | 1 | `01-chat-1-product-requirements-system-constitution.md` | `18. HUMAN PARAMETER OVERRIDE`; `19. HUMAN APPROVAL GATE` | Mapped | — |
+| Deterministic risk, sizing, leverage, and liquidation control | 1 | `01-chat-1-product-requirements-system-constitution.md` | `17. DETERMINISTIC RISK ENGINE` | Mapped | — |
+| `NO_TRADE` preference and failure safety | 1 | `01-chat-1-product-requirements-system-constitution.md` | `12. SIGNAL ENGINE`; `26. FAILURE SAFETY` | Mapped | — |
+| Evidence qualification and 75% historical conditional threshold | 1 | `01-chat-1-product-requirements-system-constitution.md` | `14. VALIDATION & EVIDENCE ENGINE`; `15. 75% TRADE-ELIGIBILITY POLICY` | Mapped | — |
+| Architecture planes, trust boundaries, and deterministic execution separation | 2 | `02-chat-2-enterprise-system-architecture.md` | `3. CORE ARCHITECTURAL SEPARATION`; `59. TRUST BOUNDARIES` | Mapped | — |
+| Strategy, model, and signal versioning | 2 | `02-chat-2-enterprise-system-architecture.md` | `21. SIGNAL VERSIONING`; `46. STRATEGY REGISTRY`; `47. MODEL REGISTRY` | Mapped | — |
+| Approval binding, idempotency, execution state, and reconciliation architecture | 2 | `02-chat-2-enterprise-system-architecture.md` | `28. HUMAN APPROVAL ARCHITECTURE`–`32. RECONCILIATION` | Mapped | — |
+| Multi-agent analytical responsibility and permissions | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `2. MOST IMPORTANT ARCHITECTURAL RULE`; `43. AGENT TOOL PERMISSIONS` | Mapped | — |
+| Technical, price action, and market-structure analysis | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `9. TEAM 2 — TECHNICAL & MARKET STRUCTURE` | Mapped | — |
+| Smart Money Concepts, Wyckoff, Fibonacci, volume, and order flow | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `10`–`13. ... ANALYST/ANALYSIS` | Mapped | — |
+| Fundamental, on-chain, derivatives, sentiment, and macro analysis | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `14`–`17. TEAM 3`–`TEAM 5` | Mapped | — |
+| Empirical market regime and event-risk analysis | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `21`–`22. MARKET REGIME ENGINE`; `51. EVENT RISK` | Mapped | — |
+| Adversarial/counter-thesis, correlated-evidence, and confluence controls | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `23`–`27. MULTI-AGENT DEBATE`–`CONFLUENCE ENGINE`; `71. BULL / BEAR THESIS` | Mapped | — |
+| `NO_TRADE`, evidence traceability, and agent-performance isolation from live control | 3 | `03-chat-3-multi-ai-agent-trading-intelligence.md` | `29. "NO TRADE"`; `39. AGENT PERFORMANCE...`; `52. EVIDENCE TRACEABILITY` | Mapped | — |
+| Validated multi-source market, derivatives, on-chain, fundamental, and sentiment data | 4 | `04-chat-4-market-data-data-engineering.md` | `4. DATA SOURCE CATEGORIES`; `18`–`33. FUNDING RATE`–`MACRO DATA` | Mapped | — |
+| Point-in-time data, quality/freshness gates, provenance, and deterministic replay | 4 | `04-chat-4-market-data-data-engineering.md` | `34`–`41. POINT-IN-TIME DATA`–`DATA FRESHNESS GATE`; `44. DATA LINEAGE`; `70. DETERMINISTIC REPLAY` | Mapped | — |
+| Technical, fundamental, SMC, Wyckoff, Fibonacci, and derivatives analysis | 5 | `05-chat-5-analysis-meta-analysis-engine.md` | `SECTION 2`; `SECTION 7`; `SECTION 11`–`12`; `SECTION 16`; `SECTION 20`; `SECTION 22` | Mapped | — |
+| Sentiment, market-regime, evidence-dependency, and alternative-hypothesis analysis | 5 | `05-chat-5-analysis-meta-analysis-engine.md` | `SECTION 25`; `SECTION 30`–`31`; `SECTION 34`; `SECTION 38` | Mapped | — |
+| Analysis-only boundary: no backtesting or execution authority | 5 | `05-chat-5-analysis-meta-analysis-engine.md` | `SECTION 48 — NO BACKTESTING`; `SECTION 49 — NO EXECUTION` | Mapped | — |
+| Strategy/signal evidence graph, strength, score, and historical-performance inputs | 6 | `06-chat-6-strategy-signal-evidence-qualification.md` | `SECTION 15`–`19. EVIDENCE GRAPH`–`HISTORICAL PERFORMANCE INPUT` | Mapped | — |
+| 75% qualification, event filtering, regime compatibility, and strategy versioning | 6 | `06-chat-6-strategy-signal-evidence-qualification.md` | `SECTION 20`–`21`; `SECTION 32`–`33`; `SECTION 42` | Mapped | — |
+| Backtesting integrity, execution costs, and reproducible performance metrics | 7 | `07-chat-7-quant-validation-anti-overfitting.md` | `SECTION 4`–`5. ... BIAS/LEAKAGE PREVENTION`; `SECTION 12`; `SECTION 17` | Mapped | — |
+| OOS, walk-forward, regime validation, robustness, and 75% threshold validation | 7 | `07-chat-7-quant-validation-anti-overfitting.md` | `SECTION 26`; `SECTION 28`–`30`; `SECTION 40`–`41` | Mapped | — |
+| Experiment registry, performance decay/drift, and no-live-execution boundary | 7 | `07-chat-7-quant-validation-anti-overfitting.md` | `SECTION 63`; `SECTION 65`–`66`; `SECTION 68`–`69` | Mapped | — |
+| Deterministic risk pipeline, risk budgets/limits, position sizing, and risk proposals | 8 | `08-chat-8-risk-portfolio-position-sizing.md` | `SECTION 1`–`3`; `SECTION 5`; `SECTION 8`–`9`; `SECTION 15`–`16`; `SECTION 55` | Mapped | — |
+| Versioned risk proposals/models and approval boundary with no-execution failure posture | 8 | `08-chat-8-risk-portfolio-position-sizing.md` | `SECTION 62`; `SECTION 65`; `SECTION 70`–`71` | Mapped | — |
+| Explicit approval, exact-parameter binding, expiry, revalidation, and duplicate prevention | 9 | `09-chat-9-human-approval-execution-exchanges.md` | `SECTION 2`–`5`; `SECTION 8`; `SECTION 10`–`12` | Mapped | — |
+| Exchange abstraction/CCXT, least-privilege exchange permissions, and execution checks | 9 | `09-chat-9-human-approval-execution-exchanges.md` | `SECTION 16`–`20`; `SECTION 22`; `SECTION 39` | Mapped | — |
+| Reconciliation, unknown-execution handling, execution audit, and no unsafe automatic recovery | 9 | `09-chat-9-human-approval-execution-exchanges.md` | `SECTION 51`–`55`; `SECTION 70`; `SECTION 75`; `SECTION 77` | Mapped | — |
+| Prompt/model/strategy versioning, drift, risk and approval safety, and kill switches | 10 | `10-chat-10-safety-security-observability-recovery.md` | `SECTION 11`; `SECTION 13`; `SECTION 21`; `SECTION 23`–`25`; `SECTION 41` | Mapped | — |
+| Immutable audit, observability, failure recovery, and startup reconciliation | 10 | `10-chat-10-safety-security-observability-recovery.md` | `SECTION 45`–`48`; `SECTION 52`; `SECTION 66`; `SECTION 84`–`85` | Mapped | — |
+| Supervision UX: analytical panels, evidence/75% presentation, approval, execution, and risk | 11 | `11-chat-11-frontend-dashboard-trader-ux.md` | `SECTION 10`–`18`; `SECTION 24`–`26`; `SECTION 35`–`41`; `SECTION 45`–`47` | Mapped | — |
+| `NO_TRADE`, audit, performance, security, and frontend/backend contract UX | 11 | `11-chat-11-frontend-dashboard-trader-ux.md` | `SECTION 67`; `SECTION 87`; `SECTION 90`–`91`; `SECTION 110`; `SECTION 149`–`150` | Mapped | — |
+| Implementation sequencing for versioning, qualification, `NO_TRADE`, risk, approval, execution, CCXT, reconciliation, audit, and observability | 12 | `12-chat-12-implementation-roadmap-copilot-protocol.md` | `SECTION 17`–`18`; `SECTION 26`–`29`; `SECTION 35`; `SECTION 38`–`46` | Mapped | — |
+| Research experiments, mock exchange, data versioning, recovery, and release approval | 12 | `12-chat-12-implementation-roadmap-copilot-protocol.md` | `SECTION 107`–`109`; `SECTION 120`–`121`; `SECTION 123`; `SECTION 129` | Mapped | — |
+| Experience ledger/records, self-awareness, and event-driven learning | 13 | `13-chat-13-adaptive-intelligence-learning.md` | split-file lines 11–39; `24. EVENT-DRIVEN LEARNING ARCHITECTURE` | Mapped | — |
+| Agent/strategy performance, drift detection, and confidence calibration | 13 | `13-chat-13-adaptive-intelligence-learning.md` | `10. AGENT PERFORMANCE MEMORY`; `14. CONFIDENCE CALIBRATION`; `48. STRATEGY PERFORMANCE ENGINE`; `50. MODEL / PROMPT DRIFT` | Mapped | — |
+| Hypothesis and experiment governance, controlled promotion, versioning, and production isolation | 13 | `13-chat-13-adaptive-intelligence-learning.md` | `40. HYPOTHESIS ENGINE`; `41. EXPERIMENT ENGINE`; `60. LEARNING GOVERNANCE`; `63. KNOWLEDGE VERSIONING`; `76. LEARNING LOOP SAFETY` | Mapped | — |
 
 ## Validation evidence
 
@@ -69,7 +116,7 @@ No contracts, risk calculations, approvals, exchange behavior, operating modes, 
 
 - **Contracts:** none changed.
 - **ADRs:** none exist or are changed.
-- **Traceability:** this report supplies the feature-level source-to-Markdown evidence absent from the area-level matrix in `docs/cross-cutting/13-requirements-traceability.md`.
+- **Traceability:** the Material capability mapping supplies feature-level source-to-Markdown evidence; the earlier Chat coverage mapping remains package-level coverage evidence.
 
 ## Deferred work
 
