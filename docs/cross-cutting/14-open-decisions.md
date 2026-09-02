@@ -32,6 +32,21 @@ and obtain the required human approval. `Open` records have no approved ADR.
 | OD-0023 | Live-trading production readiness criteria | Open | Release gates and safety; Chats 1, 9, 10, 12 | Human repository owner | — | — |
 | OD-0024 | Authoritative-source precedence and stale historical path correction | Open | Repository governance; Issues 001–002 | Human repository owner | — | — |
 
+## Open-state decision analysis
+
+The following analysis applies to each `Open` record above until its stated
+trigger makes a decision necessary:
+
+| Required field | Recorded open-state analysis |
+|---|---|
+| Problem | The named architecture choice remains unresolved, and its affected area must not rely on an unstated implementation assumption. |
+| Options | No options have been evaluated or selected. A decision-specific ADR must document alternatives when the decision is triggered. |
+| Advantages | No comparative advantages are asserted before option analysis. |
+| Disadvantages | Proceeding without an approved decision risks architecture or contract drift. |
+| Recommendation | Preserve the `Open` status; do not implement a dependent choice until a proposed ADR receives the required human approval. |
+| Reasoning | The Master Playbook and existing governance artifacts identify these decisions as open and do not authorize their selection here. |
+| Future impact | Affected implementation remains deferred until the linked ADR records the decision, consequences, compatibility impact, and any migration. |
+
 When closing a record, retain its ID and decision text, set the final status,
 record the disposition date, and link the approving ADR. Do not delete the
 historical record. The source-precedence decision in OD-0024 remains unresolved;

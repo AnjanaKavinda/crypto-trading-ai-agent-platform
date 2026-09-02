@@ -66,4 +66,5 @@ decision is unavailable, ambiguous, or not approved.
 ## Approval record
 
 Record the human repository owner's approval or rejection, date, and any
-conditions. Update the status and ADR register only after that disposition.
+conditions. Add the ADR to the register when it is proposed, then update its
+status and approval details after that disposition.
