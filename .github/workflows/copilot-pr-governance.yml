@@ -1,0 +1,19 @@
+name: Governed Copilot PR governance
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, dismissed]
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate controller rules
+        run: python .github/scripts/test_orchestrator.py
+      - name: Human merge gate
+        run: echo "Ready-to-merge is not merge authorization; no approval or merge capability is granted."

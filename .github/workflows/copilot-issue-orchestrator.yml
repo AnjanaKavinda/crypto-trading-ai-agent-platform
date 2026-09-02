@@ -1,0 +1,20 @@
+name: Governed Copilot issue orchestrator
+on:
+  issues:
+    types: [labeled, reopened]
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  checks: read
+jobs:
+  eligibility:
+    if: contains(github.event.issue.labels.*.name, 'workflow:ready')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate controller remains fail-closed
+        run: python .github/scripts/test_orchestrator.py
+      - name: Do not auto-assign or merge
+        run: echo "Dispatch requires separately configured least-privilege Copilot integration and human-governed protections."
