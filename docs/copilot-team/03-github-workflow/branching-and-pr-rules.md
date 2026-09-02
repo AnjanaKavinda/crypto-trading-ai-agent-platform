@@ -4,8 +4,8 @@
 
 ```text
 main      = stable, reviewed, releasable baseline
-develop   = integration branch
-agent/*   = one issue per branch
+dev       = integration branch
+agent/*   = one issue/task per branch
 ```
 
 ## Branch naming
@@ -16,6 +16,10 @@ agent/backend/issue-005-api-skeleton
 agent/ai/issue-007-market-data-contracts
 agent/qa/issue-006-ci-foundation
 ```
+
+Normal backlog and Copilot work targets `dev`. The human repository owner
+confirmed this branch model for Issue #193; do not create or use a `develop`
+branch.
 
 ## PR requirements
 
@@ -38,6 +42,8 @@ Every PR must include:
 - No agent merges its own PR.
 - CI must pass.
 - Human owner must review.
+- Native auto-merge and merge-queue automation are disabled for controller PRs;
+  the human repository owner must perform the final merge action.
 - Security-sensitive changes require QA/Security/Review Agent review.
 - Architecture changes require ADR review.
 
