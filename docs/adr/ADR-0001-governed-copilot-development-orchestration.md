@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-09-02 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
+| Human approver | AnjanaKavinda (human repository owner) |
 | GitHub issue / PR | Issue #193 / PR #194 |
 | Open decision ID | — |
 | Related ADRs | — |
@@ -81,15 +81,16 @@ Costs, risks, and constraints:
 
 ## Decision
 
-Propose Option B: implement a future, supervised development-orchestration
+Adopt Option B: implement a future, supervised development-orchestration
 controller that follows the contract in
 [`../copilot-team/03-github-workflow/AUTOMATED-AGENT-ORCHESTRATION.md`](../copilot-team/03-github-workflow/AUTOMATED-AGENT-ORCHESTRATION.md).
 
 V1 may automatically validate, dispatch, observe, request independent review,
 and manage a bounded correction loop. It must never approve or merge a PR into
 `dev` or `main`. Only the human repository owner may make the final merge
-decision. This ADR is Proposed and is not implementation authority until that
-owner accepts it.
+decision. This ADR is Accepted and is implementation authority subject to the
+existing Master Playbook, governance, contract, safety, and human-review
+boundaries.
 
 ## Reasoning
 
@@ -123,7 +124,7 @@ still blocks dispatch and requires human architecture review.
 | Cross-cutting artifacts | `03-agent-responsibility-matrix.md`, `04-agent-handoff-matrix.md`, `05-permission-matrix.md`, `08-state-machine-registry.md`, `10-audit-traceability-matrix.md`, `11-failure-recovery-matrix.md`, `13-requirements-traceability.md`, and `15-definition-of-done.md` |
 | Contracts / events | None changed. The implementation must use a separately governed development-automation audit schema; it must not redefine runtime contracts or events. |
 | Requirements traceability | Issue #193; the orchestration contract records state, dispatch, review, and pilot requirements. |
-| Versioning / migration | No migration. The contract becomes implementable only after this ADR is accepted. |
+| Versioning / migration | No migration. The contract is implementable after acceptance, subject to the documented safeguards. |
 
 ## Safety, security, and failure behavior
 
@@ -144,5 +145,8 @@ valid.
 
 ## Approval record
 
-Pending human repository-owner review. On approval or rejection, update this
-record and the ADR register without rewriting the decision history.
+Accepted by AnjanaKavinda, human repository owner, on 2026-09-02. The acceptance
+authorizes implementation of the supervised development-orchestration control
+model described here and in the linked orchestration contract. It does not
+authorize auto-merge, bypass human final merge authority, resolve OD-0024, or
+change any runtime trading/execution safety boundary.
