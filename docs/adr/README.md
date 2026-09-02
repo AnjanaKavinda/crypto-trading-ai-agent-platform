@@ -10,7 +10,7 @@ contradict an approved contract or cross-cutting artifact.
 
 | ID | Title | Status | Date | Owner / approver | Open decision | Contracts | Supersedes | Superseded by |
 |---|---|---|---|---|---|---|---|---|
-| ADR-0001 | [Governed Copilot development orchestration](ADR-0001-governed-copilot-development-orchestration.md) | Proposed | 2026-09-02 | Platform Architect / Pending | — | None | — | — |
+| ADR-0001 | [Governed Copilot development orchestration](ADR-0001-governed-copilot-development-orchestration.md) | Accepted | 2026-09-02 | Platform Architect / AnjanaKavinda | — | None | — | — |
 
 ## Creating an ADR
 
@@ -82,7 +82,7 @@ providers, operating modes, or any trading behavior.
 
 ## Scope and deferred governance
 
-This foundation creates no decision-specific ADR and changes no contracts,
-runtime behavior, credentials, risk controls, approval controls, or live-trading
-configuration. The recorded source-precedence conflict and stale historical path
-reference remain deferred for separate human governance resolution.
+This foundation changes no runtime behavior, credentials, risk controls, approval
+controls, or live-trading configuration. The recorded source-precedence conflict
+and stale historical path reference remain deferred for separate human governance
+resolution.
