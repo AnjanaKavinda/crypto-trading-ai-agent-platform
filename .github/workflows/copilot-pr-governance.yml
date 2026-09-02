@@ -28,6 +28,16 @@ jobs:
           gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" > /tmp/reviews.json
           gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/status" > /tmp/status.json
           gh api --paginate --slurp "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs" > /tmp/checks.json
+          python - <<'PY'
+          import json, re, subprocess
+          pr = json.load(open('/tmp/pr.json'))
+          body = pr.get('body') or ''
+          match = re.search(r'(?im)\b(?:closes|fixes|resolves)\s+#(\d+)', body)
+          if not match:
+              raise SystemExit('PR has no linked issue')
+          issue = subprocess.check_output(['gh', 'api', f"repos/{pr['base']['repo']['full_name']}/issues/{match.group(1)}"])
+          open('/tmp/issue.json', 'wb').write(issue)
+          PY
       - name: Mark linked issue under review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -35,17 +45,21 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TARGET_STATE: workflow:review
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          GOVERNED_AGENT: ${{ vars.GOVERNED_AGENT }}
+          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
       - name: Enforce current-head governance
         id: governance
         env:
           GOVERNED_BASE: dev
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           REQUIRED_REVIEWER_ROLES: ${{ vars.GOVERNED_REQUIRED_REVIEWER_ROLES }}
-        run: python .github/scripts/run-pr-governance.py /tmp/pr.json /tmp/reviews.json /tmp/status.json /tmp/checks.json
+        run: python .github/scripts/run-pr-governance.py /tmp/pr.json /tmp/reviews.json /tmp/status.json /tmp/checks.json /tmp/issue.json
       - name: Mark ready for human merge
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,6 +67,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TARGET_STATE: workflow:ready-to-merge
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
         run: python .github/scripts/transition-pr.py
       - name: Request bounded correction
         if: ${{ always() && steps.governance.outcome == 'failure' }}
@@ -63,6 +78,9 @@ jobs:
           TARGET_STATE: workflow:changes-requested
           CORRECTION_MAX: "3"
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          GOVERNED_AGENT: ${{ vars.GOVERNED_AGENT }}
+          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
       - name: Human merge gate
         run: echo "Governance passed; ready-to-merge is not merge authorization. Human merge remains required."

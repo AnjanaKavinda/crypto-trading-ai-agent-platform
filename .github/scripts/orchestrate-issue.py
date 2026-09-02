@@ -7,7 +7,6 @@ import os
 import subprocess
 import sys
 import re
-from hashlib import sha256
 from pathlib import Path
 
 from orchestrator import (
@@ -30,6 +29,24 @@ def gh_mutate(*args: str) -> object:
 
 def gh_delete(*args: str) -> object:
     return gh("--method", "DELETE", *args)
+
+
+def assign_copilot(repository: str, issue_id: str, prompt: str, agent: str,
+                   base_branch: str = "dev") -> object:
+    """Use GitHub's full Copilot coding-agent assignment request."""
+    payload = json.dumps({
+        "assignees": ["copilot-swe-agent[bot]"],
+        "agent_assignment": {
+            "target_repo": repository,
+            "base_branch": base_branch,
+            "custom_instructions": prompt,
+            "custom_agent": agent,
+        },
+    })
+    result = subprocess.run(
+        ["gh", "api", "--method", "POST", f"repos/{repository}/issues/{issue_id}/assignees",
+         "--input", "-"], input=payload, check=True, text=True, capture_output=True)
+    return json.loads(result.stdout or "null")
 
 
 def main() -> int:
@@ -119,7 +136,8 @@ def main() -> int:
               f"body={MARKER}\nAUDIT {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}")
     # The Copilot coding-agent assignment endpoint is the supported dispatch boundary.
-    gh_mutate(f"{root}/issues/{issue_id}/assignees", "-f", "assignees[]=copilot-swe-agent")
+    assign_copilot(repository, issue_id, prompt, eligibility["agent"],
+                   eligibility["base_branch"])
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
               f"body={MARKER}\nDISPATCH {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}\n\n{prompt}\n"

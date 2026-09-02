@@ -57,6 +57,21 @@ class GovernanceTests(unittest.TestCase):
             {"statuses": [{"context": "lint", "state": "success"}]},
             {"check_runs": [{"name": "tests", "conclusion": "success"}]}),
             {"lint": "success", "tests": "success"})
+    def test_risk_high_requires_roles_without_pr_keywords(self):
+        pr = {"issue_id": 10, "base": "dev", "head_sha": "abc", "author": "copilot",
+              "authorized_reviewers": ["human"], "checks": {"ci": "success"}}
+        with self.assertRaises(GovernanceError):
+            validate_pr(pr, issue_id=10, required_checks=["ci"], governed_high_risk=True,
+                        required_reviewer_roles=["qa"],
+                        reviews=[{"state": "APPROVED", "commit_id": "abc", "user": "human",
+                                  "independent": True, "role": "architect"}])
+        self.assertTrue(validate_pr(pr, issue_id=10, required_checks=["ci"],
+                                     governed_high_risk=True, required_reviewer_roles=["qa"],
+                                     reviews=[{"state": "APPROVED", "commit_id": "abc", "user": "human",
+                                               "independent": True, "role": "qa"}]))
+    def test_correction_lifecycle_is_legal(self):
+        validate_transition("workflow:changes-requested", "workflow:agent-running")
+        validate_transition("workflow:agent-running", "workflow:review")
     def test_dispatch_request_is_idempotent_and_cannot_merge(self):
         request = create_dispatch_request(
             {"id": 10}, {"canonical_backlog": 4, "agent": "Platform Architect",

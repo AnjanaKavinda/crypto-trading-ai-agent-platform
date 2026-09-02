@@ -160,9 +160,9 @@ def correction_allowed(attempt: int, maximum: int, *, same_issue: bool,
     return scope_hash == original_scope_hash
 
 
-def high_risk_review_required(text: str) -> bool:
+def high_risk_review_required(text: str, *, governed: bool = False) -> bool:
     lowered = text.lower()
-    return any(term in lowered for term in HIGH_RISK)
+    return governed or any(term in lowered for term in HIGH_RISK)
 
 
 def verify_protections(result: Mapping[str, Any]) -> None:
@@ -237,7 +237,7 @@ def validate_issue(issue: Mapping[str, Any], *, catalog: Mapping[int, Any] | Non
 def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "dev",
                 required_checks: Iterable[str] = (), reviews: Iterable[Mapping[str, Any]] = (),
                 controller: str = "controller", high_risk_text: str = "",
-                required_reviewer_roles: Iterable[str] = ()) -> bool:
+                required_reviewer_roles: Iterable[str] = (), governed_high_risk: bool = False) -> bool:
     """Validate a linked PR without granting approval or merge authority."""
     if pr.get("issue_id") != issue_id or pr.get("base") != expected_base or not pr.get("head_sha"):
         raise GovernanceError("PR relationship, base branch, or head SHA is invalid")
@@ -259,7 +259,7 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
                                   authorized_reviewers=pr.get("authorized_reviewers", ()))
                for review in reviews):
         raise GovernanceError("current-head independent approval is required")
-    if high_risk_review_required(high_risk_text):
+    if high_risk_review_required(high_risk_text, governed=governed_high_risk):
         roles = {review.get("role") for review in reviews
                  if review_is_current(review, pr["head_sha"], author=pr.get("author", ""),
                                       controller=controller,
