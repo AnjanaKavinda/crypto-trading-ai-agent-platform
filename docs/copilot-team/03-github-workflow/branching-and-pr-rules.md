@@ -42,6 +42,8 @@ Every PR must include:
 - No agent merges its own PR.
 - CI must pass.
 - Human owner must review.
+- Native auto-merge and merge-queue automation are disabled for controller PRs;
+  the human repository owner must perform the final merge action.
 - Security-sensitive changes require QA/Security/Review Agent review.
 - Architecture changes require ADR review.
 

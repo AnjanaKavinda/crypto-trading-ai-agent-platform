@@ -8,7 +8,7 @@
 | Date | 2026-09-02 |
 | Decision owner | Platform Architect |
 | Human approver | Pending |
-| GitHub issue / PR | Issue #193 / Pending |
+| GitHub issue / PR | Issue #193 / PR #194 |
 | Open decision ID | — |
 | Related ADRs | — |
 | Supersedes / superseded by | — |

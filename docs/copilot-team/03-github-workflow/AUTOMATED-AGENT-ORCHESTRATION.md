@@ -18,6 +18,20 @@ The human repository owner alone may approve and merge a PR. No automation,
 Copilot agent, reviewer agent, label, check, or state transition may merge to
 `dev` or `main`, approve a merge, or override a human decision.
 
+The future implementation must enforce this boundary with GitHub branch
+protections or rulesets: `dev` and `main` require an authenticated human-owner
+approval and human merge action. Controller and Copilot identities must not
+approve or merge PRs, bypass protections, alter rulesets, or possess
+merge-capable credentials.
+
+The implementation must use a least-privilege controller identity whose
+permissions are limited to documented issue, label, assignment, PR-status,
+check-status, and audit operations. It must not have administration, ruleset,
+branch-protection bypass, workflow-editing, repository-contents write,
+pull-request approval, or merge permission. The controller must verify that a
+dispatch-triggering event actor is an authorized human owner or approved
+automation identity before it processes the event.
+
 The controller may validate issue metadata, resolve an agent, construct a
 prompt, assign Copilot, observe PR/check/review status, and transition the
 workflow state. It may not alter shared contracts, risk limits, leverage or
@@ -44,7 +58,9 @@ the controller must not select an agent heuristically.
 Before assignment, the controller deterministically records and verifies all
 of the following:
 
-1. The issue is open, in scope, and has exactly one valid agent label.
+1. The issue is open, in scope, and has exactly one valid agent label applied
+   by an authorized human owner or approved automation identity. Unauthorized
+   issue-body or label changes block dispatch and require human review.
 2. The issue body has a complete objective, acceptance criteria, boundaries,
    relevant authoritative references, and an explicit base branch of `dev`.
 3. The canonical backlog number is resolved from the issue body and/or the
@@ -75,8 +91,9 @@ implementation has merged; this document does not dispatch or begin it.
 The controller constructs a reproducible prompt from immutable references,
 rather than an agent-selected summary:
 
-1. GitHub issue identifier, title, full body, canonical backlog-number
-   resolution evidence, labels, dependencies, and target base branch.
+1. GitHub issue identifier, title, body, canonical backlog-number resolution
+   evidence, labels, dependencies, and target base branch, after mandatory
+   secret detection and safe handling.
 2. Applicable repository instructions, path-specific instructions, approved
    ADRs, shared contracts, cross-cutting artifacts, and relevant Playbook
    sections.
@@ -89,10 +106,21 @@ rather than an agent-selected summary:
 5. A request for a PR that identifies scope, traceability, safety impact,
    validation, risks, deferred work, and the human final merge gate.
 
-The controller records content hashes or immutable references for every prompt
-input, the rendered prompt, controller version, dispatch timestamp, and
-Copilot assignment identifier. It must not inject credentials or other
-secrets into any prompt.
+Before prompt rendering, the controller must detect suspected secrets in issue
+content and any other mutable input. It must not copy suspected secrets into a
+prompt, audit record, check annotation, or log; it must block dispatch and
+escalate through a restricted human incident process using safe references.
+The controller records content hashes or immutable references for every safe
+prompt input, the rendered prompt, controller version, dispatch timestamp, and
+Copilot assignment identifier.
+
+All mutable or external content—issue text and labels, PR descriptions,
+comments, review findings, check output, and correction instructions—is
+untrusted data. The controller must delimit it as non-authoritative scope
+input, reject any attempt to override repository instructions or the safety
+wrapper, and block/escalate ambiguous or malicious content. It must apply the
+same secret-handling process before using any such content in a correction
+prompt.
 
 ## State machine
 
