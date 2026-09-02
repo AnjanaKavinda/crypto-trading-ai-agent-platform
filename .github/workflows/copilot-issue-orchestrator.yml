@@ -1,8 +1,10 @@
 name: Governed Copilot issue orchestrator
+concurrency:
+  group: governed-copilot-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
 on:
   issues:
     types: [labeled, reopened]
-  workflow_dispatch:
 permissions:
   contents: read
   issues: write
@@ -14,7 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate controller remains fail-closed
-        run: python .github/scripts/test_orchestrator.py
-      - name: Do not auto-assign or merge
-        run: echo "Dispatch requires separately configured least-privilege Copilot integration and human-governed protections."
+      - name: Execute governed Copilot dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GOVERNED_DISPATCH_ACTORS: ${{ vars.GOVERNED_DISPATCH_ACTORS }}
+        run: python .github/scripts/orchestrate-issue.py

@@ -1,5 +1,12 @@
 import unittest
+import importlib.util
+from pathlib import Path
 from orchestrator import *
+
+spec = importlib.util.spec_from_file_location(
+    "pr_governance", Path(__file__).with_name("run-pr-governance.py"))
+pr_governance = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pr_governance)
 
 class GovernanceTests(unittest.TestCase):
     def test_mapping_is_not_github_number(self):
@@ -45,6 +52,18 @@ class GovernanceTests(unittest.TestCase):
             audit.append("dispatch", {"correlation_id": "c", "body": "api_key=hidden"})
         with self.assertRaises(GovernanceError):
             audit.append("dispatch", {})
+    def test_status_and_check_run_inputs_are_combined(self):
+        self.assertEqual(pr_governance.normalize_checks(
+            {"statuses": [{"context": "lint", "state": "success"}]},
+            {"check_runs": [{"name": "tests", "conclusion": "success"}]}),
+            {"lint": "success", "tests": "success"})
+    def test_dispatch_request_is_idempotent_and_cannot_merge(self):
+        request = create_dispatch_request(
+            {"id": 10}, {"canonical_backlog": 4, "agent": "Platform Architect",
+                         "base_branch": "dev"}, "prompt-hash")
+        self.assertFalse(request["merge_capability"])
+        self.assertFalse(request["approval_capability"])
+        self.assertFalse(can_dispatch(request["dispatch_key"], [request["dispatch_key"]]))
 
 if __name__ == "__main__":
     unittest.main()
