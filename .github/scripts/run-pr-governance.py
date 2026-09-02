@@ -17,16 +17,22 @@ def main() -> int:
     reviews = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
     status = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
     checks = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
+    if isinstance(reviews, list) and reviews and isinstance(reviews[0], list):
+        reviews = [item for page in reviews for item in page]
+    if isinstance(checks, list):
+        checks = {"check_runs": [run for page in checks
+                                 for run in page.get("check_runs", [])]}
     pr = {"issue_id": None, "base": pr.get("base", {}).get("ref"),
           "head_sha": pr.get("head", {}).get("sha"),
           "author": pr.get("user", {}).get("login"), "body": pr.get("body")}
     reviews = [{"state": item.get("state"), "commit_id": item.get("commit_id"),
-                "user": item.get("user", {}).get("login"), "independent": True}
+                "user": item.get("user", {}).get("login"), "independent": True,
+                "submitted_at": item.get("submitted_at"), "id": item.get("id")}
                for item in reviews]
     checks = {item["context"]: item["state"].lower()
               for item in status.get("statuses", []) if item.get("context")}
-    checks.update({item["name"]: item["conclusion"].lower()
-                   for item in json.loads(Path(sys.argv[4]).read_text(encoding="utf-8")).get("check_runs", [])
+    checks.update({item["name"]: (item.get("conclusion") or "pending").lower()
+                   for item in checks.get("check_runs", [])
                    if item.get("name")})
     pr["checks"] = checks
     issue_match = re.search(r"(?im)\b(?:closes|fixes|resolves)\s+#(\d+)", pr.get("body") or "")

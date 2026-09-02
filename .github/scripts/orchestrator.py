@@ -245,6 +245,15 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
     if any(conclusions.get(name) != "success" for name in required_checks):
         raise GovernanceError("required check is missing or unsuccessful")
     reviews = list(reviews)
+    latest: dict[str, Mapping[str, Any]] = {}
+    for review in reviews:
+        reviewer = review.get("user")
+        if isinstance(reviewer, str):
+            prior = latest.get(reviewer)
+            if prior is None or (review.get("submitted_at", ""), review.get("id", 0)) > (
+                    prior.get("submitted_at", ""), prior.get("id", 0)):
+                latest[reviewer] = review
+    reviews = list(latest.values())
     if not any(review_is_current(review, pr["head_sha"], author=pr.get("author", ""),
                                   controller=controller,
                                   authorized_reviewers=pr.get("authorized_reviewers", ()))
