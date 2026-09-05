@@ -1,0 +1,26 @@
+name: Governed Copilot issue orchestrator
+concurrency:
+  group: governed-copilot-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+on:
+  issues:
+    types: [labeled, reopened]
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  checks: read
+jobs:
+  eligibility:
+    if: contains(github.event.issue.labels.*.name, 'workflow:ready')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute governed Copilot dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GOVERNED_DISPATCH_ACTORS: ${{ vars.GOVERNED_DISPATCH_ACTORS }}
+          GOVERNED_PILOT_ENABLED: ${{ vars.GOVERNED_PILOT_ENABLED }}
+        run: python .github/scripts/orchestrate-issue.py

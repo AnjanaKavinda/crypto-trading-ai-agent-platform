@@ -73,8 +73,9 @@ GitHub supports repository-level instructions with `.github/copilot-instructions
 
 ```text
 main      = stable reviewed baseline
-develop   = integration branch
+dev       = integration branch
 agent/*   = one branch per issue/agent task
 ```
 
-Never let Copilot push directly to `main`.
+Never let Copilot push directly to `main`. Normal backlog and Copilot work
+targets `dev`; do not create or use a `develop` branch.

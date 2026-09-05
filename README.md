@@ -129,6 +129,10 @@ docs/
 ├── audit/
 │   └── COMPLETENESS-AUDIT.md
 │
+├── adr/
+│   ├── README.md
+│   └── ADR-TEMPLATE.md
+│
 ├── playbook/
 │   ├── 00-master/
 │   ├── 01-specification/
@@ -978,6 +982,12 @@ For engineering contracts and control artifacts:
 
 ```text
 docs/cross-cutting/
+```
+
+For the Architecture Decision Record register and template:
+
+```text
+docs/adr/
 ```
 
 For implementation backlog:
