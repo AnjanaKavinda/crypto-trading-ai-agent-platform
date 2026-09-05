@@ -158,5 +158,45 @@
     "name": "type:learning",
     "color": "7057FF",
     "description": "Learning/adaptive intelligence"
+  },
+  {
+    "name": "workflow:ready",
+    "color": "0E8A16",
+    "description": "Eligible for governed Copilot dispatch"
+  },
+  {
+    "name": "workflow:agent-running",
+    "color": "1D76DB",
+    "description": "Copilot agent dispatch is active"
+  },
+  {
+    "name": "workflow:review",
+    "color": "FBCA04",
+    "description": "Awaiting deterministic checks and independent review"
+  },
+  {
+    "name": "workflow:changes-requested",
+    "color": "D93F0B",
+    "description": "Bounded correction is required"
+  },
+  {
+    "name": "workflow:ready-to-merge",
+    "color": "0E8A16",
+    "description": "Checks and reviews pass; human merge required"
+  },
+  {
+    "name": "workflow:blocked",
+    "color": "B60205",
+    "description": "Fail-closed blocked state"
+  },
+  {
+    "name": "workflow:human-decision-required",
+    "color": "5319E7",
+    "description": "Human disposition is required"
+  },
+  {
+    "name": "workflow:complete",
+    "color": "6F42C1",
+    "description": "Terminal human disposition recorded"
   }
 ]
