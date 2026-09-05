@@ -24,14 +24,24 @@ The required invariants are:
 
 `.github/workflows/governance-ci.yml` defines a job whose stable check name is `governance-ci`. GitHub required-status-check configuration uses the job/check name rather than the workflow display name.
 
-## One-time ruleset application
+## Safe bootstrap order
 
-Run from an admin-capable GitHub CLI session after this change is merged to `dev`:
+Do not configure `main` to require `governance-ci` until the workflow file exists on `main`. Required-check workflows for pull requests are evaluated from the target/base branch; protecting `main` too early can create a bootstrap deadlock.
+
+After this PR is merged to `dev`, run:
 
 ```powershell
 gh auth status
-pwsh ./scripts/setup-branch-rulesets.ps1 -Repo AnjanaKavinda/crypto-trading-ai-agent-platform
+pwsh ./scripts/setup-branch-rulesets.ps1 -Repo AnjanaKavinda/crypto-trading-ai-agent-platform -Branch dev
 ```
+
+Then create and human-review a normal PR from `dev` to `main`. The existing `protect-main` ruleset currently permits that bootstrap PR because it does not yet require `governance-ci`. After the workflow has been merged into `main`, run:
+
+```powershell
+pwsh ./scripts/setup-branch-rulesets.ps1 -Repo AnjanaKavinda/crypto-trading-ai-agent-platform -Branch main
+```
+
+`-Branch all` is available only after `governance-ci.yml` exists on both branches. The script fails closed before applying a branch ruleset if the required workflow is absent.
 
 The setup is idempotent:
 
@@ -44,7 +54,7 @@ The setup script does not enable `GOVERNED_PILOT_ENABLED`.
 
 ## Verification
 
-After applying the rulesets:
+After both rulesets are applied:
 
 ```powershell
 pwsh ./scripts/verify-branch-rulesets.ps1 -Repo AnjanaKavinda/crypto-trading-ai-agent-platform
