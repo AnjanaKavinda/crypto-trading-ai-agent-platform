@@ -16,6 +16,24 @@ remain unset/false, and canonical Backlog Issue 004
 (`AnjanaKavinda/crypto-trading-ai-agent-platform#6`) must not be dispatched by
 this policy.
 
+### Solo-maintainer identity boundaries
+
+The following identities are distinct control-plane roles, even when one
+person operates more than one of them:
+
+| Identity | Responsibility | May satisfy independent-review requirement? |
+|---|---|---|
+| Human repository owner / final merge authority | Makes the final merge decision and owns architecture, safety, and production-readiness decisions | No, not solely by being the owner |
+| Orchestration controller | Validates eligibility, records audit evidence, dispatches work, and manages bounded workflow transitions | No; a controller approval is never an independent review |
+| Independent AI reviewer identity/session | Performs the configured review against the current PR head using a separate reviewer identity/session and records findings/approval | Yes, when authorized, current-head, and independent from the implementing agent/session and controller |
+
+For a solo human maintainer, the same human may be both repository owner and
+controller, but the controller must not be counted as the independent reviewer.
+The pilot remains operable only when an authorized independent AI reviewer
+identity/session is available and its review is bound to the current PR head.
+This separation does not delegate final merge authority: only the human
+repository owner may merge.
+
 ## 1. Bounded Issue Context Pack
 
 The orchestrator constructs a versioned context pack for the active issue. The
@@ -156,6 +174,16 @@ scope approval. It must provide:
 - capability-tier selection and the escalation state machine above;
 - append-only usage/audit persistence with idempotency and correlation;
 - review-tier resolution and current-head review enforcement;
+- explicit identity separation for repository owner/final merge authority,
+  orchestration controller, and independent AI reviewer identity/session; a
+  human owner/controller overlap must not be treated as independent review;
+- branch-aware protection verification. The approved baseline is
+  `dev=0` required human reviews and `main=1` required human review. Both
+  branches still require their configured status checks, active enforcement,
+  no bypass actors, disabled auto-merge, and disabled merge queues. A
+  verifier that applies `required_reviews >= 1` to both branches is
+  incompatible with this policy and is a prerequisite blocker for Issue 004
+  pilot activation;
 - human-decision-required states for ambiguity, conflicts, and unavailable
   audit/protection evidence;
 - tests for every decision-table row, escalation path, fail-closed condition,
@@ -168,6 +196,11 @@ The implementation must integrate with the existing governed orchestration
 contract and ADR-0001 rather than create a competing controller or runtime
 contract. Any architectural or shared-contract change requires the established
 impact analysis, review, versioning, and human-approval process.
+
+Until branch-aware protection verification and the identity separation above
+are implemented and independently validated, the canonical Issue 004 pilot
+must remain blocked. This policy does not dispatch Issue #6, enable
+`GOVERNED_PILOT_ENABLED`, alter protection rules, or resolve OD-0024.
 
 ## Traceability
 
