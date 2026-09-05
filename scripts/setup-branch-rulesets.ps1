@@ -32,7 +32,7 @@ function Assert-WorkflowPresent {
     param([Parameter(Mandatory=$true)][string]$TargetBranch)
     gh api "repos/$Repo/contents/.github/workflows/governance-ci.yml?ref=$TargetBranch" --silent
     if ($LASTEXITCODE -ne 0) {
-        throw "Refusing to protect $TargetBranch: governance-ci workflow is not present on that branch."
+        throw "Refusing to protect ${TargetBranch}: governance-ci workflow is not present on that branch."
     }
 }
 
