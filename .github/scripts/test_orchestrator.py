@@ -8,6 +8,11 @@ spec = importlib.util.spec_from_file_location(
 pr_governance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr_governance)
 
+transition_spec = importlib.util.spec_from_file_location(
+    "transition_pr", Path(__file__).with_name("transition-pr.py"))
+transition_pr = importlib.util.module_from_spec(transition_spec)
+transition_spec.loader.exec_module(transition_pr)
+
 class GovernanceTests(unittest.TestCase):
     def test_mapping_is_not_github_number(self):
         self.assertEqual(resolve_canonical_number("# Issue 004 — Requirements traceability baseline")[0], 4)
@@ -103,6 +108,35 @@ class GovernanceTests(unittest.TestCase):
     def test_correction_lifecycle_is_legal(self):
         validate_transition("workflow:changes-requested", "workflow:agent-running")
         validate_transition("workflow:agent-running", "workflow:review")
+        self.assertEqual(
+            transition_pr.current_head_findings(
+                [{"user": {"login": "reviewer"}, "commit_id": "new",
+                  "state": "APPROVED", "body": "approval"}],
+                {"reviewer"}, "new"),
+            [])
+        self.assertEqual(
+            transition_pr.current_head_findings(
+                [{"user": {"login": "reviewer"}, "commit_id": "old",
+                  "state": "CHANGES_REQUESTED", "body": "stale finding"}],
+                {"reviewer"}, "new"),
+            [])
+        self.assertEqual(
+            transition_pr.current_head_findings(
+                [{"user": {"login": "reviewer"}, "commit_id": "new",
+                  "state": "CHANGES_REQUESTED", "body": "fix this"}],
+                {"reviewer"}, "new"),
+            ["fix this"])
+
+    def test_pending_governance_does_not_enter_correction_loop(self):
+        # Pending checks or missing approval produce no authorized findings.
+        self.assertEqual(
+            transition_pr.current_head_findings([], {"reviewer"}, "head"), [])
+        self.assertEqual(
+            transition_pr.current_head_findings(
+                [{"user": {"login": "reviewer"}, "commit_id": "head",
+                  "state": "APPROVED", "body": ""}],
+                {"reviewer"}, "head"),
+            [])
     def test_dispatch_request_is_idempotent_and_cannot_merge(self):
         request = create_dispatch_request(
             {"id": 10}, {"canonical_backlog": 4, "agent": "Platform Architect",

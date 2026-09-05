@@ -30,6 +30,18 @@ def api(*args: str) -> object:
     return json.loads(result.stdout or "null")
 
 
+def current_head_findings(review_records: list[dict], reviewers: set[str],
+                          head_sha: str) -> list[str]:
+    return [
+        safe_content(item.get("body") or "")
+        for item in review_records
+        if item.get("user", {}).get("login") in reviewers
+        and item.get("commit_id") == head_sha
+        and item.get("state") in {"CHANGES_REQUESTED", "COMMENTED"}
+        and (item.get("body") or "").strip()
+    ]
+
+
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     pr_number = os.environ["PR_NUMBER"]
@@ -94,6 +106,14 @@ def main() -> int:
                  for item in governed_corrections):
             return 0
         else:
+            review_records = api(f"{root}/pulls/{pr_number}/reviews")
+            reviewers = set(item for item in os.environ.get(
+                "GOVERNED_REVIEWERS", "").split(",") if item)
+            findings = current_head_findings(review_records, reviewers, pr["head"]["sha"])
+            if not findings:
+                # A failed governance check can mean that review/check inputs are
+                # still pending. Waiting must not enter the correction loop.
+                return 0
             for state in issue_labels & set(STATES):
                 if state != "workflow:changes-requested":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
@@ -104,16 +124,6 @@ def main() -> int:
                 f"pr:{pr_number} head_sha:{pr['head']['sha']}")
             agent = resolve_agent([label["name"] for label in issue_record.get("labels", [])
                                    if label["name"].startswith("agent:")])
-            review_records = api(f"{root}/pulls/{pr_number}/reviews")
-            reviewers = set(item for item in os.environ.get(
-                "GOVERNED_REVIEWERS", "").split(",") if item)
-            findings = [safe_content(item.get("body") or "") for item in review_records
-                        if item.get("user", {}).get("login") in reviewers
-                        and item.get("commit_id") == pr["head"]["sha"]
-                        and item.get("state") in {"CHANGES_REQUESTED", "COMMENTED"}
-                        and (item.get("body") or "").strip()]
-            if not findings:
-                return 1
             prompt, _ = build_launch_prompt(
                 {"id": issue, "title": issue_record.get("title", ""),
                  "body": issue_record.get("body", ""), "canonical_backlog": "unchanged"},
