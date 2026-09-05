@@ -37,7 +37,7 @@ def current_head_findings(review_records: list[dict], reviewers: set[str],
         for item in review_records
         if item.get("user", {}).get("login") in reviewers
         and item.get("commit_id") == head_sha
-        and item.get("state") in {"CHANGES_REQUESTED", "COMMENTED"}
+        and item.get("state") == "CHANGES_REQUESTED"
         and (item.get("body") or "").strip()
     ]
 

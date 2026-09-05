@@ -116,6 +116,12 @@ class GovernanceTests(unittest.TestCase):
             [])
         self.assertEqual(
             transition_pr.current_head_findings(
+                [{"user": {"login": "reviewer"}, "commit_id": "new",
+                  "state": "COMMENTED", "body": "ordinary comment"}],
+                {"reviewer"}, "new"),
+            [])
+        self.assertEqual(
+            transition_pr.current_head_findings(
                 [{"user": {"login": "reviewer"}, "commit_id": "old",
                   "state": "CHANGES_REQUESTED", "body": "stale finding"}],
                 {"reviewer"}, "new"),
