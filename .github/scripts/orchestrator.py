@@ -364,7 +364,7 @@ Open a PR and document tests, safety impact, risks, deferred work, and human fin
 
 def create_dispatch_request(issue: Mapping[str, Any], eligibility: Mapping[str, Any],
                             prompt_hash: str, *, controller_version: str = "v1") -> dict[str, Any]:
-    """Create an auditable request for the separately configured Copilot adapter.
+    """Create an auditable request for the GitHub Copilot assignment boundary.
 
     This is deliberately a data-only boundary: it has no token, approval, merge,
     repository-content-write, or exchange capability.

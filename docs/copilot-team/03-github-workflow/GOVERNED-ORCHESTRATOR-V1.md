@@ -8,13 +8,17 @@ assignment; they do not grant repository-content write, approval, merge, or
 exchange capability.
 
 The workflows run these validations on eligible issue and pull-request events.
-They deliberately do not enable native auto-merge or merge queues. A future
-The issue workflow calls GitHub's supported issue-assignee endpoint with
-`copilot-swe-agent` after the protection prerequisite is verified. The resolved
-agent label and generated prompt are retained in the durable issue audit
-comment. The incomplete `setup-branch-rulesets.ps1` is not used as protection
-evidence; if the token cannot read active compliant rulesets, dispatch fails
-closed.
+They deliberately do not enable native auto-merge or merge queues. The issue
+workflow calls GitHub's supported full Copilot agent-assignment request with
+`copilot-swe-agent[bot]`, the resolved custom agent, the generated launch
+prompt, the target repository, and the resolved base branch. The assignment
+inputs and result are retained in the durable issue audit comment.
+
+Repository protection/ruleset verification is currently unavailable under the
+present GitHub repository/account capability. The incomplete
+`setup-branch-rulesets.ps1` is not evidence of active protection. Until a
+trusted capability can verify the required `dev` and `main` protections, the
+controller remains fail-closed and must not bypass or simulate that enforcement.
 
 PR governance reads both commit statuses and check runs, invalidates approvals
 when the head SHA changes, and serializes each PR's correction loop. Successful
