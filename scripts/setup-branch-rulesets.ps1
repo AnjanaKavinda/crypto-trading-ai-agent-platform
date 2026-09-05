@@ -42,6 +42,11 @@ function New-ProtectionPayload {
         [Parameter(Mandatory=$true)][string]$TargetBranch
     )
 
+    # dev is operated by a single human maintainer, so Copilot-authored PRs cannot
+    # satisfy a native approval requirement with the owner alone. main continues to
+    # require one native approval.
+    $requiredApprovingReviewCount = if ($TargetBranch -eq "dev") { 0 } else { 1 }
+
     return @{
         name = $Name
         target = "branch"
@@ -54,7 +59,7 @@ function New-ProtectionPayload {
             @{
                 type = "pull_request"
                 parameters = @{
-                    required_approving_review_count = 1
+                    required_approving_review_count = $requiredApprovingReviewCount
                     dismiss_stale_reviews_on_push = $true
                     required_reviewers = @()
                     require_code_owner_review = $false
