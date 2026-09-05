@@ -64,9 +64,15 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(correction_allowed(2, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         self.assertFalse(correction_allowed(4, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         with self.assertRaises(GovernanceError): safe_content("token=supersecret")
-        good = {b: {"verified":True, "enforcement":"active", "required_checks":["ci"], "required_reviews":1, "bypass_actors":[], "auto_merge":False, "merge_queue":False} for b in ("dev","main")}
+        good = {b: {"verified":True, "enforcement":"active", "required_checks":["ci"],
+                    "required_reviews": 1 if b == "main" else 0,
+                    "bypass_actors":[], "auto_merge":False, "merge_queue":False}
+                for b in ("dev","main")}
         verify_protections(good)
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
+        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
+                            "main": {**good["main"], "required_reviews": 0}}
+        with self.assertRaises(GovernanceError): verify_protections(reversed_reviews)
     def test_pr_and_complete_eligibility(self):
         issue = {"id": 10, "state": "open", "labels": ["workflow:ready", "agent:architect"],
                  "body": "Canonical backlog: 004", "dependencies": [], "active_issues": []}
@@ -159,6 +165,57 @@ class GovernanceTests(unittest.TestCase):
         self.assertFalse(request["merge_capability"])
         self.assertFalse(request["approval_capability"])
         self.assertFalse(can_dispatch(request["dispatch_key"], [request["dispatch_key"]]))
+
+    def test_v11_routing_context_and_escalation_are_fail_closed(self):
+        inputs = {
+            "canonical_issue": 207, "agent_role": "Backend/Foundation",
+            "phase": "foundation", "risk_label": "high", "issue_type": "governance",
+            "affected_paths": [".github/scripts/orchestrator.py"],
+            "allowed_paths": [".github/scripts/orchestrator.py"],
+            "forbidden_paths": ["services/execution/**"],
+            "architecture_impact": True, "shared_contract_impact": False,
+            "security_impact": True, "trading_risk_statistical_impact": False,
+            "approval_execution_ccxt_impact": False,
+        }
+        extracted = extract_routing_inputs(inputs)
+        self.assertEqual(select_capability_tier(extracted), "premium-strongest-available")
+        self.assertEqual(required_review_tier(extracted), "R3")
+        pack = build_context_pack(extracted, references=["AGENTS.md"],
+                                  excerpts=["untrusted token=hidden"])
+        self.assertEqual(pack.version, "v1.1")
+        self.assertNotIn("token=hidden", pack.excerpts[0])
+        self.assertEqual(build_context_pack(extracted, references=["AGENTS.md"],
+                                            excerpts=["untrusted token=hidden"]).context_pack_id,
+                         pack.context_pack_id)
+        self.assertEqual(transition_escalation("economical-fast", blocked=True),
+                         "strong-coding-reasoning")
+        self.assertEqual(transition_escalation("strong-coding-reasoning", critical=True),
+                         "premium-strongest-available")
+        self.assertEqual(transition_escalation("strong-coding-reasoning", retries=3),
+                         "human-decision-required")
+        with self.assertRaises(GovernanceError):
+            extract_routing_inputs({**inputs, "allowed_paths": ["other/**"]})
+
+    def test_v11_audit_identity_and_stale_review(self):
+        self.assertTrue(validate_identity_separation(
+            owner="owner", controller="controller", implementer="copilot",
+            reviewer="reviewer", head_sha="head", reviewer_head_sha="head"))
+        with self.assertRaises(GovernanceError):
+            validate_identity_separation(
+                owner="owner", controller="same", implementer="copilot",
+                reviewer="same", head_sha="head", reviewer_head_sha="old")
+        audit = AppendOnlyAudit()
+        payload = {
+            "issue_id": 207, "correlation_id": "c", "agent_role": "Backend/Foundation",
+            "capability_tier": "premium-strongest-available", "routing_reason": "high",
+            "risk_classification": "high", "context_pack_id": "context-x",
+            "context_pack_version": "v1.1", "controller_policy_version": "v1.1",
+            "retry_count": 0, "review_tier": "R3", "outcome": "assigned",
+            "timestamp": "2026-09-05T00:00:00Z", "commit_sha": "abc",
+        }
+        with self.assertRaises(GovernanceError):
+            append_governance_event(audit, "dispatch", payload, "/no/such/dir/audit.jsonl")
+        self.assertEqual(audit.records, [])
 
 if __name__ == "__main__":
     unittest.main()

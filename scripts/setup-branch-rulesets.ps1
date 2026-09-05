@@ -42,6 +42,7 @@ function New-ProtectionPayload {
         [Parameter(Mandatory=$true)][string]$TargetBranch
     )
 
+    $approvingCount = if ($TargetBranch -eq "main") { 1 } else { 0 }
     return @{
         name = $Name
         target = "branch"
@@ -54,7 +55,7 @@ function New-ProtectionPayload {
             @{
                 type = "pull_request"
                 parameters = @{
-                    required_approving_review_count = 1
+                    required_approving_review_count = $approvingCount
                     dismiss_stale_reviews_on_push = $true
                     required_reviewers = @()
                     require_code_owner_review = $false

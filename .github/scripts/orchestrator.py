@@ -38,10 +38,186 @@ HIGH_RISK = ("contracts", "risk", "leverage", "position sizing", "liquidation",
              "approval", "authorization", "authentication", "ccxt", "exchange",
              "execution", "reconciliation", "strategy promotion", "production model",
              "production prompt", "secrets", "live-trading", "dangerous")
+ROUTING_POLICY_VERSION = "v1.1"
+CAPABILITY_TIERS = ("economical-fast", "strong-coding-reasoning", "premium-strongest-available")
+REVIEW_TIERS = ("R1", "R2", "R3")
 
 
 class GovernanceError(ValueError):
     """A fail-closed validation failure."""
+
+
+@dataclass(frozen=True)
+class RoutingInputs:
+    canonical_issue: int
+    agent_role: str
+    phase: str
+    risk_label: str
+    issue_type: str
+    affected_paths: tuple[str, ...]
+    allowed_paths: tuple[str, ...]
+    forbidden_paths: tuple[str, ...]
+    architecture_impact: bool
+    shared_contract_impact: bool
+    security_impact: bool
+    trading_risk_statistical_impact: bool
+    approval_execution_ccxt_impact: bool
+    blocked_ambiguous: bool = False
+
+
+@dataclass(frozen=True)
+class ContextPack:
+    context_pack_id: str
+    version: str
+    metadata: Mapping[str, Any]
+    references: tuple[str, ...]
+    excerpts: tuple[str, ...]
+    integrity_hash: str
+
+
+def _required_value(source: Mapping[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in source:
+            return source[name]
+    raise GovernanceError(f"missing routing input: {names[0]}")
+
+
+def _path_values(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple, set)) or not value:
+        raise GovernanceError(f"{field} must be a non-empty path list")
+    values = tuple(sorted({str(item).strip() for item in value if str(item).strip()}))
+    if len(values) != len(value):
+        raise GovernanceError(f"{field} contains an invalid path")
+    return values
+
+
+def extract_routing_inputs(issue: Mapping[str, Any]) -> RoutingInputs:
+    """Extract the V1.1 routing boundary without inferring missing authority."""
+    source = issue.get("routing_inputs", issue)
+    if not isinstance(source, Mapping):
+        raise GovernanceError("routing inputs are unavailable")
+    canonical = int(_required_value(source, "canonical_issue", "canonical_backlog"))
+    flags = {}
+    for name in ("architecture_impact", "shared_contract_impact", "security_impact",
+                 "trading_risk_statistical_impact", "approval_execution_ccxt_impact"):
+        value = _required_value(source, name)
+        if not isinstance(value, bool):
+            raise GovernanceError(f"{name} must be boolean")
+        flags[name] = value
+    affected = _path_values(_required_value(source, "affected_paths"), "affected_paths")
+    allowed = _path_values(_required_value(source, "allowed_paths"), "allowed_paths")
+    forbidden = _path_values(_required_value(source, "forbidden_paths"), "forbidden_paths")
+    if set(affected) & set(forbidden) or not set(affected).issubset(set(allowed)):
+        raise GovernanceError("routing path scope is contradictory")
+    blocked = bool(source.get("blocked_ambiguous", False))
+    if blocked:
+        raise GovernanceError("routing input is blocked or ambiguous")
+    return RoutingInputs(
+        canonical_issue=canonical,
+        agent_role=str(_required_value(source, "agent_role", "agent")).strip(),
+        phase=str(_required_value(source, "phase")).strip(),
+        risk_label=str(_required_value(source, "risk_label", "risk")).strip().lower(),
+        issue_type=str(_required_value(source, "issue_type", "type")).strip(),
+        affected_paths=affected, allowed_paths=allowed, forbidden_paths=forbidden,
+        **flags,
+    )
+
+
+def select_capability_tier(inputs: RoutingInputs | Mapping[str, Any]) -> str:
+    """Select the minimum applicable, vendor-neutral capability tier."""
+    if not isinstance(inputs, RoutingInputs):
+        inputs = extract_routing_inputs(inputs)
+    high = (inputs.architecture_impact or inputs.shared_contract_impact or
+            inputs.security_impact or inputs.trading_risk_statistical_impact or
+            inputs.approval_execution_ccxt_impact or inputs.risk_label in {"high", "critical"})
+    if high:
+        return "premium-strongest-available"
+    if inputs.risk_label in {"medium", "moderate"} or inputs.phase.lower() not in {"research", "documentation"}:
+        return "strong-coding-reasoning"
+    return "economical-fast"
+
+
+def required_review_tier(inputs: RoutingInputs | Mapping[str, Any]) -> str:
+    if not isinstance(inputs, RoutingInputs):
+        inputs = extract_routing_inputs(inputs)
+    if (inputs.security_impact or inputs.trading_risk_statistical_impact or
+            inputs.approval_execution_ccxt_impact or inputs.risk_label in {"high", "critical"}):
+        return "R3"
+    if inputs.architecture_impact or inputs.shared_contract_impact:
+        return "R2"
+    return "R1"
+
+
+def validate_review_tier(reviews: Iterable[Mapping[str, Any]], *, head_sha: str,
+                         required_tier: str, author: str, controller: str,
+                         authorized_reviewers: Iterable[str]) -> bool:
+    if required_tier not in REVIEW_TIERS:
+        raise GovernanceError("unknown review tier")
+    rank = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
+    if not any(review_is_current(review, head_sha, author=author, controller=controller,
+                                 authorized_reviewers=authorized_reviewers)
+               and rank.get(str(review.get("review_tier")), -1) >= rank[required_tier]
+               for review in reviews):
+        raise GovernanceError("required current-head independent review tier is missing")
+    return True
+
+
+def transition_escalation(current: str, *, blocked: bool = False,
+                          materially_uncertain: bool = False, critical: bool = False,
+                          retries: int = 0, max_retries: int = 3) -> str:
+    if retries < 0 or retries > max_retries:
+        raise GovernanceError("escalation retry limit exceeded")
+    if retries == max_retries or (blocked and current == "strong-coding-reasoning" and critical):
+        return "human-decision-required"
+    if current == "economical-fast" and (blocked or materially_uncertain):
+        return "strong-coding-reasoning"
+    if current == "strong-coding-reasoning" and (critical or materially_uncertain):
+        return "premium-strongest-available"
+    if current not in CAPABILITY_TIERS:
+        raise GovernanceError("unknown capability tier")
+    return current
+
+
+def build_context_pack(inputs: RoutingInputs | Mapping[str, Any], *,
+                       issue_metadata: Mapping[str, Any] | None = None,
+                       references: Iterable[str] = (), excerpts: Iterable[str] = (),
+                       version: str = ROUTING_POLICY_VERSION, max_excerpt_chars: int = 4000) -> ContextPack:
+    """Build a bounded, reproducible pack; external text is redacted before hashing."""
+    if not isinstance(inputs, RoutingInputs):
+        inputs = extract_routing_inputs(inputs)
+    metadata = dict(issue_metadata or {})
+    metadata.update({"canonical_issue": inputs.canonical_issue, "phase": inputs.phase,
+                     "issue_type": inputs.issue_type, "risk_label": inputs.risk_label,
+                     "scope": {"affected": inputs.affected_paths, "allowed": inputs.allowed_paths,
+                               "forbidden": inputs.forbidden_paths},
+                     "safety": {"architecture": inputs.architecture_impact,
+                                "security": inputs.security_impact,
+                                "approval_execution_ccxt": inputs.approval_execution_ccxt_impact},
+                     "routing_policy_version": version})
+    clean_refs = tuple(sorted({safe_content(str(item)) for item in references}))
+    clean_excerpts = tuple(redact_sensitive(str(item))[:max_excerpt_chars] for item in excerpts)
+    body = json.dumps({"metadata": metadata, "references": clean_refs,
+                       "excerpts": clean_excerpts}, sort_keys=True, separators=(",", ":"))
+    digest = sha256(body.encode()).hexdigest()
+    return ContextPack("context-" + digest[:32], version, metadata, clean_refs, clean_excerpts, digest)
+
+
+def redact_sensitive(value: str) -> str:
+    """Remove credential-shaped material from untrusted context before persistence."""
+    result = value or ""
+    for pattern in SECRET_PATTERNS:
+        result = pattern.sub("[REDACTED]", result)
+    return result
+
+
+def validate_identity_separation(*, owner: str, controller: str, implementer: str,
+                                reviewer: str, head_sha: str, reviewer_head_sha: str) -> bool:
+    identities = {owner.strip(), controller.strip(), implementer.strip(), reviewer.strip()}
+    if len(identities) != 4 or not all(identities):
+        raise GovernanceError("owner, controller, implementer, and reviewer must be distinct")
+    if not reviewer_head_sha or reviewer_head_sha != head_sha:
+        raise GovernanceError("independent review is stale or unbound")
+    return True
 
 
 def detect_secret(value: str) -> bool:
@@ -240,12 +416,15 @@ def verify_protections(result: Mapping[str, Any]) -> None:
     if any(not result.get(branch, {}).get("verified") or
        result.get(branch, {}).get("enforcement") != "active" or
        not result.get(branch, {}).get("required_checks") or
-           result.get(branch, {}).get("required_reviews", 0) < 1 or
+           (result.get(branch, {}).get("required_reviews", 0) !=
+            (1 if branch == "main" else 0)) or
            result.get(branch, {}).get("bypass_actors") or
            result.get(branch, {}).get("auto_merge") or
-           result.get(branch, {}).get("merge_queue")
+           result.get(branch, {}).get("merge_queue") or
+           ("deletion" in result.get(branch, {}).get("missing_rules", ())) or
+           ("non_fast_forward" in result.get(branch, {}).get("missing_rules", ()))
            for branch in required):
-        raise GovernanceError("required branch protections are unavailable or incomplete")
+       raise GovernanceError("required branch protections are unavailable or incomplete")
 
 
 @dataclass(frozen=True)
@@ -261,6 +440,13 @@ class AppendOnlyAudit:
     def append(self, event: str, payload: Mapping[str, Any]) -> AuditRecord:
         if not event or not payload.get("correlation_id"):
             raise GovernanceError("audit provenance is incomplete")
+        self._validate_payload(payload)
+        record = AuditRecord(event, dict(payload))
+        self.records.append(record)
+        return record
+
+    @staticmethod
+    def _validate_payload(payload: Mapping[str, Any]) -> None:
         def check(value: Any) -> None:
             if isinstance(value, str):
                 safe_content(value)
@@ -271,18 +457,36 @@ class AppendOnlyAudit:
                 for nested in value:
                     check(nested)
         check(payload)
-        record = AuditRecord(event, dict(payload))
-        self.records.append(record)
-        return record
 
     def write_jsonl(self, path: str | Path, event: str, payload: Mapping[str, Any]) -> AuditRecord:
         """Persist an audit record before the caller performs its side effect."""
-        record = self.append(event, payload)
+        if not event or not payload.get("correlation_id"):
+            raise GovernanceError("audit provenance is incomplete")
+        self._validate_payload(payload)
+        record = AuditRecord(event, dict(payload))
         line = json.dumps({"event": record.event, **record.payload}, sort_keys=True)
-        with Path(path).open("a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
-            stream.flush()
+        try:
+            with Path(path).open("a", encoding="utf-8") as stream:
+                stream.write(line + "\n")
+                stream.flush()
+        except (OSError, TypeError, ValueError) as error:
+            raise GovernanceError("audit persistence failed; progression is blocked") from error
+        self.records.append(record)
         return record
+
+
+def append_governance_event(audit: AppendOnlyAudit, event: str,
+                            payload: Mapping[str, Any], path: str | Path) -> AuditRecord:
+    """Persist the minimum V1.1 audit envelope before dispatch or progression."""
+    required = ("issue_id", "correlation_id", "agent_role", "capability_tier",
+                "routing_reason", "risk_classification", "context_pack_id",
+                "context_pack_version", "controller_policy_version", "retry_count",
+                "review_tier", "outcome", "timestamp", "commit_sha")
+    if any(key not in payload or payload[key] in (None, "") for key in required):
+        raise GovernanceError("audit envelope is incomplete")
+    if payload["capability_tier"] not in CAPABILITY_TIERS or payload["review_tier"] not in REVIEW_TIERS:
+        raise GovernanceError("audit envelope contains an invalid tier")
+    return audit.write_jsonl(path, event, payload)
 
 
 def validate_issue(issue: Mapping[str, Any], *, catalog: Mapping[int, Any] | None = None,
@@ -378,6 +582,8 @@ def create_dispatch_request(issue: Mapping[str, Any], eligibility: Mapping[str, 
         "agent": eligibility.get("agent"),
         "base_branch": eligibility["base_branch"],
         "prompt_hash": prompt_hash,
+        "capability_tier": eligibility.get("capability_tier"),
+        "review_tier": eligibility.get("review_tier"),
         "dispatch_key": dispatch_key(
             int(issue["id"]), int(eligibility["canonical_backlog"]),
             str(eligibility["agent"]), prompt_hash),

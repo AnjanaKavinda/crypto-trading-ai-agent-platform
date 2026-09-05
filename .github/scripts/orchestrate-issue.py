@@ -14,6 +14,7 @@ from orchestrator import (
     build_canonical_mapping, parse_catalog_dependencies, parse_catalog_titles,
     create_dispatch_request, parse_dependencies, resolve_canonical_number,
     resolve_dependency_github_numbers, validate_issue, verify_protections,
+    extract_routing_inputs, select_capability_tier, required_review_tier,
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
@@ -101,6 +102,11 @@ def main() -> int:
         "title": issue.get("title", ""), "dependencies": dependencies,
         "active_issues": active_issues, "owned": ownership, "base_branch": None,
     }
+    # V1.1 routing metadata is an explicit dispatch prerequisite; never infer it
+    # from free-form issue prose.
+    routing_inputs = extract_routing_inputs(issue.get("routing_inputs", {}))
+    capability_tier = select_capability_tier(routing_inputs)
+    review_tier = required_review_tier(routing_inputs)
     # Repository rulesets are the durable protection source; absence is unsafe.
     rulesets = gh(f"{root}/rulesets")
     repository_settings = gh(root)
@@ -127,6 +133,9 @@ def main() -> int:
             "auto_merge": bool(repository_settings.get("allow_auto_merge")),
             "merge_queue": any(rule.get("type") == "merge_queue" for detail in details
                                for rule in detail.get("rules", [])),
+            "missing_rules": [rule for rule in ("deletion", "non_fast_forward")
+                              if not any(item.get("type") == rule for detail in details
+                                         for item in detail.get("rules", []))],
         }
     verify_protections(protection)
     dependency_status = {}
@@ -134,6 +143,8 @@ def main() -> int:
         dependency_issue = gh(f"{root}/issues/{number}")
         dependency_status[canonical] = "closed" if dependency_issue.get("state") == "closed" else "open"
     eligibility = validate_issue(issue_input, dependency_status=dependency_status)
+    eligibility.update({"routing_inputs": routing_inputs, "capability_tier": capability_tier,
+                        "review_tier": review_tier})
     prompt, prompt_hash = build_launch_prompt(
         {**issue_input, "canonical_backlog": eligibility["canonical_backlog"]},
         eligibility["agent"], ["AGENTS.md", ".github/copilot-instructions.md",

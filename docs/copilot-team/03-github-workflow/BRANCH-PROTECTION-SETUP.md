@@ -9,7 +9,7 @@ Both `dev` and `main` must have active, independently verifiable protection befo
 The required invariants are:
 
 - changes enter through pull requests;
-- at least one approving review is required;
+- `dev` requires zero native human approvals and `main` requires one native human approval;
 - stale approvals are dismissed after new pushes;
 - review threads must be resolved;
 - the `governance-ci` status check must pass;
