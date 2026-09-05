@@ -1,0 +1,25 @@
+name: Governance CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  governance-ci:
+    name: governance-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile governance scripts
+        working-directory: .github/scripts
+        run: python -m compileall .
+      - name: Run orchestrator governance unit tests
+        working-directory: .github/scripts
+        run: python -m unittest test_orchestrator.py
