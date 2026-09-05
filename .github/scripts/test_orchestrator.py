@@ -128,7 +128,7 @@ class GovernanceTests(unittest.TestCase):
             ["fix this"])
 
     def test_pending_governance_does_not_enter_correction_loop(self):
-        # Pending checks or missing approval produce no authorized findings.
+        # No approval, pending/missing checks, and missing roles produce no finding.
         self.assertEqual(
             transition_pr.current_head_findings([], {"reviewer"}, "head"), [])
         self.assertEqual(
@@ -137,6 +137,15 @@ class GovernanceTests(unittest.TestCase):
                   "state": "APPROVED", "body": ""}],
                 {"reviewer"}, "head"),
             [])
+        self.assertEqual(
+            transition_pr.current_head_findings(
+                [{"user": {"login": "other"}, "commit_id": "head",
+                  "state": "CHANGES_REQUESTED", "body": "unauthorized"}],
+                {"reviewer"}, "head"),
+            [])
+        # No finding means no correction attempt is eligible for increment.
+        self.assertFalse(
+            transition_pr.current_head_findings([], {"reviewer"}, "head"))
     def test_dispatch_request_is_idempotent_and_cannot_merge(self):
         request = create_dispatch_request(
             {"id": 10}, {"canonical_backlog": 4, "agent": "Platform Architect",

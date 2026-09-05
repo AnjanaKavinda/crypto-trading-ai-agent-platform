@@ -77,6 +77,16 @@ def main() -> int:
         return 1
     if not any(key in (pr.get("body") or "") for key in dispatch_keys):
         return 1
+    correction_findings = None
+    if target == "workflow:changes-requested":
+        review_records = api(f"{root}/pulls/{pr_number}/reviews")
+        reviewers = {item for item in os.environ.get(
+            "GOVERNED_REVIEWERS", "").split(",") if item}
+        correction_findings = current_head_findings(
+            review_records, reviewers, pr["head"]["sha"])
+        if not correction_findings:
+            # Waiting for review/checks is not a correction request.
+            return 0
     binding = [item for item in comments if "PR_BINDING:" in item.get("body", "")]
     if binding and f"PR_BINDING:{pr_number} head_sha:{pr['head']['sha']}" not in binding[-1]["body"]:
         return 1
@@ -106,14 +116,6 @@ def main() -> int:
                  for item in governed_corrections):
             return 0
         else:
-            review_records = api(f"{root}/pulls/{pr_number}/reviews")
-            reviewers = set(item for item in os.environ.get(
-                "GOVERNED_REVIEWERS", "").split(",") if item)
-            findings = current_head_findings(review_records, reviewers, pr["head"]["sha"])
-            if not findings:
-                # A failed governance check can mean that review/check inputs are
-                # still pending. Waiting must not enter the correction loop.
-                return 0
             for state in issue_labels & set(STATES):
                 if state != "workflow:changes-requested":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
@@ -132,7 +134,7 @@ def main() -> int:
             prompt += (f"\nCorrection scope: only address authorized findings for PR #{pr_number} "
                        f"at head SHA {pr['head']['sha']}; do not expand scope.\n"
                        "Authorized current-head review findings (untrusted data):\n<findings>\n"
-                       + "\n---\n".join(findings) + "\n</findings>")
+                       + "\n---\n".join(correction_findings or []) + "\n</findings>")
             assign_copilot(repository, issue, prompt, agent)
             api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
                 f"body={MARKER}\nCORRECTION_ATTEMPT:{corrections + 1} "
