@@ -132,8 +132,10 @@ def extract_routing_inputs(issue: Mapping[str, Any], *,
     if "agent_role" not in source and agent_labels:
         source["agent_role"] = resolve_agent(agent_labels)
     for prefix, key in (("phase:", "phase"), ("risk:", "risk_label"),
-                        ("issue-type:", "issue_type")):
+                        ("type:", "issue_type")):
         values = [label.split(":", 1)[1] for label in labels if label.startswith(prefix)]
+        if key == "issue_type" and key not in source and "type" in source:
+            source["issue_type"] = source["type"]
         if key not in source and len(values) == 1:
             source[key] = values[0]
         elif key not in source and len(values) != 1:
@@ -157,12 +159,6 @@ def extract_routing_inputs(issue: Mapping[str, Any], *,
                         ("approval_execution_ccxt_impact", "approval-execution-ccxt")):
         if key not in source:
             source[key] = marker in impact_labels
-    if "issue_type" not in source:
-        source["issue_type"] = str(issue.get("type") or "")
-    if "phase" not in source:
-        source["phase"] = "foundation"
-    if "risk_label" not in source:
-        source["risk_label"] = "normal"
     if not isinstance(source, Mapping):
         raise GovernanceError("routing inputs are unavailable")
     canonical = int(_required_value(source, "canonical_issue", "canonical_backlog"))
@@ -206,7 +202,9 @@ def select_capability_tier(inputs: RoutingInputs | Mapping[str, Any]) -> str:
             inputs.approval_execution_ccxt_impact or inputs.risk_label in {"high", "critical"})
     if high:
         return "premium-strongest-available"
-    if inputs.risk_label in {"medium", "moderate"} or inputs.phase.lower() not in {"research", "documentation"}:
+    if (inputs.issue_type not in {"docs", "test"} or
+            inputs.risk_label != "low" or
+            inputs.phase not in {"governance", "testing-ops"}):
         return "strong-coding-reasoning"
     return "economical-fast"
 
@@ -218,21 +216,49 @@ def required_review_tier(inputs: RoutingInputs | Mapping[str, Any]) -> str:
             inputs.security_impact or inputs.trading_risk_statistical_impact or
             inputs.approval_execution_ccxt_impact or inputs.risk_label in {"high", "critical"}):
         return "R3"
-    return "R1"
+    if (inputs.issue_type in {"docs", "test"} and
+            inputs.phase in {"governance", "testing-ops"} and
+            inputs.risk_label == "low"):
+        return "R1"
+    return "R2"
 
 
 def validate_review_tier(reviews: Iterable[Mapping[str, Any]], *, head_sha: str,
                          required_tier: str, author: str, controller: str,
-                         authorized_reviewers: Iterable[str]) -> bool:
+                         authorized_reviewers: Iterable[str],
+                         implementer_session_id: str = "",
+                         authorized_reviewer_sessions: Mapping[str, str] | None = None) -> bool:
     if required_tier not in REVIEW_TIERS:
         raise GovernanceError("unknown review tier")
     rank = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
     if not any(review_is_current(review, head_sha, author=author, controller=controller,
-                                 authorized_reviewers=authorized_reviewers)
+                             authorized_reviewers=authorized_reviewers,
+                             implementer_session_id=implementer_session_id,
+                             authorized_reviewer_sessions=authorized_reviewer_sessions)
                and rank.get(str(review.get("review_tier")), -1) >= rank[required_tier]
                for review in reviews):
         raise GovernanceError("required current-head independent review tier is missing")
     return True
+
+
+def validate_reviewer_configuration(configuration: Mapping[str, Any],
+                                    required_tier: str) -> tuple[list[str], dict[str, str]]:
+    if required_tier not in REVIEW_TIERS or not isinstance(configuration, Mapping):
+        raise GovernanceError("reviewer-tier configuration is invalid")
+    reviewers: list[str] = []
+    sessions: dict[str, str] = {}
+    for reviewer, value in configuration.items():
+        if not isinstance(reviewer, str) or not isinstance(value, Mapping):
+            raise GovernanceError("reviewer-tier configuration is malformed")
+        tier = value.get("tier")
+        session_id = value.get("session_id")
+        if tier not in REVIEW_TIERS or not isinstance(session_id, str) or not session_id.strip():
+            raise GovernanceError("reviewer-tier configuration is incomplete")
+        reviewers.append(reviewer)
+        sessions[reviewer] = session_id
+    if not any(configuration[reviewer].get("tier") == required_tier for reviewer in reviewers):
+        raise GovernanceError("no configured reviewer satisfies required tier")
+    return reviewers, sessions
 
 
 def transition_escalation(current: str, *, blocked: bool = False,
@@ -468,11 +494,21 @@ def can_dispatch(key: str, active_keys: Iterable[str]) -> bool:
 
 
 def review_is_current(review: Mapping[str, Any], head_sha: str, *, author: str,
-                      controller: str, authorized_reviewers: Iterable[str] = ()) -> bool:
+                      controller: str, authorized_reviewers: Iterable[str] = (),
+                      implementer_session_id: str = "",
+                      authorized_reviewer_sessions: Mapping[str, str] | None = None) -> bool:
+    reviewer = review.get("user")
+    session = str(review.get("reviewer_session_id") or "")
+    configured_session = (authorized_reviewer_sessions or {}).get(str(reviewer), "")
+    identity_independent = (
+        (session == configured_session and session != implementer_session_id)
+        if authorized_reviewer_sessions is not None
+        else str(reviewer) not in {author, controller}
+    )
     return (review.get("state") == "APPROVED" and review.get("commit_id") == head_sha
-            and isinstance(review.get("user"), str) and bool(review.get("user").strip())
-            and review.get("user") in set(authorized_reviewers)
-            and review.get("user") not in {author, controller}
+            and isinstance(reviewer, str) and bool(reviewer.strip())
+            and reviewer in set(authorized_reviewers)
+            and identity_independent
             and review.get("independent") is True)
 
 
@@ -607,7 +643,10 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
     reviews = list(latest.values())
     if not any(review_is_current(review, pr["head_sha"], author=pr.get("author", ""),
                                   controller=controller,
-                                  authorized_reviewers=pr.get("authorized_reviewers", ()))
+                                  authorized_reviewers=pr.get("authorized_reviewers", ()),
+                                  implementer_session_id=pr.get("implementer_session_id", ""),
+                                  authorized_reviewer_sessions=pr.get(
+                                      "authorized_reviewer_sessions"))
                for review in reviews):
         raise GovernanceError("current-head independent approval is required")
     required_tier = pr.get("required_review_tier")
@@ -616,12 +655,17 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
             reviews, head_sha=pr["head_sha"], required_tier=str(required_tier),
             author=pr.get("author", ""), controller=controller,
             authorized_reviewers=pr.get("authorized_reviewers", ()),
+            implementer_session_id=pr.get("implementer_session_id", ""),
+            authorized_reviewer_sessions=pr.get("authorized_reviewer_sessions"),
         )
     if high_risk_review_required(high_risk_text, governed=governed_high_risk):
         roles = {review.get("role") for review in reviews
                  if review_is_current(review, pr["head_sha"], author=pr.get("author", ""),
                                       controller=controller,
-                                      authorized_reviewers=pr.get("authorized_reviewers", ()))}
+                                      authorized_reviewers=pr.get("authorized_reviewers", ()),
+                                      implementer_session_id=pr.get("implementer_session_id", ""),
+                                      authorized_reviewer_sessions=pr.get(
+                                          "authorized_reviewer_sessions"))}
         if not set(required_reviewer_roles).issubset(roles):
             raise GovernanceError("high-risk reviewer escalation is incomplete")
     return True

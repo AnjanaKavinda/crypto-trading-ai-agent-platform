@@ -187,21 +187,29 @@ def main() -> int:
                "context_pack_version": context_pack.version,
                "controller_policy_version": "v1.1", "retry_count": 0,
                "escalation_count": 0, "review_tier": review_tier,
-               "reviewer_role": "independent-ai-reviewer", "outcome": "assigned",
+               "reviewer_role": "independent-ai-reviewer", "outcome": "dispatch-intended",
                "timestamp": datetime.now(timezone.utc).isoformat(),
                "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
                "prompt_hash": prompt_hash, "controller_version": "v1.1",
-               "prior_state": "workflow:ready", "new_state": "workflow:agent-running"}
+               "prior_state": "workflow:ready", "new_state": "workflow:agent-running",
+               "implementer_session_id": os.environ.get("GOVERNED_IMPLEMENTER_SESSION", "")}
+    if not payload["implementer_session_id"]:
+        raise GovernanceError("implementer session is not configured")
     audit_path = os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue_id}.jsonl")
     append_governance_event(audit, "dispatch", payload, audit_path)
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
-              f"body={MARKER}\nAUDIT {json.dumps(payload, sort_keys=True)}\n"
+              f"body={MARKER}\nDISPATCH_INTENT {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}")
     # The Copilot coding-agent assignment endpoint is the supported dispatch boundary.
     assign_copilot(repository, issue_id, prompt, eligibility["agent"],
                    eligibility["base_branch"])
+    append_governance_event(
+        audit, "assignment",
+        {**payload, "outcome": "assigned"},
+        audit_path,
+    )
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
-              f"body={MARKER}\nDISPATCH {json.dumps(payload, sort_keys=True)}\n"
+              f"body={MARKER}\nASSIGNMENT_COMPLETED {json.dumps({**payload, 'outcome': 'assigned'}, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}\n\n{prompt}\n"
               f"Include `dispatch_key:{request['dispatch_key']}` in the PR body.")
     for state in ("workflow:ready", "workflow:agent-running", "workflow:review",

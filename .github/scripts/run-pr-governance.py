@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-from orchestrator import GovernanceError, validate_pr
+from orchestrator import GovernanceError, validate_pr, validate_reviewer_configuration
 
 
 def normalize_checks(status: dict, check_runs: dict) -> dict[str, str]:
@@ -34,24 +34,34 @@ def main() -> int:
     pr = {"issue_id": None, "base": pr.get("base", {}).get("ref"),
           "head_sha": pr.get("head", {}).get("sha"),
           "author": pr.get("user", {}).get("login"), "body": pr.get("body")}
-    reviewer_roles = json.loads(os.environ.get("GOVERNED_REVIEWER_ROLES", "{}"))
-    reviewer_tiers = json.loads(os.environ.get("GOVERNED_REVIEWER_TIERS", "{}"))
+    try:
+        reviewer_roles = json.loads(os.environ.get("GOVERNED_REVIEWER_ROLES", "{}"))
+        reviewer_configuration = json.loads(
+            os.environ.get("GOVERNED_REVIEWER_TIERS", "{}"))
+    except json.JSONDecodeError as error:
+        print(f"malformed trusted reviewer configuration; blocked: {error}", file=sys.stderr)
+        return 1
     reviews = [{"state": item.get("state"), "commit_id": item.get("commit_id"),
                 "user": item.get("user", {}).get("login"), "independent": True,
                 "submitted_at": item.get("submitted_at"), "id": item.get("id"),
                 "role": reviewer_roles.get(item.get("user", {}).get("login")),
-                "review_tier": reviewer_tiers.get(item.get("user", {}).get("login"), "R1")}
+                "review_tier": reviewer_configuration.get(
+                    item.get("user", {}).get("login"), {}).get("tier"),
+                "reviewer_session_id": (item.get("body") or "").split(
+                    "reviewer_session_id:", 1)[1].split()[0]
+                    if "reviewer_session_id:" in (item.get("body") or "") else ""}
                for item in reviews]
     pr["checks"] = normalize_checks(status, check_runs)
     pr["governed_high_risk"] = any(label.get("name") == "risk:high"
                                     for label in issue.get("labels", []))
     labels = {label.get("name") for label in issue.get("labels", [])}
     pr["required_review_tier"] = (
-        "R3" if labels & {"risk:high", "risk:critical", "impact:architecture",
+        "R3" if labels & {"risk:high", "risk:critical", "type:architecture",
+                          "type:contract", "type:security", "impact:architecture",
                           "impact:shared-contract", "impact:security",
                           "impact:trading-risk", "impact:approval-execution-ccxt"}
-        else "R2" if labels & {"risk:medium", "impact:normal"}
-        else "R1"
+        else "R1" if labels & {"risk:low", "type:docs", "type:test"}
+        else "R2"
     )
     issue_match = re.search(r"(?im)\b(?:closes|fixes|resolves)\s+#(\d+)", pr.get("body") or "")
     issue_id = os.environ.get("GOVERNED_ISSUE_ID") or (issue_match.group(1) if issue_match else "")
@@ -61,6 +71,21 @@ def main() -> int:
     pr["issue_id"] = int(issue_id)
     pr["authorized_reviewers"] = [name for name in
                                   os.environ.get("GOVERNED_REVIEWERS", "").split(",") if name]
+    try:
+        configured_reviewers, configured_sessions = validate_reviewer_configuration(
+            reviewer_configuration, pr["required_review_tier"])
+    except GovernanceError as error:
+        print(f"missing trusted reviewer-tier configuration; blocked: {error}", file=sys.stderr)
+        return 1
+    if set(pr["authorized_reviewers"]) != set(configured_reviewers):
+        print("reviewer allowlist and reviewer-tier configuration disagree; blocked",
+              file=sys.stderr)
+        return 1
+    pr["authorized_reviewer_sessions"] = configured_sessions
+    pr["implementer_session_id"] = os.environ.get("GOVERNED_IMPLEMENTER_SESSION", "")
+    if not pr["implementer_session_id"]:
+        print("missing trusted implementer session configuration; blocked", file=sys.stderr)
+        return 1
     required = [name for name in os.environ.get("REQUIRED_CHECKS", "").split(",") if name]
     required_roles = [role for role in os.environ.get(
         "REQUIRED_REVIEWER_ROLES", "").split(",") if role]

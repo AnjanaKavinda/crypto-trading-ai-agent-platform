@@ -217,8 +217,8 @@ class GovernanceTests(unittest.TestCase):
                     "## Affected paths\n- docs/**\n\n## Allowed paths\n- docs/**\n\n"
                     "## Forbidden paths\n- secrets/**",
             "labels": [
-                {"name": "agent:architect"}, {"name": "phase:foundation"},
-                {"name": "risk:high"}, {"name": "issue-type:governance"},
+                {"name": "agent:architect"}, {"name": "phase:governance"},
+                {"name": "risk:high"}, {"name": "type:ci"},
                 {"name": "impact:architecture"},
             ],
         }
@@ -227,6 +227,33 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(extracted.agent_role, "Platform Architect")
         self.assertEqual(select_capability_tier(extracted),
                          "premium-strongest-available")
+        issue_six = {"title": "Requirements traceability baseline",
+                     "body": "# Issue 004 — Requirements traceability baseline",
+                     "labels": [{"name": "agent:architect"}, {"name": "phase:governance"}]}
+        with self.assertRaises(GovernanceError):
+            extract_routing_inputs(issue_six)
+
+    def test_v11_taxonomy_and_r2_decision(self):
+        normal = {
+            "canonical_issue": 11, "agent_role": "Backend/Foundation Engineer",
+            "phase": "foundation", "risk_label": "medium", "issue_type": "backend",
+            "affected_paths": ["apps/api/**"], "allowed_paths": ["apps/api/**"],
+            "forbidden_paths": ["secrets/**"], "architecture_impact": False,
+            "shared_contract_impact": False, "security_impact": False,
+            "trading_risk_statistical_impact": False,
+            "approval_execution_ccxt_impact": False,
+        }
+        self.assertEqual(required_review_tier(normal), "R2")
+        self.assertEqual(select_capability_tier(normal), "strong-coding-reasoning")
+        self.assertEqual(extract_routing_inputs({
+            "canonical_issue": 11, "agent_role": "Backend/Foundation Engineer",
+            "phase": "foundation", "risk_label": "medium", "type": "backend",
+            "affected_paths": ["apps/api/**"], "allowed_paths": ["apps/api/**"],
+            "forbidden_paths": ["secrets/**"], "architecture_impact": False,
+            "shared_contract_impact": False, "security_impact": False,
+            "trading_risk_statistical_impact": False,
+            "approval_execution_ccxt_impact": False,
+        }).issue_type, "backend")
 
     def test_v11_audit_identity_and_stale_review(self):
         self.assertTrue(validate_identity_separation(
@@ -239,6 +266,12 @@ class GovernanceTests(unittest.TestCase):
             validate_identity_separation(
                 owner="owner", controller="same", implementer="copilot",
                 reviewer="same", head_sha="head", reviewer_head_sha="old")
+        self.assertTrue(review_is_current(
+            {"state": "APPROVED", "commit_id": "head", "user": "owner",
+             "independent": True, "reviewer_session_id": "review-session"},
+            "head", author="copilot", controller="owner",
+            authorized_reviewers=["owner"], implementer_session_id="implement-session",
+            authorized_reviewer_sessions={"owner": "review-session"}))
         audit = AppendOnlyAudit()
         payload = {
             "issue_id": 207, "correlation_id": "c", "agent_role": "Backend/Foundation",
@@ -251,6 +284,16 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             append_governance_event(audit, "dispatch", payload, "/no/such/dir/audit.jsonl")
         self.assertEqual(audit.records, [])
+
+    def test_v11_reviewer_configuration_is_explicit(self):
+        reviewers, sessions = validate_reviewer_configuration(
+            {"owner": {"tier": "R3", "session_id": "review-session"}}, "R3")
+        self.assertEqual(reviewers, ["owner"])
+        self.assertEqual(sessions["owner"], "review-session")
+        with self.assertRaises(GovernanceError):
+            validate_reviewer_configuration({}, "R3")
+        with self.assertRaises(GovernanceError):
+            validate_reviewer_configuration({"owner": {"tier": "R3"}}, "R3")
 
     def test_v11_architecture_is_r3_and_review_is_enforced(self):
         inputs = {
