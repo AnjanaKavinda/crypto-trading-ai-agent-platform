@@ -38,13 +38,15 @@ jobs:
         id: fetch
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
         run: |
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" > /tmp/pr.json
-          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/reviews" > /tmp/reviews.json
+          case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > /tmp/reviews.json
           python - <<'PY'
           import json, re
           pr = json.load(open('/tmp/pr.json'))
@@ -55,8 +57,8 @@ jobs:
           open('/tmp/issue_number.txt', 'w').write(match.group(1))
           PY
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
-          gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/files" > /tmp/files.json
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}.diff" \
+          gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > /tmp/files.json
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \
             -H 'Accept: application/vnd.github.v3.diff' > /tmp/pr.diff
           python - <<'PY'
           import json, os, re
@@ -118,6 +120,7 @@ jobs:
       - name: Verify deterministic checks before AI review
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
@@ -144,7 +147,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" > /tmp/pr-after.json
+          case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-after.json
           test "$(jq -r .head.sha /tmp/pr-after.json)" = "$(jq -r .head_sha /tmp/reviewer-request.json)"
       - name: Produce signed independent-review provenance artifact
         id: produce
