@@ -111,6 +111,29 @@ Other providers may be introduced behind the same adapter boundary after explici
 
 Runtime trading-agent model mappings are not fixed by this initial development-review mapping. They must use the same policy shape — approved adapter plus allowlisted configuration — and remain subject to their own implementation readiness, security, cost, and governance controls.
 
+### Quality-first runtime trading rule
+
+For runtime crypto trading and analysis, **cost optimization is subordinate to empirically validated quality, calibration, robustness, deterministic safety, and reliability**.
+
+The platform must not downgrade any trading-critical, statistical, risk, security, approval, execution, or production-governance workload below its validated minimum capability/reliability tier merely to reduce cost.
+
+Runtime model/provider approval must be based on evidence appropriate to the workload, including as applicable:
+
+- historical backtesting and walk-forward validation;
+- out-of-sample and regime-aware evaluation;
+- calibration and uncertainty measurement;
+- adversarial/counter-thesis performance;
+- drift monitoring;
+- failure-rate and latency analysis;
+- reproducibility and auditability;
+- shadow-mode or paper-trading validation before production use.
+
+A cheaper model/provider may replace a more expensive one only after it demonstrates that it satisfies the same approved quality, safety, and reliability floor for the targeted workload.
+
+If the required validated model/provider is unavailable, degraded, unapproved, stale, or outside its validated operating envelope, the system must **fail closed**. For trading-signal generation this means `NO_TRADE` / blocked progression rather than silently substituting a cheaper or unvalidated model.
+
+No model, regardless of price or capability tier, is authoritative for deterministic risk calculations, position sizing, leverage limits, liquidation constraints, approval, execution, or exchange interaction. Those remain deterministic and governed, with human approval where required.
+
 ## Reasoning
 
 This option best matches the existing architecture and current development needs:
@@ -121,6 +144,8 @@ This option best matches the existing architecture and current development needs
 4. A multi-provider adapter boundary avoids future lock-in without introducing uncontrolled provider switching.
 5. The decision prevents another coding-agent cycle from resolving provider ambiguity during implementation.
 6. Cost optimization remains subordinate to required tier, safety, correctness, security, statistical integrity, deterministic risk, and human approval.
+7. Runtime trading-quality thresholds must be established empirically; price alone is never sufficient evidence for a downgrade.
+8. `NO_TRADE` / blocked operation is preferred to silently using an unvalidated or lower-reliability model when required evidence or provider capability is unavailable.
 
 ## Consequences
 
@@ -168,6 +193,9 @@ Implementation sequencing:
 - `AnjanaKavinda` is the final human reviewer, final approval authority, and final manual merge authority.
 - No provider/model receives live-trading, exchange, deterministic-risk, approval, execution, or production-promotion authority.
 - No automatic cross-provider fallback is permitted for R3/high-risk review without a separately approved mapping and validation.
+- Runtime trading/analysis workloads must not be downgraded below their validated minimum reliability tier for cost reasons.
+- Unavailable or unvalidated trading-critical model/provider capability must produce `NO_TRADE` / blocked progression rather than silent substitution.
+- Runtime trading model promotion requires empirical validation appropriate to the workload, including out-of-sample/regime-aware evaluation and calibration where applicable.
 - Cost thresholds and bounded retry/context rules from the independent reviewer contract remain mandatory.
 - `GOVERNED_PILOT_ENABLED` remains false/unset until separately authorized.
 - Canonical Issue 004 / GitHub Issue #6 remains blocked until its full prerequisite set is satisfied.
