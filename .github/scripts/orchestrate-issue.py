@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from orchestrator import (
@@ -15,6 +16,7 @@ from orchestrator import (
     create_dispatch_request, parse_dependencies, resolve_canonical_number,
     resolve_dependency_github_numbers, validate_issue, verify_protections,
     extract_routing_inputs, select_capability_tier, required_review_tier,
+    build_context_pack, append_governance_event, transition_escalation,
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
@@ -104,9 +106,20 @@ def main() -> int:
     }
     # V1.1 routing metadata is an explicit dispatch prerequisite; never infer it
     # from free-form issue prose.
-    routing_inputs = extract_routing_inputs(issue.get("routing_inputs", {}))
+    routing_inputs = extract_routing_inputs(issue, catalog_titles=catalog_titles)
     capability_tier = select_capability_tier(routing_inputs)
     review_tier = required_review_tier(routing_inputs)
+    escalation_tier = transition_escalation(capability_tier, retries=0)
+    context_pack = build_context_pack(
+        routing_inputs,
+        issue_metadata={"issue_id": int(issue_id), "github_title": issue.get("title", ""),
+                        "dependencies": dependencies, "base_branch": "dev",
+                        "controller_version": "v1.1"},
+        references=["AGENTS.md", ".github/copilot-instructions.md",
+                    "docs/adr/ADR-0001-governed-copilot-development-orchestration.md",
+                    "docs/copilot-team/03-github-workflow/MODEL-ROUTING-GOVERNANCE-V1.1.md"],
+        excerpts=[body],
+    )
     # Repository rulesets are the durable protection source; absence is unsafe.
     rulesets = gh(f"{root}/rulesets")
     repository_settings = gh(root)
@@ -143,12 +156,13 @@ def main() -> int:
         dependency_issue = gh(f"{root}/issues/{number}")
         dependency_status[canonical] = "closed" if dependency_issue.get("state") == "closed" else "open"
     eligibility = validate_issue(issue_input, dependency_status=dependency_status)
-    eligibility.update({"routing_inputs": routing_inputs, "capability_tier": capability_tier,
-                        "review_tier": review_tier})
+    eligibility.update({"routing_inputs": routing_inputs, "capability_tier": escalation_tier,
+                        "review_tier": review_tier, "context_pack": context_pack})
     prompt, prompt_hash = build_launch_prompt(
         {**issue_input, "canonical_backlog": eligibility["canonical_backlog"]},
         eligibility["agent"], ["AGENTS.md", ".github/copilot-instructions.md",
                                "docs/adr/ADR-0001-governed-copilot-development-orchestration.md"],
+        context_pack=context_pack,
     )
     comments = gh(f"{root}/issues/{issue_id}/comments")
     active = [comment for comment in comments if MARKER in comment.get("body", "")
@@ -166,9 +180,20 @@ def main() -> int:
     audit = AppendOnlyAudit()
     payload = {"correlation_id": request["dispatch_key"], "issue_id": int(issue_id),
                "canonical_backlog": eligibility["canonical_backlog"], "agent": eligibility["agent"],
-               "prompt_hash": prompt_hash, "controller_version": "v1",
+               "agent_role": eligibility["agent"], "capability_tier": capability_tier,
+               "routing_reason": "deterministic V1.1 decision table",
+               "risk_classification": routing_inputs.risk_label,
+               "context_pack_id": context_pack.context_pack_id,
+               "context_pack_version": context_pack.version,
+               "controller_policy_version": "v1.1", "retry_count": 0,
+               "escalation_count": 0, "review_tier": review_tier,
+               "reviewer_role": "independent-ai-reviewer", "outcome": "assigned",
+               "timestamp": datetime.now(timezone.utc).isoformat(),
+               "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+               "prompt_hash": prompt_hash, "controller_version": "v1.1",
                "prior_state": "workflow:ready", "new_state": "workflow:agent-running"}
-    audit.append("dispatch", payload)
+    audit_path = os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue_id}.jsonl")
+    append_governance_event(audit, "dispatch", payload, audit_path)
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
               f"body={MARKER}\nAUDIT {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}")

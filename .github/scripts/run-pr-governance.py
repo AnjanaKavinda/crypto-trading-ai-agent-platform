@@ -35,14 +35,24 @@ def main() -> int:
           "head_sha": pr.get("head", {}).get("sha"),
           "author": pr.get("user", {}).get("login"), "body": pr.get("body")}
     reviewer_roles = json.loads(os.environ.get("GOVERNED_REVIEWER_ROLES", "{}"))
+    reviewer_tiers = json.loads(os.environ.get("GOVERNED_REVIEWER_TIERS", "{}"))
     reviews = [{"state": item.get("state"), "commit_id": item.get("commit_id"),
                 "user": item.get("user", {}).get("login"), "independent": True,
                 "submitted_at": item.get("submitted_at"), "id": item.get("id"),
-                "role": reviewer_roles.get(item.get("user", {}).get("login"))}
+                "role": reviewer_roles.get(item.get("user", {}).get("login")),
+                "review_tier": reviewer_tiers.get(item.get("user", {}).get("login"), "R1")}
                for item in reviews]
     pr["checks"] = normalize_checks(status, check_runs)
     pr["governed_high_risk"] = any(label.get("name") == "risk:high"
                                     for label in issue.get("labels", []))
+    labels = {label.get("name") for label in issue.get("labels", [])}
+    pr["required_review_tier"] = (
+        "R3" if labels & {"risk:high", "risk:critical", "impact:architecture",
+                          "impact:shared-contract", "impact:security",
+                          "impact:trading-risk", "impact:approval-execution-ccxt"}
+        else "R2" if labels & {"risk:medium", "impact:normal"}
+        else "R1"
+    )
     issue_match = re.search(r"(?im)\b(?:closes|fixes|resolves)\s+#(\d+)", pr.get("body") or "")
     issue_id = os.environ.get("GOVERNED_ISSUE_ID") or (issue_match.group(1) if issue_match else "")
     if not issue_id:

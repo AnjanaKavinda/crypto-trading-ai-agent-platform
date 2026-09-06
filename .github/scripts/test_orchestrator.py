@@ -159,9 +159,20 @@ class GovernanceTests(unittest.TestCase):
         self.assertFalse(
             transition_pr.current_head_findings([], {"reviewer"}, "head"))
     def test_dispatch_request_is_idempotent_and_cannot_merge(self):
+        inputs = {
+            "canonical_issue": 10, "agent_role": "Platform Architect", "phase": "foundation",
+            "risk_label": "normal", "issue_type": "governance",
+            "affected_paths": ["docs/**"], "allowed_paths": ["docs/**"],
+            "forbidden_paths": ["secrets/**"], "architecture_impact": False,
+            "shared_contract_impact": False, "security_impact": False,
+            "trading_risk_statistical_impact": False,
+            "approval_execution_ccxt_impact": False,
+        }
+        pack = build_context_pack(inputs)
         request = create_dispatch_request(
             {"id": 10}, {"canonical_backlog": 4, "agent": "Platform Architect",
-                         "base_branch": "dev"}, "prompt-hash")
+                         "base_branch": "dev", "context_pack": pack,
+                         "capability_tier": "economical-fast", "review_tier": "R1"}, "prompt-hash")
         self.assertFalse(request["merge_capability"])
         self.assertFalse(request["approval_capability"])
         self.assertFalse(can_dispatch(request["dispatch_key"], [request["dispatch_key"]]))
@@ -180,12 +191,15 @@ class GovernanceTests(unittest.TestCase):
         extracted = extract_routing_inputs(inputs)
         self.assertEqual(select_capability_tier(extracted), "premium-strongest-available")
         self.assertEqual(required_review_tier(extracted), "R3")
+        with self.assertRaises(GovernanceError):
+            build_context_pack(extracted, references=["AGENTS.md"],
+                               excerpts=["untrusted token=hidden"])
         pack = build_context_pack(extracted, references=["AGENTS.md"],
-                                  excerpts=["untrusted token=hidden"])
+                                  excerpts=["bounded safe excerpt"])
         self.assertEqual(pack.version, "v1.1")
-        self.assertNotIn("token=hidden", pack.excerpts[0])
+        self.assertEqual(pack.excerpts[0], "bounded safe excerpt")
         self.assertEqual(build_context_pack(extracted, references=["AGENTS.md"],
-                                            excerpts=["untrusted token=hidden"]).context_pack_id,
+                                            excerpts=["bounded safe excerpt"]).context_pack_id,
                          pack.context_pack_id)
         self.assertEqual(transition_escalation("economical-fast", blocked=True),
                          "strong-coding-reasoning")
@@ -196,7 +210,28 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             extract_routing_inputs({**inputs, "allowed_paths": ["other/**"]})
 
+    def test_v11_extracts_real_issue_labels_and_scope(self):
+        issue = {
+            "title": "Requirements traceability baseline",
+            "body": "# Issue 004 — Requirements traceability baseline\n\n"
+                    "## Affected paths\n- docs/**\n\n## Allowed paths\n- docs/**\n\n"
+                    "## Forbidden paths\n- secrets/**",
+            "labels": [
+                {"name": "agent:architect"}, {"name": "phase:foundation"},
+                {"name": "risk:high"}, {"name": "issue-type:governance"},
+                {"name": "impact:architecture"},
+            ],
+        }
+        extracted = extract_routing_inputs(issue)
+        self.assertEqual(extracted.canonical_issue, 4)
+        self.assertEqual(extracted.agent_role, "Platform Architect")
+        self.assertEqual(select_capability_tier(extracted),
+                         "premium-strongest-available")
+
     def test_v11_audit_identity_and_stale_review(self):
+        self.assertTrue(validate_identity_separation(
+            owner="owner", controller="owner", implementer="copilot",
+            reviewer="reviewer", head_sha="head", reviewer_head_sha="head"))
         self.assertTrue(validate_identity_separation(
             owner="owner", controller="controller", implementer="copilot",
             reviewer="reviewer", head_sha="head", reviewer_head_sha="head"))
@@ -216,6 +251,28 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             append_governance_event(audit, "dispatch", payload, "/no/such/dir/audit.jsonl")
         self.assertEqual(audit.records, [])
+
+    def test_v11_architecture_is_r3_and_review_is_enforced(self):
+        inputs = {
+            "canonical_issue": 207, "agent_role": "Platform Architect", "phase": "foundation",
+            "risk_label": "normal", "issue_type": "governance",
+            "affected_paths": ["docs/**"], "allowed_paths": ["docs/**"],
+            "forbidden_paths": ["secrets/**"], "architecture_impact": True,
+            "shared_contract_impact": False, "security_impact": False,
+            "trading_risk_statistical_impact": False,
+            "approval_execution_ccxt_impact": False,
+        }
+        self.assertEqual(required_review_tier(inputs), "R3")
+        pr = {"issue_id": 10, "base": "dev", "head_sha": "head", "author": "copilot",
+              "authorized_reviewers": ["reviewer"], "checks": {"ci": "success"},
+              "required_review_tier": "R3"}
+        review = {"state": "APPROVED", "commit_id": "head", "user": "reviewer",
+                  "independent": True, "review_tier": "R3"}
+        self.assertTrue(validate_pr(pr, issue_id=10, required_checks=["ci"],
+                                     reviews=[review]))
+        with self.assertRaises(GovernanceError):
+            validate_pr({**pr, "required_review_tier": "R3"}, issue_id=10,
+                        required_checks=["ci"], reviews=[{**review, "review_tier": "R2"}])
 
 if __name__ == "__main__":
     unittest.main()

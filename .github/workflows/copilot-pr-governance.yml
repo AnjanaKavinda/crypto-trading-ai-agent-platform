@@ -57,6 +57,7 @@ jobs:
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
+          GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           REQUIRED_REVIEWER_ROLES: ${{ vars.GOVERNED_REQUIRED_REVIEWER_ROLES }}
         run: python .github/scripts/run-pr-governance.py /tmp/pr.json /tmp/reviews.json /tmp/status.json /tmp/checks.json /tmp/issue.json
