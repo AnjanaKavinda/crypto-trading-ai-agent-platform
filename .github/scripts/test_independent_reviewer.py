@@ -49,6 +49,17 @@ class IndependentReviewerTests(unittest.TestCase):
             "- name: Produce signed independent-review provenance artifact", 1)[0]
         self.assertIn("PR_NUMBER: ${{ github.event.inputs.pr_number }}", step)
 
+    def test_payload_omits_unsupported_sampling_temperature(self):
+        adapter = OpenAIReviewerAdapter(
+            api_key="test-key",
+            transport=lambda payload, timeout: response("approved"),
+            model_mapping=MODEL_MAPPING,
+        )
+        payload = adapter._payload(make_request())
+        self.assertNotIn("temperature", payload)
+        self.assertEqual(payload["model"], "gpt-5.6-sol")
+        self.assertEqual(payload["response_format"]["type"], "json_schema")
+
     def test_all_model_dispositions_are_structured(self):
         for disposition in ("approved", "changes-requested", "blocked"):
             result = OpenAIReviewerAdapter(
