@@ -59,7 +59,14 @@ jobs:
           GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
           GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
           GOVERNED_REVIEW_ARTIFACTS: ${{ vars.GOVERNED_REVIEW_ARTIFACTS }}
-          GOVERNED_PROVENANCE_PRODUCER: ${{ vars.GOVERNED_PROVENANCE_PRODUCER }}
+          # The trusted producer identity is bound to the exact workflow
+          # file/ref that the platform (never a repository *variable*)
+          # reports as GITHUB_WORKFLOW_REF when governed-independent-review.yml
+          # runs. Comparing against this literal, computed-from-context value
+          # -- rather than an independently editable vars.* value -- means an
+          # artifact can only verify if it was actually produced by that
+          # exact trusted workflow file pinned to the protected dev branch.
+          GOVERNED_PROVENANCE_PRODUCER: ${{ github.repository }}/.github/workflows/governed-independent-review.yml@refs/heads/dev
           GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_AUDIT_LOG: ${{ vars.GOVERNED_AUDIT_LOG }}

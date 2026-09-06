@@ -6,33 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: PR number under review
+        description: >-
+          PR number to check for an existing current-head independent
+          review. This is the only trusted input: it identifies which PR to
+          verify, it does not assert a review outcome. Disposition, actual
+          review tier, and reviewer identity are never accepted as inputs --
+          they are derived only from a real GitHub review already submitted
+          against the PR's current head by a reviewer configured in
+          GOVERNED_REVIEWER_TIERS.
         required: true
-      issue_id:
-        description: Linked canonical issue number (GitHub issue)
-        required: true
-      head_sha:
-        description: Current PR head SHA this review is bound to
-        required: true
-      reviewer_identity:
-        description: Independent reviewer identity (must differ from controller/implementer)
-        required: true
-      required_review_tier:
-        description: Required review tier (R1, R2, or R3)
-        required: true
-      actual_review_tier:
-        description: Review tier actually performed (R1, R2, or R3)
-        required: true
-      disposition:
-        description: Review disposition (approved or changes-requested)
-        required: true
-        default: approved
-      reviewer_role:
-        description: Reviewer role label (for example Platform Architect, QA/Security Reviewer)
-        required: false
-        default: ""
 permissions:
   contents: read
+  pull-requests: read
+  issues: read
 jobs:
   produce-review-provenance:
     name: produce-review-provenance
@@ -48,27 +34,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Fetch verified GitHub API snapshots
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" > /tmp/pr.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/reviews" > /tmp/reviews.json
+          python - <<'PY'
+          import json, re
+          pr = json.load(open('/tmp/pr.json'))
+          body = pr.get('body') or ''
+          match = re.search(r'(?im)\b(?:closes|fixes|resolves)\s+#(\d+)', body)
+          if not match:
+              raise SystemExit('PR has no linked issue')
+          open('/tmp/issue_number.txt', 'w').write(match.group(1))
+          PY
+          gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
       - name: Produce signed independent-review provenance artifact
         id: produce
         env:
           GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
-          GOVERNED_REPOSITORY: ${{ github.repository }}
-          GOVERNED_PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          GOVERNED_ISSUE_ID: ${{ github.event.inputs.issue_id }}
-          GOVERNED_HEAD_SHA: ${{ github.event.inputs.head_sha }}
-          GOVERNED_REVIEW_ID: independent-review-${{ github.run_id }}-${{ github.run_attempt }}
-          GOVERNED_REVIEWER_IDENTITY: ${{ github.event.inputs.reviewer_identity }}
-          GOVERNED_REVIEWER_SESSION_ID: independent-reviewer-session-${{ github.run_id }}
+          GOVERNED_BASE: dev
+          GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
+          GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
-          GOVERNED_REQUIRED_REVIEW_TIER: ${{ github.event.inputs.required_review_tier }}
-          GOVERNED_ACTUAL_REVIEW_TIER: ${{ github.event.inputs.actual_review_tier }}
-          GOVERNED_PRODUCER_IDENTITY: ${{ vars.GOVERNED_PROVENANCE_PRODUCER }}
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-          GOVERNED_REVIEW_DISPOSITION: ${{ github.event.inputs.disposition }}
-          GOVERNED_REVIEWER_ROLE: ${{ github.event.inputs.reviewer_role }}
           GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
         run: |
-          python .github/scripts/produce-review-provenance.py > /tmp/review-artifact.json
+          python .github/scripts/produce-review-provenance.py /tmp/pr.json /tmp/reviews.json /tmp/issue.json > /tmp/review-artifact.json
       - name: Upload signed provenance artifact
         uses: actions/upload-artifact@v4
         with:
@@ -79,10 +73,12 @@ jobs:
           retention-days: 90
       - name: Report immutable producer output pointer
         run: |
-          echo "Trusted producer output created. This signed artifact, not any" >&2
-          echo "free-form assertion, is the only value copilot-pr-governance.yml" >&2
-          echo "will accept as independent-review provenance. A repository" >&2
-          echo "maintainer must copy the exact JSON below into the" >&2
-          echo "GOVERNED_REVIEW_ARTIFACTS repository variable (as a JSON list)" >&2
-          echo "before the PR governance check will find it." >&2
+          echo "Trusted producer output created. This signed artifact -- not any" >&2
+          echo "free-form assertion or human-supplied disposition -- is the only" >&2
+          echo "value copilot-pr-governance.yml will accept as independent-review" >&2
+          echo "provenance. Prefer fetching this immutable run/artifact directly" >&2
+          echo "(run id ${{ github.run_id }}); only if that is not feasible should" >&2
+          echo "a maintainer copy this exact JSON into the GOVERNED_REVIEW_ARTIFACTS" >&2
+          echo "repository variable (as a JSON list), and only as a pointer to this" >&2
+          echo "verifiable value, never as a new trust assertion." >&2
           cat /tmp/review-artifact.json

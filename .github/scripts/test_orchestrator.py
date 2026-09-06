@@ -1,6 +1,12 @@
 import unittest
 import importlib.util
+import io
+import json
+import os
+import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 from orchestrator import *
 import review_provenance
 
@@ -13,6 +19,11 @@ transition_spec = importlib.util.spec_from_file_location(
     "transition_pr", Path(__file__).with_name("transition-pr.py"))
 transition_pr = importlib.util.module_from_spec(transition_spec)
 transition_spec.loader.exec_module(transition_pr)
+
+producer_spec = importlib.util.spec_from_file_location(
+    "review_producer", Path(__file__).with_name("produce-review-provenance.py"))
+review_producer = importlib.util.module_from_spec(producer_spec)
+producer_spec.loader.exec_module(review_producer)
 
 class GovernanceTests(unittest.TestCase):
     def test_mapping_is_not_github_number(self):
@@ -327,7 +338,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret",
             reviewer_role="QA/Security Reviewer")
         result = review_provenance.verify_artifact(
@@ -350,7 +361,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         # Human controller cannot self-assert an artifact using a different secret.
         with self.assertRaises(GovernanceError):
@@ -374,7 +385,8 @@ class GovernanceTests(unittest.TestCase):
                 head_sha="head", reviewer_identity="reviewer-bot",
                 reviewer_session_id="same-session", implementer_session_id="same-session",
                 required_review_tier="R2", review_tier="R3",
-                producer_identity="trusted-producer", controller_policy_version="v1.1",
+                producer_identity="trusted-producer", producer_run_id="run-1",
+                controller_policy_version="v1.1",
                 disposition="approved", secret="signing-secret")
 
     def test_v11_stale_head_artifact_rejected(self):
@@ -382,7 +394,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="old-head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         with self.assertRaises(GovernanceError):
             review_provenance.verify_artifact(
@@ -396,7 +408,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         with self.assertRaises(GovernanceError):
             review_provenance.verify_artifact(
@@ -416,7 +428,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         tampered = dict(artifact, review_tier="R1")
         with self.assertRaises(GovernanceError):
@@ -433,7 +445,8 @@ class GovernanceTests(unittest.TestCase):
                 head_sha="head", reviewer_identity="reviewer-bot",
                 reviewer_session_id="review-session", implementer_session_id="implement-session",
                 required_review_tier=required, review_tier=tier,
-                producer_identity="trusted-producer", controller_policy_version="v1.1",
+                producer_identity="trusted-producer", producer_run_id="run-1",
+                controller_policy_version="v1.1",
                 disposition="approved", secret="signing-secret")
         kwargs = dict(secret="signing-secret", expected_repository="o/r",
                       expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
@@ -454,7 +467,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         audit = AppendOnlyAudit()
         verified = pr_governance.verify_reviewer_artifacts(
@@ -476,6 +489,242 @@ class GovernanceTests(unittest.TestCase):
             expected_head_sha="head", expected_producer_identity="trusted-producer",
             controller="human-owner", implementer_session_id="implement-session")
         self.assertEqual(verified, {})
+
+    def _reviewer_configuration(self):
+        return {"reviewer-bot": {"tier": "R3", "session_id": "review-session"},
+                "reviewer-lite": {"tier": "R1", "session_id": "reviewer-lite-session"}}
+
+    def test_v11_resolve_review_evidence_derives_disposition_and_tier_from_real_review(self):
+        # Disposition, reviewer identity and actual tier are never accepted
+        # as caller/human input -- they only exist if a real GitHub review
+        # with that exact state is already present at the current head.
+        pr = {"head_sha": "head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": [{"name": "risk:normal"}]}
+        reviews = [{"id": 9, "state": "APPROVED", "commit_id": "head",
+                    "user": {"login": "reviewer-bot"}, "submitted_at": "2024-01-01T00:00:00Z"}]
+        evidence = review_provenance.resolve_review_evidence(
+            pr=pr, issue=issue, reviews=reviews,
+            reviewer_configuration=self._reviewer_configuration(),
+            implementer_session_id="implement-session", controller="human-owner")
+        self.assertEqual(evidence["disposition"], "approved")
+        self.assertEqual(evidence["review_tier"], "R3")
+        self.assertEqual(evidence["reviewer_identity"], "reviewer-bot")
+        self.assertEqual(evidence["reviewer_session_id"], "review-session")
+        self.assertEqual(evidence["required_review_tier"], "R2")
+        self.assertEqual(evidence["issue_id"], 7)
+
+    def test_v11_resolve_review_evidence_rejects_unconfigured_reviewer_identity(self):
+        # A free-typed/fake reviewer login that is not part of the trusted
+        # reviewer-tier configuration can never satisfy provenance, even if
+        # a review record with that login exists at the current head.
+        pr = {"head_sha": "head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": []}
+        reviews = [{"id": 9, "state": "APPROVED", "commit_id": "head",
+                    "user": {"login": "unknown-actor"}}]
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews,
+                reviewer_configuration=self._reviewer_configuration(),
+                implementer_session_id="implement-session", controller="human-owner")
+
+    def test_v11_resolve_review_evidence_rejects_stale_head_review(self):
+        # A caller cannot forge current-head binding: a review submitted
+        # against a previous commit is not evidence for the current head.
+        pr = {"head_sha": "new-head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": []}
+        reviews = [{"id": 9, "state": "APPROVED", "commit_id": "old-head",
+                    "user": {"login": "reviewer-bot"}}]
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews,
+                reviewer_configuration=self._reviewer_configuration(),
+                implementer_session_id="implement-session", controller="human-owner")
+
+    def test_v11_resolve_review_evidence_rejects_wrong_base_branch(self):
+        pr = {"head_sha": "head", "base": "main", "body": "Closes #7"}
+        issue = {"number": 7, "labels": []}
+        reviews = [{"id": 9, "state": "APPROVED", "commit_id": "head",
+                    "user": {"login": "reviewer-bot"}}]
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews,
+                reviewer_configuration=self._reviewer_configuration(),
+                implementer_session_id="implement-session", controller="human-owner")
+
+    def test_v11_resolve_review_evidence_rejects_controller_review(self):
+        # A human controller's ordinary GitHub review/approval is never
+        # treated as an independent AI review, even at the current head.
+        pr = {"head_sha": "head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": []}
+        reviews = [{"id": 9, "state": "APPROVED", "commit_id": "head",
+                    "user": {"login": "reviewer-bot"}}]
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews,
+                reviewer_configuration=self._reviewer_configuration(),
+                implementer_session_id="implement-session", controller="reviewer-bot")
+
+    def test_v11_resolve_review_evidence_rejects_implementer_session_collision(self):
+        pr = {"head_sha": "head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": []}
+        reviews = [{"id": 9, "state": "APPROVED", "commit_id": "head",
+                    "user": {"login": "reviewer-bot"}}]
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews,
+                reviewer_configuration=self._reviewer_configuration(),
+                implementer_session_id="review-session", controller="human-owner")
+
+    def test_v11_resolve_review_evidence_prefers_approved_over_changes_requested(self):
+        pr = {"head_sha": "head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": [{"name": "risk:high"}]}
+        reviews = [
+            {"id": 8, "state": "CHANGES_REQUESTED", "commit_id": "head",
+             "user": {"login": "reviewer-lite"}, "submitted_at": "2024-01-01T00:00:00Z"},
+            {"id": 9, "state": "APPROVED", "commit_id": "head",
+             "user": {"login": "reviewer-bot"}, "submitted_at": "2024-01-02T00:00:00Z"},
+        ]
+        evidence = review_provenance.resolve_review_evidence(
+            pr=pr, issue=issue, reviews=reviews,
+            reviewer_configuration=self._reviewer_configuration(),
+            implementer_session_id="implement-session", controller="human-owner")
+        self.assertEqual(evidence["disposition"], "approved")
+        self.assertEqual(evidence["reviewer_identity"], "reviewer-bot")
+        self.assertEqual(evidence["required_review_tier"], "R3")
+
+    def test_v11_resolve_review_evidence_ignores_non_review_states(self):
+        # COMMENTED/DISMISSED/PENDING reviews are not completed independent
+        # reviews and can never establish disposition.
+        pr = {"head_sha": "head", "base": "dev", "body": "Closes #7"}
+        issue = {"number": 7, "labels": []}
+        reviews = [{"id": 9, "state": "COMMENTED", "commit_id": "head",
+                    "user": {"login": "reviewer-bot"}}]
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews,
+                reviewer_configuration=self._reviewer_configuration(),
+                implementer_session_id="implement-session", controller="human-owner")
+
+    def test_v11_required_review_tier_from_labels_matches_governance_classification(self):
+        # The producer must classify the required tier identically to the
+        # trusted base-branch controller (run-pr-governance.py), otherwise
+        # a producer-signed "required_review_tier" could diverge from what
+        # governance actually enforces.
+        for labels, expected in (
+                ([{"name": "risk:high"}], "R3"),
+                ([{"name": "type:security"}], "R3"),
+                ([{"name": "risk:low"}], "R1"),
+                ([{"name": "type:test"}], "R1"),
+                ([{"name": "risk:normal"}], "R2"),
+                ([], "R2")):
+            self.assertEqual(
+                review_provenance.required_review_tier_from_labels(labels), expected)
+
+    def test_v11_producer_run_id_is_a_required_signed_field(self):
+        # producer_run_id must be present and bound into the signature; an
+        # artifact missing it (for example from an older/incompatible
+        # producer) is rejected exactly like any other incomplete artifact.
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            producer_run_id="run-1", controller_policy_version="v1.1",
+            disposition="approved", secret="signing-secret")
+        incomplete = dict(artifact)
+        del incomplete["producer_run_id"]
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                incomplete, secret="signing-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="trusted-producer", controller="human-owner",
+                implementer_session_id="implement-session")
+
+    def _write_producer_inputs(self, directory, *, base="dev", head_sha="head",
+                               body="Closes #7", labels=None, reviews=None,
+                               issue_number=7):
+        pr_path = Path(directory) / "pr.json"
+        reviews_path = Path(directory) / "reviews.json"
+        issue_path = Path(directory) / "issue.json"
+        pr_path.write_text(json.dumps({
+            "number": 42, "body": body,
+            "base": {"ref": base}, "head": {"sha": head_sha},
+        }))
+        reviews_path.write_text(json.dumps(reviews if reviews is not None else []))
+        issue_path.write_text(json.dumps({
+            "number": issue_number, "labels": labels if labels is not None else [],
+        }))
+        return str(pr_path), str(reviews_path), str(issue_path)
+
+    def _producer_env(self, audit_log):
+        return {
+            "GOVERNED_IMPLEMENTER_SESSION": "implement-session",
+            "GOVERNED_CONTROLLER": "human-owner",
+            "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev",
+            "GITHUB_RUN_ID": "123456",
+            "GOVERNANCE_PROVENANCE_SIGNING_KEY": "signing-secret",
+            "GITHUB_REPOSITORY": "o/r",
+            "GOVERNED_BASE": "dev",
+            "GOVERNED_REVIEWER_TIERS": json.dumps(self._reviewer_configuration()),
+            "GOVERNED_REVIEWER_ROLES": json.dumps({"reviewer-bot": "QA/Security Reviewer"}),
+            "GOVERNED_AUDIT_LOG": audit_log,
+        }
+
+    def test_v11_producer_end_to_end_signs_only_a_real_current_head_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pr_path, reviews_path, issue_path = self._write_producer_inputs(
+                tmp, reviews=[{"id": 9, "state": "APPROVED", "commit_id": "head",
+                              "user": {"login": "reviewer-bot"},
+                              "submitted_at": "2024-01-01T00:00:00Z"}])
+            audit_log = str(Path(tmp) / "audit.jsonl")
+            with patch.object(review_producer.sys, "argv",
+                              ["produce-review-provenance.py", pr_path, reviews_path, issue_path]), \
+                 patch.dict(os.environ, self._producer_env(audit_log), clear=False):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    exit_code = review_producer.main()
+            self.assertEqual(exit_code, 0)
+            artifact = json.loads(out.getvalue())
+            self.assertEqual(artifact["disposition"], "approved")
+            self.assertEqual(artifact["reviewer_identity"], "reviewer-bot")
+            self.assertEqual(artifact["producer_identity"],
+                             "o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev")
+            self.assertEqual(artifact["producer_run_id"], "123456")
+            self.assertTrue(Path(audit_log).exists())
+            audit_lines = Path(audit_log).read_text().splitlines()
+            self.assertTrue(any("provenance-created" in line for line in audit_lines))
+
+    def test_v11_producer_blocks_when_only_controller_dispatched_no_real_review(self):
+        # A human/controller dispatching the producer workflow, with no
+        # genuine current-head reviewer-configuration-matched GitHub review
+        # in existence, must never be able to manufacture an approval.
+        with tempfile.TemporaryDirectory() as tmp:
+            pr_path, reviews_path, issue_path = self._write_producer_inputs(tmp, reviews=[])
+            audit_log = str(Path(tmp) / "audit.jsonl")
+            with patch.object(review_producer.sys, "argv",
+                              ["produce-review-provenance.py", pr_path, reviews_path, issue_path]), \
+                 patch.dict(os.environ, self._producer_env(audit_log), clear=False):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    exit_code = review_producer.main()
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(out.getvalue(), "")
+
+    def test_v11_producer_blocks_on_stale_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pr_path, reviews_path, issue_path = self._write_producer_inputs(
+                tmp, head_sha="new-head",
+                reviews=[{"id": 9, "state": "APPROVED", "commit_id": "old-head",
+                         "user": {"login": "reviewer-bot"}}])
+            audit_log = str(Path(tmp) / "audit.jsonl")
+            with patch.object(review_producer.sys, "argv",
+                              ["produce-review-provenance.py", pr_path, reviews_path, issue_path]), \
+                 patch.dict(os.environ, self._producer_env(audit_log), clear=False):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    exit_code = review_producer.main()
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(out.getvalue(), "")
 
     def test_v11_architecture_is_r3_and_review_is_enforced(self):
         inputs = {

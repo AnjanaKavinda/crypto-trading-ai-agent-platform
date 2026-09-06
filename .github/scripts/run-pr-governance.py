@@ -123,15 +123,8 @@ def main() -> int:
     pr["checks"] = normalize_checks(status, check_runs)
     pr["governed_high_risk"] = any(label.get("name") == "risk:high"
                                     for label in issue.get("labels", []))
-    labels = {label.get("name") for label in issue.get("labels", [])}
-    pr["required_review_tier"] = (
-        "R3" if labels & {"risk:high", "risk:critical", "type:architecture",
-                          "type:contract", "type:security", "impact:architecture",
-                          "impact:shared-contract", "impact:security",
-                          "impact:trading-risk", "impact:approval-execution-ccxt"}
-        else "R1" if labels & {"risk:low", "type:docs", "type:test"}
-        else "R2"
-    )
+    pr["required_review_tier"] = review_provenance.required_review_tier_from_labels(
+        issue.get("labels", []))
     issue_match = re.search(r"(?im)\b(?:closes|fixes|resolves)\s+#(\d+)", pr.get("body") or "")
     issue_id = os.environ.get("GOVERNED_ISSUE_ID") or (issue_match.group(1) if issue_match else "")
     if not issue_id:
