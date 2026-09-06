@@ -311,12 +311,15 @@ class GovernanceTests(unittest.TestCase):
                     "head_sha": "head", "session_id": "review-session"}})
         self.assertFalse(reviews[0]["independent"])
         self.assertEqual(reviews[0]["reviewer_session_id"], "")
+        with self.assertRaises(GovernanceError):
+            pr_governance.validate_reviewer_artifacts(
+                {"7": {"verified": True, "producer": "human-controller"}})
         reviews = pr_governance.build_governed_reviews(
             raw, {}, {"owner": {"tier": "R3"}},
             {"7": {"verified": True, "reviewer": "owner",
                     "head_sha": "head", "session_id": "review-session"}})
-        self.assertTrue(reviews[0]["independent"])
-        self.assertEqual(reviews[0]["reviewer_session_id"], "review-session")
+        self.assertFalse(reviews[0]["independent"])
+        self.assertEqual(reviews[0]["reviewer_session_id"], "")
 
     def test_v11_architecture_is_r3_and_review_is_enforced(self):
         inputs = {

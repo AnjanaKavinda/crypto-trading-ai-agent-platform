@@ -20,27 +20,31 @@ def normalize_checks(status: dict, check_runs: dict) -> dict[str, str]:
 def build_governed_reviews(reviews: list[dict], reviewer_roles: dict,
                            reviewer_configuration: dict,
                            artifacts: dict) -> list[dict]:
-    """Bind approval evidence to trusted workflow artifacts, never review text."""
+    """Normalize reviews without granting trust to unimplemented artifacts.
+
+    V1.1 has no approved independent-review producer or signature verifier yet.
+    Repository variables are therefore never sufficient provenance.
+    """
     governed = []
     for item in reviews:
         login = item.get("user", {}).get("login")
-        artifact = artifacts.get(str(item.get("id")), {})
-        artifact_matches = (
-            artifact.get("verified") is True
-            and artifact.get("reviewer") == login
-            and artifact.get("head_sha") == item.get("commit_id")
-            and isinstance(artifact.get("session_id"), str)
-            and bool(artifact["session_id"].strip())
-        )
         governed.append({
             "state": item.get("state"), "commit_id": item.get("commit_id"),
-            "user": login, "independent": artifact_matches,
+            "user": login, "independent": False,
             "submitted_at": item.get("submitted_at"), "id": item.get("id"),
             "role": reviewer_roles.get(login),
             "review_tier": reviewer_configuration.get(login, {}).get("tier"),
-            "reviewer_session_id": artifact.get("session_id", "") if artifact_matches else "",
+            "reviewer_session_id": "",
         })
     return governed
+
+
+def validate_reviewer_artifacts(artifacts: object) -> None:
+    if not isinstance(artifacts, dict):
+        raise GovernanceError("trusted reviewer artifacts must be an object")
+    if artifacts:
+        raise GovernanceError(
+            "trusted independent-review producer/provenance is not implemented")
 
 
 def main() -> int:
@@ -73,8 +77,10 @@ def main() -> int:
     except json.JSONDecodeError as error:
         print(f"malformed trusted reviewer artifacts; blocked: {error}", file=sys.stderr)
         return 1
-    if not isinstance(reviewer_artifacts, dict):
-        print("trusted reviewer artifacts must be an object; blocked", file=sys.stderr)
+    try:
+        validate_reviewer_artifacts(reviewer_artifacts)
+    except GovernanceError as error:
+        print(f"{error}; blocked", file=sys.stderr)
         return 1
     reviews = build_governed_reviews(
         reviews, reviewer_roles, reviewer_configuration, reviewer_artifacts)

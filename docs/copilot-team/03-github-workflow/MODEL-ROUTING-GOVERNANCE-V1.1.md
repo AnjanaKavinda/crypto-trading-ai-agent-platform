@@ -165,6 +165,17 @@ the final merge authority for every tier.
 
 ## 7. Implementation handoff
 
+### Independent-review producer prerequisite
+
+The current V1.1 implementation does not have an approved independent-review
+automation producer or signature/provenance verifier. `GOVERNED_REVIEW_ARTIFACTS`
+is therefore an unsupported activation prerequisite: a mutable repository
+variable, even one containing `verified: true`, cannot establish independent AI
+review. PR governance must fail closed until a separately approved producer
+emits evidence bound to the review ID, current head SHA, reviewer identity,
+reviewer session, review tier, and producer identity. A human controller's
+ordinary GitHub approval must never satisfy this requirement.
+
 A later Backend/Foundation issue may implement this policy only after separate
 scope approval. It must provide:
 
