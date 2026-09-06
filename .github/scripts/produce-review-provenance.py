@@ -279,7 +279,8 @@ def main() -> int:
             expected_pr_number=int(pr_number), expected_issue_id=evidence["issue_id"],
             expected_head_sha=evidence["head_sha"],
             expected_producer_identity=producer_identity,
-            controller=controller, implementer_session_id=implementer_session_id)
+            controller=controller, implementer_session_id=implementer_session_id,
+            require_approved=False)
     except GovernanceError as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",

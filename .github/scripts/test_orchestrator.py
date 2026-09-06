@@ -454,6 +454,26 @@ class GovernanceTests(unittest.TestCase):
                 expected_producer_identity="trusted-producer", controller="human-owner",
                 implementer_session_id="implement-session")
 
+    def test_v11_nonapproved_signed_provenance_can_self_verify_but_not_merge_verify(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R3", review_tier="R3",
+            producer_identity="trusted-producer", producer_run_id="run-1",
+            controller_policy_version="v1.1", disposition="changes-requested",
+            secret="signing-secret")
+        kwargs = dict(
+            secret="signing-secret", expected_repository="o/r",
+            expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+            expected_producer_identity="trusted-producer", controller="human-owner",
+            implementer_session_id="implement-session")
+        verified = review_provenance.verify_artifact(
+            artifact, require_approved=False, **kwargs)
+        self.assertEqual(verified["commit_id"], "head")
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(artifact, **kwargs)
+
     def test_v11_review_tier_hierarchy_enforced(self):
         def make(tier, required):
             return review_provenance.build_artifact(

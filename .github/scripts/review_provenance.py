@@ -284,7 +284,8 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
                      expected_pr_number: int, expected_issue_id: int,
                      expected_head_sha: str, expected_producer_identity: str,
                      controller: str, implementer_session_id: str,
-                     max_age_seconds: float = 24 * 3600) -> dict:
+                     max_age_seconds: float = 24 * 3600,
+                     require_approved: bool = True) -> dict:
     """Verify a producer artifact and return a normalized governed review.
 
     Fails closed (raises ``GovernanceError``) for any missing field, bad
@@ -327,7 +328,9 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
             "reviewer must be independent from the implementing session")
     if reviewer == str(controller) or reviewer_session == str(controller):
         raise GovernanceError("reviewer must be independent from the controller")
-    if artifact["disposition"] != "approved":
+    if artifact["disposition"] not in DISPOSITIONS:
+        raise GovernanceError("provenance artifact contains an invalid disposition")
+    if require_approved and artifact["disposition"] != "approved":
         raise GovernanceError("provenance artifact does not record an approved review")
     review_tier = artifact["review_tier"]
     required_tier = artifact["required_review_tier"]
