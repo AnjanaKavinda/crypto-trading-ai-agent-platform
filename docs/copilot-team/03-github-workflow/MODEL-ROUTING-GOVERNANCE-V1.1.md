@@ -160,8 +160,10 @@ controller, and approval is invalidated when the PR head changes.
 | `R3-governed-high-risk` | Architecture, contracts, security, statistical authority, deterministic risk, approval, execution, CCXT, reconciliation, secrets, or dangerous flags | Independent premium review by the applicable architect and/or QA/security role, deterministic checks, and explicit human review |
 
 R3 review does not authorize live trading, change deterministic authority,
-replace human approval, or permit auto-merge. The human repository owner remains
-the final merge authority for every tier.
+replace human approval, or permit auto-merge. Independent AI review is a technical
+pre-review/governance gate, not the final approval authority. The human repository
+owner, `AnjanaKavinda`, is the final human reviewer, final approval authority, and
+the only authority for the final manual merge decision for every tier.
 
 ## 7. Implementation handoff
 

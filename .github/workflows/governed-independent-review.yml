@@ -1,0 +1,84 @@
+name: Governed independent AI review producer
+concurrency:
+  group: governed-independent-review-${{ github.event.inputs.pr_number }}
+  cancel-in-progress: false
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: >-
+          PR number to check for an existing current-head independent
+          review. This is the only trusted input: it identifies which PR to
+          verify, it does not assert a review outcome. Disposition, actual
+          review tier, and reviewer identity are never accepted as inputs --
+          they are derived only from a real GitHub review already submitted
+          against the PR's current head by a reviewer configured in
+          GOVERNED_REVIEWER_TIERS.
+        required: true
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+jobs:
+  produce-review-provenance:
+    name: produce-review-provenance
+    runs-on: ubuntu-latest
+    steps:
+      # This job is the trusted independent-review producer execution. It is
+      # a separate governed run from the workflow that dispatches or
+      # implements PR work, so its GITHUB_RUN_ID/job identity is never the
+      # implementer session, and its output is never treated as a
+      # controller/human approval by itself; only the signed artifact it
+      # emits is consumed by copilot-pr-governance.yml.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch verified GitHub API snapshots
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" > /tmp/pr.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/reviews" > /tmp/reviews.json
+          python - <<'PY'
+          import json, re
+          pr = json.load(open('/tmp/pr.json'))
+          body = pr.get('body') or ''
+          match = re.search(r'(?im)\b(?:closes|fixes|resolves)\s+#(\d+)', body)
+          if not match:
+              raise SystemExit('PR has no linked issue')
+          open('/tmp/issue_number.txt', 'w').write(match.group(1))
+          PY
+          gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
+      - name: Produce signed independent-review provenance artifact
+        id: produce
+        env:
+          GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
+          GOVERNED_BASE: dev
+          GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
+          GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
+          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
+        run: |
+          python .github/scripts/produce-review-provenance.py /tmp/pr.json /tmp/reviews.json /tmp/issue.json > /tmp/review-artifact.json
+      - name: Upload signed provenance artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-provenance-${{ github.event.inputs.pr_number }}-${{ github.run_id }}
+          path: |
+            /tmp/review-artifact.json
+            /tmp/governance-audit.jsonl
+          retention-days: 90
+      - name: Report immutable producer output pointer
+        run: |
+          echo "Trusted producer output created. This signed artifact -- not any" >&2
+          echo "free-form assertion or human-supplied disposition -- is the only" >&2
+          echo "value copilot-pr-governance.yml will accept as independent-review" >&2
+          echo "provenance. Prefer fetching this immutable run/artifact directly" >&2
+          echo "(run id ${{ github.run_id }}); only if that is not feasible should" >&2
+          echo "a maintainer copy this exact JSON into the GOVERNED_REVIEW_ARTIFACTS" >&2
+          echo "repository variable (as a JSON list), and only as a pointer to this" >&2
+          echo "verifiable value, never as a new trust assertion." >&2
+          cat /tmp/review-artifact.json
