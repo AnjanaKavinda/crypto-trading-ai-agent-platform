@@ -17,6 +17,32 @@ def normalize_checks(status: dict, check_runs: dict) -> dict[str, str]:
     return checks
 
 
+def build_governed_reviews(reviews: list[dict], reviewer_roles: dict,
+                           reviewer_configuration: dict,
+                           artifacts: dict) -> list[dict]:
+    """Bind approval evidence to trusted workflow artifacts, never review text."""
+    governed = []
+    for item in reviews:
+        login = item.get("user", {}).get("login")
+        artifact = artifacts.get(str(item.get("id")), {})
+        artifact_matches = (
+            artifact.get("verified") is True
+            and artifact.get("reviewer") == login
+            and artifact.get("head_sha") == item.get("commit_id")
+            and isinstance(artifact.get("session_id"), str)
+            and bool(artifact["session_id"].strip())
+        )
+        governed.append({
+            "state": item.get("state"), "commit_id": item.get("commit_id"),
+            "user": login, "independent": artifact_matches,
+            "submitted_at": item.get("submitted_at"), "id": item.get("id"),
+            "role": reviewer_roles.get(login),
+            "review_tier": reviewer_configuration.get(login, {}).get("tier"),
+            "reviewer_session_id": artifact.get("session_id", "") if artifact_matches else "",
+        })
+    return governed
+
+
 def main() -> int:
     if len(sys.argv) != 6:
         print("usage: run-pr-governance.py PR.json REVIEWS.json STATUS.json CHECKS.json ISSUE.json", file=sys.stderr)
@@ -41,16 +67,17 @@ def main() -> int:
     except json.JSONDecodeError as error:
         print(f"malformed trusted reviewer configuration; blocked: {error}", file=sys.stderr)
         return 1
-    reviews = [{"state": item.get("state"), "commit_id": item.get("commit_id"),
-                "user": item.get("user", {}).get("login"), "independent": True,
-                "submitted_at": item.get("submitted_at"), "id": item.get("id"),
-                "role": reviewer_roles.get(item.get("user", {}).get("login")),
-                "review_tier": reviewer_configuration.get(
-                    item.get("user", {}).get("login"), {}).get("tier"),
-                "reviewer_session_id": (item.get("body") or "").split(
-                    "reviewer_session_id:", 1)[1].split()[0]
-                    if "reviewer_session_id:" in (item.get("body") or "") else ""}
-               for item in reviews]
+    try:
+        reviewer_artifacts = json.loads(
+            os.environ.get("GOVERNED_REVIEW_ARTIFACTS", "{}"))
+    except json.JSONDecodeError as error:
+        print(f"malformed trusted reviewer artifacts; blocked: {error}", file=sys.stderr)
+        return 1
+    if not isinstance(reviewer_artifacts, dict):
+        print("trusted reviewer artifacts must be an object; blocked", file=sys.stderr)
+        return 1
+    reviews = build_governed_reviews(
+        reviews, reviewer_roles, reviewer_configuration, reviewer_artifacts)
     pr["checks"] = normalize_checks(status, check_runs)
     pr["governed_high_risk"] = any(label.get("name") == "risk:high"
                                     for label in issue.get("labels", []))

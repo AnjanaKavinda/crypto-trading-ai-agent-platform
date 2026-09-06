@@ -256,7 +256,9 @@ def validate_reviewer_configuration(configuration: Mapping[str, Any],
             raise GovernanceError("reviewer-tier configuration is incomplete")
         reviewers.append(reviewer)
         sessions[reviewer] = session_id
-    if not any(configuration[reviewer].get("tier") == required_tier for reviewer in reviewers):
+    rank = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
+    if not any(rank[configuration[reviewer].get("tier")] >= rank[required_tier]
+               for reviewer in reviewers):
         raise GovernanceError("no configured reviewer satisfies required tier")
     return reviewers, sessions
 

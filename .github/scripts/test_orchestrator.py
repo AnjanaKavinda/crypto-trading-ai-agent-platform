@@ -290,10 +290,33 @@ class GovernanceTests(unittest.TestCase):
             {"owner": {"tier": "R3", "session_id": "review-session"}}, "R3")
         self.assertEqual(reviewers, ["owner"])
         self.assertEqual(sessions["owner"], "review-session")
+        reviewers, _ = validate_reviewer_configuration(
+            {"owner": {"tier": "R3", "session_id": "review-session"}}, "R2")
+        self.assertEqual(reviewers, ["owner"])
+        with self.assertRaises(GovernanceError):
+            validate_reviewer_configuration(
+                {"owner": {"tier": "R1", "session_id": "review-session"}}, "R2")
         with self.assertRaises(GovernanceError):
             validate_reviewer_configuration({}, "R3")
         with self.assertRaises(GovernanceError):
             validate_reviewer_configuration({"owner": {"tier": "R3"}}, "R3")
+
+    def test_v11_review_session_requires_trusted_artifact(self):
+        raw = [{"id": 7, "state": "APPROVED", "commit_id": "head",
+                "user": {"login": "owner"},
+                "body": "reviewer_session_id:review-session"}]
+        reviews = pr_governance.build_governed_reviews(
+            raw, {}, {"owner": {"tier": "R3"}},
+            {"7": {"verified": False, "reviewer": "owner",
+                    "head_sha": "head", "session_id": "review-session"}})
+        self.assertFalse(reviews[0]["independent"])
+        self.assertEqual(reviews[0]["reviewer_session_id"], "")
+        reviews = pr_governance.build_governed_reviews(
+            raw, {}, {"owner": {"tier": "R3"}},
+            {"7": {"verified": True, "reviewer": "owner",
+                    "head_sha": "head", "session_id": "review-session"}})
+        self.assertTrue(reviews[0]["independent"])
+        self.assertEqual(reviews[0]["reviewer_session_id"], "review-session")
 
     def test_v11_architecture_is_r3_and_review_is_enforced(self):
         inputs = {
