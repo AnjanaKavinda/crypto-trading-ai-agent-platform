@@ -46,7 +46,6 @@ function New-ProtectionPayload {
     # satisfy a native approval requirement with the owner alone. main continues to
     # require one native approval.
     $requiredApprovingReviewCount = if ($TargetBranch -eq "dev") { 0 } else { 1 }
-
     return @{
         name = $Name
         target = "branch"

@@ -23,4 +23,5 @@ jobs:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GOVERNED_DISPATCH_ACTORS: ${{ vars.GOVERNED_DISPATCH_ACTORS }}
           GOVERNED_PILOT_ENABLED: ${{ vars.GOVERNED_PILOT_ENABLED }}
+          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
         run: python .github/scripts/orchestrate-issue.py
