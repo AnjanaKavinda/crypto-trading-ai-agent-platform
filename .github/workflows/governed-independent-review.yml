@@ -38,9 +38,15 @@ jobs:
         id: fetch
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
+          GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
         run: |
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" > /tmp/pr.json
-          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/reviews" > /tmp/reviews.json
+          case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > /tmp/reviews.json
           python - <<'PY'
           import json, re
           pr = json.load(open('/tmp/pr.json'))
@@ -51,6 +57,100 @@ jobs:
           open('/tmp/issue_number.txt', 'w').write(match.group(1))
           PY
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
+          gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > /tmp/files.json
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \
+            -H 'Accept: application/vnd.github.v3.diff' > /tmp/pr.diff
+          python - <<'PY'
+          import json, os, re
+          from hashlib import sha256
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, '.github/scripts')
+          from independent_reviewer import build_request
+          from orchestrator import detect_secret
+          pr = json.load(open('/tmp/pr.json'))
+          issue = json.load(open('/tmp/issue.json'))
+          files = json.load(open('/tmp/files.json'))
+          head = pr.get('head', {}).get('sha')
+          base = pr.get('base', {}).get('ref')
+          if not head or base != 'dev' or not isinstance(files, list):
+              raise SystemExit('current PR head or bounded file list is invalid')
+          changed = []
+          for item in files:
+              path = item.get('filename')
+              if not path:
+                  raise SystemExit('unsafe or secret-shaped review context')
+              changed.append(path)
+          diff = Path('/tmp/pr.diff').read_text(encoding='utf-8')
+          if not diff or detect_secret(diff):
+              raise SystemExit('complete changed content is unavailable or unsafe')
+          max_bytes = int(os.environ.get('REVIEW_CONTEXT_MAX_BYTES', '120000'))
+          if len(diff.encode()) > max_bytes:
+              raise SystemExit('complete changed content exceeds the explicit review context budget')
+          issue_id = int(re.search(r'(?im)\b(?:closes|fixes|resolves)\s+#(\d+)', pr.get('body') or '').group(1))
+          labels = {x.get('name') for x in issue.get('labels', [])}
+          required = 'R3' if labels & {'risk:high','risk:critical','type:security','type:architecture','type:contract','impact:security','impact:architecture','impact:shared-contract','impact:trading-risk','impact:approval-execution-ccxt'} else ('R1' if labels & {'risk:low','type:docs','type:test'} else 'R2')
+          capability = {'R1':'economical-fast','R2':'strong-coding-reasoning','R3':'premium-strongest-available'}[required]
+          request = build_request(
+              repository=os.environ['GITHUB_REPOSITORY'], pr_number=int(pr['number']),
+              head_sha=head, base_branch=base, github_issue_id=issue_id,
+              canonical_issue_id=issue_id, agent_role='Backend/Foundation',
+              reviewer_role=os.environ['GOVERNED_AI_REVIEWER_ROLE'],
+              required_review_tier=required, capability_tier=capability,
+              context_pack_id='context-' + sha256(diff.encode()).hexdigest()[:32],
+              context_pack_version='v1.1',
+              implementation_session_id=os.environ['GOVERNED_IMPLEMENTER_SESSION'],
+              allowed_paths=tuple(changed), forbidden_paths=('secrets/**','.env','services/execution/**'),
+              changed_files=tuple(changed), diff_reference='sha256:' + sha256(diff.encode()).hexdigest(),
+              required_checks=tuple(x for x in os.environ.get('REQUIRED_CHECKS','').split(',') if x),
+              safety_invariants=('no-merge-authority','no-live-trading','human-final-review'),
+              controller_policy_version='v1.1')
+          if not request.required_checks:
+              raise SystemExit('required deterministic checks are not configured')
+          Path('/tmp/reviewer-request.json').write_text(json.dumps(request.__dict__, sort_keys=True, default=list))
+          Path('/tmp/reviewer-context.json').write_text(json.dumps({
+              'issue': {'number': issue.get('number'), 'title': issue.get('title'), 'body': (issue.get('body') or '')[:12000]},
+              'pull_request': {'number': pr['number'], 'base': base, 'head_sha': head},
+              'changed_files': changed,
+              'complete_diff': diff,
+              'required_checks': list(request.required_checks),
+              'safety_invariants': list(request.safety_invariants),
+          }, sort_keys=True))
+          PY
+      - name: Verify deterministic checks before AI review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
+          REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
+        run: |
+          gh api "repos/${{ github.repository }}/commits/$(jq -r .head.sha /tmp/pr.json)/status" > /tmp/status.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$(jq -r .head.sha /tmp/pr.json)/check-runs" > /tmp/checks.json
+          python - <<'PY'
+          import json, os
+          status=json.load(open('/tmp/status.json'))
+          pages=json.load(open('/tmp/checks.json'))
+          checks={x.get('context'):x.get('state') for x in status.get('statuses',[]) if x.get('context')}
+          checks.update({x.get('name'):x.get('conclusion') for page in pages for x in page.get('check_runs',[]) if x.get('name')})
+          required=[x for x in os.environ.get('REQUIRED_CHECKS','').split(',') if x]
+          if any(checks.get(name) != 'success' for name in required):
+             raise SystemExit('required deterministic check is missing or failed')
+          PY
+      - name: Execute bounded OpenAI independent reviewer
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
+        run: python .github/scripts/run-independent-review.py /tmp/reviewer-request.json /tmp/reviewer-result.json --context /tmp/reviewer-context.json
+      - name: Re-verify exact current PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: |
+          case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-after.json
+          test "$(jq -r .head.sha /tmp/pr-after.json)" = "$(jq -r .head_sha /tmp/reviewer-request.json)"
       - name: Produce signed independent-review provenance artifact
         id: produce
         env:
@@ -60,15 +160,20 @@ jobs:
           GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          GOVERNED_AI_REVIEWER: ${{ vars.GOVERNED_AI_REVIEWER }}
+          GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
+          GOVERNED_REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
           GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
         run: |
-          python .github/scripts/produce-review-provenance.py /tmp/pr.json /tmp/reviews.json /tmp/issue.json > /tmp/review-artifact.json
+          python .github/scripts/produce-review-provenance.py /tmp/pr.json /tmp/reviews.json /tmp/issue.json /tmp/reviewer-result.json > /tmp/review-artifact.json
       - name: Upload signed provenance artifact
         uses: actions/upload-artifact@v4
         with:
           name: review-provenance-${{ github.event.inputs.pr_number }}-${{ github.run_id }}
           path: |
             /tmp/review-artifact.json
+            /tmp/reviewer-result.json
             /tmp/governance-audit.jsonl
           retention-days: 90
       - name: Report immutable producer output pointer
