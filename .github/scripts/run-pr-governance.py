@@ -6,6 +6,7 @@ import re
 import sys
 import uuid
 from pathlib import Path
+from typing import Mapping
 
 from orchestrator import AppendOnlyAudit, GovernanceError, validate_pr, validate_reviewer_configuration
 import review_provenance
@@ -39,8 +40,8 @@ def verify_reviewer_artifacts(raw_artifacts: object, *, audit: AppendOnlyAudit,
         raise GovernanceError("trusted reviewer artifacts must be a list or object")
     verified: dict[tuple, dict] = {}
     for candidate in candidates:
-        correlation_id = str(
-            (candidate or {}).get("review_id") or (candidate or {}).get("id") or uuid.uuid4())
+        fields = candidate if isinstance(candidate, Mapping) else {}
+        correlation_id = str(fields.get("review_id") or fields.get("id") or uuid.uuid4())
         try:
             result = review_provenance.verify_artifact(candidate, **verify_kwargs)
         except review_provenance.StaleProvenanceError as error:

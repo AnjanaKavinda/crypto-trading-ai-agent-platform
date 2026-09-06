@@ -467,6 +467,16 @@ class GovernanceTests(unittest.TestCase):
         self.assertNotIn("merge", str(verified))
         self.assertNotIn("approve_pr", str(verified))
 
+    def test_v11_non_mapping_artifact_candidate_does_not_crash(self):
+        audit = AppendOnlyAudit()
+        verified = pr_governance.verify_reviewer_artifacts(
+            ["looks-good-to-me", None, 42], audit=audit,
+            audit_path="/tmp/does-not-matter.jsonl", secret="signing-secret",
+            expected_repository="o/r", expected_pr_number=1, expected_issue_id=7,
+            expected_head_sha="head", expected_producer_identity="trusted-producer",
+            controller="human-owner", implementer_session_id="implement-session")
+        self.assertEqual(verified, {})
+
     def test_v11_architecture_is_r3_and_review_is_enforced(self):
         inputs = {
             "canonical_issue": 207, "agent_role": "Platform Architect", "phase": "foundation",
