@@ -146,6 +146,7 @@ jobs:
       - name: Re-verify exact current PR head
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-after.json

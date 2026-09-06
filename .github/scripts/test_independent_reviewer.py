@@ -42,6 +42,13 @@ def response(disposition, *, model="gpt-5.6-sol", findings=None):
 
 
 class IndependentReviewerTests(unittest.TestCase):
+    def test_workflow_reverification_declares_pr_number(self):
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "governed-independent-review.yml").read_text()
+        step = workflow.split("- name: Re-verify exact current PR head", 1)[1].split(
+            "- name: Produce signed independent-review provenance artifact", 1)[0]
+        self.assertIn("PR_NUMBER: ${{ github.event.inputs.pr_number }}", step)
+
     def test_all_model_dispositions_are_structured(self):
         for disposition in ("approved", "changes-requested", "blocked"):
             result = OpenAIReviewerAdapter(
