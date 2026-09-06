@@ -8,7 +8,8 @@ import time
 import uuid
 from typing import Any, Callable, Mapping
 
-from orchestrator import CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS, detect_secret
+from orchestrator import (CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS,
+                          detect_high_confidence_secret_material, detect_secret)
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
