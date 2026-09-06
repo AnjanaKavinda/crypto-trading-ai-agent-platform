@@ -85,6 +85,22 @@ class GovernanceTests(unittest.TestCase):
         reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
                             "main": {**good["main"], "required_reviews": 0}}
         with self.assertRaises(GovernanceError): verify_protections(reversed_reviews)
+    def test_review_diff_secret_scan_allows_identifiers_and_test_fixtures(self):
+        safe_diff = """
++          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
++          GH_TOKEN: ${{ github.token }}
++    def __init__(self, api_key: str | None = None):
++        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
++        adapter = OpenAIReviewerAdapter(api_key="test-key")
+"""
+        self.assertFalse(detect_high_confidence_secret_material(safe_diff))
+
+    def test_review_diff_secret_scan_blocks_real_credential_shapes(self):
+        self.assertTrue(detect_high_confidence_secret_material("OPENAI_API_KEY=sk-" + "A" * 24))
+        self.assertTrue(detect_high_confidence_secret_material(
+            "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----"))
+        self.assertTrue(detect_high_confidence_secret_material("GH_TOKEN=ghp_" + "A" * 24))
+
     def test_pr_and_complete_eligibility(self):
         issue = {"id": 10, "state": "open", "labels": ["workflow:ready", "agent:architect"],
                  "body": "Canonical backlog: 004", "dependencies": [], "active_issues": []}
