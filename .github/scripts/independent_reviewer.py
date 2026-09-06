@@ -8,7 +8,8 @@ import time
 import uuid
 from typing import Any, Callable, Mapping
 
-from orchestrator import CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS, detect_secret
+from orchestrator import (CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS,
+                          detect_high_confidence_secret_material, detect_secret)
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
@@ -156,8 +157,9 @@ class ReviewerExecutionResult:
             raise ReviewerExecutionError("review result does not match the request")
         if self.disposition == "approved" and any(item.blocking for item in self.findings):
             raise ReviewerExecutionError("approved review contains a blocking finding")
-        if not self.reviewer_role or detect_secret(json.dumps(self.to_dict(), sort_keys=True)):
-            raise ReviewerExecutionError("review result contains unsafe or secret content")
+        if (not self.reviewer_role or
+                detect_high_confidence_secret_material(json.dumps(self.to_dict(), sort_keys=True))):
+            raise ReviewerExecutionError("review result contains credential material")
         body = dict(self.to_dict())
         body.pop("result_integrity_hash", None)
         if self.result_integrity_hash != integrity_hash(body):
