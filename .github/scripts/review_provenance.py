@@ -272,7 +272,7 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
         "reviewer_role": reviewer_role,
         "review_execution_id": review_execution_id or f"github-review-{review_id}",
         "result_integrity_hash": result_integrity_hash or "legacy-github-review",
-        "provider_execution_ref": provider_execution_ref,
+        "provider_execution_ref": provider_execution_ref or f"github-review-{review_id}",
     }
     artifact["integrity_signature"] = sign_artifact(artifact, secret)
     return artifact
@@ -355,6 +355,9 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
         "producer_run_id": artifact.get("producer_run_id"),
         "review_tier": review_tier,
         "reviewer_session_id": reviewer_session,
+        "review_execution_id": artifact.get("review_execution_id"),
+        "result_integrity_hash": artifact.get("result_integrity_hash"),
+        "provider_execution_ref": artifact.get("provider_execution_ref"),
     }
 
 

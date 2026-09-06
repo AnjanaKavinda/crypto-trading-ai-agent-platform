@@ -82,7 +82,7 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         request = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=json.dumps(payload).encode(),
-            headers={"Authorization": f"******",
+            headers={"Authorization": "Bearer " + self.api_key,
                      "Content-Type": "application/json"},
             method="POST",
         )
