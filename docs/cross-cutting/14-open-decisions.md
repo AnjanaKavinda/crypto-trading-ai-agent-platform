@@ -16,7 +16,7 @@ and obtain the required human approval. `Open` records have no approved ADR.
 | OD-0007 | Event-streaming technology | Open | Event contracts and platform architecture; Chats 2, 4 | Human repository owner | — | — |
 | OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | — | — |
 | OD-0009 | Vector-memory technology and retention | Open | Learning and retention; Chats 10, 13 | Human repository owner | — | — |
-| OD-0010 | LLM provider/model routing policy | Open | AI governance and security; Chats 3, 10, 13 | Human repository owner | [ADR-0002](../adr/ADR-0002-vendor-neutral-llm-provider-model-routing.md) (Proposed) | — |
+| OD-0010 | LLM provider/model routing policy | Resolved | AI governance and security; Chats 3, 10, 13 | Human repository owner | [ADR-0002](../adr/ADR-0002-vendor-neutral-llm-provider-model-routing.md) (Accepted) | 2026-09-06 |
 | OD-0011 | Backtesting engine implementation choice | Open | Quantitative validation; Chat 7 | Human repository owner | — | — |
 | OD-0012 | AuthN/AuthZ provider and role model | Open | Approval, authorization, and security; Chats 9, 10 | Human repository owner | — | — |
 | OD-0013 | Cloud/deployment topology | Open | Deployment and operating-mode isolation; Chats 10, 12 | Human repository owner | — | — |
