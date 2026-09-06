@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-09-06 |
 | Decision owner | Platform Architect |
-| Human approver | Pending — AnjanaKavinda |
+| Human approver | AnjanaKavinda |
 | GitHub issue / PR | #214 / #215 |
 | Open decision ID | OD-0010 |
 | Related ADRs | ADR-0001 |
@@ -202,13 +202,12 @@ Implementation sequencing:
 
 ## Approval record
 
-Pending human repository-owner review.
+Accepted by `AnjanaKavinda`, human repository owner and final architecture authority, on 2026-09-06 through final human review and manual merge of PR #215.
 
-If approved by `AnjanaKavinda`, update:
-- Status -> `Accepted`;
-- Human approver -> `AnjanaKavinda`;
-- approval date/conditions;
-- ADR register;
-- OD-0010 status and linked ADR.
+Approval evidence:
+- PR #215: `Propose ADR-0002 vendor-neutral LLM provider/model routing policy`;
+- reviewed head: `9936076776f39a279046d841b97ade5f40103426`;
+- merge commit: `1f80b34856826dff4854ffc7ff9dccabac4f64e3`;
+- accepted with the quality-first runtime trading rule: cost optimization may not reduce a trading-critical workload below its empirically validated reliability floor, and unavailable/unvalidated required capability fails closed to `NO_TRADE` / blocked progression.
 
-Until that approval is recorded, this ADR is Proposed and must not be treated as implementation authority.
+This ADR is now implementation authority for OD-0010 within its stated scope. It does not resolve OD-0024 or authorize pilot activation, live trading, direct LLM-to-exchange access, deterministic-risk bypass, or automatic merge.
