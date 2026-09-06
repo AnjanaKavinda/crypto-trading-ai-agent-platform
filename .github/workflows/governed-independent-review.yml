@@ -67,7 +67,7 @@ jobs:
           import sys
           sys.path.insert(0, '.github/scripts')
           from independent_reviewer import build_request
-          from orchestrator import detect_secret
+          from orchestrator import detect_high_confidence_secret_material
           pr = json.load(open('/tmp/pr.json'))
           issue = json.load(open('/tmp/issue.json'))
           files = json.load(open('/tmp/files.json'))
@@ -82,8 +82,8 @@ jobs:
                   raise SystemExit('unsafe or secret-shaped review context')
               changed.append(path)
           diff = Path('/tmp/pr.diff').read_text(encoding='utf-8')
-          if not diff or detect_secret(diff):
-              raise SystemExit('complete changed content is unavailable or unsafe')
+          if not diff or detect_high_confidence_secret_material(diff):
+              raise SystemExit('complete changed content is unavailable or contains credential material')
           max_bytes = int(os.environ.get('REVIEW_CONTEXT_MAX_BYTES', '120000'))
           if len(diff.encode()) > max_bytes:
               raise SystemExit('complete changed content exceeds the explicit review context budget')
