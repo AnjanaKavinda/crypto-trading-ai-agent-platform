@@ -73,9 +73,12 @@ REQUIRED_FIELDS = (
     "controller_policy_version",
     "timestamp",
     "disposition",
+    "review_execution_id",
+    "result_integrity_hash",
+    "provider_execution_ref",
 )
 
-DISPOSITIONS = ("approved", "changes-requested")
+DISPOSITIONS = ("approved", "changes-requested", "blocked")
 
 # Same classification the trusted base-branch controller
 # (run-pr-governance.py) uses to derive the required review tier from the
@@ -222,7 +225,10 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
                     implementer_session_id: str, required_review_tier: str,
                     review_tier: str, producer_identity: str, producer_run_id: str,
                     controller_policy_version: str, disposition: str, secret: str,
-                    reviewer_role: str = "", timestamp: float | None = None) -> dict:
+                    reviewer_role: str = "", timestamp: float | None = None,
+                    review_execution_id: str | None = None,
+                    result_integrity_hash: str | None = None,
+                    provider_execution_ref: str = "") -> dict:
     """Build and sign a provenance artifact for a completed independent review.
 
     ``producer_identity`` and ``producer_run_id`` must be sourced from the
@@ -264,6 +270,9 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
         "timestamp": float(timestamp) if timestamp is not None else time.time(),
         "disposition": disposition,
         "reviewer_role": reviewer_role,
+        "review_execution_id": review_execution_id or f"github-review-{review_id}",
+        "result_integrity_hash": result_integrity_hash or "legacy-github-review",
+        "provider_execution_ref": provider_execution_ref,
     }
     artifact["integrity_signature"] = sign_artifact(artifact, secret)
     return artifact

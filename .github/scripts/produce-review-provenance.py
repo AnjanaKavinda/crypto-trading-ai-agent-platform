@@ -67,8 +67,10 @@ import uuid
 from pathlib import Path
 
 from orchestrator import AppendOnlyAudit, GovernanceError
+from independent_reviewer import ReviewerExecutionError, ReviewerExecutionResult
 from review_provenance import (build_artifact, record_event,
-                                resolve_review_evidence, verify_artifact)
+                                resolve_review_evidence, required_review_tier_from_labels,
+                                verify_artifact, extract_linked_issue)
 
 
 def _require(name: str) -> str:
@@ -82,9 +84,65 @@ def _load_json(path: str) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
+                               reviewer_configuration: dict, reviewer_roles: dict,
+                               implementer_session_id: str, controller: str,
+                               preferred_reviewer: str = "") -> dict:
+    """Validate a real model result and derive identity/tier from trusted config."""
+    try:
+        parsed = ReviewerExecutionResult(
+            **{**result, "findings": tuple(
+                __import__("independent_reviewer", fromlist=["Finding"]).Finding.from_mapping(item)
+                for item in result.get("findings", []))})
+        issue_id = extract_linked_issue(pr.get("body") or "")
+        required = required_review_tier_from_labels(issue.get("labels", []))
+        if (parsed.repository != pr.get("repository") or parsed.pr_number != int(pr["number"]) or
+                parsed.head_sha != pr.get("head_sha") or parsed.required_review_tier != required):
+            raise ReviewerExecutionError("review result is not bound to the current PR/issue")
+        candidates = [
+            (login, config) for login, config in reviewer_configuration.items()
+            if login != controller and config.get("session_id") != implementer_session_id
+            and config.get("tier") in {"R1", "R2", "R3"}
+            and (not preferred_reviewer or login == preferred_reviewer)
+        ]
+        if len(candidates) != 1:
+            raise ReviewerExecutionError("trusted AI reviewer identity is ambiguous")
+        login, config = candidates[0]
+        if parsed.actual_review_tier != config["tier"] or (
+                reviewer_roles.get(login) and parsed.reviewer_role != reviewer_roles[login]):
+            raise ReviewerExecutionError("review result reviewer identity or tier is untrusted")
+        parsed.validate_against(__import__("independent_reviewer", fromlist=[
+            "ReviewerExecutionRequest"]).build_request(
+                schema_version="1.0", repository=parsed.repository, pr_number=parsed.pr_number,
+                head_sha=parsed.head_sha, base_branch=pr.get("base", "dev"),
+                github_issue_id=issue_id, canonical_issue_id=issue_id,
+                agent_role="unknown", reviewer_role=parsed.reviewer_role,
+                required_review_tier=parsed.required_review_tier,
+                capability_tier=next(tier for tier, model in __import__(
+                    "independent_reviewer", fromlist=["TIER_MODELS"]).TIER_MODELS.items()
+                    if model == parsed.model_name),
+                context_pack_id=parsed.context_pack_id,
+                context_pack_version=parsed.context_pack_version,
+                implementation_session_id=implementer_session_id,
+                review_execution_id=parsed.review_execution_id,
+                allowed_paths=("**",), forbidden_paths=("secrets/**",),
+                changed_files=("review",), diff_reference="execution-result",
+                required_checks=parsed.deterministic_check_refs,
+                safety_invariants=("no-merge",), controller_policy_version="v1.1"),
+        )
+        return {"issue_id": issue_id, "head_sha": parsed.head_sha,
+                "required_review_tier": required, "review_id": parsed.review_execution_id,
+                "reviewer_identity": login, "reviewer_session_id": config["session_id"],
+                "review_tier": parsed.actual_review_tier, "disposition": parsed.disposition,
+                "result_integrity_hash": parsed.result_integrity_hash,
+                "provider_execution_ref": parsed.provider_execution_ref}
+    except (KeyError, TypeError, StopIteration, ValueError, ReviewerExecutionError) as error:
+        raise GovernanceError(str(error)) from error
+
+
 def main() -> int:
-    if len(sys.argv) != 4:
-        print("usage: produce-review-provenance.py PR.json REVIEWS.json ISSUE.json",
+    if len(sys.argv) not in (4, 5):
+        print("usage: produce-review-provenance.py PR.json REVIEWS.json ISSUE.json [RESULT.json]",
               file=sys.stderr)
         return 2
 
@@ -96,6 +154,7 @@ def main() -> int:
         pr_raw = _load_json(sys.argv[1])
         reviews_raw = _load_json(sys.argv[2])
         issue = _load_json(sys.argv[3])
+        result_raw = _load_json(sys.argv[4]) if len(sys.argv) == 5 else None
     except (OSError, json.JSONDecodeError) as error:
         print(f"could not read verified GitHub API snapshots; blocked: {error}",
               file=sys.stderr)
@@ -127,6 +186,8 @@ def main() -> int:
         return 1
 
     pr = {
+        "number": pr_raw.get("number"),
+        "repository": repository,
         "head_sha": (pr_raw.get("head") or {}).get("sha"),
         "base": (pr_raw.get("base") or {}).get("ref"),
         "body": pr_raw.get("body"),
@@ -143,11 +204,18 @@ def main() -> int:
         return 1
 
     try:
-        evidence = resolve_review_evidence(
-            pr=pr, issue=issue, reviews=reviews_raw,
-            reviewer_configuration=reviewer_configuration,
-            implementer_session_id=implementer_session_id, controller=controller,
-            expected_base=expected_base)
+        if result_raw is not None:
+            evidence = resolve_execution_evidence(
+                result=result_raw, pr=pr, issue=issue,
+                reviewer_configuration=reviewer_configuration, reviewer_roles=reviewer_roles,
+                implementer_session_id=implementer_session_id, controller=controller,
+                preferred_reviewer=os.environ.get("GOVERNED_AI_REVIEWER", ""))
+        else:
+            evidence = resolve_review_evidence(
+                pr=pr, issue=issue, reviews=reviews_raw,
+                reviewer_configuration=reviewer_configuration,
+                implementer_session_id=implementer_session_id, controller=controller,
+                expected_base=expected_base)
     except GovernanceError as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
@@ -168,7 +236,10 @@ def main() -> int:
             review_tier=evidence["review_tier"], producer_identity=producer_identity,
             producer_run_id=producer_run_id, controller_policy_version="v1.1",
             disposition=evidence["disposition"], secret=secret,
-            reviewer_role=reviewer_roles.get(evidence["reviewer_identity"], ""))
+            reviewer_role=reviewer_roles.get(evidence["reviewer_identity"], ""),
+            review_execution_id=evidence.get("review_id"),
+            result_integrity_hash=evidence.get("result_integrity_hash"),
+            provider_execution_ref=evidence.get("provider_execution_ref", ""))
     except GovernanceError as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
