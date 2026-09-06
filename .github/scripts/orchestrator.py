@@ -329,6 +329,22 @@ def detect_secret(value: str) -> bool:
     return any(pattern.search(value or "") for pattern in SECRET_PATTERNS)
 
 
+def detect_high_confidence_secret_material(value: str) -> bool:
+    """Detect credential material in source/diff text without flagging identifiers.
+
+    Review diffs legitimately contain names such as OPENAI_API_KEY, GH_TOKEN,
+    type annotations, environment references, and deterministic test fixtures.
+    For model-bound review context, block only high-confidence credential shapes:
+    provider/user tokens and PEM/private-key blocks. Generic secret-name assignment
+    detection remains intentionally strict in safe_content/audit paths.
+    """
+    text = value or ""
+    return bool(
+        re.search(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b", text)
+        or re.search(r"-----BEGIN [A-Z ]+-----", text)
+    )
+
+
 def safe_content(value: str) -> str:
     if detect_secret(value):
         raise GovernanceError("suspected secret material; processing blocked")
