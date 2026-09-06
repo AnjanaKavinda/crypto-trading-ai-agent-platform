@@ -79,6 +79,31 @@ class IndependentReviewerTests(unittest.TestCase):
                 model_mapping=MODEL_MAPPING,
             ).review(make_request("R3"))
 
+    def test_review_result_allows_security_secret_terminology_but_blocks_credentials(self):
+        finding = [{
+            "finding_id": "f1", "severity": "medium", "category": "security",
+            "title": "Secret handling reference", "summary": "Use secrets.OPENAI_API_KEY rather than api_key=test-key in production.",
+            "blocking": False, "recommended_action": "Keep credentials in GitHub Actions secrets.",
+            "path": ".github/workflows/x.yml", "line_or_location": "env",
+            "contract_or_policy_reference": "security policy",
+        }]
+        result = OpenAIReviewerAdapter(
+            api_key="test-key",
+            transport=lambda payload, timeout: response("changes-requested", findings=finding),
+            model_mapping=MODEL_MAPPING,
+        ).review(make_request())
+        self.assertEqual(result.disposition, "changes-requested")
+        credential = [{
+            **finding[0],
+            "summary": "Leaked credential sk-" + "A" * 24,
+        }]
+        with self.assertRaises(ReviewerExecutionError):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response("changes-requested", findings=credential),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
+
     def test_malformed_output_and_blocking_approval_fail_closed(self):
         with self.assertRaises(ReviewerExecutionError):
             OpenAIReviewerAdapter(
