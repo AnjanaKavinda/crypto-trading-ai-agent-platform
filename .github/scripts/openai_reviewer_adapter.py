@@ -84,7 +84,6 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         }
         return {
             "model": self.model_mapping[request.capability_tier],
-            "temperature": 0,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -140,9 +139,29 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                     raise ReviewerExecutionError("OpenAI provider rejected the request")
                 return json.loads(response.read().decode())
         except urllib.error.HTTPError as error:
+            provider_type = ""
+            provider_code = ""
+            try:
+                payload = json.loads(error.read().decode())
+                provider_error = payload.get("error") if isinstance(payload, dict) else None
+                if isinstance(provider_error, dict):
+                    provider_type = str(provider_error.get("type") or "")
+                    provider_code = str(provider_error.get("code") or "")
+            except Exception:
+                pass
+            detail = ",".join(item for item in (provider_type, provider_code) if item)
+            suffix = f" ({detail})" if detail else ""
+            if error.code == 429 and provider_code in {"insufficient_quota", "billing_hard_limit_reached"}:
+                raise ReviewerExecutionError(
+                    f"OpenAI quota/billing failure HTTP 429{suffix}") from error
             if error.code >= 500 or error.code == 429:
-                raise TransientProviderError("OpenAI provider temporarily unavailable") from error
-            raise ReviewerExecutionError("OpenAI authentication or request failure") from error
+                raise TransientProviderError(
+                    f"OpenAI provider temporarily unavailable HTTP {error.code}{suffix}") from error
+            if error.code in (401, 403):
+                raise ReviewerExecutionError(
+                    f"OpenAI authentication/access failure HTTP {error.code}{suffix}") from error
+            raise ReviewerExecutionError(
+                f"OpenAI request rejected HTTP {error.code}{suffix}") from error
         except (urllib.error.URLError, TimeoutError) as error:
             raise TransientProviderError("OpenAI transport failure") from error
 
