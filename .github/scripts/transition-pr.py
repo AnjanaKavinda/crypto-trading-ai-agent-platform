@@ -9,8 +9,9 @@ import sys
 import importlib.util
 from pathlib import Path
 
-from orchestrator import (STATES, GovernanceError, build_launch_prompt, resolve_agent,
-                          safe_content, validate_transition)
+from orchestrator import (STATES, AppendOnlyAudit, GovernanceError, append_governance_event,
+                          build_launch_prompt, resolve_agent, safe_content, transition_escalation,
+                          validate_transition)
 
 _dispatch_spec = importlib.util.spec_from_file_location(
     "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
@@ -59,10 +60,22 @@ def main() -> int:
     linked_dispatch = any(MARKER in item.get("body", "") and "dispatch_key:" in item.get("body", "")
                           for item in comments)
     dispatch_comments = [item for item in comments if MARKER in item.get("body", "")
-                         and "DISPATCH" in item.get("body", "")
+                         and ("DISPATCH " in item.get("body", "")
+                              or "DISPATCH_INTENT" in item.get("body", "")
+                              or "ASSIGNMENT_COMPLETED" in item.get("body", ""))
                          and "dispatch_key:" in item.get("body", "")]
     dispatch_keys = [dispatch_comments[-1]["body"].split("dispatch_key:", 1)[1].split()[0]
                      ] if dispatch_comments else []
+    dispatch_payload = {}
+    if dispatch_comments:
+        match = __import__("re").search(
+            r"(?:DISPATCH|DISPATCH_INTENT|ASSIGNMENT_COMPLETED)\s+(\{.*\})",
+            dispatch_comments[-1].get("body", ""))
+        if match:
+            try:
+                dispatch_payload = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                return 1
     authorized_authors = {item for item in os.environ.get(
         "GOVERNED_PR_AUTHORS", "").split(",") if item}
     controller = os.environ.get("GOVERNED_CONTROLLER", "")
@@ -98,16 +111,52 @@ def main() -> int:
     if len(current_states) != 1:
         return 1
     current = next(iter(current_states))
-    if current != target:
-        try:
-            validate_transition(current, target)
-        except GovernanceError:
-            return 1
     governed_corrections = [item for item in comments
                             if MARKER in item.get("body", "")
                             and "CORRECTION_ATTEMPT:" in item.get("body", "")
                             and (not controller or item.get("user", {}).get("login") == controller)]
     corrections = len(governed_corrections)
+    previous_tier = dispatch_payload.get("capability_tier", "strong-coding-reasoning")
+    resulting_tier = previous_tier
+    if target == "workflow:changes-requested":
+        try:
+            resulting_tier = transition_escalation(
+                previous_tier, blocked=True, retries=corrections)
+        except GovernanceError:
+            return 1
+        if resulting_tier == "human-decision-required":
+            target = "workflow:human-decision-required"
+    if current != target:
+        try:
+            validate_transition(current, target)
+        except GovernanceError:
+            return 1
+    audit_payload = {
+        "issue_id": int(issue), "pr_id": int(pr_number),
+        "correlation_id": dispatch_keys[0], "agent_role": dispatch_payload.get(
+            "agent_role", (issue_record.get("assignee") or {}).get("login", "unknown")),
+        "capability_tier": (previous_tier if resulting_tier == "human-decision-required"
+                            else resulting_tier),
+        "routing_reason": "bound dispatch transition", "risk_classification": dispatch_payload.get(
+            "risk_classification", "unknown"),
+        "context_pack_id": dispatch_payload.get("context_pack_id", "unknown"),
+        "context_pack_version": dispatch_payload.get("context_pack_version", "v1.1"),
+        "controller_policy_version": "v1.1", "retry_count": corrections,
+        "escalation_count": int(resulting_tier != previous_tier),
+        "reviewer_role": "independent-ai-reviewer", "outcome": target,
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc).isoformat(),
+        "commit_sha": pr["head"]["sha"],
+        "previous_capability_tier": previous_tier,
+        "new_capability_tier": resulting_tier,
+        "resulting_workflow_state": target,
+    }
+    try:
+        append_governance_event(
+            AppendOnlyAudit(), "review" if target == "workflow:review" else "disposition",
+            audit_payload, os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue}.jsonl"))
+    except GovernanceError:
+        return 1
     if target == "workflow:changes-requested":
         maximum = int(os.environ.get("CORRECTION_MAX", "3"))
         if corrections >= maximum:
