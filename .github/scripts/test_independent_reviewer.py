@@ -5,6 +5,9 @@ import unittest
 
 from independent_reviewer import ReviewerExecutionError, build_request
 from openai_reviewer_adapter import OpenAIReviewerAdapter, TransientProviderError
+MODEL_MAPPING = {"economical-fast": "gpt-5.6-luna",
+                 "strong-coding-reasoning": "gpt-5.6-terra",
+                 "premium-strongest-available": "gpt-5.6-sol"}
 
 _producer_spec = importlib.util.spec_from_file_location(
     "review_producer", Path(__file__).with_name("produce-review-provenance.py"))
@@ -28,12 +31,11 @@ def make_request(tier="R3", head="head"):
     )
 
 
-def response(disposition, *, actual_tier="R1", findings=None):
+def response(disposition, *, model="gpt-5.6-sol", findings=None):
     return {
-        "id": "provider-execution-1", "model": "gpt-5.6-sol",
+        "id": "provider-execution-1", "model": model,
         "choices": [{"message": {"content": json.dumps({
-            "disposition": disposition, "actual_review_tier": actual_tier,
-            "findings": findings or [],
+            "disposition": disposition, "findings": findings or [],
         })}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5},
     }
@@ -45,23 +47,26 @@ class IndependentReviewerTests(unittest.TestCase):
             result = OpenAIReviewerAdapter(
                 api_key="test-key",
                 transport=lambda payload, timeout, d=disposition: response(d),
+                model_mapping=MODEL_MAPPING,
             ).review(make_request())
             self.assertEqual(result.disposition, disposition)
             self.assertEqual(result.head_sha, "head")
             self.assertEqual(result.actual_review_tier, "R3")
 
-    def test_model_cannot_downgrade_actual_tier(self):
-        result = OpenAIReviewerAdapter(
-            api_key="test-key",
-            transport=lambda payload, timeout: response("approved", actual_tier="R1"),
-        ).review(make_request("R3"))
-        self.assertEqual(result.actual_review_tier, "R3")
+    def test_unapproved_returned_model_fails_closed(self):
+        with self.assertRaises(ReviewerExecutionError):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response("approved", model="unapproved"),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request("R3"))
 
     def test_malformed_output_and_blocking_approval_fail_closed(self):
         with self.assertRaises(ReviewerExecutionError):
             OpenAIReviewerAdapter(
                 api_key="test-key",
                 transport=lambda payload, timeout: {"id": "x", "choices": []},
+                model_mapping=MODEL_MAPPING,
             ).review(make_request())
         blocking = [{"finding_id": "f1", "severity": "high", "category": "security",
                      "title": "unsafe", "summary": "unsafe", "blocking": True,
@@ -70,6 +75,7 @@ class IndependentReviewerTests(unittest.TestCase):
             OpenAIReviewerAdapter(
                 api_key="test-key",
                 transport=lambda payload, timeout: response("approved", findings=blocking),
+                model_mapping=MODEL_MAPPING,
             ).review(make_request())
 
     def test_transient_retry_is_bounded(self):
@@ -80,7 +86,8 @@ class IndependentReviewerTests(unittest.TestCase):
             raise TransientProviderError("timeout")
 
         with self.assertRaises(ReviewerExecutionError):
-            OpenAIReviewerAdapter(api_key="test-key", transport=transport).review(make_request())
+            OpenAIReviewerAdapter(api_key="test-key", transport=transport,
+                                  model_mapping=MODEL_MAPPING).review(make_request())
         self.assertEqual(len(calls), 2)
 
     def test_missing_credentials_and_insufficient_tier_fail_closed(self):
@@ -103,6 +110,7 @@ class IndependentReviewerTests(unittest.TestCase):
         result = OpenAIReviewerAdapter(
             api_key="test-key",
             transport=lambda payload, timeout: response("approved"),
+            model_mapping=MODEL_MAPPING,
         ).review(make_request())
         evidence = review_producer.resolve_execution_evidence(
             result=result.to_dict(),

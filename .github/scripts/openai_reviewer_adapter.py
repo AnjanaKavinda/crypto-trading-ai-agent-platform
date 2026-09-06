@@ -10,8 +10,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from independent_reviewer import (
-    DISPOSITIONS, Finding, IndependentReviewerAdapter, ReviewerExecutionError,
-    ReviewerExecutionRequest, ReviewerExecutionResult, TIER_MODELS, integrity_hash,
+    CAPABILITY_TIERS, DISPOSITIONS, Finding, IndependentReviewerAdapter,
+    ReviewerExecutionError, ReviewerExecutionRequest, ReviewerExecutionResult,
+    integrity_hash,
 )
 
 
@@ -28,12 +29,25 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         self.timeout_seconds = int(timeout_seconds)
         self.max_retries = int(max_retries)
         self.transport = transport or self._transport
-        self.model_mapping = dict(model_mapping or TIER_MODELS)
+        self.model_mapping = dict(model_mapping or self._load_model_mapping())
         self.context_pack = dict(context_pack or {})
         if not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1):
             raise ReviewerExecutionError("OpenAI reviewer configuration is unavailable")
-        if any(not self.model_mapping.get(key) for key in TIER_MODELS):
+        if any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
             raise ReviewerExecutionError("OpenAI tier mapping is incomplete")
+
+    @staticmethod
+    def _load_model_mapping() -> dict[str, str]:
+        try:
+            value = json.loads(os.environ["GOVERNED_REVIEWER_MODEL_MAPPING"])
+        except (KeyError, json.JSONDecodeError) as error:
+            raise ReviewerExecutionError(
+                "governed OpenAI model mapping is unavailable") from error
+        if not isinstance(value, dict) or any(
+                not isinstance(value.get(tier), str) or not value[tier].strip()
+                for tier in CAPABILITY_TIERS):
+            raise ReviewerExecutionError("governed OpenAI model mapping is malformed")
+        return value
 
     def review(self, request: ReviewerExecutionRequest) -> ReviewerExecutionResult:
         request.validate()
@@ -71,7 +85,39 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         return {
             "model": self.model_mapping[request.capability_tier],
             "temperature": 0,
-            "response_format": {"type": "json_object"},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "independent_review",
+                    "strict": True,
+                    "schema": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["disposition", "findings"],
+                        "properties": {
+                            "disposition": {"type": "string", "enum": list(DISPOSITIONS)},
+                            "findings": {"type": "array", "items": {
+                                "type": "object", "additionalProperties": False,
+                                "required": ["finding_id", "severity", "category", "title",
+                                             "summary", "blocking", "recommended_action",
+                                             "path", "line_or_location",
+                                             "contract_or_policy_reference"],
+                                "properties": {
+                                    "finding_id": {"type": "string"},
+                                    "severity": {"type": "string"},
+                                    "category": {"type": "string"},
+                                    "title": {"type": "string"},
+                                    "summary": {"type": "string"},
+                                    "blocking": {"type": "boolean"},
+                                    "recommended_action": {"type": "string"},
+                                    "path": {"type": "string"},
+                                    "line_or_location": {"type": "string"},
+                                    "contract_or_policy_reference": {"type": "string"},
+                                },
+                            }},
+                        },
+                    },
+                },
+            },
             "messages": [
                 {"role": "system", "content": context["instructions"]},
                 {"role": "user", "content": json.dumps(context, sort_keys=True, default=list)},
@@ -112,17 +158,26 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         if disposition not in DISPOSITIONS or not isinstance(document["findings"], list):
             raise ReviewerExecutionError("OpenAI returned an invalid reviewer disposition")
         usage = response.get("usage")
+        returned_model = str(response.get("model") or "")
+        expected_model = self.model_mapping[request.capability_tier]
+        if returned_model != expected_model:
+            raise ReviewerExecutionError(
+                "OpenAI returned an unapproved model for the requested tier")
+        actual_tier = {"economical-fast": "R1", "strong-coding-reasoning": "R2",
+                       "premium-strongest-available": "R3"}[
+                           next(tier for tier, model in self.model_mapping.items()
+                                if model == returned_model)]
         result = ReviewerExecutionResult(
             schema_version="1.0", review_execution_id=request.review_execution_id,
             repository=request.repository, pr_number=request.pr_number, head_sha=request.head_sha,
             context_pack_id=request.context_pack_id, context_pack_version=request.context_pack_version,
             required_review_tier=request.required_review_tier,
-            actual_review_tier=request.required_review_tier, reviewer_role=request.reviewer_role,
+            actual_review_tier=actual_tier, reviewer_role=request.reviewer_role,
             disposition=disposition, findings=findings,
             deterministic_check_refs=request.required_checks,
             provider_execution_ref=str(response.get("id") or ""),
-            provider_name="openai", model_name=self.model_mapping[request.capability_tier],
-            model_version=str(response.get("model") or ""),
+            provider_name="openai", model_name=returned_model,
+            model_version=returned_model,
             usage=usage if isinstance(usage, Mapping) else None,
             estimated_cost=None, actual_cost=None, started_at=started,
             completed_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),

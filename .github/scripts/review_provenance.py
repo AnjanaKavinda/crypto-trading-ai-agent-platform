@@ -76,6 +76,7 @@ REQUIRED_FIELDS = (
     "review_execution_id",
     "result_integrity_hash",
     "provider_execution_ref",
+    "provider_model",
 )
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
@@ -228,7 +229,7 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
                     reviewer_role: str = "", timestamp: float | None = None,
                     review_execution_id: str | None = None,
                     result_integrity_hash: str | None = None,
-                    provider_execution_ref: str = "") -> dict:
+                    provider_execution_ref: str = "", provider_model: str = "") -> dict:
     """Build and sign a provenance artifact for a completed independent review.
 
     ``producer_identity`` and ``producer_run_id`` must be sourced from the
@@ -273,6 +274,7 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
         "review_execution_id": review_execution_id or f"github-review-{review_id}",
         "result_integrity_hash": result_integrity_hash or "legacy-github-review",
         "provider_execution_ref": provider_execution_ref or f"github-review-{review_id}",
+        "provider_model": provider_model or "github-review",
     }
     artifact["integrity_signature"] = sign_artifact(artifact, secret)
     return artifact
@@ -358,6 +360,7 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
         "review_execution_id": artifact.get("review_execution_id"),
         "result_integrity_hash": artifact.get("result_integrity_hash"),
         "provider_execution_ref": artifact.get("provider_execution_ref"),
+        "provider_model": artifact.get("provider_model"),
     }
 
 

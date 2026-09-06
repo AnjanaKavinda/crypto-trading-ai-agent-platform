@@ -41,6 +41,7 @@ jobs:
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
         run: |
           gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}" > /tmp/pr.json
           gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/reviews" > /tmp/reviews.json
@@ -55,6 +56,8 @@ jobs:
           PY
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
           gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}/files" > /tmp/files.json
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}.diff" \
+            -H 'Accept: application/vnd.github.v3.diff' > /tmp/pr.diff
           python - <<'PY'
           import json, os, re
           from hashlib import sha256
@@ -70,16 +73,18 @@ jobs:
           base = pr.get('base', {}).get('ref')
           if not head or base != 'dev' or not isinstance(files, list):
               raise SystemExit('current PR head or bounded file list is invalid')
-          patches = []
           changed = []
           for item in files:
               path = item.get('filename')
-              patch = item.get('patch', '')
-              if not path or detect_secret(path + '\n' + patch):
+              if not path:
                   raise SystemExit('unsafe or secret-shaped review context')
               changed.append(path)
-              patches.append({'path': path, 'status': item.get('status'), 'patch': patch[:12000]})
-          diff = json.dumps(patches, sort_keys=True, separators=(',', ':'))
+          diff = Path('/tmp/pr.diff').read_text(encoding='utf-8')
+          if not diff or detect_secret(diff):
+              raise SystemExit('complete changed content is unavailable or unsafe')
+          max_bytes = int(os.environ.get('REVIEW_CONTEXT_MAX_BYTES', '120000'))
+          if len(diff.encode()) > max_bytes:
+              raise SystemExit('complete changed content exceeds the explicit review context budget')
           issue_id = int(re.search(r'(?im)\b(?:closes|fixes|resolves)\s+#(\d+)', pr.get('body') or '').group(1))
           labels = {x.get('name') for x in issue.get('labels', [])}
           required = 'R3' if labels & {'risk:high','risk:critical','type:security','type:architecture','type:contract','impact:security','impact:architecture','impact:shared-contract','impact:trading-risk','impact:approval-execution-ccxt'} else ('R1' if labels & {'risk:low','type:docs','type:test'} else 'R2')
@@ -104,7 +109,8 @@ jobs:
           Path('/tmp/reviewer-context.json').write_text(json.dumps({
               'issue': {'number': issue.get('number'), 'title': issue.get('title'), 'body': (issue.get('body') or '')[:12000]},
               'pull_request': {'number': pr['number'], 'base': base, 'head_sha': head},
-              'changed_files': patches,
+              'changed_files': changed,
+              'complete_diff': diff,
               'required_checks': list(request.required_checks),
               'safety_invariants': list(request.safety_invariants),
           }, sort_keys=True))
@@ -113,6 +119,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
+          REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
         run: |
           gh api "repos/${{ github.repository }}/commits/$(jq -r .head.sha /tmp/pr.json)/status" > /tmp/status.json
           gh api --paginate --slurp "repos/${{ github.repository }}/commits/$(jq -r .head.sha /tmp/pr.json)/check-runs" > /tmp/checks.json
@@ -130,6 +138,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
         run: python .github/scripts/run-independent-review.py /tmp/reviewer-request.json /tmp/reviewer-result.json --context /tmp/reviewer-context.json
       - name: Re-verify exact current PR head
         env:

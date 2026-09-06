@@ -67,7 +67,8 @@ import uuid
 from pathlib import Path
 
 from orchestrator import AppendOnlyAudit, GovernanceError
-from independent_reviewer import ReviewerExecutionError, ReviewerExecutionResult
+from independent_reviewer import (ReviewerExecutionError, ReviewerExecutionResult,
+                                  build_request, CAPABILITY_TIERS)
 from review_provenance import (build_artifact, record_event,
                                 resolve_review_evidence, required_review_tier_from_labels,
                                 verify_artifact, extract_linked_issue)
@@ -111,16 +112,15 @@ def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
         if parsed.actual_review_tier != config["tier"] or (
                 reviewer_roles.get(login) and parsed.reviewer_role != reviewer_roles[login]):
             raise ReviewerExecutionError("review result reviewer identity or tier is untrusted")
-        parsed.validate_against(__import__("independent_reviewer", fromlist=[
-            "ReviewerExecutionRequest"]).build_request(
+        parsed.validate_against(build_request(
                 schema_version="1.0", repository=parsed.repository, pr_number=parsed.pr_number,
                 head_sha=parsed.head_sha, base_branch=pr.get("base", "dev"),
                 github_issue_id=issue_id, canonical_issue_id=issue_id,
                 agent_role="unknown", reviewer_role=parsed.reviewer_role,
                 required_review_tier=parsed.required_review_tier,
-                capability_tier=next(tier for tier, model in __import__(
-                    "independent_reviewer", fromlist=["TIER_MODELS"]).TIER_MODELS.items()
-                    if model == parsed.model_name),
+                capability_tier=next(tier for tier in CAPABILITY_TIERS
+                                     if tier == {"R1": "economical-fast", "R2": "strong-coding-reasoning",
+                                                 "R3": "premium-strongest-available"}[parsed.required_review_tier]),
                 context_pack_id=parsed.context_pack_id,
                 context_pack_version=parsed.context_pack_version,
                 implementation_session_id=implementer_session_id,
@@ -135,7 +135,8 @@ def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
                 "reviewer_identity": login, "reviewer_session_id": config["session_id"],
                 "review_tier": parsed.actual_review_tier, "disposition": parsed.disposition,
                 "result_integrity_hash": parsed.result_integrity_hash,
-                "provider_execution_ref": parsed.provider_execution_ref}
+                "provider_execution_ref": parsed.provider_execution_ref,
+                "provider_model": parsed.model_name}
     except (KeyError, TypeError, StopIteration, ValueError, ReviewerExecutionError) as error:
         raise GovernanceError(str(error)) from error
 
@@ -239,7 +240,8 @@ def main() -> int:
             reviewer_role=reviewer_roles.get(evidence["reviewer_identity"], ""),
             review_execution_id=evidence.get("review_id"),
             result_integrity_hash=evidence.get("result_integrity_hash"),
-            provider_execution_ref=evidence.get("provider_execution_ref", ""))
+            provider_execution_ref=evidence.get("provider_execution_ref", ""),
+            provider_model=evidence.get("provider_model", ""))
     except GovernanceError as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",

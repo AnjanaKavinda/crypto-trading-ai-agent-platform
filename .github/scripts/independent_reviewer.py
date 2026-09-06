@@ -1,7 +1,7 @@
 """Vendor-neutral, fail-closed independent reviewer execution contract."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
 import time
@@ -16,11 +16,6 @@ CATEGORIES = (
     "architecture", "security", "governance", "correctness", "testing",
     "statistical", "risk", "execution", "maintainability", "scope", "other",
 )
-TIER_MODELS = {
-    "economical-fast": "gpt-5.6-luna",
-    "strong-coding-reasoning": "gpt-5.6-terra",
-    "premium-strongest-available": "gpt-5.6-sol",
-}
 TIER_RANK = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
 
 
@@ -195,4 +190,3 @@ class IndependentReviewerAdapter:
 
     def review(self, request: ReviewerExecutionRequest) -> ReviewerExecutionResult:
         raise NotImplementedError
-
