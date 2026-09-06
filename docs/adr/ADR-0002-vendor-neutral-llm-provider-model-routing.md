@@ -8,7 +8,7 @@
 | Date | 2026-09-06 |
 | Decision owner | Platform Architect |
 | Human approver | Pending — AnjanaKavinda |
-| GitHub issue / PR | #214 / pending |
+| GitHub issue / PR | #214 / #215 |
 | Open decision ID | OD-0010 |
 | Related ADRs | ADR-0001 |
 | Supersedes / superseded by | — |
