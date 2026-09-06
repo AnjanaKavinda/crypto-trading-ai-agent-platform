@@ -2,6 +2,7 @@ import unittest
 import importlib.util
 from pathlib import Path
 from orchestrator import *
+import review_provenance
 
 spec = importlib.util.spec_from_file_location(
     "pr_governance", Path(__file__).with_name("run-pr-governance.py"))
@@ -305,21 +306,166 @@ class GovernanceTests(unittest.TestCase):
         raw = [{"id": 7, "state": "APPROVED", "commit_id": "head",
                 "user": {"login": "owner"},
                 "body": "reviewer_session_id:review-session"}]
+        # A free-form claim (no signature at all) never establishes independence.
         reviews = pr_governance.build_governed_reviews(
-            raw, {}, {"owner": {"tier": "R3"}},
-            {"7": {"verified": False, "reviewer": "owner",
-                    "head_sha": "head", "session_id": "review-session"}})
+            raw, {}, {"owner": {"tier": "R3"}}, {})
         self.assertFalse(reviews[0]["independent"])
         self.assertEqual(reviews[0]["reviewer_session_id"], "")
+        # A mutable-variable-shaped ``verified: true`` assertion (no
+        # integrity signature) is rejected the same way a tampered artifact
+        # would be, never accepted as a shortcut.
         with self.assertRaises(GovernanceError):
-            pr_governance.validate_reviewer_artifacts(
-                {"7": {"verified": True, "producer": "human-controller"}})
+            review_provenance.verify_artifact(
+                {"verified": True, "producer": "human-controller"},
+                secret="s", expected_repository="o/r", expected_pr_number=1,
+                expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="trusted-producer",
+                controller="human-owner", implementer_session_id="implement-session")
+
+    def test_v11_verified_artifact_is_accepted_and_trusted(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            controller_policy_version="v1.1", disposition="approved", secret="signing-secret",
+            reviewer_role="QA/Security Reviewer")
+        result = review_provenance.verify_artifact(
+            artifact, secret="signing-secret", expected_repository="o/r",
+            expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+            expected_producer_identity="trusted-producer", controller="human-owner",
+            implementer_session_id="implement-session")
+        self.assertTrue(result["independent"])
+        self.assertEqual(result["review_tier"], "R3")
+        self.assertEqual(result["user"], "reviewer-bot")
+        raw = [{"id": "review-1", "state": "APPROVED", "commit_id": "head",
+                "user": {"login": "reviewer-bot"}}]
         reviews = pr_governance.build_governed_reviews(
-            raw, {}, {"owner": {"tier": "R3"}},
-            {"7": {"verified": True, "reviewer": "owner",
-                    "head_sha": "head", "session_id": "review-session"}})
-        self.assertFalse(reviews[0]["independent"])
-        self.assertEqual(reviews[0]["reviewer_session_id"], "")
+            raw, {}, {}, {("reviewer-bot", "head"): result})
+        self.assertTrue(reviews[0]["independent"])
+        self.assertEqual(reviews[0]["reviewer_session_id"], "review-session")
+
+    def test_v11_fabricated_or_controller_asserted_artifact_rejected(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
+        # Human controller cannot self-assert an artifact using a different secret.
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                artifact, secret="wrong-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="trusted-producer", controller="human-owner",
+                implementer_session_id="implement-session")
+        # Free-form text is not an object at all.
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                "looks-good-to-me", secret="signing-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="trusted-producer", controller="human-owner",
+                implementer_session_id="implement-session")
+
+    def test_v11_implementer_and_reviewer_session_collision_rejected(self):
+        with self.assertRaises(GovernanceError):
+            review_provenance.build_artifact(
+                repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+                head_sha="head", reviewer_identity="reviewer-bot",
+                reviewer_session_id="same-session", implementer_session_id="same-session",
+                required_review_tier="R2", review_tier="R3",
+                producer_identity="trusted-producer", controller_policy_version="v1.1",
+                disposition="approved", secret="signing-secret")
+
+    def test_v11_stale_head_artifact_rejected(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="old-head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                artifact, secret="signing-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="new-head",
+                expected_producer_identity="trusted-producer", controller="human-owner",
+                implementer_session_id="implement-session")
+
+    def test_v11_mismatched_reviewer_or_producer_identity_rejected(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                artifact, secret="signing-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="different-producer", controller="human-owner",
+                implementer_session_id="implement-session")
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                artifact, secret="signing-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="trusted-producer", controller="reviewer-bot",
+                implementer_session_id="implement-session")
+
+    def test_v11_tampered_artifact_rejected(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
+        tampered = dict(artifact, review_tier="R1")
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                tampered, secret="signing-secret", expected_repository="o/r",
+                expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                expected_producer_identity="trusted-producer", controller="human-owner",
+                implementer_session_id="implement-session")
+
+    def test_v11_review_tier_hierarchy_enforced(self):
+        def make(tier, required):
+            return review_provenance.build_artifact(
+                repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+                head_sha="head", reviewer_identity="reviewer-bot",
+                reviewer_session_id="review-session", implementer_session_id="implement-session",
+                required_review_tier=required, review_tier=tier,
+                producer_identity="trusted-producer", controller_policy_version="v1.1",
+                disposition="approved", secret="signing-secret")
+        kwargs = dict(secret="signing-secret", expected_repository="o/r",
+                      expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+                      expected_producer_identity="trusted-producer", controller="human-owner",
+                      implementer_session_id="implement-session")
+        self.assertTrue(review_provenance.verify_artifact(make("R3", "R2"), **kwargs))
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(make("R2", "R3"), **kwargs)
+
+    def test_v11_audit_write_failure_blocks_progression(self):
+        audit = AppendOnlyAudit()
+        with self.assertRaises(GovernanceError):
+            review_provenance.record_event(
+                audit, "/no/such/dir/audit.jsonl", "provenance-created", correlation_id="c")
+
+    def test_v11_verify_reviewer_artifacts_matches_no_merge_capability(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer",
+            controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
+        audit = AppendOnlyAudit()
+        verified = pr_governance.verify_reviewer_artifacts(
+            [artifact, {"garbage": True}], audit=audit, audit_path="/tmp/does-not-matter.jsonl",
+            secret="signing-secret", expected_repository="o/r", expected_pr_number=1,
+            expected_issue_id=7, expected_head_sha="head",
+            expected_producer_identity="trusted-producer", controller="human-owner",
+            implementer_session_id="implement-session")
+        self.assertIn(("reviewer-bot", "head"), verified)
+        self.assertNotIn("merge", str(verified))
+        self.assertNotIn("approve_pr", str(verified))
 
     def test_v11_architecture_is_r3_and_review_is_enforced(self):
         inputs = {

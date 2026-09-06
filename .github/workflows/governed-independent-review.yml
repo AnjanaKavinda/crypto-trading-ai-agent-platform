@@ -1,0 +1,88 @@
+name: Governed independent AI review producer
+concurrency:
+  group: governed-independent-review-${{ github.event.inputs.pr_number }}
+  cancel-in-progress: false
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number under review
+        required: true
+      issue_id:
+        description: Linked canonical issue number (GitHub issue)
+        required: true
+      head_sha:
+        description: Current PR head SHA this review is bound to
+        required: true
+      reviewer_identity:
+        description: Independent reviewer identity (must differ from controller/implementer)
+        required: true
+      required_review_tier:
+        description: Required review tier (R1, R2, or R3)
+        required: true
+      actual_review_tier:
+        description: Review tier actually performed (R1, R2, or R3)
+        required: true
+      disposition:
+        description: Review disposition (approved or changes-requested)
+        required: true
+        default: approved
+      reviewer_role:
+        description: Reviewer role label (for example Platform Architect, QA/Security Reviewer)
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  produce-review-provenance:
+    name: produce-review-provenance
+    runs-on: ubuntu-latest
+    steps:
+      # This job is the trusted independent-review producer execution. It is
+      # a separate governed run from the workflow that dispatches or
+      # implements PR work, so its GITHUB_RUN_ID/job identity is never the
+      # implementer session, and its output is never treated as a
+      # controller/human approval by itself; only the signed artifact it
+      # emits is consumed by copilot-pr-governance.yml.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Produce signed independent-review provenance artifact
+        id: produce
+        env:
+          GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
+          GOVERNED_REPOSITORY: ${{ github.repository }}
+          GOVERNED_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          GOVERNED_ISSUE_ID: ${{ github.event.inputs.issue_id }}
+          GOVERNED_HEAD_SHA: ${{ github.event.inputs.head_sha }}
+          GOVERNED_REVIEW_ID: independent-review-${{ github.run_id }}-${{ github.run_attempt }}
+          GOVERNED_REVIEWER_IDENTITY: ${{ github.event.inputs.reviewer_identity }}
+          GOVERNED_REVIEWER_SESSION_ID: independent-reviewer-session-${{ github.run_id }}
+          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
+          GOVERNED_REQUIRED_REVIEW_TIER: ${{ github.event.inputs.required_review_tier }}
+          GOVERNED_ACTUAL_REVIEW_TIER: ${{ github.event.inputs.actual_review_tier }}
+          GOVERNED_PRODUCER_IDENTITY: ${{ vars.GOVERNED_PROVENANCE_PRODUCER }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          GOVERNED_REVIEW_DISPOSITION: ${{ github.event.inputs.disposition }}
+          GOVERNED_REVIEWER_ROLE: ${{ github.event.inputs.reviewer_role }}
+          GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
+        run: |
+          python .github/scripts/produce-review-provenance.py > /tmp/review-artifact.json
+      - name: Upload signed provenance artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-provenance-${{ github.event.inputs.pr_number }}-${{ github.run_id }}
+          path: |
+            /tmp/review-artifact.json
+            /tmp/governance-audit.jsonl
+          retention-days: 90
+      - name: Report immutable producer output pointer
+        run: |
+          echo "Trusted producer output created. This signed artifact, not any" >&2
+          echo "free-form assertion, is the only value copilot-pr-governance.yml" >&2
+          echo "will accept as independent-review provenance. A repository" >&2
+          echo "maintainer must copy the exact JSON below into the" >&2
+          echo "GOVERNED_REVIEW_ARTIFACTS repository variable (as a JSON list)" >&2
+          echo "before the PR governance check will find it." >&2
+          cat /tmp/review-artifact.json
