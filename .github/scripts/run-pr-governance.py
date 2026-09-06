@@ -43,9 +43,12 @@ def verify_reviewer_artifacts(raw_artifacts: object, *, audit: AppendOnlyAudit,
             (candidate or {}).get("review_id") or (candidate or {}).get("id") or uuid.uuid4())
         try:
             result = review_provenance.verify_artifact(candidate, **verify_kwargs)
+        except review_provenance.StaleProvenanceError as error:
+            review_provenance.record_event(audit, audit_path, "provenance-stale",
+                                           correlation_id=correlation_id, reason=str(error))
+            continue
         except GovernanceError as error:
-            event = ("provenance-stale" if "stale" in str(error) else "provenance-rejected")
-            review_provenance.record_event(audit, audit_path, event,
+            review_provenance.record_event(audit, audit_path, "provenance-rejected",
                                            correlation_id=correlation_id, reason=str(error))
             continue
         review_provenance.record_event(

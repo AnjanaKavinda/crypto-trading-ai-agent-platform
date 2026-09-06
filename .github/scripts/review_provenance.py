@@ -58,6 +58,10 @@ REQUIRED_FIELDS = (
 DISPOSITIONS = ("approved", "changes-requested")
 
 
+class StaleProvenanceError(GovernanceError):
+    """Raised when a provenance artifact no longer matches the current PR head."""
+
+
 def _canonical_payload(artifact: Mapping[str, Any]) -> bytes:
     import json
 
@@ -151,7 +155,7 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
     if int(artifact["issue_id"]) != int(expected_issue_id):
         raise GovernanceError("provenance artifact does not match the linked issue")
     if str(artifact["head_sha"]) != str(expected_head_sha):
-        raise GovernanceError("provenance artifact is stale; current PR head has changed")
+        raise StaleProvenanceError("provenance artifact is stale; current PR head has changed")
     if str(artifact["producer_identity"]) != str(expected_producer_identity):
         raise GovernanceError("provenance artifact was not created by the trusted producer")
     reviewer = str(artifact["reviewer_identity"])
@@ -181,7 +185,8 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
         raise GovernanceError("provenance artifact timestamp is invalid")
     age = time.time() - artifact_time
     if age < 0 or age > max_age_seconds:
-        raise GovernanceError("provenance artifact is expired or has an invalid timestamp")
+        raise StaleProvenanceError(
+            "provenance artifact is expired or has an invalid timestamp")
     return {
         "state": "APPROVED",
         "commit_id": artifact["head_sha"],
