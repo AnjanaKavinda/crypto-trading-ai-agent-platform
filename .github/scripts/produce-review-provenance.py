@@ -56,7 +56,7 @@ def _require(name: str) -> str:
 
 def main() -> int:
     audit = AppendOnlyAudit()
-    audit_path = os.environ.get("GOVERNED_AUDIT_LOG", "/tmp/governance-audit.jsonl")
+    audit_path = os.environ.get("GOVERNED_AUDIT_LOG") or "/tmp/governance-audit.jsonl"
     correlation_id = os.environ.get("GOVERNED_REVIEW_ID") or str(uuid.uuid4())
     try:
         repository = _require("GOVERNED_REPOSITORY")

@@ -161,7 +161,7 @@ def main() -> int:
         return 1
     producer_identity = os.environ.get("GOVERNED_PROVENANCE_PRODUCER", "")
     signing_secret = os.environ.get("GOVERNANCE_PROVENANCE_SIGNING_KEY", "")
-    audit_path = os.environ.get("GOVERNED_AUDIT_LOG", "/tmp/governance-audit.jsonl")
+    audit_path = os.environ.get("GOVERNED_AUDIT_LOG") or "/tmp/governance-audit.jsonl"
     audit = AppendOnlyAudit()
     if not producer_identity or not signing_secret:
         if reviewer_artifacts:
