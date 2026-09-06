@@ -11,6 +11,7 @@ contradict an approved contract or cross-cutting artifact.
 | ID | Title | Status | Date | Owner / approver | Open decision | Contracts | Supersedes | Superseded by |
 |---|---|---|---|---|---|---|---|---|
 | ADR-0001 | [Governed Copilot development orchestration](ADR-0001-governed-copilot-development-orchestration.md) | Accepted | 2026-09-02 | Platform Architect / AnjanaKavinda | — | None | — | — |
+| ADR-0002 | [Vendor-neutral LLM provider and model routing policy](ADR-0002-vendor-neutral-llm-provider-model-routing.md) | Proposed | 2026-09-06 | Platform Architect / Pending | OD-0010 | Independent AI reviewer execution contract V1 | — | — |
 
 ## Creating an ADR
 
