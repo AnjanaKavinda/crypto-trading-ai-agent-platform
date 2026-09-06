@@ -158,6 +158,7 @@ jobs:
           GOVERNED_AI_REVIEWER: ${{ vars.GOVERNED_AI_REVIEWER }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
           GOVERNED_REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
           GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
         run: |
           python .github/scripts/produce-review-provenance.py /tmp/pr.json /tmp/reviews.json /tmp/issue.json /tmp/reviewer-result.json > /tmp/review-artifact.json

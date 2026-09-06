@@ -39,17 +39,22 @@ class Finding:
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "Finding":
         required = ("finding_id", "severity", "category", "title", "summary",
-                    "blocking", "recommended_action")
-        if any(not isinstance(value.get(key), (str, bool)) for key in required):
+                    "blocking", "recommended_action", "path", "line_or_location",
+                    "contract_or_policy_reference")
+        if set(value) != set(required):
+            raise ReviewerExecutionError("model finding does not match strict schema")
+        if any(not isinstance(value[key], (str, bool)) for key in required):
             raise ReviewerExecutionError("model finding is malformed")
         if value["severity"] not in SEVERITIES or value["category"] not in CATEGORIES:
             raise ReviewerExecutionError("model finding taxonomy is invalid")
         if not isinstance(value["blocking"], bool):
             raise ReviewerExecutionError("finding blocking flag is invalid")
-        fields = {key: str(value.get(key) or "") for key in
-                  ("path", "line_or_location", "contract_or_policy_reference")}
-        return cls(*(str(value[key]) if key != "blocking" else value[key]
-                     for key in required), **fields)
+        return cls(
+            finding_id=value["finding_id"], severity=value["severity"],
+            category=value["category"], title=value["title"], summary=value["summary"],
+            blocking=value["blocking"], recommended_action=value["recommended_action"],
+            path=value["path"], line_or_location=value["line_or_location"],
+            contract_or_policy_reference=value["contract_or_policy_reference"])
 
 
 @dataclass(frozen=True)

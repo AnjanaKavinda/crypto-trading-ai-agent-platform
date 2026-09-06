@@ -70,7 +70,8 @@ class IndependentReviewerTests(unittest.TestCase):
             ).review(make_request())
         blocking = [{"finding_id": "f1", "severity": "high", "category": "security",
                      "title": "unsafe", "summary": "unsafe", "blocking": True,
-                     "recommended_action": "fix"}]
+                     "recommended_action": "fix", "path": "", "line_or_location": "",
+                     "contract_or_policy_reference": ""}]
         with self.assertRaises(ReviewerExecutionError):
             OpenAIReviewerAdapter(
                 api_key="test-key",
@@ -121,6 +122,7 @@ class IndependentReviewerTests(unittest.TestCase):
             reviewer_roles={"reviewer-bot": "QA/Security Reviewer"},
             implementer_session_id="implementation-session", controller="human-owner",
             preferred_reviewer="reviewer-bot",
+            model_mapping=MODEL_MAPPING,
         )
         self.assertEqual(evidence["review_id"], result.review_execution_id)
         self.assertEqual(evidence["result_integrity_hash"], result.result_integrity_hash)

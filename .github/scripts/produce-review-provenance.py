@@ -88,7 +88,8 @@ def _load_json(path: str) -> object:
 def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
                                reviewer_configuration: dict, reviewer_roles: dict,
                                implementer_session_id: str, controller: str,
-                               preferred_reviewer: str = "") -> dict:
+                               preferred_reviewer: str = "",
+                               model_mapping: dict[str, str] | None = None) -> dict:
     """Validate a real model result and derive identity/tier from trusted config."""
     try:
         parsed = ReviewerExecutionResult(
@@ -109,6 +110,13 @@ def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
         if len(candidates) != 1:
             raise ReviewerExecutionError("trusted AI reviewer identity is ambiguous")
         login, config = candidates[0]
+        mapping = model_mapping or json.loads(
+            os.environ.get("GOVERNED_REVIEWER_MODEL_MAPPING", "{}"))
+        expected_model = mapping.get({
+            "R1": "economical-fast", "R2": "strong-coding-reasoning",
+            "R3": "premium-strongest-available"}[parsed.required_review_tier])
+        if parsed.provider_name != "openai" or parsed.model_name != expected_model:
+            raise ReviewerExecutionError("review result provider/model is not governed")
         if parsed.actual_review_tier != config["tier"] or (
                 reviewer_roles.get(login) and parsed.reviewer_role != reviewer_roles[login]):
             raise ReviewerExecutionError("review result reviewer identity or tier is untrusted")
@@ -210,7 +218,9 @@ def main() -> int:
                 result=result_raw, pr=pr, issue=issue,
                 reviewer_configuration=reviewer_configuration, reviewer_roles=reviewer_roles,
                 implementer_session_id=implementer_session_id, controller=controller,
-                preferred_reviewer=os.environ.get("GOVERNED_AI_REVIEWER", ""))
+                preferred_reviewer=os.environ.get("GOVERNED_AI_REVIEWER", ""),
+                model_mapping=json.loads(os.environ.get(
+                    "GOVERNED_REVIEWER_MODEL_MAPPING", "{}")))
         else:
             evidence = resolve_review_evidence(
                 pr=pr, issue=issue, reviews=reviews_raw,
