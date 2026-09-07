@@ -168,12 +168,17 @@ class Finding:
                     "contract_or_policy_reference")
         if set(value) != set(required):
             raise ReviewerExecutionError("model finding does not match strict schema")
-        if any(not isinstance(value[key], (str, bool)) for key in required):
-            raise ReviewerExecutionError("model finding is malformed")
-        if value["severity"] not in SEVERITIES or value["category"] not in CATEGORIES:
-            raise ReviewerExecutionError("model finding taxonomy is invalid")
+        string_fields = tuple(key for key in required if key != "blocking")
+        if any(not isinstance(value[key], str) for key in string_fields):
+            raise ReviewerExecutionError("model finding string fields are malformed")
         if not isinstance(value["blocking"], bool):
             raise ReviewerExecutionError("finding blocking flag is invalid")
+        if value["severity"] not in SEVERITIES or value["category"] not in CATEGORIES:
+            raise ReviewerExecutionError("model finding taxonomy is invalid")
+        if any(not value[key].strip() for key in
+               ("finding_id", "severity", "category", "title", "summary",
+                "recommended_action")):
+            raise ReviewerExecutionError("model finding required text is empty")
         return cls(
             finding_id=value["finding_id"], severity=value["severity"],
             category=value["category"], title=value["title"], summary=value["summary"],
