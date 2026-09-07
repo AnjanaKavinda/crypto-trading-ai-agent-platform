@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -20,6 +19,7 @@ def main() -> int:
     parser.add_argument("output")
     parser.add_argument("--context", default="")
     parser.add_argument("--attestation", default="")
+    parser.add_argument("--handoff-key-file", default="")
     args = parser.parse_args()
     try:
         raw = json.loads(Path(args.request).read_text(encoding="utf-8"))
@@ -28,8 +28,10 @@ def main() -> int:
         result = OpenAIReviewerAdapter(context_pack=context).review(request)
         Path(args.output).write_text(json.dumps(result.to_dict(), sort_keys=True), encoding="utf-8")
         if args.attestation:
-            attestation = sign_execution_handoff(
-                request, result, os.environ.get("GOVERNANCE_PROVENANCE_SIGNING_KEY", ""))
+            if not args.handoff_key_file:
+                raise ReviewerExecutionError("review result handoff key file is required")
+            handoff_secret = Path(args.handoff_key_file).read_text(encoding="utf-8").strip()
+            attestation = sign_execution_handoff(request, result, handoff_secret)
             Path(args.attestation).write_text(
                 json.dumps(attestation, sort_keys=True), encoding="utf-8")
         return 0
