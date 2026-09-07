@@ -277,7 +277,7 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
         "controller_policy_version": controller_policy_version,
         "timestamp": float(timestamp) if timestamp is not None else time.time(),
         "disposition": disposition,
-        "reviewer_role": reviewer_role,
+        "reviewer_role": reviewer_role or "unclassified-reviewer",
         "review_execution_id": review_execution_id or f"github-review-{review_id}",
         "result_integrity_hash": result_integrity_hash or "legacy-github-review",
         "provider_execution_ref": provider_execution_ref or f"github-review-{review_id}",
