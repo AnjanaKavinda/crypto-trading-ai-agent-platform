@@ -1,6 +1,7 @@
 param(
     [string]$Repo = "",
-    [string]$RequiredCheck = "governance-ci"
+    [string]$RequiredCheck = "governance-ci",
+    [string]$FinalGovernanceCheck = "governance-gate"
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,6 +67,11 @@ foreach ($branch in @("dev", "main")) {
     Assert-True ([bool]$status.strict_required_status_checks_policy) "$name must use strict required status checks."
     $contexts = @($status.required_status_checks | ForEach-Object { $_.context })
     Assert-True ($contexts -contains $RequiredCheck) "$name must require status check '$RequiredCheck'."
+    if ($branch -eq "dev") {
+        Assert-True ($contexts -contains $FinalGovernanceCheck) "$name must require final governance status '$FinalGovernanceCheck'."
+    } else {
+        Assert-True (-not ($contexts -contains $FinalGovernanceCheck)) "$name must not require '$FinalGovernanceCheck'."
+    }
 
     Write-Host "PASS: $name"
 }
