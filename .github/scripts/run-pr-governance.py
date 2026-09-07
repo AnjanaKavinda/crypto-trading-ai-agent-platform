@@ -2,7 +2,6 @@
 """Validate GitHub API snapshots using the trusted base-branch controller."""
 import json
 import os
-import re
 import sys
 import uuid
 from pathlib import Path
@@ -125,12 +124,15 @@ def main() -> int:
                                     for label in issue.get("labels", []))
     pr["required_review_tier"] = review_provenance.required_review_tier_from_labels(
         issue.get("labels", []))
-    issue_match = re.search(r"(?im)\b(?:closes|fixes|resolves)\s+#(\d+)", pr.get("body") or "")
-    issue_id = os.environ.get("GOVERNED_ISSUE_ID") or (issue_match.group(1) if issue_match else "")
-    if not issue_id:
-        print("PR has no recorded linked issue; blocked", file=sys.stderr)
+    configured_issue_id = os.environ.get("GOVERNED_ISSUE_ID", "").strip()
+    try:
+        parsed_issue_id = review_provenance.extract_linked_issue(pr.get("body") or "")
+        if configured_issue_id and int(configured_issue_id) != parsed_issue_id:
+            raise GovernanceError("configured issue id does not match the PR's governed link")
+        pr["issue_id"] = parsed_issue_id
+    except (GovernanceError, ValueError) as error:
+        print(f"{error}; blocked", file=sys.stderr)
         return 1
-    pr["issue_id"] = int(issue_id)
     pr["authorized_reviewers"] = [name for name in
                                   os.environ.get("GOVERNED_REVIEWERS", "").split(",") if name]
     try:

@@ -471,8 +471,14 @@ class GovernanceTests(unittest.TestCase):
         verified = review_provenance.verify_artifact(
             artifact, require_approved=False, **kwargs)
         self.assertEqual(verified["commit_id"], "head")
+        self.assertEqual(verified["state"], "CHANGES_REQUESTED")
         with self.assertRaises(GovernanceError):
             review_provenance.verify_artifact(artifact, **kwargs)
+
+    def test_v11_governance_consumer_uses_same_nonclosing_issue_parser(self):
+        source = Path(pr_governance.__file__).read_text(encoding="utf-8")
+        self.assertIn("review_provenance.extract_linked_issue", source)
+        self.assertNotIn("(?:closes|fixes|resolves)", source)
 
     def test_v11_review_tier_hierarchy_enforced(self):
         def make(tier, required):
