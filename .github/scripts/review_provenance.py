@@ -118,17 +118,25 @@ def required_review_tier_from_labels(labels: Iterable[Any]) -> str:
 
 
 def extract_linked_issue(body: str) -> int:
-    """Extract the canonical linked issue number from a PR body.
+    """Extract one unambiguous governed linked-issue number from a PR body.
 
-    Raises ``GovernanceError`` (fail closed) when no linked issue is
-    recorded; a PR without a recorded linked issue can never be bound to
-    approved provenance.
+    Closing keywords (Closes/Fixes/Resolves) and the non-closing governance
+    reference form 'Related to #N' are accepted. The parser fails closed
+    when there is no governed reference or when distinct issue numbers are
+    referenced, so a workflow cannot silently choose one of several issues.
+    Repeating the same issue number with multiple accepted keywords remains
+    unambiguous and is allowed.
     """
-    match = re.search(r"(?im)\b(?:closes|fixes|resolves)\s+#(\d+)", body or "")
-    if not match:
+    matches = re.findall(
+        r"(?im)\b(?:closes|fixes|resolves|related\s+to)\s+#(\d+)",
+        body or "",
+    )
+    issue_ids = {int(value) for value in matches}
+    if not issue_ids:
         raise GovernanceError("PR has no recorded linked issue")
-    return int(match.group(1))
-
+    if len(issue_ids) != 1:
+        raise GovernanceError("PR has ambiguous linked issues")
+    return next(iter(issue_ids))
 
 def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
                              reviews: Iterable[Mapping[str, Any]],

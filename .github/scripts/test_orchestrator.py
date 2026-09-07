@@ -530,6 +530,16 @@ class GovernanceTests(unittest.TestCase):
         return {"reviewer-bot": {"tier": "R3", "session_id": "review-session"},
                 "reviewer-lite": {"tier": "R1", "session_id": "reviewer-lite-session"}}
 
+    def test_v11_extract_linked_issue_accepts_closing_and_related_to_forms(self):
+        for body in ("Fixes #211", "Closes #211", "Resolves #211", "Related to #211",
+                     "RELATED TO #211", "Fixes #211\nRelated to #211"):
+            self.assertEqual(review_provenance.extract_linked_issue(body), 211)
+
+    def test_v11_extract_linked_issue_fails_closed_on_missing_or_ambiguous_links(self):
+        with self.assertRaises(GovernanceError):
+            review_provenance.extract_linked_issue("No governed issue reference")
+        with self.assertRaises(GovernanceError):
+            review_provenance.extract_linked_issue("Related to #211\nFixes #212")
     def test_v11_resolve_review_evidence_derives_disposition_and_tier_from_real_review(self):
         # Disposition, reviewer identity and actual tier are never accepted
         # as caller/human input -- they only exist if a real GitHub review
