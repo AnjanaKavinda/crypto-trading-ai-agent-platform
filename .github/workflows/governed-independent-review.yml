@@ -3,26 +3,29 @@ concurrency:
   group: governed-independent-review-${{ github.event.inputs.pr_number }}
   cancel-in-progress: false
 on:
+  workflow_run:
+    workflows: ["Governance CI"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: >-
-          PR number to check for an existing current-head independent
-          review. This is the only trusted input: it identifies which PR to
-          verify, it does not assert a review outcome. Disposition, actual
-          review tier, and reviewer identity are never accepted as inputs --
-          they are derived only from a real GitHub review already submitted
-          against the PR's current head by a reviewer configured in
-          GOVERNED_REVIEWER_TIERS.
+        description: PR number for a controlled manual validation run.
         required: true
 permissions:
   contents: read
   pull-requests: read
-  issues: read
+  issues: write
+  statuses: write
 jobs:
   produce-review-provenance:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'pull_request')
     name: produce-review-provenance
     runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}
     steps:
       # This job is the trusted independent-review producer execution. It is
       # a separate governed run from the workflow that dispatches or
@@ -31,6 +34,8 @@ jobs:
       # controller/human approval by itself; only the signed artifact it
       # emits is consumed by copilot-pr-governance.yml.
       - uses: actions/checkout@v4
+        with:
+          ref: dev
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -38,7 +43,6 @@ jobs:
         id: fetch
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
@@ -86,7 +90,7 @@ jobs:
           diff = Path('/tmp/pr.diff').read_text(encoding='utf-8')
           if not diff or detect_high_confidence_secret_material(diff):
               raise SystemExit('complete changed content is unavailable or contains credential material')
-          max_bytes = int(os.environ.get('REVIEW_CONTEXT_MAX_BYTES', '120000'))
+          max_bytes = int(os.environ.get('REVIEW_CONTEXT_MAX_BYTES') or '120000')
           if len(diff.encode()) > max_bytes:
               raise SystemExit('complete changed content exceeds the explicit review context budget')
           from review_provenance import extract_linked_issue
@@ -122,10 +126,17 @@ jobs:
               'safety_invariants': list(request.safety_invariants),
           }, sort_keys=True))
           PY
+      - name: Publish pending governance gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha="$(jq -r .head.sha /tmp/pr.json)"
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+            -f state=pending -f context=governance-gate \
+            -f description='Independent governed review in progress'
       - name: Verify deterministic checks before AI review
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
@@ -145,7 +156,6 @@ jobs:
       - name: Re-verify exact current PR head immediately before AI review
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-before-model.json
           python - <<'PY'
@@ -180,7 +190,6 @@ jobs:
       - name: Re-verify exact current PR head after AI review
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-after.json
@@ -188,7 +197,6 @@ jobs:
       - name: Re-fetch current PR head immediately before provenance
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-final.json
           python - <<'PY'
@@ -219,7 +227,6 @@ jobs:
       - name: Re-verify current head after artifact construction
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-publish.json
           python - <<'PY'
@@ -230,10 +237,60 @@ jobs:
           current=json.load(open('/tmp/pr-publish.json'))
           assert_current_head(artifact['head_sha'], current.get('head', {}).get('sha'))
           PY
-      - name: Upload signed provenance artifact
+      - name: Consume signed provenance and publish governance gate
+        id: governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOVERNED_BASE: dev
+          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
+          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
+          GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
+          GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
+          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
+          GOVERNED_PROVENANCE_PRODUCER: ${{ github.repository }}/.github/workflows/governed-independent-review.yml@refs/heads/dev
+          GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+          REQUIRED_REVIEWER_ROLES: ${{ vars.GOVERNED_REQUIRED_REVIEWER_ROLES }}
+          GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
+          GOVERNED_REVIEW_ARTIFACT_FILE: /tmp/review-artifact.json
+          GOVERNED_REVIEW_RESULT_FILE: /tmp/reviewer-result.json
+        run: |
+          head_sha="$(jq -r .head.sha /tmp/pr-final.json)"
+          gh api "repos/${{ github.repository }}/commits/$head_sha/status" > /tmp/status-final.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$head_sha/check-runs" > /tmp/checks-final.json
+          export GOVERNED_REVIEW_ARTIFACTS="$(jq -c '[.]' /tmp/review-artifact.json)"
+          set +e
+          python .github/scripts/run-pr-governance.py \
+            /tmp/pr-final.json /tmp/reviews.json /tmp/status-final.json /tmp/checks-final.json /tmp/issue.json
+          governance_rc=$?
+          set -e
+          disposition="$(jq -r .disposition /tmp/reviewer-result.json)"
+          if [ "$governance_rc" -eq 0 ]; then
+            gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=success -f context=governance-gate \
+              -f description='Signed independent review approved'
+            TARGET_STATE=workflow:ready-to-merge \
+              python .github/scripts/transition-pr.py
+          else
+            gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=failure -f context=governance-gate \
+              -f description="Independent review disposition: $disposition"
+            if [ "$disposition" = "changes-requested" ]; then
+              TARGET_STATE=workflow:changes-requested \
+                python .github/scripts/transition-pr.py
+            else
+              TARGET_STATE=workflow:human-decision-required \
+                python .github/scripts/transition-pr.py
+            fi
+            exit "$governance_rc"
+          fi
+      - name: Upload signed provenance and audit artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: review-provenance-${{ github.event.inputs.pr_number }}-${{ github.run_id }}
+          name: review-provenance-${{ env.PR_NUMBER }}-${{ github.run_id }}
+          if-no-files-found: ignore
           path: |
             /tmp/review-artifact.json
             /tmp/reviewer-result.json
@@ -241,14 +298,14 @@ jobs:
             /tmp/reviewer-result-attestation.json
             /tmp/governance-audit.jsonl
           retention-days: 90
-      - name: Report immutable producer output pointer
+      - name: Fail governance gate if review workflow did not finalize
+        if: always() && steps.governance.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Trusted producer output created. This signed artifact -- not any" >&2
-          echo "free-form assertion or human-supplied disposition -- is the only" >&2
-          echo "value copilot-pr-governance.yml will accept as independent-review" >&2
-          echo "provenance. Prefer fetching this immutable run/artifact directly" >&2
-          echo "(run id ${{ github.run_id }}); only if that is not feasible should" >&2
-          echo "a maintainer copy this exact JSON into the GOVERNED_REVIEW_ARTIFACTS" >&2
-          echo "repository variable (as a JSON list), and only as a pointer to this" >&2
-          echo "verifiable value, never as a new trust assertion." >&2
-          cat /tmp/review-artifact.json
+          if [ -f /tmp/pr.json ]; then
+            head_sha="$(jq -r .head.sha /tmp/pr.json)"
+            gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=failure -f context=governance-gate \
+              -f description='Governed independent review did not finalize successfully'
+          fi
