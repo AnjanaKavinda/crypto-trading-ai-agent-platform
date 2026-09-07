@@ -73,6 +73,14 @@ def main() -> int:
     allowed_actors = {item for item in os.environ.get("GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
     if not allowed_actors or os.environ.get("GITHUB_ACTOR") not in allowed_actors:
         raise GovernanceError("dispatch actor is not on the governed allowlist")
+    if os.environ.get("GOVERNED_PILOT_ENABLED", "").strip().lower() != "true":
+        raise GovernanceError("governed automation is disabled by the global kill switch")
+    pilot_issues = {item.strip() for item in os.environ.get(
+        "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
+    if not pilot_issues:
+        raise GovernanceError("governed pilot issue allowlist is empty")
+    if "*" not in pilot_issues and str(issue_id) not in pilot_issues:
+        raise GovernanceError("issue is not on the governed pilot allowlist")
     labels = [item["name"] for item in issue.get("labels", [])]
     body = issue.get("body") or ""
     current_canonical, _ = resolve_canonical_number(issue.get("body") or "")
@@ -91,8 +99,8 @@ def main() -> int:
         raise GovernanceError("issue title does not match approved canonical catalog")
     if current_canonical == 4 and int(issue_id) != 6:
         raise GovernanceError("canonical Issue 004 is reserved for GitHub issue #6")
-    if current_canonical == 4 and os.environ.get("GOVERNED_PILOT_ENABLED") != "true":
-        raise GovernanceError("canonical Issue 004 pilot requires explicit human activation")
+    if current_canonical == 4 and str(issue_id) != "6":
+        raise GovernanceError("canonical Issue 004 pilot is reserved for GitHub issue #6")
     dependency_github_numbers = resolve_dependency_github_numbers(
         dependencies, canonical_to_github)
     active_issues = [{"state": item.get("state"),
