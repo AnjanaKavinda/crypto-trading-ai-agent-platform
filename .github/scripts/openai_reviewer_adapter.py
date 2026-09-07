@@ -26,8 +26,7 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                  max_retries: int = 1, transport: Callable[..., Mapping[str, Any]] | None = None,
                  model_mapping: Mapping[str, str] | None = None,
                  context_pack: Mapping[str, Any] | None = None,
-                 max_payload_bytes: int | None = None,
-                 max_completion_tokens: int | None = None):
+                 max_payload_bytes: int | None = None):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.timeout_seconds = int(timeout_seconds)
         self.max_retries = int(max_retries)
@@ -37,11 +36,8 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         self.max_payload_bytes = int(
             max_payload_bytes if max_payload_bytes is not None
             else os.environ.get("REVIEW_CONTEXT_MAX_BYTES", "120000"))
-        self.max_completion_tokens = int(
-            max_completion_tokens if max_completion_tokens is not None
-            else os.environ.get("REVIEW_MAX_COMPLETION_TOKENS", "12000"))
         if (not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1)
-                or self.max_payload_bytes <= 0 or self.max_completion_tokens <= 0):
+                or self.max_payload_bytes <= 0):
             raise ReviewerExecutionError("OpenAI reviewer configuration is unavailable")
         if any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
             raise ReviewerExecutionError("OpenAI tier mapping is incomplete")
@@ -128,8 +124,6 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                     },
                 },
             },
-            "n": 1,
-            "max_completion_tokens": self.max_completion_tokens,
             "messages": [
                 {"role": "developer", "content": context["instructions"]},
                 {"role": "user", "content": json.dumps(context, sort_keys=True, default=list)},
