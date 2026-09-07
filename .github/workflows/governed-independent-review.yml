@@ -47,6 +47,7 @@ jobs:
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
           GOVERNED_PILOT_ISSUES: ${{ vars.GOVERNED_PILOT_ISSUES }}
+          GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
         run: |
@@ -70,6 +71,30 @@ jobs:
                   raise SystemExit('linked issue is not on the governed pilot allowlist')
           PY
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)/comments" > /tmp/issue-comments.json
+          python - <<'PY'
+          import json, os, re
+          if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
+              pr = json.load(open('/tmp/pr.json'))
+              pages = json.load(open('/tmp/issue-comments.json'))
+              comments = [item for page in pages for item in page]
+              allowed_authors = {item.strip() for item in os.environ.get(
+                  'GOVERNED_PR_AUTHORS', '').split(',') if item.strip()}
+              author = (pr.get('user') or {}).get('login')
+              if not allowed_authors or author not in allowed_authors:
+                  raise SystemExit('automatic review PR author is not governed')
+              keys = []
+              for comment in comments:
+                  body = comment.get('body') or ''
+                  if '<!-- governed-copilot-orchestrator:v1 -->' not in body:
+                      continue
+                  match = re.search(r'dispatch_key:([A-Za-z0-9_-]+)', body)
+                  if match:
+                      keys.append(match.group(1))
+              pr_body = pr.get('body') or ''
+              if not keys or not any(key in pr_body for key in keys):
+                  raise SystemExit('automatic review PR is not bound to a governed dispatch')
+          PY
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > /tmp/files.json
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \
             -H 'Accept: application/vnd.github.v3.diff' > /tmp/pr.diff
