@@ -531,6 +531,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("state=closed", transition_source)
         self.assertIn('"github-actions[bot]"', transition_source)
         self.assertIn("trusted_correction_actors", transition_source)
+        self.assertIn('GOVERNED_PILOT_ENABLED', transition_source)
+        self.assertIn('GOVERNED_PILOT_ISSUES', transition_source)
         self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_script)
         self.assertIn('$requiredStatusChecks += @{ context = $FinalGovernanceCheck }',
                       ruleset_script)
