@@ -246,7 +246,7 @@ Expected paths (create/modify only when needed):
         )
         evidence = review_producer.resolve_execution_evidence(
             result=result.to_dict(), original_request=request,
-            execution_handoff=handoff, signing_secret="signing-secret", **kwargs)
+            execution_handoff=handoff, handoff_secret="signing-secret", **kwargs)
         self.assertEqual(evidence["review_id"], result.review_execution_id)
         self.assertEqual(evidence["request_integrity_hash"], request.integrity_hash)
         self.assertEqual(evidence["diff_reference"], request.diff_reference)
