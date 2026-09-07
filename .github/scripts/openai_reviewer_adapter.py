@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from independent_reviewer import (
-    CAPABILITY_TIERS, DISPOSITIONS, Finding, IndependentReviewerAdapter,
+    CAPABILITY_TIERS, CATEGORIES, DISPOSITIONS, SEVERITIES, Finding, IndependentReviewerAdapter,
     ReviewerExecutionError, ReviewerExecutionRequest, ReviewerExecutionResult,
     integrity_hash,
 )
@@ -86,7 +86,10 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                 "bounded GitHub request context. Do not execute code, access external systems, "
                 "make trading decisions, or exercise repository, merge, branch-protection, "
                 "risk, approval, exchange, or production authority. Return only the required "
-                "JSON disposition and structured findings. Do not include private reasoning "
+                "JSON disposition and structured findings. Use only the governed severity and "
+                "category taxonomy encoded in the response schema. If any finding is blocking, "
+                "the disposition must be changes-requested or blocked; approved is valid only "
+                "when no unresolved blocking finding exists. Do not include private reasoning "
                 "or credentials."
             ),
             "bounded_context": self.context_pack,
@@ -111,8 +114,8 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                                              "contract_or_policy_reference"],
                                 "properties": {
                                     "finding_id": {"type": "string"},
-                                    "severity": {"type": "string"},
-                                    "category": {"type": "string"},
+                                    "severity": {"type": "string", "enum": list(SEVERITIES)},
+                                    "category": {"type": "string", "enum": list(CATEGORIES)},
                                     "title": {"type": "string"},
                                     "summary": {"type": "string"},
                                     "blocking": {"type": "boolean"},
