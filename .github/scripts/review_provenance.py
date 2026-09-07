@@ -128,7 +128,7 @@ def extract_linked_issue(body: str) -> int:
     unambiguous and is allowed.
     """
     matches = re.findall(
-        r"(?im)\\b(?:closes|fixes|resolves|related\\s+to)\\s+#(\\d+)",
+        r"(?im)\b(?:closes|fixes|resolves|related\s+to)\s+#(\d+)",
         body or "",
     )
     issue_ids = {int(value) for value in matches}
@@ -137,7 +137,6 @@ def extract_linked_issue(body: str) -> int:
     if len(issue_ids) != 1:
         raise GovernanceError("PR has ambiguous linked issues")
     return next(iter(issue_ids))
-
 
 def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
                              reviews: Iterable[Mapping[str, Any]],
