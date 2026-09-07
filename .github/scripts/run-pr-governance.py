@@ -62,18 +62,23 @@ def verify_reviewer_artifacts(raw_artifacts: object, *, audit: AppendOnlyAudit,
 def build_governed_reviews(reviews: list[dict], reviewer_roles: dict,
                            reviewer_configuration: dict,
                            verified_artifacts: dict[tuple, dict]) -> list[dict]:
-    """Normalize reviews, trusting independence only for a verified artifact.
+    """Normalize GitHub reviews and trusted producer artifacts.
 
-    A review is marked independent only when a signed, verified producer
-    artifact exists for the exact same reviewer login and current commit
-    SHA. Anything else (including any unsigned or unverifiable artifact)
-    remains ``independent: False`` and cannot satisfy governance.
+    Ordinary GitHub review records remain untrusted unless a verified signed
+    producer artifact binds the same reviewer and head. A verified artifact is
+    also sufficient on its own to represent the independent AI review because
+    the reviewer execution contract does not require the model to impersonate
+    a GitHub user or submit a GitHub review object. This preserves the actual
+    contract flow: model execution -> signed provenance -> governance consumer.
     """
     governed = []
+    represented: set[tuple[str, str]] = set()
+
     for item in reviews:
         login = item.get("user", {}).get("login")
         commit_id = item.get("commit_id")
-        verified = verified_artifacts.get((login, commit_id))
+        key = (str(login or ""), str(commit_id or ""))
+        verified = verified_artifacts.get(key)
         governed.append({
             "state": item.get("state"), "commit_id": commit_id,
             "user": login, "independent": bool(verified),
@@ -83,6 +88,24 @@ def build_governed_reviews(reviews: list[dict], reviewer_roles: dict,
                            or reviewer_configuration.get(login, {}).get("tier"),
             "reviewer_session_id": (verified or {}).get("reviewer_session_id", ""),
         })
+        if verified:
+            represented.add(key)
+
+    for key, verified in verified_artifacts.items():
+        if key in represented:
+            continue
+        governed.append({
+            "state": verified.get("state"),
+            "commit_id": verified.get("commit_id"),
+            "user": verified.get("user"),
+            "independent": True,
+            "submitted_at": verified.get("submitted_at"),
+            "id": verified.get("id"),
+            "role": verified.get("role") or reviewer_roles.get(verified.get("user")),
+            "review_tier": verified.get("review_tier"),
+            "reviewer_session_id": verified.get("reviewer_session_id", ""),
+        })
+
     return governed
 
 
