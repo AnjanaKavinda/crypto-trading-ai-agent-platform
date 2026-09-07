@@ -29,13 +29,18 @@ jobs:
           gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/status" > /tmp/status.json
           gh api --paginate --slurp "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs" > /tmp/checks.json
           python - <<'PY'
-          import json, re, subprocess
+          import json, subprocess, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import extract_linked_issue
           pr = json.load(open('/tmp/pr.json'))
-          body = pr.get('body') or ''
-          match = re.search(r'(?im)\b(?:closes|fixes|resolves)\s+#(\d+)', body)
-          if not match:
-              raise SystemExit('PR has no linked issue')
-          issue = subprocess.check_output(['gh', 'api', f"repos/{pr['base']['repo']['full_name']}/issues/{match.group(1)}"])
+          try:
+              issue_id = extract_linked_issue(pr.get('body') or '')
+          except Exception as error:
+              raise SystemExit(str(error)) from error
+          issue = subprocess.check_output([
+              'gh', 'api',
+              f"repos/{pr['base']['repo']['full_name']}/issues/{issue_id}",
+          ])
           open('/tmp/issue.json', 'wb').write(issue)
           PY
       - name: Mark linked issue under review
