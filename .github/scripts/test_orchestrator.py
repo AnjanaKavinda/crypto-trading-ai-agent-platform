@@ -76,11 +76,22 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(correction_allowed(2, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         self.assertFalse(correction_allowed(4, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         with self.assertRaises(GovernanceError): safe_content("token=supersecret")
-        good = {b: {"verified":True, "enforcement":"active", "required_checks":["ci"],
-                    "required_reviews": 1 if b == "main" else 0,
-                    "bypass_actors":[], "auto_merge":False, "merge_queue":False}
-                for b in ("dev","main")}
+        good = {
+            "dev": {"verified": True, "enforcement": "active",
+                    "required_checks": ["governance-ci", "governance-gate"],
+                    "required_reviews": 0, "bypass_actors": [],
+                    "auto_merge": False, "merge_queue": False},
+            "main": {"verified": True, "enforcement": "active",
+                     "required_checks": ["governance-ci"],
+                     "required_reviews": 1, "bypass_actors": [],
+                     "auto_merge": False, "merge_queue": False},
+        }
         verify_protections(good)
+        with self.assertRaises(GovernanceError):
+            verify_protections({
+                **good,
+                "dev": {**good["dev"], "required_checks": ["governance-ci"]},
+            })
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
         reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
                             "main": {**good["main"], "required_reviews": 0}}
