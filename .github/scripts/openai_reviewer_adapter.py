@@ -82,10 +82,12 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
             "request": {key: value for key, value in as_safe_dict(request).items()
                         if key != "integrity_hash"},
             "instructions": (
-                "Review only the bounded request context. You have no repository write, "
-                "merge, branch protection, trading, risk, approval, or execution authority. "
-                "Return only JSON with disposition and structured findings. Do not include "
-                "private reasoning or credentials."
+                "Perform a defensive software, security, and governance review of only the "
+                "bounded GitHub request context. Do not execute code, access external systems, "
+                "make trading decisions, or exercise repository, merge, branch-protection, "
+                "risk, approval, exchange, or production authority. Return only the required "
+                "JSON disposition and structured findings. Do not include private reasoning "
+                "or credentials."
             ),
             "bounded_context": self.context_pack,
         }
