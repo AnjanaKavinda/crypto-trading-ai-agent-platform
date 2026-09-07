@@ -440,6 +440,56 @@ class GovernanceTests(unittest.TestCase):
                 controller="human-owner", required_reviewer_roles=("QA/Security Reviewer",),
                 governed_high_risk=True)
 
+    def test_v11_transition_consumes_only_result_bound_to_signed_provenance(self):
+        result = {
+            "disposition": "changes-requested",
+            "head_sha": "head",
+            "findings": [{
+                "finding_id": "f1", "severity": "medium", "category": "governance",
+                "title": "Fix", "summary": "Bounded fix", "blocking": False,
+                "recommended_action": "Correct the bounded issue", "path": ".github/x",
+                "line_or_location": "", "contract_or_policy_reference": "",
+            }],
+        }
+        result["result_integrity_hash"] = transition_pr.integrity_hash(result)
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=7, issue_id=195, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R3", review_tier="R3",
+            producer_identity="o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev",
+            producer_run_id="run-1", controller_policy_version="v1.1",
+            disposition="changes-requested", secret="signing-secret",
+            reviewer_role="QA/Security Reviewer",
+            result_integrity_hash=result["result_integrity_hash"],
+        )
+        pr = {"number": 7, "head": {"sha": "head"}}
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_path = Path(temp) / "artifact.json"
+            result_path = Path(temp) / "result.json"
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            env = {
+                "GITHUB_REPOSITORY": "o/r",
+                "GOVERNED_REVIEW_ARTIFACT_FILE": str(artifact_path),
+                "GOVERNED_REVIEW_RESULT_FILE": str(result_path),
+                "GOVERNANCE_PROVENANCE_SIGNING_KEY": "signing-secret",
+                "GOVERNED_PROVENANCE_PRODUCER":
+                    "o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev",
+                "GOVERNED_CONTROLLER": "human-owner",
+                "GOVERNED_IMPLEMENTER_SESSION": "implement-session",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                verified = transition_pr.verified_review_result(pr, 195)
+            self.assertEqual(verified["disposition"], "changes-requested")
+
+            tampered = dict(result)
+            tampered["disposition"] = "approved"
+            result_path.write_text(json.dumps(tampered), encoding="utf-8")
+            with patch.dict(os.environ, env, clear=False):
+                with self.assertRaises(GovernanceError):
+                    transition_pr.verified_review_result(pr, 195)
+
     def test_v11_automation_v1_production_wiring_is_present(self):
         issue_source = (Path(__file__).with_name("orchestrate-issue.py")
                         .read_text(encoding="utf-8"))
