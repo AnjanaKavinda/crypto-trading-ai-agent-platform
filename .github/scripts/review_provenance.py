@@ -138,6 +138,7 @@ def extract_linked_issue(body: str) -> int:
         raise GovernanceError("PR has ambiguous linked issues")
     return next(iter(issue_ids))
 
+
 def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
                              reviews: Iterable[Mapping[str, Any]],
                              reviewer_configuration: Mapping[str, Any],
