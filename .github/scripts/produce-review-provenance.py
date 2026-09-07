@@ -236,7 +236,7 @@ def main() -> int:
                 reviewer_configuration=reviewer_configuration,
                 implementer_session_id=implementer_session_id, controller=controller,
                 expected_base=expected_base)
-    except GovernanceError as error:
+    except (GovernanceError, KeyError, TypeError, ValueError) as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
                          correlation_id=correlation_id, reason=str(error))
