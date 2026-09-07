@@ -34,12 +34,15 @@ def make_request(tier="R3", head="head"):
     )
 
 
-def response(disposition, *, model="gpt-5.6-sol", findings=None):
+def response(disposition, *, model="gpt-5.6-sol", findings=None, content=None,
+             finish_reason="stop", refusal=None, provider_id="provider-execution-1"):
+    document = {"disposition": disposition, "findings": findings or []}
+    message = {"content": json.dumps(document) if content is None else content}
+    if refusal is not None:
+        message["refusal"] = refusal
     return {
-        "id": "provider-execution-1", "model": model,
-        "choices": [{"message": {"content": json.dumps({
-            "disposition": disposition, "findings": findings or [],
-        })}}],
+        "id": provider_id, "model": model,
+        "choices": [{"finish_reason": finish_reason, "message": message}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5},
     }
 
@@ -56,7 +59,7 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertIn("--attestation /tmp/reviewer-result-attestation.json", workflow)
         self.assertIn("/tmp/reviewer-request.json /tmp/reviewer-result-attestation.json", workflow)
 
-    def test_payload_omits_unsupported_sampling_temperature(self):
+    def test_payload_uses_bounded_current_chat_contract(self):
         adapter = OpenAIReviewerAdapter(
             api_key="test-key",
             transport=lambda payload, timeout: response("approved"),
@@ -66,6 +69,9 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertNotIn("temperature", payload)
         self.assertEqual(payload["model"], "gpt-5.6-sol")
         self.assertEqual(payload["response_format"]["type"], "json_schema")
+        self.assertEqual(payload["n"], 1)
+        self.assertEqual(payload["max_completion_tokens"], 12000)
+        self.assertEqual(payload["messages"][0]["role"], "developer")
 
     def test_issue_policy_paths_drive_scope_and_forbidden_paths_fail_closed(self):
         body = """## Bounded implementation scope
@@ -147,6 +153,75 @@ Expected paths (create/modify only when needed):
             self.assertEqual(result.disposition, disposition)
             self.assertEqual(result.head_sha, "head")
             self.assertEqual(result.actual_review_tier, "R3")
+
+    def test_provider_response_shape_variants_are_handled_without_leaking_content(self):
+        document = json.dumps({"disposition": "approved", "findings": []})
+        array_content = [{"type": "text", "text": document}]
+        result = OpenAIReviewerAdapter(
+            api_key="test-key",
+            transport=lambda payload, timeout: response(
+                "approved", content=array_content),
+            model_mapping=MODEL_MAPPING,
+        ).review(make_request())
+        self.assertEqual(result.disposition, "approved")
+
+        with self.assertRaisesRegex(
+                ReviewerExecutionError, "refused the bounded review request"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "blocked", content=None, refusal="provider refusal"),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
+
+        with self.assertRaisesRegex(ReviewerExecutionError, "was truncated"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "approved", finish_reason="length"),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
+
+        with self.assertRaisesRegex(ReviewerExecutionError, "content-filtered"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "approved", finish_reason="content_filter"),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
+
+    def test_malformed_or_refused_provider_output_is_never_auto_retried(self):
+        for provider_response in (
+                {"id": "x", "model": "gpt-5.6-sol", "choices": []},
+                response("blocked", content=None, refusal="provider refusal")):
+            calls = []
+            def transport(payload, timeout, value=provider_response):
+                calls.append(1)
+                return value
+            with self.assertRaises(ReviewerExecutionError):
+                OpenAIReviewerAdapter(
+                    api_key="test-key", transport=transport,
+                    model_mapping=MODEL_MAPPING,
+                ).review(make_request())
+            self.assertEqual(calls, [1])
+
+    def test_strict_provider_document_and_execution_identity_fail_closed(self):
+        extra = json.dumps({
+            "disposition": "approved", "findings": [], "unexpected": True})
+        with self.assertRaisesRegex(ReviewerExecutionError, "unexpected fields"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "approved", content=extra),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
+        with self.assertRaisesRegex(ReviewerExecutionError, "no provider execution id"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "approved", provider_id=""),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
 
     def test_unapproved_returned_model_fails_closed(self):
         with self.assertRaises(ReviewerExecutionError):
