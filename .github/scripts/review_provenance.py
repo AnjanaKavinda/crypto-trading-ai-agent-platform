@@ -65,6 +65,7 @@ REQUIRED_FIELDS = (
     "head_sha",
     "reviewer_identity",
     "reviewer_session_id",
+    "reviewer_role",
     "implementer_session_id",
     "required_review_tier",
     "review_tier",
