@@ -138,6 +138,12 @@ def main() -> int:
     except (GovernanceError, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return 1
     if target == "workflow:changes-requested":
+        if os.environ.get("GOVERNED_PILOT_ENABLED", "").strip().lower() != "true":
+            return 1
+        pilot_issues = {item.strip() for item in os.environ.get(
+            "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
+        if "*" not in pilot_issues and issue not in pilot_issues:
+            return 1
         if signed_result is not None:
             if signed_result.get("disposition") != "changes-requested":
                 return 1
