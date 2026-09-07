@@ -55,6 +55,11 @@ class IndependentReviewerTests(unittest.TestCase):
             "PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}",
             workflow)
         self.assertIn('workflows: ["Governance CI"]', workflow)
+        self.assertIn("vars.GOVERNED_PILOT_ENABLED == 'true'", workflow)
+        self.assertIn("GOVERNED_PILOT_ISSUES", workflow)
+        self.assertIn("canonical_issue, _ = resolve_canonical_number", workflow)
+        self.assertIn("agent_role = resolve_agent", workflow)
+        self.assertIn("Block automatic duplicate paid review for the same head", workflow)
         self.assertIn("Re-verify exact current PR head immediately before AI review", workflow)
         self.assertIn("Re-verify current head after artifact construction", workflow)
         self.assertIn("--attestation /tmp/reviewer-result-attestation.json", workflow)
