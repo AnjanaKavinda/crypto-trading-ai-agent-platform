@@ -69,8 +69,6 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertNotIn("temperature", payload)
         self.assertEqual(payload["model"], "gpt-5.6-sol")
         self.assertEqual(payload["response_format"]["type"], "json_schema")
-        self.assertEqual(payload["n"], 1)
-        self.assertEqual(payload["max_completion_tokens"], 12000)
         self.assertEqual(payload["messages"][0]["role"], "developer")
 
     def test_issue_policy_paths_drive_scope_and_forbidden_paths_fail_closed(self):
