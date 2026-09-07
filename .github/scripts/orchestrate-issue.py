@@ -99,8 +99,6 @@ def main() -> int:
         raise GovernanceError("issue title does not match approved canonical catalog")
     if current_canonical == 4 and int(issue_id) != 6:
         raise GovernanceError("canonical Issue 004 is reserved for GitHub issue #6")
-    if current_canonical == 4 and str(issue_id) != "6":
-        raise GovernanceError("canonical Issue 004 pilot is reserved for GitHub issue #6")
     dependency_github_numbers = resolve_dependency_github_numbers(
         dependencies, canonical_to_github)
     active_issues = [{"state": item.get("state"),
