@@ -88,7 +88,7 @@ def _load_json(path: str) -> object:
 
 
 def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecutionRequest,
-                               execution_handoff: dict, signing_secret: str,
+                               execution_handoff: dict, handoff_secret: str,
                                pr: dict, issue: dict, reviewer_configuration: dict,
                                reviewer_roles: dict, implementer_session_id: str,
                                controller: str, preferred_reviewer: str = "",
@@ -126,7 +126,7 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
         original_request.validate()
         parsed.validate_against(original_request)
         verify_execution_handoff(
-            original_request, parsed, execution_handoff, signing_secret)
+            original_request, parsed, execution_handoff, handoff_secret)
         if (original_request.repository != pr.get("repository") or
                 original_request.pr_number != int(pr["number"]) or
                 original_request.head_sha != pr.get("head_sha") or
@@ -188,10 +188,15 @@ def main() -> int:
         producer_run_id = _require("GITHUB_RUN_ID")
         secret = _require("GOVERNANCE_PROVENANCE_SIGNING_KEY")
         repository = _require("GITHUB_REPOSITORY")
+        handoff_key_file = os.environ.get("GOVERNED_REVIEW_HANDOFF_KEY_FILE", "")
+        handoff_secret = (Path(handoff_key_file).read_text(encoding="utf-8").strip()
+                          if result_raw is not None and handoff_key_file else "")
+        if result_raw is not None and not handoff_secret:
+            raise GovernanceError("review result handoff key is unavailable")
         expected_base = os.environ.get("GOVERNED_BASE") or "dev"
         reviewer_configuration = json.loads(os.environ.get("GOVERNED_REVIEWER_TIERS", "{}"))
         reviewer_roles = json.loads(os.environ.get("GOVERNED_REVIEWER_ROLES", "{}"))
-    except (GovernanceError, json.JSONDecodeError) as error:
+    except (GovernanceError, json.JSONDecodeError, OSError) as error:
         print(f"{error}; blocked", file=sys.stderr)
         return 1
     if not isinstance(reviewer_configuration, dict) or not isinstance(reviewer_roles, dict):
@@ -223,7 +228,7 @@ def main() -> int:
             original_request = request_from_mapping(request_raw)
             evidence = resolve_execution_evidence(
                 result=result_raw, original_request=original_request,
-                execution_handoff=handoff_raw, signing_secret=secret,
+                execution_handoff=handoff_raw, handoff_secret=handoff_secret,
                 pr=pr, issue=issue,
                 reviewer_configuration=reviewer_configuration, reviewer_roles=reviewer_roles,
                 implementer_session_id=implementer_session_id, controller=controller,
