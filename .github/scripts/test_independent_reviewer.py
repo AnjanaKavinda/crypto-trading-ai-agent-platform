@@ -60,6 +60,8 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertIn("canonical_issue, _ = resolve_canonical_number", workflow)
         self.assertIn("agent_role = resolve_agent", workflow)
         self.assertIn("Block automatic duplicate paid review for the same head", workflow)
+        self.assertIn("automatic review PR author is not governed", workflow)
+        self.assertIn("automatic review PR is not bound to a governed dispatch", workflow)
         self.assertIn("Re-verify exact current PR head immediately before AI review", workflow)
         self.assertIn("Re-verify current head after artifact construction", workflow)
         self.assertIn("--attestation /tmp/reviewer-result-attestation.json", workflow)
