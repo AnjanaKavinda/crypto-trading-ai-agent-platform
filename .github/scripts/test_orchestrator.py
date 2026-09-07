@@ -467,11 +467,14 @@ class GovernanceTests(unittest.TestCase):
                       transition_source)
         self.assertIn("state=closed", transition_source)
 
-    def test_v11_pr_governance_workflow_uses_central_issue_parser(self):
+    def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "copilot-pr-governance.yml").read_text(encoding="utf-8")
-        self.assertIn("from review_provenance import extract_linked_issue", workflow)
-        self.assertNotIn("(?:closes|fixes|resolves)", workflow)
+        transition = (Path(__file__).with_name("transition-pr.py")
+                      .read_text(encoding="utf-8"))
+        self.assertIn("transition-pr.py", workflow)
+        self.assertIn("from review_provenance import extract_linked_issue", transition)
+        self.assertNotIn("(?:closes|fixes|resolves)", transition)
 
     def test_v11_fabricated_or_controller_asserted_artifact_rejected(self):
         artifact = review_provenance.build_artifact(
