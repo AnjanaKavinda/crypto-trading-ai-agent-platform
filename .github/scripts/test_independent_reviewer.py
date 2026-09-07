@@ -3,7 +3,10 @@ import importlib.util
 from pathlib import Path
 import unittest
 
-from independent_reviewer import ReviewerExecutionError, build_request
+from independent_reviewer import (
+    ReviewerExecutionError, assert_current_head, build_request,
+    extract_allowed_paths_from_issue, integrity_hash, sign_execution_handoff,
+)
 from openai_reviewer_adapter import OpenAIReviewerAdapter, TransientProviderError
 MODEL_MAPPING = {"economical-fast": "gpt-5.6-luna",
                  "strong-coding-reasoning": "gpt-5.6-terra",
@@ -48,6 +51,10 @@ class IndependentReviewerTests(unittest.TestCase):
         step = workflow.split("- name: Re-verify exact current PR head", 1)[1].split(
             "- name: Produce signed independent-review provenance artifact", 1)[0]
         self.assertIn("PR_NUMBER: ${{ github.event.inputs.pr_number }}", step)
+        self.assertIn("Re-verify exact current PR head immediately before AI review", workflow)
+        self.assertIn("Re-verify current head after artifact construction", workflow)
+        self.assertIn("--attestation /tmp/reviewer-result-attestation.json", workflow)
+        self.assertIn("/tmp/reviewer-request.json /tmp/reviewer-result-attestation.json", workflow)
 
     def test_payload_omits_unsupported_sampling_temperature(self):
         adapter = OpenAIReviewerAdapter(
@@ -59,6 +66,76 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertNotIn("temperature", payload)
         self.assertEqual(payload["model"], "gpt-5.6-sol")
         self.assertEqual(payload["response_format"]["type"], "json_schema")
+
+    def test_issue_policy_paths_drive_scope_and_forbidden_paths_fail_closed(self):
+        body = """## Bounded implementation scope
+Expected paths (create/modify only when needed):
+- `.github/scripts/independent_reviewer.py`
+- `.github/workflows/governed-independent-review.yml`
+
+## Functional requirements
+"""
+        allowed = extract_allowed_paths_from_issue(body)
+        self.assertEqual(
+            allowed,
+            (".github/scripts/independent_reviewer.py",
+             ".github/workflows/governed-independent-review.yml"))
+        build_request(
+            repository="o/r", pr_number=7, head_sha="head", base_branch="dev",
+            github_issue_id=211, canonical_issue_id=211, agent_role="Backend/Foundation",
+            reviewer_role="QA/Security Reviewer", required_review_tier="R3",
+            capability_tier="premium-strongest-available", context_pack_id="context-1",
+            context_pack_version="v1.1", implementation_session_id="implementation-session",
+            allowed_paths=allowed, forbidden_paths=("services/execution/**", ".env"),
+            changed_files=(".github/scripts/independent_reviewer.py",),
+            diff_reference="sha256:diff", required_checks=("tests",),
+            safety_invariants=("no-merge",), controller_policy_version="v1.1")
+        with self.assertRaises(ReviewerExecutionError):
+            build_request(
+                repository="o/r", pr_number=7, head_sha="head", base_branch="dev",
+                github_issue_id=211, canonical_issue_id=211, agent_role="Backend/Foundation",
+                reviewer_role="QA/Security Reviewer", required_review_tier="R3",
+                capability_tier="premium-strongest-available", context_pack_id="context-1",
+                context_pack_version="v1.1", implementation_session_id="implementation-session",
+                allowed_paths=(".github/**",), forbidden_paths=("services/execution/**",),
+                changed_files=("services/execution/live.py",), diff_reference="sha256:diff",
+                required_checks=("tests",), safety_invariants=("no-merge",),
+                controller_policy_version="v1.1")
+        with self.assertRaises(ReviewerExecutionError):
+            build_request(
+                repository="o/r", pr_number=7, head_sha="head", base_branch="dev",
+                github_issue_id=211, canonical_issue_id=211, agent_role="Backend/Foundation",
+                reviewer_role="QA/Security Reviewer", required_review_tier="R3",
+                capability_tier="premium-strongest-available", context_pack_id="context-1",
+                context_pack_version="v1.1", implementation_session_id="implementation-session",
+                allowed_paths=(".github/**",), forbidden_paths=("services/execution/**",),
+                changed_files=("../escape.py",), diff_reference="sha256:diff",
+                required_checks=("tests",), safety_invariants=("no-merge",),
+                controller_policy_version="v1.1")
+
+    def test_current_head_guard_rejects_before_or_after_execution_changes(self):
+        assert_current_head("head", "head")
+        with self.assertRaises(ReviewerExecutionError):
+            assert_current_head("head", "changed")
+
+    def test_outbound_metadata_secret_and_payload_budget_fail_before_transport(self):
+        calls = []
+        def transport(payload, timeout):
+            calls.append(1)
+            return response("approved")
+        with self.assertRaises(ReviewerExecutionError):
+            OpenAIReviewerAdapter(
+                api_key="test-key", transport=transport, model_mapping=MODEL_MAPPING,
+                context_pack={"issue": {"body": "password=hunter2"}, "complete_diff": "safe"},
+            ).review(make_request())
+        self.assertEqual(calls, [])
+        with self.assertRaises(ReviewerExecutionError):
+            OpenAIReviewerAdapter(
+                api_key="test-key", transport=transport, model_mapping=MODEL_MAPPING,
+                context_pack={"issue": {"body": "safe"}, "complete_diff": "x" * 1000},
+                max_payload_bytes=200,
+            ).review(make_request())
+        self.assertEqual(calls, [])
 
     def test_all_model_dispositions_are_structured(self):
         for disposition in ("approved", "changes-requested", "blocked"):
@@ -150,25 +227,39 @@ class IndependentReviewerTests(unittest.TestCase):
                 controller_policy_version="v1.1",
             )
 
-    def test_valid_execution_can_be_handed_to_trusted_provenance(self):
+    def test_valid_execution_is_bound_to_original_request_and_signed_handoff(self):
+        request = make_request()
         result = OpenAIReviewerAdapter(
             api_key="test-key",
             transport=lambda payload, timeout: response("approved"),
             model_mapping=MODEL_MAPPING,
-        ).review(make_request())
-        evidence = review_producer.resolve_execution_evidence(
-            result=result.to_dict(),
+        ).review(request)
+        handoff = sign_execution_handoff(request, result, "signing-secret")
+        kwargs = dict(
             pr={"number": 7, "repository": "o/r", "head_sha": "head",
                 "base": "dev", "body": "Closes #211"},
             issue={"number": 211, "labels": [{"name": "risk:high"}]},
             reviewer_configuration={"reviewer-bot": {"tier": "R3", "session_id": "review-session"}},
             reviewer_roles={"reviewer-bot": "QA/Security Reviewer"},
             implementer_session_id="implementation-session", controller="human-owner",
-            preferred_reviewer="reviewer-bot",
-            model_mapping=MODEL_MAPPING,
+            preferred_reviewer="reviewer-bot", model_mapping=MODEL_MAPPING,
         )
+        evidence = review_producer.resolve_execution_evidence(
+            result=result.to_dict(), original_request=request,
+            execution_handoff=handoff, signing_secret="signing-secret", **kwargs)
         self.assertEqual(evidence["review_id"], result.review_execution_id)
-        self.assertEqual(evidence["result_integrity_hash"], result.result_integrity_hash)
+        self.assertEqual(evidence["request_integrity_hash"], request.integrity_hash)
+        self.assertEqual(evidence["diff_reference"], request.diff_reference)
+
+        tampered = result.to_dict()
+        tampered["disposition"] = "changes-requested"
+        body = dict(tampered)
+        body.pop("result_integrity_hash", None)
+        tampered["result_integrity_hash"] = integrity_hash(body)
+        with self.assertRaises(Exception):
+            review_producer.resolve_execution_evidence(
+                result=tampered, original_request=request,
+                execution_handoff=handoff, signing_secret="signing-secret", **kwargs)
 
 
 if __name__ == "__main__":
