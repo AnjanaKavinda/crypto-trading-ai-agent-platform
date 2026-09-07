@@ -171,10 +171,11 @@ def main() -> int:
     if len(current_states) != 1:
         return 1
     current = next(iter(current_states))
+    trusted_correction_actors = {controller, "github-actions[bot]"} - {""}
     governed_corrections = [item for item in comments
                             if MARKER in item.get("body", "")
                             and "CORRECTION_ATTEMPT:" in item.get("body", "")
-                            and (not controller or item.get("user", {}).get("login") == controller)]
+                            and item.get("user", {}).get("login") in trusted_correction_actors]
     corrections = len(governed_corrections)
     previous_tier = dispatch_payload.get("capability_tier", "strong-coding-reasoning")
     resulting_tier = previous_tier
