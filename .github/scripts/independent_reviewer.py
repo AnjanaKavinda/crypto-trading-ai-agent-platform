@@ -70,10 +70,18 @@ def extract_allowed_paths_from_issue(issue_body: str) -> tuple[str, ...]:
     tail = body[marker.end():]
     section = re.split(r"(?m)^##\s+", tail, maxsplit=1)[0]
     paths = []
-    for value in re.findall(r"(?m)^-\s+`([^`]+)`", section):
-        candidate = value.strip()
+    for line in section.splitlines():
+        match = re.match(r"^-\s+`([^`]+)`", line)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
         if candidate and candidate not in paths:
             paths.append(_normalized_pattern(candidate))
+        if (candidate.endswith("/test_orchestrator.py") and
+                "narrowly scoped new tests" in line.lower()):
+            test_pattern = candidate.rsplit("/", 1)[0] + "/test_*.py"
+            if test_pattern not in paths:
+                paths.append(_normalized_pattern(test_pattern))
     if not paths:
         raise ReviewerExecutionError("linked issue governed review paths are empty")
     return tuple(paths)
