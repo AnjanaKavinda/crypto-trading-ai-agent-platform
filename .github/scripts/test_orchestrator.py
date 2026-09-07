@@ -76,11 +76,22 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(correction_allowed(2, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         self.assertFalse(correction_allowed(4, 3, same_issue=True, same_pr=True, scope_hash="x", original_scope_hash="x"))
         with self.assertRaises(GovernanceError): safe_content("token=supersecret")
-        good = {b: {"verified":True, "enforcement":"active", "required_checks":["ci"],
-                    "required_reviews": 1 if b == "main" else 0,
-                    "bypass_actors":[], "auto_merge":False, "merge_queue":False}
-                for b in ("dev","main")}
+        good = {
+            "dev": {"verified": True, "enforcement": "active",
+                    "required_checks": ["governance-ci", "governance-gate"],
+                    "required_reviews": 0, "bypass_actors": [],
+                    "auto_merge": False, "merge_queue": False},
+            "main": {"verified": True, "enforcement": "active",
+                     "required_checks": ["governance-ci"],
+                     "required_reviews": 1, "bypass_actors": [],
+                     "auto_merge": False, "merge_queue": False},
+        }
         verify_protections(good)
+        with self.assertRaises(GovernanceError):
+            verify_protections({
+                **good,
+                "dev": {**good["dev"], "required_checks": ["governance-ci"]},
+            })
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
         reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
                             "main": {**good["main"], "required_reviews": 0}}
@@ -440,11 +451,100 @@ class GovernanceTests(unittest.TestCase):
                 controller="human-owner", required_reviewer_roles=("QA/Security Reviewer",),
                 governed_high_risk=True)
 
-    def test_v11_pr_governance_workflow_uses_central_issue_parser(self):
+    def test_v11_transition_consumes_only_result_bound_to_signed_provenance(self):
+        result = {
+            "disposition": "changes-requested",
+            "head_sha": "head",
+            "findings": [{
+                "finding_id": "f1", "severity": "medium", "category": "governance",
+                "title": "Fix", "summary": "Bounded fix", "blocking": False,
+                "recommended_action": "Correct the bounded issue", "path": ".github/x",
+                "line_or_location": "", "contract_or_policy_reference": "",
+            }],
+        }
+        result["result_integrity_hash"] = transition_pr.integrity_hash(result)
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=7, issue_id=195, review_id="review-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R3", review_tier="R3",
+            producer_identity="o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev",
+            producer_run_id="run-1", controller_policy_version="v1.1",
+            disposition="changes-requested", secret="signing-secret",
+            reviewer_role="QA/Security Reviewer",
+            result_integrity_hash=result["result_integrity_hash"],
+        )
+        pr = {"number": 7, "head": {"sha": "head"}}
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_path = Path(temp) / "artifact.json"
+            result_path = Path(temp) / "result.json"
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            env = {
+                "GITHUB_REPOSITORY": "o/r",
+                "GOVERNED_REVIEW_ARTIFACT_FILE": str(artifact_path),
+                "GOVERNED_REVIEW_RESULT_FILE": str(result_path),
+                "GOVERNANCE_PROVENANCE_SIGNING_KEY": "signing-secret",
+                "GOVERNED_PROVENANCE_PRODUCER":
+                    "o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev",
+                "GOVERNED_CONTROLLER": "human-owner",
+                "GOVERNED_IMPLEMENTER_SESSION": "implement-session",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                verified = transition_pr.verified_review_result(pr, 195)
+            self.assertEqual(verified["disposition"], "changes-requested")
+
+            tampered = dict(result)
+            tampered["disposition"] = "approved"
+            result_path.write_text(json.dumps(tampered), encoding="utf-8")
+            with patch.dict(os.environ, env, clear=False):
+                with self.assertRaises(GovernanceError):
+                    transition_pr.verified_review_result(pr, 195)
+
+    def test_v11_automation_v1_production_wiring_is_present(self):
+        issue_source = (Path(__file__).with_name("orchestrate-issue.py")
+                        .read_text(encoding="utf-8"))
+        issue_workflow = (Path(__file__).parents[1] / "workflows" /
+                          "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
+        review_workflow = (Path(__file__).parents[1] / "workflows" /
+                           "governed-independent-review.yml").read_text(encoding="utf-8")
+        pr_workflow = (Path(__file__).parents[1] / "workflows" /
+                       "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        transition_source = (Path(__file__).with_name("transition-pr.py")
+                             .read_text(encoding="utf-8"))
+        ruleset_script = (Path(__file__).parents[2] / "scripts" /
+                          "setup-branch-rulesets.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("governed automation is disabled by the global kill switch", issue_source)
+        self.assertIn("GOVERNED_PILOT_ISSUES", issue_source)
+        self.assertIn("GOVERNED_PILOT_ISSUES:", issue_workflow)
+        self.assertIn('workflows: ["Governance CI"]', review_workflow)
+        self.assertIn("governance-gate", review_workflow)
+        self.assertIn("GOVERNED_REVIEW_ARTIFACT_FILE", review_workflow)
+        self.assertIn("run-pr-governance.py", review_workflow)
+        self.assertIn("transition-pr.py", review_workflow)
+        self.assertIn("types: [opened, synchronize, reopened, closed]", pr_workflow)
+        self.assertIn("complete-after-human-merge", pr_workflow)
+        self.assertIn("verify_artifact(", transition_source)
+        self.assertIn("structured review result is not bound to signed provenance",
+                      transition_source)
+        self.assertIn("state=closed", transition_source)
+        self.assertIn('"github-actions[bot]"', transition_source)
+        self.assertIn("trusted_correction_actors", transition_source)
+        self.assertIn('GOVERNED_PILOT_ENABLED', transition_source)
+        self.assertIn('GOVERNED_PILOT_ISSUES', transition_source)
+        self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_script)
+        self.assertIn('$requiredStatusChecks += @{ context = $FinalGovernanceCheck }',
+                      ruleset_script)
+
+    def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "copilot-pr-governance.yml").read_text(encoding="utf-8")
-        self.assertIn("from review_provenance import extract_linked_issue", workflow)
-        self.assertNotIn("(?:closes|fixes|resolves)", workflow)
+        transition = (Path(__file__).with_name("transition-pr.py")
+                      .read_text(encoding="utf-8"))
+        self.assertIn("transition-pr.py", workflow)
+        self.assertIn("from review_provenance import extract_linked_issue", transition)
+        self.assertNotIn("(?:closes|fixes|resolves)", transition)
 
     def test_v11_fabricated_or_controller_asserted_artifact_rejected(self):
         artifact = review_provenance.build_artifact(

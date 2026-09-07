@@ -544,9 +544,14 @@ def high_risk_review_required(text: str, *, governed: bool = False) -> bool:
 
 def verify_protections(result: Mapping[str, Any]) -> None:
     required = ("dev", "main")
+    expected_checks = {
+        "dev": {"governance-ci", "governance-gate"},
+        "main": {"governance-ci"},
+    }
     if any(not result.get(branch, {}).get("verified") or
        result.get(branch, {}).get("enforcement") != "active" or
-       not result.get(branch, {}).get("required_checks") or
+       not expected_checks[branch].issubset(set(
+           result.get(branch, {}).get("required_checks") or ())) or
            (result.get(branch, {}).get("required_reviews", 0) !=
             (1 if branch == "main" else 0)) or
            result.get(branch, {}).get("bypass_actors") or

@@ -35,7 +35,7 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         self.context_pack = dict(context_pack or {})
         self.max_payload_bytes = int(
             max_payload_bytes if max_payload_bytes is not None
-            else os.environ.get("REVIEW_CONTEXT_MAX_BYTES", "120000"))
+            else (os.environ.get("REVIEW_CONTEXT_MAX_BYTES") or "120000"))
         if (not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1)
                 or self.max_payload_bytes <= 0):
             raise ReviewerExecutionError("OpenAI reviewer configuration is unavailable")

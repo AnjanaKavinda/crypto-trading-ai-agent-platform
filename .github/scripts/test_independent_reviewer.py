@@ -51,9 +51,17 @@ class IndependentReviewerTests(unittest.TestCase):
     def test_workflow_reverification_declares_pr_number(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "governed-independent-review.yml").read_text()
-        step = workflow.split("- name: Re-verify exact current PR head", 1)[1].split(
-            "- name: Produce signed independent-review provenance artifact", 1)[0]
-        self.assertIn("PR_NUMBER: ${{ github.event.inputs.pr_number }}", step)
+        self.assertIn(
+            "PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}",
+            workflow)
+        self.assertIn('workflows: ["Governance CI"]', workflow)
+        self.assertIn("vars.GOVERNED_PILOT_ENABLED == 'true'", workflow)
+        self.assertIn("GOVERNED_PILOT_ISSUES", workflow)
+        self.assertIn("canonical_issue, _ = resolve_canonical_number", workflow)
+        self.assertIn("agent_role = resolve_agent", workflow)
+        self.assertIn("Block automatic duplicate paid review for the same head", workflow)
+        self.assertIn("automatic review PR author is not governed", workflow)
+        self.assertIn("automatic review PR is not bound to a governed dispatch", workflow)
         self.assertIn("Re-verify exact current PR head immediately before AI review", workflow)
         self.assertIn("Re-verify current head after artifact construction", workflow)
         self.assertIn("--attestation /tmp/reviewer-result-attestation.json", workflow)
