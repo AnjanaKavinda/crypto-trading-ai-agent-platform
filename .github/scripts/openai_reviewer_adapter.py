@@ -26,7 +26,8 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                  max_retries: int = 1, transport: Callable[..., Mapping[str, Any]] | None = None,
                  model_mapping: Mapping[str, str] | None = None,
                  context_pack: Mapping[str, Any] | None = None,
-                 max_payload_bytes: int | None = None):
+                 max_payload_bytes: int | None = None,
+                 max_completion_tokens: int | None = None):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.timeout_seconds = int(timeout_seconds)
         self.max_retries = int(max_retries)
@@ -36,8 +37,11 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         self.max_payload_bytes = int(
             max_payload_bytes if max_payload_bytes is not None
             else os.environ.get("REVIEW_CONTEXT_MAX_BYTES", "120000"))
+        self.max_completion_tokens = int(
+            max_completion_tokens if max_completion_tokens is not None
+            else os.environ.get("REVIEW_MAX_COMPLETION_TOKENS", "12000"))
         if (not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1)
-                or self.max_payload_bytes <= 0):
+                or self.max_payload_bytes <= 0 or self.max_completion_tokens <= 0):
             raise ReviewerExecutionError("OpenAI reviewer configuration is unavailable")
         if any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
             raise ReviewerExecutionError("OpenAI tier mapping is incomplete")
@@ -124,8 +128,10 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                     },
                 },
             },
+            "n": 1,
+            "max_completion_tokens": self.max_completion_tokens,
             "messages": [
-                {"role": "system", "content": context["instructions"]},
+                {"role": "developer", "content": context["instructions"]},
                 {"role": "user", "content": json.dumps(context, sort_keys=True, default=list)},
             ],
         }
@@ -183,23 +189,133 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         except (urllib.error.URLError, TimeoutError) as error:
             raise TransientProviderError("OpenAI transport failure") from error
 
+    @staticmethod
+    def _safe_response_shape(response: Mapping[str, Any]) -> str:
+        """Return non-sensitive provider-shape metadata for diagnostics only."""
+        if not isinstance(response, Mapping):
+            return "response_type=" + type(response).__name__
+        choices = response.get("choices")
+        choice_count = len(choices) if isinstance(choices, list) else -1
+        finish_reason = ""
+        content_type = ""
+        has_refusal = False
+        has_tool_calls = False
+        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
+            choice = choices[0]
+            finish_reason = str(choice.get("finish_reason") or "")
+            message = choice.get("message")
+            if isinstance(message, Mapping):
+                content = message.get("content")
+                content_type = type(content).__name__
+                has_refusal = bool(message.get("refusal"))
+                has_tool_calls = bool(message.get("tool_calls") or message.get("function_call"))
+        return (
+            f"choices={choice_count},finish_reason={finish_reason or 'missing'},"
+            f"content_type={content_type or 'missing'},refusal={has_refusal},"
+            f"tool_calls={has_tool_calls}"
+        )
+
+    @staticmethod
+    def _extract_message_document(message: Mapping[str, Any]) -> Mapping[str, Any]:
+        refusal = message.get("refusal")
+        if isinstance(refusal, str) and refusal.strip():
+            raise ReviewerExecutionError("OpenAI reviewer refused the bounded review request")
+        if message.get("tool_calls") or message.get("function_call"):
+            raise ReviewerExecutionError("OpenAI reviewer returned an unexpected tool call")
+
+        content = message.get("content")
+        if isinstance(content, Mapping):
+            document = content
+        elif isinstance(content, str):
+            if not content.strip():
+                raise ReviewerExecutionError("OpenAI reviewer returned empty structured content")
+            try:
+                document = json.loads(content)
+            except json.JSONDecodeError as error:
+                raise ReviewerExecutionError(
+                    "OpenAI reviewer returned non-JSON structured content") from error
+        elif isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if not isinstance(part, Mapping):
+                    raise ReviewerExecutionError(
+                        "OpenAI reviewer returned malformed content parts")
+                part_type = str(part.get("type") or "")
+                if part_type == "refusal" and str(part.get("refusal") or "").strip():
+                    raise ReviewerExecutionError(
+                        "OpenAI reviewer refused the bounded review request")
+                if part_type in {"text", "output_text"} and isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
+                    continue
+                raise ReviewerExecutionError(
+                    "OpenAI reviewer returned unsupported content parts")
+            joined = "".join(text_parts).strip()
+            if not joined:
+                raise ReviewerExecutionError("OpenAI reviewer returned empty structured content")
+            try:
+                document = json.loads(joined)
+            except json.JSONDecodeError as error:
+                raise ReviewerExecutionError(
+                    "OpenAI reviewer returned non-JSON structured content") from error
+        else:
+            raise ReviewerExecutionError("OpenAI reviewer returned no structured content")
+
+        if not isinstance(document, Mapping):
+            raise ReviewerExecutionError("OpenAI reviewer structured output is not an object")
+        if set(document) != {"disposition", "findings"}:
+            raise ReviewerExecutionError("OpenAI reviewer structured output has unexpected fields")
+        if not isinstance(document.get("findings"), list):
+            raise ReviewerExecutionError("OpenAI reviewer findings must be a list")
+        return document
+
     def _parse(self, response: Mapping[str, Any], request: ReviewerExecutionRequest,
                started: str) -> ReviewerExecutionResult:
+        shape = self._safe_response_shape(response)
         try:
-            choice = response["choices"][0]["message"]["content"]
-            document = json.loads(choice) if isinstance(choice, str) else choice
+            if not isinstance(response, Mapping):
+                raise ReviewerExecutionError("OpenAI reviewer response is not an object")
+            choices = response.get("choices")
+            if not isinstance(choices, list) or len(choices) != 1:
+                raise ReviewerExecutionError(
+                    f"OpenAI reviewer response choice count is invalid ({shape})")
+            choice = choices[0]
+            if not isinstance(choice, Mapping):
+                raise ReviewerExecutionError(
+                    f"OpenAI reviewer choice is malformed ({shape})")
+            finish_reason = str(choice.get("finish_reason") or "")
+            if finish_reason and finish_reason != "stop":
+                if finish_reason == "length":
+                    raise ReviewerExecutionError(
+                        f"OpenAI reviewer output was truncated ({shape})")
+                if finish_reason == "content_filter":
+                    raise ReviewerExecutionError(
+                        f"OpenAI reviewer output was content-filtered ({shape})")
+                raise ReviewerExecutionError(
+                    f"OpenAI reviewer ended with unsupported finish reason ({shape})")
+            message = choice.get("message")
+            if not isinstance(message, Mapping):
+                raise ReviewerExecutionError(
+                    f"OpenAI reviewer message is malformed ({shape})")
+            document = self._extract_message_document(message)
             disposition = document["disposition"]
+            if disposition not in DISPOSITIONS:
+                raise ReviewerExecutionError("OpenAI returned an invalid reviewer disposition")
             findings = tuple(Finding.from_mapping(item) for item in document["findings"])
+        except ReviewerExecutionError:
+            raise
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise ReviewerExecutionError("OpenAI returned malformed reviewer output") from error
-        if disposition not in DISPOSITIONS or not isinstance(document["findings"], list):
-            raise ReviewerExecutionError("OpenAI returned an invalid reviewer disposition")
+            raise ReviewerExecutionError(
+                f"OpenAI returned malformed reviewer output ({shape})") from error
+
         usage = response.get("usage")
         returned_model = str(response.get("model") or "")
         expected_model = self.model_mapping[request.capability_tier]
         if returned_model != expected_model:
             raise ReviewerExecutionError(
                 "OpenAI returned an unapproved model for the requested tier")
+        provider_execution_ref = str(response.get("id") or "")
+        if not provider_execution_ref:
+            raise ReviewerExecutionError("OpenAI reviewer response has no provider execution id")
         actual_tier = {"economical-fast": "R1", "strong-coding-reasoning": "R2",
                        "premium-strongest-available": "R3"}[
                            next(tier for tier, model in self.model_mapping.items()
@@ -212,7 +328,7 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
             actual_review_tier=actual_tier, reviewer_role=request.reviewer_role,
             disposition=disposition, findings=findings,
             deterministic_check_refs=request.required_checks,
-            provider_execution_ref=str(response.get("id") or ""),
+            provider_execution_ref=provider_execution_ref,
             provider_name="openai", model_name=returned_model,
             model_version=returned_model,
             usage=usage if isinstance(usage, Mapping) else None,
