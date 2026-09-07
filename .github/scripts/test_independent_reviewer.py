@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 
 from independent_reviewer import (
-    ReviewerExecutionError, assert_current_head, build_request,
+    CATEGORIES, SEVERITIES, ReviewerExecutionError, assert_current_head, build_request,
     extract_allowed_paths_from_issue, integrity_hash, sign_execution_handoff,
 )
 from openai_reviewer_adapter import OpenAIReviewerAdapter, TransientProviderError
@@ -70,6 +70,49 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5.6-sol")
         self.assertEqual(payload["response_format"]["type"], "json_schema")
         self.assertEqual(payload["messages"][0]["role"], "developer")
+
+    def test_provider_schema_taxonomy_exactly_matches_governed_contract(self):
+        payload = OpenAIReviewerAdapter(
+            api_key="test-key",
+            transport=lambda payload, timeout: response("approved"),
+            model_mapping=MODEL_MAPPING,
+        )._payload(make_request())
+        finding = payload["response_format"]["json_schema"]["schema"]["properties"]["findings"]["items"]
+        properties = finding["properties"]
+        self.assertEqual(properties["severity"]["enum"], list(SEVERITIES))
+        self.assertEqual(properties["category"]["enum"], list(CATEGORIES))
+
+    def test_local_finding_validation_matches_schema_types_and_required_text(self):
+        base = {
+            "finding_id": "f1", "severity": "medium", "category": "security",
+            "title": "title", "summary": "summary", "blocking": False,
+            "recommended_action": "fix", "path": "", "line_or_location": "",
+            "contract_or_policy_reference": "",
+        }
+        OpenAIReviewerAdapter(
+            api_key="test-key",
+            transport=lambda payload, timeout: response(
+                "changes-requested", findings=[base]),
+            model_mapping=MODEL_MAPPING,
+        ).review(make_request())
+
+        invalid = dict(base, title=True)
+        with self.assertRaisesRegex(ReviewerExecutionError, "string fields are malformed"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "changes-requested", findings=[invalid]),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
+
+        empty = dict(base, finding_id=" ")
+        with self.assertRaisesRegex(ReviewerExecutionError, "required text is empty"):
+            OpenAIReviewerAdapter(
+                api_key="test-key",
+                transport=lambda payload, timeout: response(
+                    "changes-requested", findings=[empty]),
+                model_mapping=MODEL_MAPPING,
+            ).review(make_request())
 
     def test_issue_policy_paths_drive_scope_and_forbidden_paths_fail_closed(self):
         body = """## Bounded implementation scope
