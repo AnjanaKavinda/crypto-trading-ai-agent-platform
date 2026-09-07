@@ -501,6 +501,8 @@ class GovernanceTests(unittest.TestCase):
                        "copilot-pr-governance.yml").read_text(encoding="utf-8")
         transition_source = (Path(__file__).with_name("transition-pr.py")
                              .read_text(encoding="utf-8"))
+        ruleset_script = (Path(__file__).parents[2] / "scripts" /
+                          "setup-branch-rulesets.ps1").read_text(encoding="utf-8")
 
         self.assertIn("governed automation is disabled by the global kill switch", issue_source)
         self.assertIn("GOVERNED_PILOT_ISSUES", issue_source)
@@ -516,6 +518,9 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("structured review result is not bound to signed provenance",
                       transition_source)
         self.assertIn("state=closed", transition_source)
+        self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_script)
+        self.assertIn('$requiredStatusChecks += @{ context = $FinalGovernanceCheck }',
+                      ruleset_script)
 
     def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
