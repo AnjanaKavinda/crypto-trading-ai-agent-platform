@@ -784,5 +784,12 @@ class GovernanceTests(unittest.TestCase):
             validate_pr({**pr, "required_review_tier": "R3"}, issue_id=10,
                         required_checks=["ci"], reviews=[{**review, "review_tier": "R2"}])
 
+
+def load_tests(loader, tests, pattern):
+    """Ensure Governance CI's legacy entry point also runs reviewer-adapter tests."""
+    import test_independent_reviewer
+    tests.addTests(loader.loadTestsFromModule(test_independent_reviewer))
+    return tests
+
 if __name__ == "__main__":
     unittest.main()
