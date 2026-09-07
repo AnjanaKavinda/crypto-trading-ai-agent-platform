@@ -52,7 +52,7 @@ from typing import Any, Iterable, Mapping
 
 from orchestrator import AppendOnlyAudit, GovernanceError, REVIEW_TIERS
 
-PROVENANCE_SCHEMA_VERSION = "1.1"
+PROVENANCE_SCHEMA_VERSION = "1.2"
 
 # Fields bound into the signed payload. Order is irrelevant (the payload is
 # serialized with sorted keys) but every field listed here is mandatory.
@@ -65,6 +65,7 @@ REQUIRED_FIELDS = (
     "head_sha",
     "reviewer_identity",
     "reviewer_session_id",
+    "reviewer_role",
     "implementer_session_id",
     "required_review_tier",
     "review_tier",
@@ -77,6 +78,9 @@ REQUIRED_FIELDS = (
     "result_integrity_hash",
     "provider_execution_ref",
     "provider_model",
+    "request_integrity_hash",
+    "diff_reference",
+    "execution_handoff_signature",
 )
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
@@ -229,7 +233,10 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
                     reviewer_role: str = "", timestamp: float | None = None,
                     review_execution_id: str | None = None,
                     result_integrity_hash: str | None = None,
-                    provider_execution_ref: str = "", provider_model: str = "") -> dict:
+                    provider_execution_ref: str = "", provider_model: str = "",
+                    request_integrity_hash: str = "legacy-github-review",
+                    diff_reference: str = "legacy-github-review",
+                    execution_handoff_signature: str = "legacy-github-review") -> dict:
     """Build and sign a provenance artifact for a completed independent review.
 
     ``producer_identity`` and ``producer_run_id`` must be sourced from the
@@ -270,11 +277,14 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
         "controller_policy_version": controller_policy_version,
         "timestamp": float(timestamp) if timestamp is not None else time.time(),
         "disposition": disposition,
-        "reviewer_role": reviewer_role,
+        "reviewer_role": reviewer_role or "unclassified-reviewer",
         "review_execution_id": review_execution_id or f"github-review-{review_id}",
         "result_integrity_hash": result_integrity_hash or "legacy-github-review",
         "provider_execution_ref": provider_execution_ref or f"github-review-{review_id}",
         "provider_model": provider_model or "github-review",
+        "request_integrity_hash": request_integrity_hash,
+        "diff_reference": diff_reference,
+        "execution_handoff_signature": execution_handoff_signature,
     }
     artifact["integrity_signature"] = sign_artifact(artifact, secret)
     return artifact
@@ -364,6 +374,9 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
         "result_integrity_hash": artifact.get("result_integrity_hash"),
         "provider_execution_ref": artifact.get("provider_execution_ref"),
         "provider_model": artifact.get("provider_model"),
+        "request_integrity_hash": artifact.get("request_integrity_hash"),
+        "diff_reference": artifact.get("diff_reference"),
+        "execution_handoff_signature": artifact.get("execution_handoff_signature"),
     }
 
 

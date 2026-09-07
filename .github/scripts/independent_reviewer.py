@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+import fnmatch
+import hmac
 import json
+import re
 import time
 import uuid
+from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from orchestrator import (CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS,
-                          detect_high_confidence_secret_material, detect_secret)
+                          detect_high_confidence_secret_material)
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
@@ -18,6 +22,126 @@ CATEGORIES = (
     "statistical", "risk", "execution", "maintainability", "scope", "other",
 )
 TIER_RANK = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
+
+
+def _normalized_repo_path(value: str) -> str:
+    if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
+        raise ReviewerExecutionError("review scope contains an invalid repository path")
+    parts = PurePosixPath(value).parts
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ReviewerExecutionError("review scope contains an unsafe repository path")
+    return str(PurePosixPath(value))
+
+
+def _normalized_pattern(value: str) -> str:
+    if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
+        raise ReviewerExecutionError("review scope contains an invalid path pattern")
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ReviewerExecutionError("review scope contains an unsafe path pattern")
+    return value
+
+
+def _matches_pattern(path: str, pattern: str) -> bool:
+    return fnmatch.fnmatchcase(path, pattern)
+
+
+def validate_changed_path_scope(changed_files: tuple[str, ...],
+                                allowed_paths: tuple[str, ...],
+                                forbidden_paths: tuple[str, ...]) -> None:
+    normalized_changed = tuple(_normalized_repo_path(path) for path in changed_files)
+    normalized_allowed = tuple(_normalized_pattern(pattern) for pattern in allowed_paths)
+    normalized_forbidden = tuple(_normalized_pattern(pattern) for pattern in forbidden_paths)
+    for path in normalized_changed:
+        if any(_matches_pattern(path, pattern) for pattern in normalized_forbidden):
+            raise ReviewerExecutionError(f"changed path is forbidden by review policy: {path}")
+        if not any(_matches_pattern(path, pattern) for pattern in normalized_allowed):
+            raise ReviewerExecutionError(f"changed path is outside governed review scope: {path}")
+
+
+def extract_allowed_paths_from_issue(issue_body: str) -> tuple[str, ...]:
+    """Derive bounded review paths from the trusted linked-issue policy text."""
+    body = issue_body or ""
+    marker = re.search(r"(?im)^Expected paths(?:\s*\([^\n]*\))?:\s*$", body)
+    if not marker:
+        marker = re.search(r"(?im)^Allowed paths(?:\s*\([^\n]*\))?:\s*$", body)
+    if not marker:
+        raise ReviewerExecutionError("linked issue does not define governed review paths")
+    tail = body[marker.end():]
+    section = re.split(r"(?m)^##\s+", tail, maxsplit=1)[0]
+    paths = []
+    for line in section.splitlines():
+        match = re.match(r"^-\s+`([^`]+)`", line)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        if candidate and candidate not in paths:
+            paths.append(_normalized_pattern(candidate))
+        if (candidate.endswith("/test_orchestrator.py") and
+                "narrowly scoped new tests" in line.lower()):
+            test_pattern = candidate.rsplit("/", 1)[0] + "/test_*.py"
+            if test_pattern not in paths:
+                paths.append(_normalized_pattern(test_pattern))
+    if not paths:
+        raise ReviewerExecutionError("linked issue governed review paths are empty")
+    return tuple(paths)
+
+
+def assert_current_head(expected_head: str, actual_head: str) -> None:
+    if not expected_head or not actual_head or expected_head != actual_head:
+        raise ReviewerExecutionError("PR head changed during independent review execution")
+
+
+def request_from_mapping(raw: Mapping[str, Any]) -> "ReviewerExecutionRequest":
+    return ReviewerExecutionRequest(
+        **{**raw, "allowed_paths": tuple(raw["allowed_paths"]),
+           "forbidden_paths": tuple(raw["forbidden_paths"]),
+           "changed_files": tuple(raw["changed_files"]),
+           "required_checks": tuple(raw["required_checks"]),
+           "safety_invariants": tuple(raw["safety_invariants"])})
+
+
+def _handoff_payload(request: "ReviewerExecutionRequest",
+                     result: "ReviewerExecutionResult") -> dict[str, str]:
+    return {
+        "request_integrity_hash": request.integrity_hash,
+        "diff_reference": request.diff_reference,
+        "review_execution_id": result.review_execution_id,
+        "result_integrity_hash": result.result_integrity_hash,
+        "provider_execution_ref": result.provider_execution_ref,
+    }
+
+
+def sign_execution_handoff(request: "ReviewerExecutionRequest",
+                           result: "ReviewerExecutionResult", secret: str) -> dict[str, str]:
+    if not secret:
+        raise ReviewerExecutionError("review result handoff signing secret is unavailable")
+    body = _handoff_payload(request, result)
+    derived = hmac.new(secret.encode("utf-8"), b"independent-review-handoff-v1",
+                       sha256).digest()
+    signature = hmac.new(
+        derived,
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        sha256,
+    ).hexdigest()
+    return {**body, "signature": signature}
+
+
+def verify_execution_handoff(request: "ReviewerExecutionRequest",
+                             result: "ReviewerExecutionResult",
+                             handoff: Mapping[str, Any], secret: str) -> None:
+    expected = sign_execution_handoff(request, result, secret)
+    if not isinstance(handoff, Mapping):
+        raise ReviewerExecutionError("review result handoff attestation is malformed")
+    if set(handoff) != set(expected):
+        raise ReviewerExecutionError("review result handoff attestation is incomplete")
+    for key, value in expected.items():
+        actual = str(handoff.get(key) or "")
+        if key == "signature":
+            if not hmac.compare_digest(actual, value):
+                raise ReviewerExecutionError("review result handoff attestation is invalid")
+        elif actual != value:
+            raise ReviewerExecutionError("review result handoff is not bound to the original request")
 
 
 class ReviewerExecutionError(GovernanceError):
@@ -98,6 +222,7 @@ class ReviewerExecutionRequest:
             raise ReviewerExecutionError("bounded context pack is required")
         if not self.allowed_paths or not self.changed_files or not self.required_checks:
             raise ReviewerExecutionError("review scope/checks are incomplete")
+        validate_changed_path_scope(self.changed_files, self.allowed_paths, self.forbidden_paths)
         if self.review_execution_id == self.implementation_session_id:
             raise ReviewerExecutionError("reviewer and implementation sessions must differ")
         rank = TIER_RANK

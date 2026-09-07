@@ -14,6 +14,7 @@ from independent_reviewer import (
     ReviewerExecutionError, ReviewerExecutionRequest, ReviewerExecutionResult,
     integrity_hash,
 )
+from orchestrator import detect_high_confidence_secret_material, detect_secret
 
 
 class TransientProviderError(ReviewerExecutionError):
@@ -24,14 +25,19 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
     def __init__(self, api_key: str | None = None, *, timeout_seconds: int = 300,
                  max_retries: int = 1, transport: Callable[..., Mapping[str, Any]] | None = None,
                  model_mapping: Mapping[str, str] | None = None,
-                 context_pack: Mapping[str, Any] | None = None):
+                 context_pack: Mapping[str, Any] | None = None,
+                 max_payload_bytes: int | None = None):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.timeout_seconds = int(timeout_seconds)
         self.max_retries = int(max_retries)
         self.transport = transport or self._transport
         self.model_mapping = dict(model_mapping or self._load_model_mapping())
         self.context_pack = dict(context_pack or {})
-        if not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1):
+        self.max_payload_bytes = int(
+            max_payload_bytes if max_payload_bytes is not None
+            else os.environ.get("REVIEW_CONTEXT_MAX_BYTES", "120000"))
+        if (not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1)
+                or self.max_payload_bytes <= 0):
             raise ReviewerExecutionError("OpenAI reviewer configuration is unavailable")
         if any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
             raise ReviewerExecutionError("OpenAI tier mapping is incomplete")
@@ -53,6 +59,7 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         request.validate()
         started = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         payload = self._payload(request)
+        self._validate_outbound_payload(payload)
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -122,6 +129,17 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                 {"role": "user", "content": json.dumps(context, sort_keys=True, default=list)},
             ],
         }
+
+    def _validate_outbound_payload(self, payload: Mapping[str, Any]) -> None:
+        serialized = json.dumps(payload, sort_keys=True, default=list)
+        if len(serialized.encode("utf-8")) > self.max_payload_bytes:
+            raise ReviewerExecutionError("OpenAI reviewer outbound payload exceeds context budget")
+        if detect_high_confidence_secret_material(serialized):
+            raise ReviewerExecutionError("OpenAI reviewer outbound payload contains credential material")
+        bounded = self.context_pack
+        metadata = {key: value for key, value in bounded.items() if key != "complete_diff"}
+        if detect_secret(json.dumps(metadata, sort_keys=True, default=list)):
+            raise ReviewerExecutionError("OpenAI reviewer outbound metadata contains secret-shaped content")
 
     def _transport(self, payload: Mapping[str, Any], timeout: int) -> Mapping[str, Any]:
         request = urllib.request.Request(

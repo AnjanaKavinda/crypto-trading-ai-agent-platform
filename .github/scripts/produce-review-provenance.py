@@ -67,8 +67,10 @@ import uuid
 from pathlib import Path
 
 from orchestrator import AppendOnlyAudit, GovernanceError
-from independent_reviewer import (ReviewerExecutionError, ReviewerExecutionResult,
-                                  build_request, CAPABILITY_TIERS)
+from independent_reviewer import (
+    ReviewerExecutionError, ReviewerExecutionResult, ReviewerExecutionRequest,
+    request_from_mapping, verify_execution_handoff,
+)
 from review_provenance import (build_artifact, record_event,
                                 resolve_review_evidence, required_review_tier_from_labels,
                                 verify_artifact, extract_linked_issue)
@@ -85,10 +87,11 @@ def _load_json(path: str) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
-                               reviewer_configuration: dict, reviewer_roles: dict,
-                               implementer_session_id: str, controller: str,
-                               preferred_reviewer: str = "",
+def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecutionRequest,
+                               execution_handoff: dict, handoff_secret: str,
+                               pr: dict, issue: dict, reviewer_configuration: dict,
+                               reviewer_roles: dict, implementer_session_id: str,
+                               controller: str, preferred_reviewer: str = "",
                                model_mapping: dict[str, str] | None = None) -> dict:
     """Validate a real model result and derive identity/tier from trusted config."""
     try:
@@ -120,38 +123,37 @@ def resolve_execution_evidence(*, result: dict, pr: dict, issue: dict,
         if parsed.actual_review_tier != config["tier"] or (
                 reviewer_roles.get(login) and parsed.reviewer_role != reviewer_roles[login]):
             raise ReviewerExecutionError("review result reviewer identity or tier is untrusted")
-        parsed.validate_against(build_request(
-                schema_version="1.0", repository=parsed.repository, pr_number=parsed.pr_number,
-                head_sha=parsed.head_sha, base_branch=pr.get("base", "dev"),
-                github_issue_id=issue_id, canonical_issue_id=issue_id,
-                agent_role="unknown", reviewer_role=parsed.reviewer_role,
-                required_review_tier=parsed.required_review_tier,
-                capability_tier=next(tier for tier in CAPABILITY_TIERS
-                                     if tier == {"R1": "economical-fast", "R2": "strong-coding-reasoning",
-                                                 "R3": "premium-strongest-available"}[parsed.required_review_tier]),
-                context_pack_id=parsed.context_pack_id,
-                context_pack_version=parsed.context_pack_version,
-                implementation_session_id=implementer_session_id,
-                review_execution_id=parsed.review_execution_id,
-                allowed_paths=("**",), forbidden_paths=("secrets/**",),
-                changed_files=("review",), diff_reference="execution-result",
-                required_checks=parsed.deterministic_check_refs,
-                safety_invariants=("no-merge",), controller_policy_version="v1.1"),
-        )
+        original_request.validate()
+        parsed.validate_against(original_request)
+        verify_execution_handoff(
+            original_request, parsed, execution_handoff, handoff_secret)
+        if (original_request.repository != pr.get("repository") or
+                original_request.pr_number != int(pr["number"]) or
+                original_request.head_sha != pr.get("head_sha") or
+                original_request.base_branch != pr.get("base") or
+                original_request.github_issue_id != issue_id or
+                original_request.canonical_issue_id != issue_id or
+                original_request.required_review_tier != required or
+                original_request.implementation_session_id != implementer_session_id):
+            raise ReviewerExecutionError(
+                "original reviewer request is not bound to the current PR/issue")
         return {"issue_id": issue_id, "head_sha": parsed.head_sha,
                 "required_review_tier": required, "review_id": parsed.review_execution_id,
                 "reviewer_identity": login, "reviewer_session_id": config["session_id"],
                 "review_tier": parsed.actual_review_tier, "disposition": parsed.disposition,
                 "result_integrity_hash": parsed.result_integrity_hash,
                 "provider_execution_ref": parsed.provider_execution_ref,
-                "provider_model": parsed.model_name}
+                "provider_model": parsed.model_name,
+                "request_integrity_hash": original_request.integrity_hash,
+                "diff_reference": original_request.diff_reference,
+                "execution_handoff_signature": str(execution_handoff.get("signature") or "")}
     except (KeyError, TypeError, StopIteration, ValueError, ReviewerExecutionError) as error:
         raise GovernanceError(str(error)) from error
 
 
 def main() -> int:
-    if len(sys.argv) not in (4, 5):
-        print("usage: produce-review-provenance.py PR.json REVIEWS.json ISSUE.json [RESULT.json]",
+    if len(sys.argv) not in (4, 7):
+        print("usage: produce-review-provenance.py PR.json REVIEWS.json ISSUE.json [RESULT.json REQUEST.json HANDOFF.json]",
               file=sys.stderr)
         return 2
 
@@ -163,7 +165,9 @@ def main() -> int:
         pr_raw = _load_json(sys.argv[1])
         reviews_raw = _load_json(sys.argv[2])
         issue = _load_json(sys.argv[3])
-        result_raw = _load_json(sys.argv[4]) if len(sys.argv) == 5 else None
+        result_raw = _load_json(sys.argv[4]) if len(sys.argv) == 7 else None
+        request_raw = _load_json(sys.argv[5]) if len(sys.argv) == 7 else None
+        handoff_raw = _load_json(sys.argv[6]) if len(sys.argv) == 7 else None
     except (OSError, json.JSONDecodeError) as error:
         print(f"could not read verified GitHub API snapshots; blocked: {error}",
               file=sys.stderr)
@@ -184,10 +188,15 @@ def main() -> int:
         producer_run_id = _require("GITHUB_RUN_ID")
         secret = _require("GOVERNANCE_PROVENANCE_SIGNING_KEY")
         repository = _require("GITHUB_REPOSITORY")
+        handoff_key_file = os.environ.get("GOVERNED_REVIEW_HANDOFF_KEY_FILE", "")
+        handoff_secret = (Path(handoff_key_file).read_text(encoding="utf-8").strip()
+                          if result_raw is not None and handoff_key_file else "")
+        if result_raw is not None and not handoff_secret:
+            raise GovernanceError("review result handoff key is unavailable")
         expected_base = os.environ.get("GOVERNED_BASE") or "dev"
         reviewer_configuration = json.loads(os.environ.get("GOVERNED_REVIEWER_TIERS", "{}"))
         reviewer_roles = json.loads(os.environ.get("GOVERNED_REVIEWER_ROLES", "{}"))
-    except (GovernanceError, json.JSONDecodeError) as error:
+    except (GovernanceError, json.JSONDecodeError, OSError) as error:
         print(f"{error}; blocked", file=sys.stderr)
         return 1
     if not isinstance(reviewer_configuration, dict) or not isinstance(reviewer_roles, dict):
@@ -214,8 +223,13 @@ def main() -> int:
 
     try:
         if result_raw is not None:
+            if not isinstance(request_raw, dict) or not isinstance(handoff_raw, dict):
+                raise GovernanceError("review execution request or handoff is malformed")
+            original_request = request_from_mapping(request_raw)
             evidence = resolve_execution_evidence(
-                result=result_raw, pr=pr, issue=issue,
+                result=result_raw, original_request=original_request,
+                execution_handoff=handoff_raw, handoff_secret=handoff_secret,
+                pr=pr, issue=issue,
                 reviewer_configuration=reviewer_configuration, reviewer_roles=reviewer_roles,
                 implementer_session_id=implementer_session_id, controller=controller,
                 preferred_reviewer=os.environ.get("GOVERNED_AI_REVIEWER", ""),
@@ -227,7 +241,7 @@ def main() -> int:
                 reviewer_configuration=reviewer_configuration,
                 implementer_session_id=implementer_session_id, controller=controller,
                 expected_base=expected_base)
-    except GovernanceError as error:
+    except (GovernanceError, KeyError, TypeError, ValueError) as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
                          correlation_id=correlation_id, reason=str(error))
@@ -251,7 +265,11 @@ def main() -> int:
             review_execution_id=evidence.get("review_id"),
             result_integrity_hash=evidence.get("result_integrity_hash"),
             provider_execution_ref=evidence.get("provider_execution_ref", ""),
-            provider_model=evidence.get("provider_model", ""))
+            provider_model=evidence.get("provider_model", ""),
+            request_integrity_hash=evidence.get("request_integrity_hash", "legacy-github-review"),
+            diff_reference=evidence.get("diff_reference", "legacy-github-review"),
+            execution_handoff_signature=evidence.get(
+                "execution_handoff_signature", "legacy-github-review"))
     except GovernanceError as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
