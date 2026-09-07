@@ -372,6 +372,80 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(reviews[0]["independent"])
         self.assertEqual(reviews[0]["reviewer_session_id"], "review-session")
 
+    def test_v11_verified_artifact_without_github_review_is_consumed(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-exec-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R3", review_tier="R3",
+            producer_identity="trusted-producer", producer_run_id="run-1",
+            controller_policy_version="v1.1", disposition="approved",
+            secret="signing-secret", reviewer_role="QA/Security Reviewer")
+        verified = review_provenance.verify_artifact(
+            artifact, secret="signing-secret", expected_repository="o/r",
+            expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+            expected_producer_identity="trusted-producer", controller="human-owner",
+            implementer_session_id="implement-session")
+        reviews = pr_governance.build_governed_reviews(
+            [], {"reviewer-bot": "QA/Security Reviewer"},
+            {"reviewer-bot": {"tier": "R3", "session_id": "review-session"}},
+            {("reviewer-bot", "head"): verified})
+        self.assertEqual(len(reviews), 1)
+        self.assertTrue(reviews[0]["independent"])
+        self.assertEqual(reviews[0]["state"], "APPROVED")
+        pr = {
+            "issue_id": 7, "base": "dev", "head_sha": "head", "author": "copilot",
+            "checks": {"governance-ci": "success"},
+            "authorized_reviewers": ["reviewer-bot"],
+            "authorized_reviewer_sessions": {"reviewer-bot": "review-session"},
+            "implementer_session_id": "implement-session",
+            "required_review_tier": "R3",
+        }
+        self.assertTrue(validate_pr(
+            pr, issue_id=7, expected_base="dev",
+            required_checks=("governance-ci",), reviews=reviews,
+            controller="human-owner", required_reviewer_roles=("QA/Security Reviewer",),
+            governed_high_risk=True))
+
+    def test_v11_nonapproved_artifact_only_cannot_satisfy_governance(self):
+        artifact = review_provenance.build_artifact(
+            repository="o/r", pr_number=1, issue_id=7, review_id="review-exec-1",
+            head_sha="head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="implement-session",
+            required_review_tier="R3", review_tier="R3",
+            producer_identity="trusted-producer", producer_run_id="run-1",
+            controller_policy_version="v1.1", disposition="changes-requested",
+            secret="signing-secret", reviewer_role="QA/Security Reviewer")
+        verified = review_provenance.verify_artifact(
+            artifact, secret="signing-secret", expected_repository="o/r",
+            expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
+            expected_producer_identity="trusted-producer", controller="human-owner",
+            implementer_session_id="implement-session", require_approved=False)
+        reviews = pr_governance.build_governed_reviews(
+            [], {"reviewer-bot": "QA/Security Reviewer"},
+            {"reviewer-bot": {"tier": "R3", "session_id": "review-session"}},
+            {("reviewer-bot", "head"): verified})
+        pr = {
+            "issue_id": 7, "base": "dev", "head_sha": "head", "author": "copilot",
+            "checks": {"governance-ci": "success"},
+            "authorized_reviewers": ["reviewer-bot"],
+            "authorized_reviewer_sessions": {"reviewer-bot": "review-session"},
+            "implementer_session_id": "implement-session",
+            "required_review_tier": "R3",
+        }
+        with self.assertRaises(GovernanceError):
+            validate_pr(
+                pr, issue_id=7, expected_base="dev",
+                required_checks=("governance-ci",), reviews=reviews,
+                controller="human-owner", required_reviewer_roles=("QA/Security Reviewer",),
+                governed_high_risk=True)
+
+    def test_v11_pr_governance_workflow_uses_central_issue_parser(self):
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        self.assertIn("from review_provenance import extract_linked_issue", workflow)
+        self.assertNotIn("(?:closes|fixes|resolves)", workflow)
+
     def test_v11_fabricated_or_controller_asserted_artifact_rejected(self):
         artifact = review_provenance.build_artifact(
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
