@@ -1,6 +1,7 @@
 param(
     [string]$Repo = "",
     [string]$RequiredCheck = "governance-ci",
+    [string]$FinalGovernanceCheck = "governance-gate",
     [ValidateSet("dev", "main", "all")][string]$Branch = "all"
 )
 
@@ -34,6 +35,12 @@ function Assert-WorkflowPresent {
     if ($LASTEXITCODE -ne 0) {
         throw "Refusing to protect ${TargetBranch}: governance-ci workflow is not present on that branch."
     }
+    if ($TargetBranch -eq "dev") {
+        gh api "repos/$Repo/contents/.github/workflows/governed-independent-review.yml?ref=$TargetBranch" --silent
+        if ($LASTEXITCODE -ne 0) {
+            throw "Refusing to protect dev: governed independent-review workflow is not present."
+        }
+    }
 }
 
 function New-ProtectionPayload {
@@ -46,6 +53,10 @@ function New-ProtectionPayload {
     # satisfy a native approval requirement with the owner alone. main continues to
     # require one native approval.
     $requiredApprovingReviewCount = if ($TargetBranch -eq "dev") { 0 } else { 1 }
+    $requiredStatusChecks = @(@{ context = $RequiredCheck })
+    if ($TargetBranch -eq "dev") {
+        $requiredStatusChecks += @{ context = $FinalGovernanceCheck }
+    }
     return @{
         name = $Name
         target = "branch"
@@ -71,7 +82,7 @@ function New-ProtectionPayload {
             @{
                 type = "required_status_checks"
                 parameters = @{
-                    required_status_checks = @( @{ context = $RequiredCheck } )
+                    required_status_checks = $requiredStatusChecks
                     strict_required_status_checks_policy = $true
                     do_not_enforce_on_create = $false
                 }
@@ -121,4 +132,6 @@ Write-Host "Setting governed required check variable to '$RequiredCheck'..."
 gh variable set GOVERNED_REQUIRED_CHECKS --body $RequiredCheck --repo $Repo
 if ($LASTEXITCODE -ne 0) { throw "Failed to set GOVERNED_REQUIRED_CHECKS repository variable." }
 
-Write-Host "Requested ruleset phase applied. Do not enable any governed pilot until both branches pass verification."
+Write-Host "Requested ruleset phase applied."
+Write-Host "dev requires '$RequiredCheck' and '$FinalGovernanceCheck'; main requires '$RequiredCheck' plus one native approval."
+Write-Host "Do not enable any governed pilot until both branches pass verification."
