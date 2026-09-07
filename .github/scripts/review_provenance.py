@@ -366,8 +366,13 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
     if age < 0 or age > max_age_seconds:
         raise StaleProvenanceError(
             "provenance artifact is expired or has an invalid timestamp")
+    normalized_state = {
+        "approved": "APPROVED",
+        "changes-requested": "CHANGES_REQUESTED",
+        "blocked": "BLOCKED",
+    }[str(artifact["disposition"])]
     return {
-        "state": "APPROVED",
+        "state": normalized_state,
         "commit_id": artifact["head_sha"],
         "user": reviewer,
         "independent": True,
