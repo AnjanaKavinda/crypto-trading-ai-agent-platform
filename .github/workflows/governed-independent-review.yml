@@ -21,7 +21,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'pull_request')
+       github.event.workflow_run.event == 'pull_request' &&
+       vars.GOVERNED_PILOT_ENABLED == 'true')
     name: produce-review-provenance
     runs-on: ubuntu-latest
     env:
@@ -45,6 +46,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
+          GOVERNED_PILOT_ISSUES: ${{ vars.GOVERNED_PILOT_ISSUES }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
         run: |
@@ -52,7 +54,7 @@ jobs:
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr.json
           gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > /tmp/reviews.json
           python - <<'PY'
-          import json, sys
+          import json, os, sys
           sys.path.insert(0, '.github/scripts')
           from review_provenance import extract_linked_issue
           pr = json.load(open('/tmp/pr.json'))
@@ -61,6 +63,11 @@ jobs:
           except Exception as error:
               raise SystemExit(str(error)) from error
           open('/tmp/issue_number.txt', 'w').write(str(issue_id))
+          if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
+              allowed = {item.strip() for item in os.environ.get(
+                  'GOVERNED_PILOT_ISSUES', '').split(',') if item.strip()}
+              if '*' not in allowed and str(issue_id) not in allowed:
+                  raise SystemExit('linked issue is not on the governed pilot allowlist')
           PY
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > /tmp/files.json
@@ -73,7 +80,8 @@ jobs:
           import sys
           sys.path.insert(0, '.github/scripts')
           from independent_reviewer import build_request, extract_allowed_paths_from_issue
-          from orchestrator import detect_high_confidence_secret_material
+          from orchestrator import (detect_high_confidence_secret_material, resolve_agent,
+                                    resolve_canonical_number)
           pr = json.load(open('/tmp/pr.json'))
           issue = json.load(open('/tmp/issue.json'))
           files = json.load(open('/tmp/files.json'))
@@ -99,10 +107,14 @@ jobs:
           labels = {x.get('name') for x in issue.get('labels', [])}
           required = 'R3' if labels & {'risk:high','risk:critical','type:security','type:architecture','type:contract','impact:security','impact:architecture','impact:shared-contract','impact:trading-risk','impact:approval-execution-ccxt'} else ('R1' if labels & {'risk:low','type:docs','type:test'} else 'R2')
           capability = {'R1':'economical-fast','R2':'strong-coding-reasoning','R3':'premium-strongest-available'}[required]
+          canonical_issue, _ = resolve_canonical_number(issue.get('body') or '')
+          agent_role = resolve_agent([
+              name for name in labels if isinstance(name, str) and name.startswith('agent:')
+          ])
           request = build_request(
               repository=os.environ['GITHUB_REPOSITORY'], pr_number=int(pr['number']),
               head_sha=head, base_branch=base, github_issue_id=issue_id,
-              canonical_issue_id=issue_id, agent_role='Backend/Foundation',
+              canonical_issue_id=canonical_issue, agent_role=agent_role,
               reviewer_role=os.environ['GOVERNED_AI_REVIEWER_ROLE'],
               required_review_tier=required, capability_tier=capability,
               context_pack_id='context-' + sha256(diff.encode()).hexdigest()[:32],
@@ -153,6 +165,17 @@ jobs:
           if any(checks.get(name) != 'success' for name in required):
              raise SystemExit('required deterministic check is missing or failed')
           PY
+      - name: Block automatic duplicate paid review for the same head
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha="$(jq -r .head.sha /tmp/pr.json)"
+          gh api "repos/${{ github.repository }}/commits/$head_sha/status" > /tmp/pre-review-status.json
+          if jq -e '.statuses[]? | select(.context == "governance-gate" and (.state == "success" or .state == "failure" or .state == "error"))' /tmp/pre-review-status.json >/dev/null; then
+            echo "A final governance-gate status already exists for this exact head; automatic paid re-review is blocked. Use controlled workflow_dispatch only after human review." >&2
+            exit 1
+          fi
       - name: Re-verify exact current PR head immediately before AI review
         env:
           GH_TOKEN: ${{ github.token }}
