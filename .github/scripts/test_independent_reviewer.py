@@ -259,7 +259,7 @@ Expected paths (create/modify only when needed):
         with self.assertRaises(Exception):
             review_producer.resolve_execution_evidence(
                 result=tampered, original_request=request,
-                execution_handoff=handoff, signing_secret="signing-secret", **kwargs)
+                execution_handoff=handoff, handoff_secret="signing-secret", **kwargs)
 
 
 if __name__ == "__main__":
