@@ -153,10 +153,18 @@ jobs:
           current=json.load(open('/tmp/pr-before-model.json'))
           assert_current_head(request['head_sha'], current.get('head', {}).get('sha'))
           PY
+      - name: Create ephemeral reviewer handoff key
+        run: |
+          python - <<'PY'
+          import os, secrets
+          from pathlib import Path
+          path = Path('/tmp/reviewer-handoff.key')
+          path.write_text(secrets.token_hex(32), encoding='utf-8')
+          os.chmod(path, 0o600)
+          PY
       - name: Execute bounded OpenAI independent reviewer
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
@@ -165,6 +173,7 @@ jobs:
           /tmp/reviewer-request.json /tmp/reviewer-result.json
           --context /tmp/reviewer-context.json
           --attestation /tmp/reviewer-result-attestation.json
+          --handoff-key-file /tmp/reviewer-handoff.key
       - name: Re-verify exact current PR head after AI review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -201,6 +210,7 @@ jobs:
           GOVERNED_REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           GOVERNED_REVIEWER_MODEL_MAPPING: ${{ vars.GOVERNED_REVIEWER_MODEL_MAPPING }}
           GOVERNED_AUDIT_LOG: /tmp/governance-audit.jsonl
+          GOVERNED_REVIEW_HANDOFF_KEY_FILE: /tmp/reviewer-handoff.key
         run: |
           python .github/scripts/produce-review-provenance.py /tmp/pr-final.json /tmp/reviews.json /tmp/issue.json /tmp/reviewer-result.json /tmp/reviewer-request.json /tmp/reviewer-result-attestation.json > /tmp/review-artifact.json
       - name: Re-verify current head after artifact construction
