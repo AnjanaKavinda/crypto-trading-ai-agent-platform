@@ -2,48 +2,26 @@ name: Governed Copilot PR governance
 concurrency:
   group: governed-copilot-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: false
+
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
-  pull_request_review:
-    types: [submitted, dismissed]
+    types: [opened, synchronize, reopened, closed]
+
 permissions:
   contents: read
   issues: write
   pull-requests: read
-  checks: read
+  statuses: write
+
 jobs:
-  governance:
+  track-review:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      # Validate the trusted base-branch controller, never PR-modified automation.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-      - name: Fetch trusted PR governance inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" > /tmp/pr.json
-          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" > /tmp/reviews.json
-          gh api "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/status" > /tmp/status.json
-          gh api --paginate --slurp "repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs" > /tmp/checks.json
-          python - <<'PY'
-          import json, subprocess, sys
-          sys.path.insert(0, '.github/scripts')
-          from review_provenance import extract_linked_issue
-          pr = json.load(open('/tmp/pr.json'))
-          try:
-              issue_id = extract_linked_issue(pr.get('body') or '')
-          except Exception as error:
-              raise SystemExit(str(error)) from error
-          issue = subprocess.check_output([
-              'gh', 'api',
-              f"repos/{pr['base']['repo']['full_name']}/issues/{issue_id}",
-          ])
-          open('/tmp/issue.json', 'wb').write(issue)
-          PY
-      - name: Mark linked issue under review
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Mark governed PR under review
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -51,54 +29,33 @@ jobs:
           TARGET_STATE: workflow:review
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-          GOVERNED_AGENT: ${{ vars.GOVERNED_AGENT }}
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
-      - name: Enforce current-head governance
-        id: governance
+      - name: Publish pending final governance gate
         env:
-          GOVERNED_BASE: dev
-          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
-          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-          GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
-          GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
-          GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
-          GOVERNED_REVIEW_ARTIFACTS: ${{ vars.GOVERNED_REVIEW_ARTIFACTS }}
-          # The trusted producer identity is bound to the exact workflow
-          # file/ref that the platform (never a repository *variable*)
-          # reports as GITHUB_WORKFLOW_REF when governed-independent-review.yml
-          # runs. Comparing against this literal, computed-from-context value
-          # -- rather than an independently editable vars.* value -- means an
-          # artifact can only verify if it was actually produced by that
-          # exact trusted workflow file pinned to the protected dev branch.
-          GOVERNED_PROVENANCE_PRODUCER: ${{ github.repository }}/.github/workflows/governed-independent-review.yml@refs/heads/dev
-          GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
-          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
-          GOVERNED_AUDIT_LOG: ${{ vars.GOVERNED_AUDIT_LOG }}
-          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
-          REQUIRED_REVIEWER_ROLES: ${{ vars.GOVERNED_REQUIRED_REVIEWER_ROLES }}
-        run: python .github/scripts/run-pr-governance.py /tmp/pr.json /tmp/reviews.json /tmp/status.json /tmp/checks.json /tmp/issue.json
-      - name: Mark ready for human merge
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -f state=pending -f context=governance-gate \
+            -f description='Waiting for deterministic CI and independent review'
+      - name: Human merge remains final authority
+        run: echo "No workflow step can merge this PR; the human repository owner remains the final merge authority."
+
+  complete-after-human-merge:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - name: Mark bound issue complete after actual merge
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET_STATE: workflow:ready-to-merge
+          TARGET_STATE: workflow:complete
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-        run: python .github/scripts/transition-pr.py
-      - name: Request bounded correction
-        if: ${{ always() && steps.governance.outcome == 'failure' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET_STATE: workflow:changes-requested
-          CORRECTION_MAX: "3"
-          GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
-          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-          GOVERNED_AGENT: ${{ vars.GOVERNED_AGENT }}
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
-      - name: Human merge gate
-        run: echo "Governance passed; ready-to-merge is not merge authorization. Human merge remains required."
