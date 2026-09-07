@@ -440,6 +440,33 @@ class GovernanceTests(unittest.TestCase):
                 controller="human-owner", required_reviewer_roles=("QA/Security Reviewer",),
                 governed_high_risk=True)
 
+    def test_v11_automation_v1_production_wiring_is_present(self):
+        issue_source = (Path(__file__).with_name("orchestrate-issue.py")
+                        .read_text(encoding="utf-8"))
+        issue_workflow = (Path(__file__).parents[1] / "workflows" /
+                          "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
+        review_workflow = (Path(__file__).parents[1] / "workflows" /
+                           "governed-independent-review.yml").read_text(encoding="utf-8")
+        pr_workflow = (Path(__file__).parents[1] / "workflows" /
+                       "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        transition_source = (Path(__file__).with_name("transition-pr.py")
+                             .read_text(encoding="utf-8"))
+
+        self.assertIn("governed automation is disabled by the global kill switch", issue_source)
+        self.assertIn("GOVERNED_PILOT_ISSUES", issue_source)
+        self.assertIn("GOVERNED_PILOT_ISSUES:", issue_workflow)
+        self.assertIn('workflows: ["Governance CI"]', review_workflow)
+        self.assertIn("governance-gate", review_workflow)
+        self.assertIn("GOVERNED_REVIEW_ARTIFACT_FILE", review_workflow)
+        self.assertIn("run-pr-governance.py", review_workflow)
+        self.assertIn("transition-pr.py", review_workflow)
+        self.assertIn("types: [opened, synchronize, reopened, closed]", pr_workflow)
+        self.assertIn("complete-after-human-merge", pr_workflow)
+        self.assertIn("verify_artifact(", transition_source)
+        self.assertIn("structured review result is not bound to signed provenance",
+                      transition_source)
+        self.assertIn("state=closed", transition_source)
+
     def test_v11_pr_governance_workflow_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "copilot-pr-governance.yml").read_text(encoding="utf-8")
