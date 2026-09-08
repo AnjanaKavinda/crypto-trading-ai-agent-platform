@@ -282,11 +282,23 @@ class GovernanceTests(unittest.TestCase):
 
     def test_completed_assignment_suppresses_same_key_retry(self):
         key = "dispatch-key"
-        comments = [{"body": (
-            f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED dispatch_key:{key}"
-        )}]
+        comments = [{"user": {"login": "github-actions[bot]"},
+                    "body": (
+                        f"{orchestrate_issue.MARKER}\n"
+                        f"ASSIGNMENT_COMPLETED dispatch_key:{key}"
+                    )}]
         self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), {key})
         self.assertFalse(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_untrusted_completion_comment_does_not_suppress_retry(self):
+        key = "dispatch-key"
+        comments = [{"user": {"login": "untrusted-user"},
+                     "body": (
+                         f"{orchestrate_issue.MARKER}\n"
+                         f"ASSIGNMENT_COMPLETED dispatch_key:{key}"
+                     )}]
+        self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), set())
+        self.assertTrue(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
 
     def test_assignment_requires_isolated_user_token_and_headers(self):
         with self.assertRaises(GovernanceError):

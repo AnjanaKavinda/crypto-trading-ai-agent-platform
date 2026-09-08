@@ -20,6 +20,7 @@ from orchestrator import (
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
+TRUSTED_COMPLETION_ACTORS = {"github-actions[bot]"}
 
 
 def gh(*args: str) -> object:
@@ -149,7 +150,9 @@ def completed_assignment_keys(comments: list[dict]) -> set[str]:
     completed: set[str] = set()
     for comment in comments:
         body = comment.get("body", "")
-        if MARKER not in body or "ASSIGNMENT_COMPLETED" not in body:
+        actor = (comment.get("user") or {}).get("login")
+        if (actor not in TRUSTED_COMPLETION_ACTORS or MARKER not in body
+                or "ASSIGNMENT_COMPLETED" not in body):
             continue
         marker = "dispatch_key:"
         if marker in body:
