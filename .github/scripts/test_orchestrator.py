@@ -425,7 +425,8 @@ class GovernanceTests(unittest.TestCase):
 
     def test_synchronize_consumes_old_head_correction_once(self):
         ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
-                 "new_head": "ignored", "dispatch_key": "base:correction:1"}
+                 "new_head": "ignored", "base_dispatch_key": "base",
+                 "dispatch_key": "base:correction:1", "correction_attempt": 1}
         comment = {"user": {"login": "github-actions[bot]"},
                    "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
                            f"{json.dumps(ready)}"}
@@ -442,9 +443,11 @@ class GovernanceTests(unittest.TestCase):
 
     def test_synchronize_rejects_same_head_untrusted_and_mismatched_correction(self):
         same = {"issue_id": 6, "pr_id": 237, "head_sha": "new",
-                "dispatch_key": "same"}
+                "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                "correction_attempt": 1}
         wrong_pr = {"issue_id": 6, "pr_id": 999, "head_sha": "old",
-                    "dispatch_key": "wrong"}
+                    "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                    "correction_attempt": 1}
         comments = [
             {"user": {"login": "github-actions[bot]"},
              "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(same)}"},
@@ -454,6 +457,94 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             transition_pr.correction_synchronize_evidence(
                 comments, {"github-actions[bot]"}, 6, 237, "new")
+
+    def test_synchronize_rejects_malformed_and_conflicting_completion(self):
+        ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
+                 "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                 "correction_attempt": 1}
+        malformed = {"user": {"login": "github-actions[bot]"},
+                     "body": f"{transition_pr.MARKER}\nCORRECTION_READY {{bad json}}"}
+        with self.assertRaises(GovernanceError):
+            transition_pr.correction_synchronize_evidence(
+                [malformed], {"github-actions[bot]"}, 6, 237, "new", "base")
+        ready_comment = {"user": {"login": "github-actions[bot]"},
+                         "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
+                                 f"{json.dumps(ready)}"}
+        completion = dict(ready, new_head="other")
+        completion_comment = {"user": {"login": "github-actions[bot]"},
+                              "body": f"{transition_pr.MARKER}\nCORRECTION_COMPLETED "
+                                      f"{json.dumps(completion)}"}
+        with self.assertRaises(GovernanceError):
+            transition_pr.correction_synchronize_evidence(
+                [ready_comment, completion_comment], {"github-actions[bot]"},
+                6, 237, "new", "base")
+
+    def test_transition_main_completes_correction_and_duplicate_sync_is_noop(self):
+        dispatch = {"dispatch_key": "base", "review_tier": "R1",
+                    "capability_tier": "economical-fast"}
+        ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
+                 "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                 "correction_attempt": 1, "base_branch": "dev", "agent": "Platform Architect",
+                 "prompt": "bounded", "prompt_hash": sha256(b"bounded").hexdigest()}
+        comments = [
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nDISPATCH {json.dumps(dispatch)}\n"
+                     "dispatch_key:base"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(ready)}\n"
+                     "dispatch_key:base:correction:1"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nPR_BINDING:237 head_sha:old "
+                     "dispatch_key:base"},
+        ]
+        issue = {"state": "open", "labels": [{"name": "workflow:human-decision-required"}]}
+        pr = {"number": 237, "body": "Fixes #6 base", "merged": False,
+              "user": {"login": "Copilot"}, "head": {"sha": "new"}}
+        mutations = []
+
+        def fake_api(*args):
+            path = next((item for item in args if isinstance(item, str)
+                         and item.startswith("repos/")), "")
+            if args[:2] == ("--method", "POST"):
+                mutations.append(args)
+                if "/comments" in path:
+                    body = args[-1].split("body=", 1)[1]
+                    comments.append({"user": {"login": "github-actions[bot]"},
+                                      "body": body})
+                elif "/labels" in path:
+                    issue["labels"] = [{"name": "workflow:review"}]
+                return {}
+            if args[:2] == ("--method", "DELETE"):
+                issue["labels"] = []
+                return {}
+            if path.endswith("/pulls/237"):
+                return pr
+            if path.endswith("/issues/6/comments"):
+                return comments
+            if path.endswith("/issues/6"):
+                return issue
+            raise AssertionError(args)
+
+        with tempfile.NamedTemporaryFile("w", delete=False) as event:
+            json.dump({"action": "synchronize"}, event)
+            event_path = event.name
+        env = {
+            "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "237",
+            "TARGET_STATE": "workflow:review", "GITHUB_EVENT_PATH": event_path,
+            "GOVERNED_PR_AUTHORS": "Copilot", "GOVERNED_CONTROLLER": "AnjanaKavinda",
+            "GOVERNED_AUDIT_PATH": tempfile.mktemp(),
+        }
+        with patch.dict(os.environ, env, clear=False), patch.object(
+                transition_pr, "api", side_effect=fake_api), patch.object(
+                transition_pr, "append_governance_event"):
+            self.assertEqual(transition_pr.main(), 0)
+            first_mutation_count = len(mutations)
+            self.assertEqual(transition_pr.main(), 0)
+        self.assertEqual(len(mutations), first_mutation_count)
+        self.assertTrue(any("CORRECTION_COMPLETED" in str(item) for item in mutations))
+        self.assertIn("head_sha:new", comments[-1]["body"])
+        self.assertEqual({label["name"] for label in issue["labels"]}, {"workflow:review"})
+        os.unlink(event_path)
 
     def test_no_user_token_or_assignment_api_capability(self):
         source = (Path(__file__).with_name("orchestrate-issue.py")

@@ -77,8 +77,10 @@ def correction_records(comments: list[dict], trusted: set[str],
                 continue
             try:
                 record = json.loads(line.split(" ", 1)[1])
-            except (json.JSONDecodeError, IndexError, TypeError):
-                continue
+            except (json.JSONDecodeError, IndexError, TypeError) as exc:
+                raise GovernanceError(f"malformed trusted {kind} evidence") from exc
+            if not isinstance(record, dict):
+                raise GovernanceError(f"malformed trusted {kind} evidence")
             if (record.get("issue_id") == issue_id and record.get("pr_id") == pr_id
                     and record.get("dispatch_key")):
                 record["_kind"] = kind
@@ -88,29 +90,83 @@ def correction_records(comments: list[dict], trusted: set[str],
 
 def correction_synchronize_evidence(comments: list[dict], trusted: set[str],
                                     issue_id: int, pr_id: int,
-                                    current_head: str) -> dict:
+                                    current_head: str,
+                                    base_dispatch_key: str | None = None) -> dict:
     records = correction_records(comments, trusted, issue_id, pr_id)
     ready = [item for item in records if item["_kind"] == "CORRECTION_READY"]
     completed = [item for item in records if item["_kind"] == "CORRECTION_COMPLETED"]
-    consumed = {(item["dispatch_key"], item.get("new_head")) for item in completed}
-    already = [item for item in completed if item.get("new_head") == current_head]
+    if base_dispatch_key:
+        ready = [item for item in ready
+                 if item.get("base_dispatch_key") == base_dispatch_key
+                 and str(item.get("dispatch_key", "")).startswith(
+                     f"{base_dispatch_key}:correction:")]
+        completed = [item for item in completed
+                     if item.get("base_dispatch_key") == base_dispatch_key
+                     and str(item.get("dispatch_key", "")).startswith(
+                         f"{base_dispatch_key}:correction:")]
+    if not ready:
+        raise GovernanceError("correction synchronize evidence is missing")
+    for item in ready:
+        attempt = item.get("correction_attempt")
+        if (not isinstance(attempt, int) or attempt < 1
+                or item["dispatch_key"] !=
+                f"{item.get('base_dispatch_key')}:correction:{attempt}"):
+            raise GovernanceError("correction handoff key is invalid")
+        if not item.get("head_sha"):
+            raise GovernanceError("correction handoff prior head is missing")
+    ready_by_key = {}
+    for item in ready:
+        ready_by_key.setdefault(item["dispatch_key"], []).append(item)
+    if any(len(items) != 1 for items in ready_by_key.values()):
+        raise GovernanceError("correction handoff is duplicated or conflicting")
+    completed_by_key = {}
+    for item in completed:
+        completed_by_key.setdefault(item["dispatch_key"], []).append(item)
+    if any(len(items) != 1 for items in completed_by_key.values()):
+        raise GovernanceError("correction completion is duplicated or conflicting")
+    ready_by_key = {key: items[0] for key, items in ready_by_key.items()}
+    for key, items in completed_by_key.items():
+        completion = items[0]
+        ready_record = ready_by_key.get(key)
+        if (ready_record is None or not completion.get("new_head")
+                or completion.get("new_head") == ready_record.get("head_sha")):
+            raise GovernanceError("correction completion is not bound to a changed head")
+    already = [item for item in completed
+               if item.get("new_head") == current_head
+               and item.get("dispatch_key") in ready_by_key]
     if len(already) == 1:
         result = dict(already[0])
         result["_already_consumed"] = True
         return result
     if len(already) > 1:
         raise GovernanceError("correction synchronize evidence is ambiguous")
-    candidates = [item for item in ready
-                  if item.get("head_sha") != current_head
-                  and (item["dispatch_key"], current_head) not in consumed]
-    if len(candidates) != 1:
-        raise GovernanceError("correction synchronize evidence is missing or ambiguous")
-    record = candidates[0]
-    if any(item.get("dispatch_key") == record["dispatch_key"]
+    if any(item.get("dispatch_key") in ready_by_key
            and item.get("new_head") not in (None, current_head)
            for item in completed):
         raise GovernanceError("correction was already consumed for another head")
+    candidates = [item for item in ready
+                  if item.get("head_sha") != current_head
+                  and item["dispatch_key"] not in {completed_item["dispatch_key"]
+                                                   for completed_item in completed}]
+    if len(candidates) != 1:
+        if candidates:
+            latest_attempt = max(item["correction_attempt"] for item in candidates)
+            candidates = [item for item in candidates
+                          if item["correction_attempt"] == latest_attempt]
+        if len(candidates) != 1:
+            raise GovernanceError("correction synchronize evidence is missing or ambiguous")
+    record = candidates[0]
     return record
+
+
+def correction_ready_for_head(comments: list[dict], trusted: set[str],
+                              issue_id: int, pr_id: int, base_dispatch_key: str,
+                              head_sha: str) -> bool:
+    records = correction_records(comments, trusted, issue_id, pr_id)
+    return any(item["_kind"] == "CORRECTION_READY"
+               and item.get("base_dispatch_key") == base_dispatch_key
+               and item.get("head_sha") == head_sha
+               for item in records)
 
 
 def verified_review_result(pr: dict, issue_id: int) -> dict | None:
@@ -221,16 +277,41 @@ def main() -> int:
             event_action = json.loads(Path(event_path).read_text()).get("action", "")
         except (OSError, json.JSONDecodeError):
             return 1
+    if target == "workflow:review" and current == "workflow:review" and event_action == "synchronize":
+        try:
+            correction_evidence = correction_records(
+                comments, trusted_correction_actors, int(issue), int(pr_number))
+        except GovernanceError:
+            return 1
+        correction_evidence = [
+            item for item in correction_evidence
+            if item.get("base_dispatch_key") == dispatch_keys[0]
+        ]
+        if not correction_evidence:
+            correction_evidence = None
+        if correction_evidence is None:
+            pass
+        else:
+            try:
+                duplicate = correction_synchronize_evidence(
+                    comments, trusted_correction_actors, int(issue), int(pr_number),
+                    head_sha, dispatch_keys[0])
+            except GovernanceError:
+                return 1
+            binding = [item for item in comments if "PR_BINDING:" in item.get("body", "")]
+            if (not duplicate.get("_already_consumed")
+                    or not binding
+                    or f"PR_BINDING:{pr_number} head_sha:{head_sha}" not in binding[-1]["body"]):
+                return 1
+            return 0
     if target == "workflow:review" and current == "workflow:human-decision-required":
         if event_action != "synchronize":
             return 1
         try:
             correction = correction_synchronize_evidence(
-                comments, trusted_correction_actors, int(issue), int(pr_number), head_sha)
+                comments, trusted_correction_actors, int(issue), int(pr_number), head_sha,
+                dispatch_keys[0])
         except GovernanceError:
-            return 1
-        if (correction.get("base_dispatch_key", dispatch_keys[0]) != dispatch_keys[0]
-                or not correction["dispatch_key"].startswith(f"{dispatch_keys[0]}:correction:")):
             return 1
         if not correction.get("_already_consumed"):
             completion = {key: value for key, value in correction.items()
@@ -337,10 +418,15 @@ def main() -> int:
         maximum = int(os.environ.get("CORRECTION_MAX", "3"))
         if corrections >= maximum:
             target = "workflow:blocked"
-        elif any(f'"head_sha": "{head_sha}"' in item.get("body", "")
-                 for item in comments if "CORRECTION_READY" in item.get("body", "")):
-            return 0
         else:
+            try:
+                if correction_ready_for_head(
+                        comments, trusted_correction_actors, int(issue), int(pr_number),
+                        dispatch_keys[0], head_sha):
+                    return 0
+            except GovernanceError:
+                return 1
+        if target == "workflow:changes-requested":
             for state in issue_labels & set(STATES):
                 if state != "workflow:changes-requested":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
