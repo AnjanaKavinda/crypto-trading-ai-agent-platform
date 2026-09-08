@@ -528,11 +528,14 @@ class GovernanceTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w", delete=False) as event:
             json.dump({"action": "synchronize"}, event)
             event_path = event.name
+        audit_file = tempfile.NamedTemporaryFile(delete=False)
+        audit_path = audit_file.name
+        audit_file.close()
         env = {
             "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "237",
             "TARGET_STATE": "workflow:review", "GITHUB_EVENT_PATH": event_path,
             "GOVERNED_PR_AUTHORS": "Copilot", "GOVERNED_CONTROLLER": "AnjanaKavinda",
-            "GOVERNED_AUDIT_PATH": tempfile.mktemp(),
+            "GOVERNED_AUDIT_PATH": audit_path,
         }
         with patch.dict(os.environ, env, clear=False), patch.object(
                 transition_pr, "api", side_effect=fake_api), patch.object(
@@ -545,6 +548,7 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("head_sha:new", comments[-1]["body"])
         self.assertEqual({label["name"] for label in issue["labels"]}, {"workflow:review"})
         os.unlink(event_path)
+        os.unlink(audit_path)
 
     def test_no_user_token_or_assignment_api_capability(self):
         source = (Path(__file__).with_name("orchestrate-issue.py")
