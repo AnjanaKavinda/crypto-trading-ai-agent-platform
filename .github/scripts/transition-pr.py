@@ -229,24 +229,27 @@ def main() -> int:
     comments = api(f"{root}/issues/{issue}/comments")
     issue_record = api(f"{root}/issues/{issue}")
     issue_labels = {label["name"] for label in issue_record.get("labels", [])}
-    linked_dispatch = any(MARKER in item.get("body", "") and "dispatch_key:" in item.get("body", "")
-                          for item in comments)
-    dispatch_comments = [item for item in comments if MARKER in item.get("body", "")
-                         and ("DISPATCH " in item.get("body", "")
-                              or "DISPATCH_INTENT" in item.get("body", "")
-                              or "ASSIGNMENT_COMPLETED" in item.get("body", ""))
-                         and "dispatch_key:" in item.get("body", "")]
+    trusted_dispatch_comments = [item for item in comments
+                                if item.get("user", {}).get("login") == "github-actions[bot]"
+                                and MARKER in item.get("body", "")
+                                and "dispatch_key:" in item.get("body", "")]
+    linked_dispatch = bool(trusted_dispatch_comments)
+    dispatch_comments = [
+        item for item in trusted_dispatch_comments
+        if ("DISPATCH " in item.get("body", "")
+            or "DISPATCH_INTENT" in item.get("body", "")
+            or "ASSIGNMENT_COMPLETED" in item.get("body", ""))
+    ]
     dispatch_keys = [dispatch_comments[-1]["body"].split("dispatch_key:", 1)[1].split()[0]
                      ] if dispatch_comments else []
-    if not any(key in (pr.get("body") or "") for key in dispatch_keys):
-        try:
-            dispatch_keys = [derive_current_dispatch_key(
-                comments=comments, pr_number=int(pr_number), issue_id=int(issue),
-                base=(pr.get("base") or {}).get("ref", "dev"),
-                head_sha=(pr.get("head") or {}).get("sha", ""),
-                pr_body=pr.get("body") or "")]
-        except GovernanceError as error:
-            return blocked(f"current trusted dispatch binding unavailable: {error}")
+    try:
+        dispatch_keys = [derive_current_dispatch_key(
+            comments=comments, pr_number=int(pr_number), issue_id=int(issue),
+            base=(pr.get("base") or {}).get("ref", "dev"),
+            head_sha=(pr.get("head") or {}).get("sha", ""),
+            pr_body=pr.get("body") or "")]
+    except GovernanceError as error:
+        return blocked(f"current trusted dispatch binding unavailable: {error}")
     dispatch_payload = {}
     if dispatch_comments:
         match = __import__("re").search(

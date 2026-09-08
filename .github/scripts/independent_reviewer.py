@@ -13,7 +13,8 @@ from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from orchestrator import (CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS,
-                          detect_high_confidence_secret_material)
+                          detect_high_confidence_secret_material,
+                          extract_bounded_path_section)
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
@@ -60,58 +61,12 @@ def validate_changed_path_scope(changed_files: tuple[str, ...],
 
 
 def extract_allowed_paths_from_issue(issue_body: str) -> tuple[str, ...]:
-    """Derive one bounded, unambiguous path section from trusted issue Markdown.
-
-    Markdown headings are syntax, not data.  A path list therefore ends at the
-    next heading of the same or higher level (or any heading for an unprefixed
-    marker), and malformed bullet entries are rejected rather than ignored.
-    """
-    body = issue_body or ""
-    heading_re = re.compile(r"^( {0,3})(#{1,6})[ \t]+(.+?)\s*#*\s*$")
-    markers: list[tuple[int, int]] = []
-    lines = body.splitlines()
-    for index, line in enumerate(lines):
-        heading = heading_re.match(line)
-        if heading and heading.group(3).strip().casefold() in {
-                "allowed paths", "expected paths"}:
-            markers.append((index, len(heading.group(2))))
-            continue
-        if re.match(r"^\s*(?:Allowed paths|Expected paths)"
-                    r"(?:\s*\([^:\n]*\))?\s*:\s*$", line, re.I):
-            markers.append((index, 0))
-    if len(markers) != 1:
+    try:
+        return tuple(_normalized_pattern(path)
+                     for path in extract_bounded_path_section(issue_body))
+    except GovernanceError as error:
         raise ReviewerExecutionError(
-            "linked issue governed review paths are absent or ambiguous")
-    marker_line, level = markers[0]
-    end = len(lines)
-    for index in range(marker_line + 1, len(lines)):
-        heading = heading_re.match(lines[index])
-        if heading and (level == 0 or len(heading.group(2)) <= level):
-            end = index
-            break
-    paths = []
-    for line in lines[marker_line + 1:end]:
-        if not line.strip():
-            continue
-        bullet = re.match(r"^\s*[-*+]\s+(.*)$", line)
-        if not bullet:
-            continue
-        match = re.fullmatch(r"`([^`]+)`", bullet.group(1).strip())
-        if not match:
-            raise ReviewerExecutionError(
-                "linked issue governed review paths contain an unsafe or ambiguous entry")
-        candidate = match.group(1).strip()
-        normalized = _normalized_pattern(candidate)
-        if normalized not in paths:
-            paths.append(normalized)
-        if (candidate.endswith("/test_orchestrator.py") and
-                "narrowly scoped new tests" in line.lower()):
-            test_pattern = candidate.rsplit("/", 1)[0] + "/test_*.py"
-            if test_pattern not in paths:
-                paths.append(_normalized_pattern(test_pattern))
-    if not paths:
-        raise ReviewerExecutionError("linked issue governed review paths are empty")
-    return tuple(paths)
+            f"linked issue governed review paths are invalid: {error}") from error
 
 
 def assert_current_head(expected_head: str, actual_head: str) -> None:

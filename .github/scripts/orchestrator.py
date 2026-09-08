@@ -130,6 +130,64 @@ def _section_values(body: str, heading: str) -> tuple[str, ...]:
     return tuple(values)
 
 
+def extract_bounded_path_section(body: str) -> tuple[str, ...]:
+    """Parse the single bounded Allowed/Expected paths Markdown section."""
+    lines = (body or "").splitlines()
+    heading_re = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*#*\s*$")
+    markers: list[tuple[int, int]] = []
+
+    def heading_name(value: str) -> str:
+        value = re.sub(r"\s*#*\s*$", "", value).strip()
+        value = re.sub(r"\s*:\s*$", "", value).strip()
+        value = re.sub(r"\s*\([^)]*\)\s*$", "", value).strip()
+        return value.casefold()
+
+    names = {"allowed paths", "expected paths"}
+    for index, line in enumerate(lines):
+        match = heading_re.match(line)
+        if match and heading_name(match.group(2)) in names:
+            markers.append((index, len(match.group(1))))
+        elif re.match(
+                r"^\s*(?:Allowed paths|Expected paths)"
+                r"(?:\s*\([^:\n]*\))?\s*:?\s*$", line, re.I):
+            markers.append((index, 0))
+    if len(markers) != 1:
+        raise GovernanceError("governed path section is absent or ambiguous")
+    marker_line, level = markers[0]
+    end = len(lines)
+    for index in range(marker_line + 1, len(lines)):
+        match = heading_re.match(lines[index])
+        if match and (level == 0 or len(match.group(1)) <= level):
+            end = index
+            break
+    paths: list[str] = []
+    for line in lines[marker_line + 1:end]:
+        if not line.strip():
+            continue
+        bullet = re.match(r"^\s*[-*+]\s+(.*)$", line)
+        if not bullet:
+            raise GovernanceError("governed path section contains malformed content")
+        match = re.fullmatch(r"`([^`]+)`", bullet.group(1).strip())
+        if not match:
+            raise GovernanceError("governed path section contains an unsafe entry")
+        candidate = match.group(1).strip()
+        if candidate in paths:
+            raise GovernanceError("governed path section contains duplicate paths")
+        if (candidate.startswith("/") or "\\" in candidate
+                or any(part in ("", ".", "..") for part in candidate.split("/"))):
+            raise GovernanceError("governed path section contains an unsafe entry")
+        paths.append(candidate)
+        if (candidate.endswith("/test_orchestrator.py")
+                and "narrowly scoped new tests" in line.lower()):
+            test_pattern = candidate.rsplit("/", 1)[0] + "/test_*.py"
+            if test_pattern in paths:
+                raise GovernanceError("governed path section contains duplicate paths")
+            paths.append(test_pattern)
+    if not paths:
+        raise GovernanceError("governed path section is empty")
+    return tuple(paths)
+
+
 def extract_routing_inputs(issue: Mapping[str, Any], *,
                            catalog_titles: Mapping[int, str] | None = None) -> RoutingInputs:
     """Extract V1.1 inputs from a GitHub issue, labels, and approved catalog."""
@@ -165,7 +223,15 @@ def extract_routing_inputs(issue: Mapping[str, Any], *,
                          ("allowed_paths", "Allowed paths"),
                          ("forbidden_paths", "Forbidden paths")):
         if key not in source:
-            source[key] = _section_values(body, heading)
+            if key == "allowed_paths":
+                try:
+                    source[key] = extract_bounded_path_section(body)
+                except GovernanceError as error:
+                    if "absent" not in str(error):
+                        raise
+                    source[key] = ()
+            else:
+                source[key] = _section_values(body, heading)
     if not source.get("affected_paths") and source.get("agent_role") in ROLE_PATHS:
         source["affected_paths"] = ROLE_PATHS[source["agent_role"]]
     if not source.get("allowed_paths") and source.get("agent_role") in ROLE_PATHS:
@@ -679,6 +745,13 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
     if any(conclusions.get(name) != "success" for name in required_checks):
         raise GovernanceError("required check is missing or unsuccessful")
     reviews = list(reviews)
+    if pr.get("required_review_tier") == "R1":
+        if not any(review.get("state") == "APPROVED"
+                   and review.get("commit_id") == pr["head_sha"]
+                   and review.get("user") == controller
+                   for review in reviews):
+            raise GovernanceError("current-head human approval is required for R1")
+        return True
     latest: dict[str, Mapping[str, Any]] = {}
     for review in reviews:
         reviewer = review.get("user")

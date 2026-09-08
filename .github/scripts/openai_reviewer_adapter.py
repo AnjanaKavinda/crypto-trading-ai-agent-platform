@@ -31,15 +31,18 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         self.timeout_seconds = int(timeout_seconds)
         self.max_retries = int(max_retries)
         self.transport = transport or self._transport
-        self.model_mapping = dict(model_mapping or self._load_model_mapping())
+        explicit_api_key = api_key is not None
+        self.model_mapping = dict(model_mapping) if model_mapping is not None else (
+            self._load_model_mapping() if self.api_key else {})
         self.context_pack = dict(context_pack or {})
         self.max_payload_bytes = int(
             max_payload_bytes if max_payload_bytes is not None
             else (os.environ.get("REVIEW_CONTEXT_MAX_BYTES") or "120000"))
-        if (not self.api_key or self.timeout_seconds <= 0 or self.max_retries not in (0, 1)
+        if ((explicit_api_key and not self.api_key) or self.timeout_seconds <= 0
+                or self.max_retries not in (0, 1)
                 or self.max_payload_bytes <= 0):
             raise ReviewerExecutionError("OpenAI reviewer configuration is unavailable")
-        if any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
+        if self.api_key and any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
             raise ReviewerExecutionError("OpenAI tier mapping is incomplete")
 
     @staticmethod
@@ -61,6 +64,11 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
             request.validate()
         except ReviewerExecutionError as error:
             failures.append(str(error))
+        if request.required_review_tier != "R1":
+            if not self.api_key:
+                failures.append("OpenAI reviewer credentials are unavailable")
+            if any(not self.model_mapping.get(key) for key in CAPABILITY_TIERS):
+                failures.append("OpenAI tier mapping is incomplete")
         try:
             payload = self._payload(request)
             self._validate_outbound_payload(payload)

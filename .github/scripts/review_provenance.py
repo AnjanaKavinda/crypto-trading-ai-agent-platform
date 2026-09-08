@@ -151,6 +151,7 @@ def derive_current_dispatch_key(*, comments: Iterable[Mapping[str, Any]],
     if base != "dev" or not head_sha:
         raise GovernanceError("dispatch binding has an invalid base or head")
     candidates: set[str] = set()
+    stale_seen = False
     for comment in comments:
         if (not isinstance(comment, Mapping) or
                 (comment.get("user") or {}).get("login") != "github-actions[bot]"):
@@ -170,12 +171,11 @@ def derive_current_dispatch_key(*, comments: Iterable[Mapping[str, Any]],
                 raise GovernanceError("malformed trusted PR dispatch binding")
             if int(binding.group(1)) != int(pr_number):
                 continue
-            if binding.group(2) != head_sha:
-                if key in candidates:
-                    continue
-                raise GovernanceError("dispatch binding is stale for the current PR head")
             if binding.group(3) != key:
                 raise GovernanceError("dispatch binding key is inconsistent")
+            if binding.group(2) != head_sha:
+                stale_seen = True
+                continue
             candidates.add(key)
             continue
         record_match = re.search(
@@ -193,12 +193,15 @@ def derive_current_dispatch_key(*, comments: Iterable[Mapping[str, Any]],
         if record.get("pr_id") not in (None, int(pr_number)):
             continue
         if record.get("head_sha") not in (None, head_sha):
-            raise GovernanceError("dispatch evidence is stale for the current PR head")
+            stale_seen = True
+            continue
         candidates.add(key)
     body_keys = set(re.findall(r"dispatch_key:([A-Za-z0-9_-]+)", pr_body or ""))
     if body_keys and (len(body_keys) != 1 or candidates != body_keys):
         raise GovernanceError("PR dispatch key does not match trusted current binding")
     if len(candidates) != 1:
+        if stale_seen:
+            raise GovernanceError("trusted dispatch evidence is stale for the current PR head")
         raise GovernanceError("trusted current dispatch key is missing or ambiguous")
     return next(iter(candidates))
 
