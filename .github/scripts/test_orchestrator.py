@@ -300,6 +300,92 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), set())
         self.assertTrue(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
 
+    def test_assignment_reconciliation_recovers_without_second_assignment(self):
+        calls = []
+        self.assertEqual(
+            orchestrate_issue.reconcile_assignment(
+                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
+                assigner=lambda *args: calls.append(args),
+                fetcher=lambda path: {"assignees": [{"login": "copilot-swe-agent[bot]"}]}),
+            "recovered")
+        self.assertEqual(calls, [])
+
+    def test_assignment_reconciliation_retries_only_when_proven_absent(self):
+        calls = []
+        comments = []
+
+        def writer(*args):
+            comments.append({"user": {"login": "github-actions[bot]"}, "body": args[-1]})
+
+        def reader(*args):
+            return comments
+
+        states = iter([{"assignees": []}, {"assignees": [{"login": "copilot-swe-agent[bot]"}]}])
+        result = orchestrate_issue.reconcile_assignment(
+            "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
+            assigner=lambda *args: calls.append(args) or {"id": "receipt"},
+            fetcher=lambda path: next(states), writer=writer, reader=reader)
+        self.assertEqual(result, "assigned")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("ASSIGNMENT_RECEIPT", comments[-1]["body"])
+
+    def test_assignment_reconciliation_blocks_ambiguous_state(self):
+        calls = []
+        self.assertEqual(
+            orchestrate_issue.reconcile_assignment(
+                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
+                assigner=lambda *args: calls.append(args),
+                fetcher=lambda path: {}),
+            "human-decision-required")
+        self.assertEqual(calls, [])
+
+    def test_assignment_reconciliation_blocks_after_ambiguous_post_call_state(self):
+        calls = []
+        comments = []
+        states = iter([{"assignees": []}, {"unexpected": "shape"}])
+        result = orchestrate_issue.reconcile_assignment(
+            "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
+            assigner=lambda *args: calls.append(args) or {"id": "receipt"},
+            fetcher=lambda path: next(states),
+            writer=lambda *args: comments.append(args[-1]),
+            reader=lambda *args: [{"user": {"login": "github-actions[bot]"},
+                                   "body": comments[-1]}])
+        self.assertEqual(result, "human-decision-required")
+        self.assertEqual(len(calls), 1)
+
+    def test_remote_success_with_receipt_failure_recovers_without_retry(self):
+        calls = []
+        writes = 0
+        comments = []
+
+        def writer(*args):
+            nonlocal writes
+            writes += 1
+            if writes == 2:
+                raise OSError("completion comment unavailable")
+            comments.append({"user": {"login": "github-actions[bot]"},
+                             "body": args[-1]})
+
+        states = iter([
+            {"assignees": []},
+            {"assignees": [{"login": "copilot-swe-agent[bot]"}]},
+        ])
+        with self.assertRaises(OSError):
+            orchestrate_issue.reconcile_assignment(
+                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
+                assigner=lambda *args: calls.append(args) or {"id": "receipt"},
+                fetcher=lambda path: next(states), writer=writer,
+                reader=lambda *args: comments)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            orchestrate_issue.reconcile_assignment(
+                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
+                assigner=lambda *args: calls.append(args),
+                fetcher=lambda path: {"assignees": [{"login": "copilot-swe-agent[bot]"}]}),
+            "recovered")
+        self.assertEqual(len(calls), 1)
+
     def test_assignment_requires_isolated_user_token_and_headers(self):
         with self.assertRaises(GovernanceError):
             orchestrate_issue.assign_copilot("o/r", "6", "prompt", "agent", "dev", "")
