@@ -545,6 +545,20 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("required_reviews\", 0) != 1", (Path(__file__).with_name("orchestrator.py")
                       .read_text(encoding="utf-8")))
 
+    def test_v11_promotion_uses_dedicated_app_identity_and_main_lifecycle(self):
+        promotion = (Path(__file__).parents[1] / "workflows" /
+                     "promote-dev-to-main.yml").read_text(encoding="utf-8")
+        pr_workflow = (Path(__file__).parents[1] / "workflows" /
+                       "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        self.assertIn("actions/create-github-app-token@v2", promotion)
+        self.assertIn("GOVERNED_AUTOMATION_APP_ID", promotion)
+        self.assertIn("GOVERNED_AUTOMATION_APP_PRIVATE_KEY", promotion)
+        self.assertIn("promotion PR author collided with mandatory human reviewer", promotion)
+        self.assertIn("mandatory human reviewer was not requested", promotion)
+        self.assertIn("Validate main promotion shape", pr_workflow)
+        self.assertIn("github.event.pull_request.base.ref == 'dev'", pr_workflow)
+        self.assertNotIn("pull-requests: write\n\njobs:", promotion)
+
     def test_v11_human_owner_is_mandatory_reviewer_not_pr_author(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "copilot-pr-governance.yml").read_text(encoding="utf-8")
@@ -554,8 +568,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("* @AnjanaKavinda", codeowners)
         self.assertIn("Governed PRs must not be authored by the final human reviewer", workflow)
         self.assertIn("requested_reviewers", workflow)
-        self.assertIn("--reviewer \"AnjanaKavinda\"", promotion)
-        self.assertIn("pull-requests: write", promotion)
+        self.assertIn("reviewers[]=$CONTROLLER", promotion)
+        self.assertIn("actions/create-github-app-token@v2", promotion)
 
     def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /

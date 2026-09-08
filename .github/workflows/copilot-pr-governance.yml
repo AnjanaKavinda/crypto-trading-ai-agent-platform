@@ -37,7 +37,18 @@ jobs:
             "repos/${{ github.repository }}/pulls/$PR_NUMBER/requested_reviewers" \
             -f "reviewers[]=$CONTROLLER"
 
+      - name: Validate main promotion shape
+        if: github.event.pull_request.base.ref == 'main'
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+        run: |
+          test "$PR_HEAD" = "dev" || {
+            echo "main accepts only governed promotion PRs from dev" >&2
+            exit 1
+          }
+
       - name: Mark governed PR under review
+        if: github.event.pull_request.base.ref == 'dev'
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -48,6 +59,7 @@ jobs:
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
       - name: Publish pending final governance gate
+        if: github.event.pull_request.base.ref == 'dev'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -59,7 +71,7 @@ jobs:
         run: echo "No workflow step can merge this PR; the human repository owner remains the final merge authority."
 
   handle-unmerged-close:
-    if: github.event.action == 'closed' && github.event.pull_request.merged != true
+    if: github.event.action == 'closed' && github.event.pull_request.merged != true && github.event.pull_request.base.ref == 'dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +89,7 @@ jobs:
         run: python .github/scripts/transition-pr.py
 
   complete-after-human-merge:
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
