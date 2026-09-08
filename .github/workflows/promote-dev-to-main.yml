@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   promote:
@@ -16,6 +16,7 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+
       - name: Validate promotion state
         env:
           GH_TOKEN: ${{ github.token }}
@@ -29,13 +30,41 @@ jobs:
           fi
           existing="$(gh pr list --base main --head dev --state open --json number --jq 'length')"
           test "$existing" -eq 0
+
+      - name: Validate dedicated promotion GitHub App configuration
+        env:
+          APP_ID: ${{ vars.GOVERNED_AUTOMATION_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.GOVERNED_AUTOMATION_APP_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_ID" || { echo "GOVERNED_AUTOMATION_APP_ID is not configured" >&2; exit 1; }
+          test -n "$APP_PRIVATE_KEY" || { echo "GOVERNED_AUTOMATION_APP_PRIVATE_KEY is not configured" >&2; exit 1; }
+
+      - name: Mint least-privilege GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GOVERNED_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.GOVERNED_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Create bot-authored promotion PR and request human reviewer
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
         run: |
-          gh pr create \
-            --base main \
-            --head dev \
-            --title "Promote governed dev baseline to main" \
-            --body "Governed branch promotion only. No new implementation scope. Human reviewer/final approval authority: @AnjanaKavinda. Auto-merge is prohibited; manual merge remains mandatory." \
-            --reviewer "AnjanaKavinda"
+          pr_url="$(gh pr create             --base main             --head dev             --title "Promote governed dev baseline to main"             --body "Governed branch promotion only. No new implementation scope. Human reviewer/final approval authority: @AnjanaKavinda. Auto-merge is prohibited; manual merge remains mandatory.")"
+          pr_number="$(gh pr view "$pr_url" --json number --jq .number)"
+          gh api --method POST             "repos/${{ github.repository }}/pulls/$pr_number/requested_reviewers"             -f "reviewers[]=$CONTROLLER"
+          author="$(gh pr view "$pr_number" --json author --jq .author.login)"
+          requested="$(gh api "repos/${{ github.repository }}/pulls/$pr_number/requested_reviewers"             --jq '.users[].login')"
+          test "$author" != "$CONTROLLER" || {
+            echo "promotion PR author collided with mandatory human reviewer" >&2
+            exit 1
+          }
+          printf '%s
+' "$requested" | grep -Fx "$CONTROLLER" >/dev/null || {
+            echo "mandatory human reviewer was not requested" >&2
+            exit 1
+          }
+          echo "Created promotion PR #$pr_number by $author with $CONTROLLER requested for review."
