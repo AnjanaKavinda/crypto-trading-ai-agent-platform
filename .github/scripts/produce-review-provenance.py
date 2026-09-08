@@ -101,7 +101,9 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
                 for item in result.get("findings", []))})
         issue_id = extract_linked_issue(pr.get("body") or "")
         required = required_review_tier_from_labels(issue.get("labels", []))
-        if (parsed.repository != pr.get("repository") or parsed.pr_number != int(pr["number"]) or
+        base_repo = (pr.get("base") or {}).get("repo") or {}
+        pr_repository = pr.get("repository") or base_repo.get("full_name")
+        if (parsed.repository != pr_repository or parsed.pr_number != int(pr["number"]) or
                 parsed.head_sha != pr.get("head_sha") or parsed.required_review_tier != required):
             raise ReviewerExecutionError("review result is not bound to the current PR/issue")
         candidates = [

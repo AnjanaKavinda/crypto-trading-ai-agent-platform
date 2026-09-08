@@ -167,7 +167,7 @@ def extract_bounded_path_section(body: str) -> tuple[str, ...]:
         bullet = re.match(r"^\s*[-*+]\s+(.*)$", line)
         if not bullet:
             raise GovernanceError("governed path section contains malformed content")
-        match = re.fullmatch(r"`([^`]+)`", bullet.group(1).strip())
+        match = re.fullmatch(r"`([^`]+)`(?:\s+\([^)]*\))?", bullet.group(1).strip())
         if not match:
             raise GovernanceError("governed path section contains an unsafe entry")
         candidate = match.group(1).strip()
