@@ -43,6 +43,76 @@ def gh_paginated(path: str) -> list[dict]:
     return [item for page in pages for item in page]
 
 
+def hydrate_rulesets(repository: str, rulesets: list[dict] | None = None,
+                   *, fetcher: callable | None = None) -> list[dict]:
+    """Hydrate ruleset collection summaries before branch matching.
+
+    The repository ruleset list endpoint returns summary objects without detailed
+    conditions or rules. Matching against those summaries produces false negatives
+    for live branch protections and must therefore be followed by an id-based detail
+    fetch per ruleset.
+    """
+    if fetcher is None:
+        fetcher = gh
+    listing = rulesets if rulesets is not None else fetcher(f"repos/{repository}/rulesets")
+    hydrated: list[dict] = []
+    for ruleset in listing:
+        ruleset_id = ruleset.get("id")
+        if ruleset_id is None:
+            continue
+        detail = fetcher(f"repos/{repository}/rulesets/{ruleset_id}")
+        if isinstance(detail, dict):
+            hydrated.append(detail)
+    return hydrated
+
+
+def build_protection_snapshot(rulesets: list[dict], *, repository_settings: dict | None = None) -> dict[str, dict]:
+    """Build the required protection evidence from detailed rulesets only."""
+    repository_settings = repository_settings or {}
+    protection: dict[str, dict] = {}
+    for branch in ("dev", "main"):
+        ref = f"refs/heads/{branch}"
+        matches = [detail for detail in rulesets if ref in detail.get("conditions", {})
+                   .get("ref_name", {}).get("include", [])]
+        required_checks: list[str] = []
+        bypass_actors: list[str] = []
+        review_counts: list[int] = []
+        missing_rules: list[str] = []
+        for detail in matches:
+            bypass_actors.extend(str(actor) for actor in detail.get("bypass_actors", []) if str(actor).strip())
+            for rule in detail.get("rules", []):
+                rule_type = rule.get("type")
+                if rule_type == "pull_request":
+                   review_counts.append(int(rule.get("parameters", {}).get(
+                       "required_approving_review_count", 0)))
+                elif rule_type == "required_status_checks":
+                   params = rule.get("parameters", {})
+                   contexts = params.get("required_status_checks", [])
+                   for item in contexts:
+                       if isinstance(item, dict):
+                           context = item.get("context")
+                           if context:
+                               required_checks.append(str(context))
+                       elif isinstance(item, str) and item.strip():
+                           required_checks.append(item)
+        for rule_name in ("deletion", "non_fast_forward"):
+            if not any(rule.get("type") == rule_name for detail in matches
+                      for rule in detail.get("rules", [])):
+                missing_rules.append(rule_name)
+        protection[branch] = {
+            "verified": bool(matches) and all(detail.get("enforcement") == "active" for detail in matches),
+            "enforcement": "active" if matches else "missing",
+            "required_checks": sorted(dict.fromkeys(required_checks)),
+            "required_reviews": max(review_counts or [0]),
+            "bypass_actors": sorted(dict.fromkeys(bypass_actors)),
+            "auto_merge": bool(repository_settings.get("allow_auto_merge")),
+            "merge_queue": any(rule.get("type") == "merge_queue" for detail in matches
+                              for rule in detail.get("rules", [])),
+            "missing_rules": missing_rules,
+        }
+    return protection
+
+
 def assign_copilot(repository: str, issue_id: str, prompt: str, agent: str,
                    base_branch: str = "dev") -> object:
     """Use GitHub's full Copilot coding-agent assignment request."""
@@ -127,35 +197,15 @@ def main() -> int:
         excerpts=[body],
     )
     # Repository rulesets are the durable protection source; absence is unsafe.
+    # The ruleset collection endpoint returns summary objects without the detailed
+    # conditions/rules payload needed for branch matching. Hydrate those details
+    # before matching refs/heads/dev and refs/heads/main.
     rulesets = gh(f"{root}/rulesets")
     repository_settings = gh(root)
-    protection = {}
-    for branch in ("dev", "main"):
-        matches = [item for item in rulesets
-                   if f"refs/heads/{branch}" in item.get("conditions", {}).get(
-                       "ref_name", {}).get("include", [])]
-        details = [gh(f"{root}/rulesets/{item['id']}") for item in matches if item.get("id")]
-        pull_rules = [rule for detail in details for rule in detail.get("rules", [])
-                      if rule.get("type") == "pull_request"]
-        check_rules = [rule for detail in details for rule in detail.get("rules", [])
-                       if rule.get("type") == "required_status_checks"]
-        required_checks = [context for rule in check_rules
-                           for context in rule.get("parameters", {}).get("required_status_checks", [])]
-        protection[branch] = {
-            "verified": bool(matches) and all(item.get("enforcement") == "active" for item in matches),
-            "enforcement": "active",
-            "required_checks": [item.get("context") for item in required_checks
-                                if item.get("context")],
-            "required_reviews": max([rule.get("parameters", {}).get(
-                "required_approving_review_count", 0) for rule in pull_rules] or [0]),
-            "bypass_actors": [actor for detail in details for actor in detail.get("bypass_actors", [])],
-            "auto_merge": bool(repository_settings.get("allow_auto_merge")),
-            "merge_queue": any(rule.get("type") == "merge_queue" for detail in details
-                               for rule in detail.get("rules", [])),
-            "missing_rules": [rule for rule in ("deletion", "non_fast_forward")
-                              if not any(item.get("type") == rule for detail in details
-                                         for item in detail.get("rules", []))],
-        }
+    protection = build_protection_snapshot(
+        hydrate_rulesets(repository, rulesets, fetcher=lambda path: gh(path)),
+        repository_settings=repository_settings,
+    )
     verify_protections(protection)
     dependency_status = {}
     for canonical, number in zip(dependencies, dependency_github_numbers):

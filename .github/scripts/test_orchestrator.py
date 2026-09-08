@@ -15,6 +15,11 @@ spec = importlib.util.spec_from_file_location(
 pr_governance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr_governance)
 
+orchestrate_spec = importlib.util.spec_from_file_location(
+    "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
+orchestrate_issue = importlib.util.module_from_spec(orchestrate_spec)
+orchestrate_spec.loader.exec_module(orchestrate_issue)
+
 transition_spec = importlib.util.spec_from_file_location(
     "transition_pr", Path(__file__).with_name("transition-pr.py"))
 transition_pr = importlib.util.module_from_spec(transition_spec)
@@ -70,6 +75,59 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError): resolve_base_branch("develop")
         validate_transition("workflow:ready", "workflow:agent-running")
         with self.assertRaises(GovernanceError): validate_transition("workflow:complete", "workflow:ready")
+    def test_ruleset_collection_is_hydrated_before_branch_matching(self):
+        summary = [
+            {"id": 101, "name": "protect-dev", "enforcement": "active"},
+            {"id": 202, "name": "protect-main", "enforcement": "active"},
+        ]
+        details = {
+            101: {
+                "id": 101,
+                "name": "protect-dev",
+                "enforcement": "active",
+                "conditions": {"ref_name": {"include": ["refs/heads/dev"]}},
+                "rules": [
+                    {"type": "pull_request", "parameters": {"required_approving_review_count": 0}},
+                    {"type": "required_status_checks", "parameters": {
+                        "required_status_checks": [{"context": "governance-ci"}, {"context": "governance-gate"}]
+                    }},
+                    {"type": "deletion"},
+                    {"type": "non_fast_forward"},
+                ],
+            },
+            202: {
+                "id": 202,
+                "name": "protect-main",
+                "enforcement": "active",
+                "conditions": {"ref_name": {"include": ["refs/heads/main"]}},
+                "rules": [
+                    {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+                    {"type": "required_status_checks", "parameters": {
+                        "required_status_checks": [{"context": "governance-ci"}]
+                    }},
+                    {"type": "deletion"},
+                    {"type": "non_fast_forward"},
+                ],
+            },
+        }
+
+        def fake_fetcher(path):
+            if path == "repos/o/r/rulesets":
+                return summary
+            return details[int(path.rsplit("/", 1)[1])]
+
+        hydrated = orchestrate_issue.hydrate_rulesets("o/r", summary, fetcher=fake_fetcher)
+        self.assertEqual([item["id"] for item in hydrated], [101, 202])
+        protection = orchestrate_issue.build_protection_snapshot(hydrated, repository_settings={"allow_auto_merge": False})
+        self.assertTrue(protection["dev"]["verified"])
+        self.assertTrue(protection["main"]["verified"])
+        self.assertEqual(protection["dev"]["required_checks"], ["governance-ci", "governance-gate"])
+        self.assertEqual(protection["main"]["required_checks"], ["governance-ci"])
+        self.assertEqual(protection["dev"]["required_reviews"], 0)
+        self.assertEqual(protection["main"]["required_reviews"], 1)
+        self.assertEqual(protection["dev"]["bypass_actors"], [])
+        self.assertEqual(protection["dev"]["missing_rules"], [])
+
     def test_reviews_retries_secrets_and_protection(self):
         self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"old","user":"reviewer"}, "new", author="bot", controller="controller", authorized_reviewers=["reviewer"]))
         self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"new","independent":True}, "new", author="bot", controller="controller", authorized_reviewers=["reviewer"]))
@@ -79,7 +137,7 @@ class GovernanceTests(unittest.TestCase):
         good = {
             "dev": {"verified": True, "enforcement": "active",
                     "required_checks": ["governance-ci", "governance-gate"],
-                    "required_reviews": 1, "bypass_actors": [],
+                    "required_reviews": 0, "bypass_actors": [],
                     "auto_merge": False, "merge_queue": False},
             "main": {"verified": True, "enforcement": "active",
                      "required_checks": ["governance-ci"],
@@ -93,7 +151,7 @@ class GovernanceTests(unittest.TestCase):
                 "dev": {**good["dev"], "required_checks": ["governance-ci"]},
             })
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
-        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 0},
+        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
                             "main": {**good["main"], "required_reviews": 0}}
         with self.assertRaises(GovernanceError): verify_protections(reversed_reviews)
     def test_review_diff_secret_scan_allows_identifiers_and_test_fixtures(self):
@@ -501,6 +559,45 @@ class GovernanceTests(unittest.TestCase):
                 with self.assertRaises(GovernanceError):
                     transition_pr.verified_review_result(pr, 195)
 
+    def test_transition_audit_requires_dispatch_bound_review_tier(self):
+        payload = {
+            "agent_role": "Platform Architect",
+            "review_tier": "R2",
+            "risk_classification": "medium",
+            "context_pack_id": "context-x",
+            "context_pack_version": "v1.1",
+        }
+        audit_payload = {
+            "issue_id": 195,
+            "pr_id": 77,
+            "correlation_id": "dispatch-key",
+            "agent_role": payload["agent_role"],
+            "capability_tier": "strong-coding-reasoning",
+            "review_tier": transition_pr.transition_review_tier(payload),
+            "routing_reason": "bound dispatch transition",
+            "risk_classification": payload["risk_classification"],
+            "context_pack_id": payload["context_pack_id"],
+            "context_pack_version": payload["context_pack_version"],
+            "controller_policy_version": "v1.1",
+            "retry_count": 0,
+            "escalation_count": 0,
+            "reviewer_role": "independent-ai-reviewer",
+            "outcome": "workflow:review",
+            "timestamp": "2026-09-08T00:00:00Z",
+            "commit_sha": "abc123",
+        }
+        self.assertEqual(audit_payload["review_tier"], "R2")
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "audit.jsonl"
+            append_governance_event(
+                AppendOnlyAudit(), "review", audit_payload, str(audit_path),
+            )
+            self.assertTrue(audit_path.exists())
+        with self.assertRaises(GovernanceError):
+            transition_pr.transition_review_tier({})
+        with self.assertRaises(GovernanceError):
+            transition_pr.transition_review_tier({"review_tier": "R9"})
+
     def test_v11_automation_v1_production_wiring_is_present(self):
         issue_source = (Path(__file__).with_name("orchestrate-issue.py")
                         .read_text(encoding="utf-8"))
@@ -540,9 +637,9 @@ class GovernanceTests(unittest.TestCase):
                       ruleset_script)
         self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_verifier)
         self.assertIn("$contexts -contains $FinalGovernanceCheck", ruleset_verifier)
-        self.assertIn("$requiredApprovingReviewCount = 1", ruleset_script)
-        self.assertIn("must require exactly one human approval", ruleset_verifier)
-        self.assertIn("required_reviews\", 0) != 1", (Path(__file__).with_name("orchestrator.py")
+        self.assertIn("$requiredApprovingReviewCount = if ($TargetBranch -eq \"dev\") { 0 } else { 1 }", ruleset_script)
+        self.assertIn("must require exactly $expectedApprovalCount native approval(s)", ruleset_verifier)
+        self.assertIn('required_reviews", 0) != expected_reviews[branch]', (Path(__file__).with_name("orchestrator.py")
                       .read_text(encoding="utf-8")))
 
     def test_v11_promotion_uses_dedicated_app_identity_and_main_lifecycle(self):

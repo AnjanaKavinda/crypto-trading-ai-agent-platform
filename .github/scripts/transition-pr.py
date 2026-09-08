@@ -79,6 +79,14 @@ def verified_review_result(pr: dict, issue_id: int) -> dict | None:
     return result
 
 
+def transition_review_tier(dispatch_payload: dict) -> str:
+    """Require the dispatch-bound review tier to remain valid and unchanged."""
+    tier = str(dispatch_payload.get("review_tier", "")).strip()
+    if tier not in {"R1", "R2", "R3"}:
+        raise GovernanceError("dispatch payload is missing a valid review tier")
+    return tier
+
+
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     pr_number = os.environ["PR_NUMBER"]
@@ -185,6 +193,7 @@ def main() -> int:
     corrections = len(governed_corrections)
     previous_tier = dispatch_payload.get("capability_tier", "strong-coding-reasoning")
     resulting_tier = previous_tier
+    review_tier = transition_review_tier(dispatch_payload)
     if target == "workflow:changes-requested":
         try:
             resulting_tier = transition_escalation(
@@ -204,6 +213,7 @@ def main() -> int:
             "agent_role", (issue_record.get("assignee") or {}).get("login", "unknown")),
         "capability_tier": (previous_tier if resulting_tier == "human-decision-required"
                             else resulting_tier),
+        "review_tier": review_tier,
         "routing_reason": "bound dispatch transition", "risk_classification": dispatch_payload.get(
             "risk_classification", "unknown"),
         "context_pack_id": dispatch_payload.get("context_pack_id", "unknown"),

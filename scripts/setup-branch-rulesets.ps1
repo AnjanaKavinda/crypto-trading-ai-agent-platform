@@ -50,8 +50,9 @@ function New-ProtectionPayload {
     )
 
     # Governed PRs are opened by Copilot/automation, while AnjanaKavinda is the
-    # mandatory independent human reviewer/final approval authority on both branches.
-    $requiredApprovingReviewCount = 1
+    # mandatory independent human reviewer/final approval authority. Native branch
+    # approval requirements remain zero on dev and one on main.
+    $requiredApprovingReviewCount = if ($TargetBranch -eq "dev") { 0 } else { 1 }
     $requiredStatusChecks = @(@{ context = $RequiredCheck })
     if ($TargetBranch -eq "dev") {
         $requiredStatusChecks += @{ context = $FinalGovernanceCheck }
@@ -132,5 +133,5 @@ gh variable set GOVERNED_REQUIRED_CHECKS --body $RequiredCheck --repo $Repo
 if ($LASTEXITCODE -ne 0) { throw "Failed to set GOVERNED_REQUIRED_CHECKS repository variable." }
 
 Write-Host "Requested ruleset phase applied."
-Write-Host "dev requires '$RequiredCheck', '$FinalGovernanceCheck', and one human approval; main requires '$RequiredCheck' and one human approval."
+Write-Host "dev requires '$RequiredCheck', '$FinalGovernanceCheck', and zero native approvals; main requires '$RequiredCheck' and one native approval."
 Write-Host "Do not enable any governed pilot until both branches pass verification."

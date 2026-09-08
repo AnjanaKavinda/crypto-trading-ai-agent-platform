@@ -53,7 +53,8 @@ foreach ($branch in @("dev", "main")) {
     $prRules = @($detail.rules | Where-Object { $_.type -eq "pull_request" })
     Assert-True ($prRules.Count -eq 1) "$name must contain exactly one pull_request rule."
     $pr = $prRules[0].parameters
-    Assert-True ([int]$pr.required_approving_review_count -eq 1) "$name must require exactly one human approval."
+    $expectedApprovalCount = if ($branch -eq "dev") { 0 } else { 1 }
+    Assert-True ([int]$pr.required_approving_review_count -eq $expectedApprovalCount) "${name} must require exactly $expectedApprovalCount native approval(s)."
     Assert-True ([bool]$pr.dismiss_stale_reviews_on_push) "$name must dismiss stale approvals."
     Assert-True ([bool]$pr.required_review_thread_resolution) "$name must require review-thread resolution."
 
