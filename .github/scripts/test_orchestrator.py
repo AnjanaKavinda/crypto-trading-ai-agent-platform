@@ -558,6 +558,45 @@ class GovernanceTests(unittest.TestCase):
                 with self.assertRaises(GovernanceError):
                     transition_pr.verified_review_result(pr, 195)
 
+    def test_transition_audit_requires_dispatch_bound_review_tier(self):
+        payload = {
+            "agent_role": "Platform Architect",
+            "review_tier": "R2",
+            "risk_classification": "medium",
+            "context_pack_id": "context-x",
+            "context_pack_version": "v1.1",
+        }
+        audit_payload = {
+            "issue_id": 195,
+            "pr_id": 77,
+            "correlation_id": "dispatch-key",
+            "agent_role": payload["agent_role"],
+            "capability_tier": "strong-coding-reasoning",
+            "review_tier": transition_pr.transition_review_tier(payload),
+            "routing_reason": "bound dispatch transition",
+            "risk_classification": payload["risk_classification"],
+            "context_pack_id": payload["context_pack_id"],
+            "context_pack_version": payload["context_pack_version"],
+            "controller_policy_version": "v1.1",
+            "retry_count": 0,
+            "escalation_count": 0,
+            "reviewer_role": "independent-ai-reviewer",
+            "outcome": "workflow:review",
+            "timestamp": "2026-09-08T00:00:00Z",
+            "commit_sha": "abc123",
+        }
+        self.assertEqual(audit_payload["review_tier"], "R2")
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "audit.jsonl"
+            append_governance_event(
+                AppendOnlyAudit(), "review", audit_payload, str(audit_path),
+            )
+            self.assertTrue(audit_path.exists())
+        with self.assertRaises(GovernanceError):
+            transition_pr.transition_review_tier({})
+        with self.assertRaises(GovernanceError):
+            transition_pr.transition_review_tier({"review_tier": "R9"})
+
     def test_v11_automation_v1_production_wiring_is_present(self):
         issue_source = (Path(__file__).with_name("orchestrate-issue.py")
                         .read_text(encoding="utf-8"))
