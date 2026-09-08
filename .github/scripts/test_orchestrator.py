@@ -568,8 +568,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("* @AnjanaKavinda", codeowners)
         self.assertIn("Governed PRs must not be authored by the final human reviewer", workflow)
         self.assertIn("requested_reviewers", workflow)
-        self.assertIn("--reviewer \"AnjanaKavinda\"", promotion)
-        self.assertIn("pull-requests: write", promotion)
+        self.assertIn("reviewers[]=$CONTROLLER", promotion)
+        self.assertIn("actions/create-github-app-token@v2", promotion)
 
     def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
