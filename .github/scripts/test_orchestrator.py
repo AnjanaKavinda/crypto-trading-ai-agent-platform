@@ -485,7 +485,8 @@ class GovernanceTests(unittest.TestCase):
 
     def test_transition_main_completes_correction_and_duplicate_sync_is_noop(self):
         dispatch = {"dispatch_key": "base", "review_tier": "R1",
-                    "capability_tier": "economical-fast"}
+                    "capability_tier": "economical-fast", "issue_id": 6,
+                    "base_branch": "dev"}
         ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
                  "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
                  "correction_attempt": 1, "base_branch": "dev", "agent": "Platform Architect",
@@ -556,7 +557,8 @@ class GovernanceTests(unittest.TestCase):
 
     def test_transition_main_completes_two_correction_cycles(self):
         dispatch = {"dispatch_key": "base", "review_tier": "R1",
-                    "capability_tier": "economical-fast"}
+                    "capability_tier": "economical-fast", "issue_id": 6,
+                    "base_branch": "dev"}
         def ready(head, attempt):
             return {
                 "issue_id": 6, "pr_id": 237, "head_sha": head,
@@ -991,8 +993,11 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("GOVERNED_REVIEW_ARTIFACT_FILE", review_workflow)
         self.assertIn("run-pr-governance.py", review_workflow)
         self.assertIn("transition-pr.py", review_workflow)
-        self.assertIn("types: [opened, synchronize, reopened, closed]", pr_workflow)
-        self.assertIn("complete-after-human-merge", pr_workflow)
+        self.assertIn("types: [opened, synchronize, reopened]", pr_workflow)
+        lifecycle_workflow = (Path(__file__).parents[1] / "workflows" /
+                              "copilot-pr-lifecycle.yml").read_text()
+        self.assertIn("types: [closed]", lifecycle_workflow)
+        self.assertIn("complete", lifecycle_workflow)
         self.assertIn("verify_artifact(", transition_source)
         self.assertIn("structured review result is not bound to signed provenance",
                       transition_source)

@@ -49,15 +49,14 @@ def response(disposition, *, model="gpt-5.6-sol", findings=None, content=None,
 
 
 class IndependentReviewerTests(unittest.TestCase):
-    def test_r1_is_deterministic_and_does_not_invoke_paid_model(self):
+    def test_r1_has_no_model_execution_result(self):
         calls = []
-        result = OpenAIReviewerAdapter(
+        with self.assertRaisesRegex(ReviewerExecutionError, "human gate"):
+            OpenAIReviewerAdapter(
             api_key="test-key",
             transport=lambda payload, timeout: calls.append(payload),
             model_mapping=MODEL_MAPPING,
-        ).review(make_request("R1"))
-        self.assertEqual(result.actual_review_tier, "R1")
-        self.assertEqual(result.provider_name, "deterministic")
+            ).review(make_request("R1"))
         self.assertEqual(calls, [])
 
     def test_dispatch_key_is_derived_from_one_current_trusted_binding(self):

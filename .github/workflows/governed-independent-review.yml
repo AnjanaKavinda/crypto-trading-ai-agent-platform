@@ -17,12 +17,51 @@ permissions:
   issues: write
   statuses: write
 jobs:
-  produce-review-provenance:
+  classify-r1:
+    name: classify-review-tier-before-model
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'pull_request' &&
        vars.GOVERNED_PILOT_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.classify.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - name: Classify R1 before reviewer setup
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance-pr.json
+          linked="$(python - <<'PY'
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import extract_linked_issue
+          print(extract_linked_issue(json.load(open('.governance-pr.json')).get('body') or ''))
+          PY
+          )"
+          gh api "repos/${{ github.repository }}/issues/$linked" > .governance-issue.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import required_review_tier_from_labels
+          issue = json.load(open('.governance-issue.json'))
+          print("tier=" + required_review_tier_from_labels(issue.get("labels", [])))
+          PY
+  produce-review-provenance:
+    needs: classify-r1
+    if: >-
+      needs.classify-r1.outputs.tier != 'R1' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        vars.GOVERNED_PILOT_ENABLED == 'true'))
     name: produce-review-provenance
     runs-on: ubuntu-latest
     env:

@@ -160,8 +160,12 @@ head invalidates prior approval or review evidence. No tier can approve or merge
 `AnjanaKavinda` remains the only final merge authority.
 
 The repository currently requires Actions approval for Copilot-triggered workflow
-runs. The safest repeatable configuration is to keep required approval for
-external or bot-triggered workflows, use only trusted-base checkout on privileged
+runs. Configure this at **Repository Settings → Actions → General → Fork pull
+request workflows → Require approval for all outside collaborators** (and keep
+the equivalent organization policy enabled where applicable). The recommended
+setting is to require approval: it adds a deliberate operator step and can delay
+trusted automation, but prevents an untrusted fork or bot event from consuming
+privileged permissions and secrets. Use only trusted-base checkout on privileged
 events, and re-run the workflow from the trusted `dev` revision after reviewing
 the event and changed paths. PR-controlled code must never execute under
 `pull_request_target`.

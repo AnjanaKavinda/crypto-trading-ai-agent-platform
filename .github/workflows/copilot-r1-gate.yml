@@ -1,0 +1,77 @@
+name: Governed R1 human gate
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+  statuses: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.base.ref == 'dev' || github.event.pull_request_review.pull_request.base.ref == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - name: Fetch trusted current-head snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.pull_request_review.pull_request.number }}
+        run: |
+          mkdir -p .governance/r1
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance/r1/pr.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > .governance/r1/reviews.json
+          linked="$(python - <<'PY'
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import extract_linked_issue
+          print(extract_linked_issue(json.load(open('.governance/r1/pr.json')).get('body') or ''))
+          PY
+          )"
+          gh api "repos/${{ github.repository }}/issues/$linked" > .governance/r1/issue.json
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          gh api "repos/${{ github.repository }}/commits/$head/status" > .governance/r1/status.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$head/check-runs" > .governance/r1/checks.json
+      - name: Leave R1 pending before approval and on invalidation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+            -f state=pending -f context=governance-gate \
+            -f description='R1 requires current-head AnjanaKavinda approval and deterministic checks'
+      - name: Publish trusted R1 result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, '.github/scripts')
+          from r1_gate import evaluate_r1_gate
+          pr = json.load(open('.governance/r1/pr.json'))
+          reviews = json.load(open('.governance/r1/reviews.json'))
+          if reviews and isinstance(reviews[0], list):
+              reviews = [item for page in reviews for item in page]
+          issue = json.load(open('.governance/r1/issue.json'))
+          status = json.load(open('.governance/r1/status.json'))
+          checks = json.load(open('.governance/r1/checks.json'))
+          result = evaluate_r1_gate(
+              pr, reviews, issue, status, checks,
+              required_checks=[x for x in os.environ.get('REQUIRED_CHECKS', '').split(',') if x])
+          json.dump(result, open('.governance/r1/result.json', 'w'), sort_keys=True)
+          PY
+          head="$(jq -r .head_sha .governance/r1/result.json)"
+          state="$(jq -r .state .governance/r1/result.json)"
+          test "$state" = not-applicable && exit 0 || true
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+            -f state="$state" -f context=governance-gate \
+            -f description="$(jq -r .reason .governance/r1/result.json)"
