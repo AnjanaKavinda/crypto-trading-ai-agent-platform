@@ -274,6 +274,45 @@ class GovernanceTests(unittest.TestCase):
         self.assertFalse(request["approval_capability"])
         self.assertFalse(can_dispatch(request["dispatch_key"], [request["dispatch_key"]]))
 
+    def test_incomplete_dispatch_intent_does_not_suppress_retry(self):
+        key = "dispatch-key"
+        comments = [{"body": f"{orchestrate_issue.MARKER}\nDISPATCH_INTENT dispatch_key:{key}"}]
+        self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), set())
+        self.assertTrue(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_completed_assignment_suppresses_same_key_retry(self):
+        key = "dispatch-key"
+        comments = [{"body": (
+            f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED dispatch_key:{key}"
+        )}]
+        self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), {key})
+        self.assertFalse(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_assignment_requires_isolated_user_token_and_headers(self):
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.assign_copilot("o/r", "6", "prompt", "agent", "dev", "")
+
+        completed = type("Completed", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
+        with patch.object(orchestrate_issue.subprocess, "run", return_value=completed) as run:
+            orchestrate_issue.assign_copilot(
+                "o/r", "6", "prompt", "agent", "dev", "user-token")
+        command = run.call_args.args[0]
+        self.assertIn("Accept: application/vnd.github+json", command)
+        self.assertIn("X-GitHub-Api-Version: 2022-11-28", command)
+        self.assertEqual(run.call_args.kwargs["env"]["GH_TOKEN"], "user-token")
+        self.assertNotIn("GITHUB_TOKEN", run.call_args.kwargs["env"])
+
+    def test_assignment_failure_redacts_token_and_never_marks_completion(self):
+        failed = type("Completed", (), {
+            "returncode": 1, "stdout": "", "stderr": "token=user-token; forbidden"
+        })()
+        with patch.object(orchestrate_issue.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(GovernanceError, r"status 1") as raised:
+                orchestrate_issue.assign_copilot(
+                    "o/r", "6", "prompt", "agent", "dev", "user-token")
+        self.assertNotIn("user-token", str(raised.exception))
+        self.assertIn("[REDACTED]", str(raised.exception))
+
     def test_v11_routing_context_and_escalation_are_fail_closed(self):
         inputs = {
             "canonical_issue": 207, "agent_role": "Backend/Foundation",

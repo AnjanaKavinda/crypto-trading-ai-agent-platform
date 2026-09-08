@@ -19,6 +19,7 @@ jobs:
       - name: Execute governed Copilot dispatch
         env:
           GH_TOKEN: ${{ github.token }}
+          COPILOT_ASSIGNMENT_TOKEN: ${{ secrets.COPILOT_ASSIGNMENT_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GOVERNED_DISPATCH_ACTORS: ${{ vars.GOVERNED_DISPATCH_ACTORS }}

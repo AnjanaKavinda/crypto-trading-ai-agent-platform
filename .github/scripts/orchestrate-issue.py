@@ -114,8 +114,10 @@ def build_protection_snapshot(rulesets: list[dict], *, repository_settings: dict
 
 
 def assign_copilot(repository: str, issue_id: str, prompt: str, agent: str,
-                   base_branch: str = "dev") -> object:
+                   base_branch: str, assignment_token: str) -> object:
     """Use GitHub's full Copilot coding-agent assignment request."""
+    if not assignment_token.strip():
+        raise GovernanceError("Copilot assignment token is not configured")
     payload = json.dumps({
         "assignees": ["copilot-swe-agent[bot]"],
         "agent_assignment": {
@@ -125,10 +127,34 @@ def assign_copilot(repository: str, issue_id: str, prompt: str, agent: str,
             "custom_agent": agent,
         },
     })
+    assignment_env = os.environ.copy()
+    assignment_env.pop("GITHUB_TOKEN", None)
+    assignment_env.pop("GH_TOKEN", None)
+    assignment_env["GH_TOKEN"] = assignment_token
     result = subprocess.run(
         ["gh", "api", "--method", "POST", f"repos/{repository}/issues/{issue_id}/assignees",
-         "--input", "-"], input=payload, check=True, text=True, capture_output=True)
+         "-H", "Accept: application/vnd.github+json",
+         "-H", "X-GitHub-Api-Version: 2022-11-28", "--input", "-"],
+        input=payload, check=False, text=True, capture_output=True, env=assignment_env)
+    if result.returncode != 0:
+        diagnostic = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        diagnostic = diagnostic.replace(assignment_token, "[REDACTED]")
+        raise GovernanceError(
+            f"Copilot assignment failed (status {result.returncode}): {diagnostic[:500]}")
     return json.loads(result.stdout or "null")
+
+
+def completed_assignment_keys(comments: list[dict]) -> set[str]:
+    """Return only dispatches with persisted assignment completion evidence."""
+    completed: set[str] = set()
+    for comment in comments:
+        body = comment.get("body", "")
+        if MARKER not in body or "ASSIGNMENT_COMPLETED" not in body:
+            continue
+        marker = "dispatch_key:"
+        if marker in body:
+            completed.add(body.split(marker, 1)[1].split()[0])
+    return completed
 
 
 def main() -> int:
@@ -151,6 +177,9 @@ def main() -> int:
         raise GovernanceError("governed pilot issue allowlist is empty")
     if "*" not in pilot_issues and str(issue_id) not in pilot_issues:
         raise GovernanceError("issue is not on the governed pilot allowlist")
+    assignment_token = os.environ.get("COPILOT_ASSIGNMENT_TOKEN", "").strip()
+    if not assignment_token:
+        raise GovernanceError("Copilot assignment token is not configured")
     labels = [item["name"] for item in issue.get("labels", [])]
     body = issue.get("body") or ""
     current_canonical, _ = resolve_canonical_number(issue.get("body") or "")
@@ -221,12 +250,9 @@ def main() -> int:
         context_pack=context_pack,
     )
     comments = gh(f"{root}/issues/{issue_id}/comments")
-    active = [comment for comment in comments if MARKER in comment.get("body", "")
-              and "DISPATCH" in comment.get("body", "")
-              and "dispatch_key:" in comment.get("body", "")]
+    active = completed_assignment_keys(comments)
     request = create_dispatch_request(issue_input, eligibility, prompt_hash)
-    if not can_dispatch(request["dispatch_key"], [comment["body"].split("dispatch_key:", 1)[1].split()[0]
-                                                  for comment in active]):
+    if not can_dispatch(request["dispatch_key"], active):
         if "workflow:agent-running" not in labels:
             if "workflow:ready" in labels:
                 gh_delete(f"{root}/issues/{issue_id}/labels/workflow:ready")
@@ -258,7 +284,7 @@ def main() -> int:
               f"dispatch_key:{request['dispatch_key']}")
     # The Copilot coding-agent assignment endpoint is the supported dispatch boundary.
     assign_copilot(repository, issue_id, prompt, eligibility["agent"],
-                   eligibility["base_branch"])
+                   eligibility["base_branch"], assignment_token)
     append_governance_event(
         audit, "assignment",
         {**payload, "outcome": "assigned"},
