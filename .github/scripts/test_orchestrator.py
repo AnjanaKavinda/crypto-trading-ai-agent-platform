@@ -423,6 +423,38 @@ class GovernanceTests(unittest.TestCase):
                 [comment, comment], {"github-actions[bot]"}),
             {"base:correction:1"})
 
+    def test_synchronize_consumes_old_head_correction_once(self):
+        ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
+                 "new_head": "ignored", "dispatch_key": "base:correction:1"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
+                           f"{json.dumps(ready)}"}
+        record = transition_pr.correction_synchronize_evidence(
+            [comment], {"github-actions[bot]"}, 6, 237, "new")
+        self.assertEqual(record["head_sha"], "old")
+        completed = dict(ready, new_head="new")
+        completed_comment = {"user": {"login": "github-actions[bot]"},
+                             "body": f"{transition_pr.MARKER}\nCORRECTION_COMPLETED "
+                                     f"{json.dumps(completed)}"}
+        duplicate = transition_pr.correction_synchronize_evidence(
+            [comment, completed_comment], {"github-actions[bot]"}, 6, 237, "new")
+        self.assertTrue(duplicate["_already_consumed"])
+
+    def test_synchronize_rejects_same_head_untrusted_and_mismatched_correction(self):
+        same = {"issue_id": 6, "pr_id": 237, "head_sha": "new",
+                "dispatch_key": "same"}
+        wrong_pr = {"issue_id": 6, "pr_id": 999, "head_sha": "old",
+                    "dispatch_key": "wrong"}
+        comments = [
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(same)}"},
+            {"user": {"login": "untrusted"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(wrong_pr)}"},
+        ]
+        with self.assertRaises(GovernanceError):
+            transition_pr.correction_synchronize_evidence(
+                comments, {"github-actions[bot]"}, 6, 237, "new")
+
     def test_no_user_token_or_assignment_api_capability(self):
         source = (Path(__file__).with_name("orchestrate-issue.py")
                   .read_text(encoding="utf-8"))

@@ -18,7 +18,7 @@ from orchestrator import (
     resolve_dependency_github_numbers, validate_issue, verify_protections,
     extract_routing_inputs, select_capability_tier, required_review_tier,
     build_context_pack, append_governance_event, transition_escalation,
-    CAPABILITY_TIERS, REVIEW_TIERS,
+    CAPABILITY_TIERS, REVIEW_TIERS, STATES,
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
@@ -253,11 +253,15 @@ def main() -> int:
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
                   f"{json.dumps(record, sort_keys=True)}\n"
                   f"dispatch_key:{record['dispatch_key']}")
-        for state in ("workflow:ready", "workflow:human-decision-required"):
+        for state in STATES:
             if state in [item["name"] for item in issue.get("labels", [])]:
                 gh_delete(f"{root}/issues/{issue_id}/labels/{state}")
         gh_mutate(f"{root}/issues/{issue_id}/labels", "-f",
                   "labels[]=workflow:agent-running")
+        resulting = gh(f"{root}/issues/{issue_id}")
+        if len({item["name"] for item in resulting.get("labels", [])
+                if item["name"] in STATES}) != 1:
+            raise GovernanceError("assignment state mutation did not produce one workflow state")
         return 0
     catalog_path = Path(__file__).parents[2] / "docs/copilot-team/04-issues/ISSUE-CATALOG.md"
     catalog_titles = parse_catalog_titles(catalog_path.read_text(encoding="utf-8"))
