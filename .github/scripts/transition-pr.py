@@ -45,6 +45,24 @@ def current_head_findings(review_records: list[dict], reviewers: set[str],
     ]
 
 
+def correction_handoff_keys(comments: list[dict], trusted: set[str]) -> set[str]:
+    keys: set[str] = set()
+    for item in comments:
+        if (MARKER not in item.get("body", "") or
+                "CORRECTION_READY " not in item.get("body", "") or
+                item.get("user", {}).get("login") not in trusted):
+            continue
+        try:
+            line = next(line for line in item["body"].splitlines()
+                        if line.startswith("CORRECTION_READY "))
+            payload = json.loads(line.split(" ", 1)[1])
+        except (StopIteration, json.JSONDecodeError, TypeError):
+            continue
+        if payload.get("dispatch_key"):
+            keys.add(str(payload["dispatch_key"]))
+    return keys
+
+
 def verified_review_result(pr: dict, issue_id: int) -> dict | None:
     """Load structured findings only when bound by a verified signed artifact."""
     artifact_path = os.environ.get("GOVERNED_REVIEW_ARTIFACT_FILE", "")
@@ -185,13 +203,10 @@ def main() -> int:
     if len(current_states) != 1:
         return 1
     current = next(iter(current_states))
+    head_sha = pr["head"]["sha"]
     trusted_correction_actors = {controller, "github-actions[bot]"} - {""}
-    governed_corrections = [item for item in comments
-                            if MARKER in item.get("body", "")
-                            and ("CORRECTION_ATTEMPT:" in item.get("body", "")
-                                 or "CORRECTION_READY" in item.get("body", ""))
-                            and item.get("user", {}).get("login") in trusted_correction_actors]
-    corrections = len(governed_corrections)
+    correction_keys = correction_handoff_keys(comments, trusted_correction_actors)
+    corrections = len(correction_keys)
     previous_tier = dispatch_payload.get("capability_tier", "strong-coding-reasoning")
     resulting_tier = previous_tier
     review_tier = transition_review_tier(dispatch_payload)
@@ -205,7 +220,11 @@ def main() -> int:
             target = "workflow:human-decision-required"
     if current != target:
         try:
-            validate_transition(current, target)
+            if not (target == "workflow:review" and
+                    current == "workflow:human-decision-required" and
+                    any(f'"head_sha": "{head_sha}"' in item.get("body", "")
+                        for item in comments if "CORRECTION_READY" in item.get("body", ""))):
+                validate_transition(current, target)
         except GovernanceError:
             return 1
     audit_payload = {
@@ -239,8 +258,8 @@ def main() -> int:
         maximum = int(os.environ.get("CORRECTION_MAX", "3"))
         if corrections >= maximum:
             target = "workflow:blocked"
-        elif any(f"head_sha:{pr['head']['sha']}" in item.get("body", "")
-                 for item in governed_corrections):
+        elif any(f'"head_sha": "{head_sha}"' in item.get("body", "")
+                 for item in comments if "CORRECTION_READY" in item.get("body", "")):
             return 0
         else:
             for state in issue_labels & set(STATES):
@@ -268,13 +287,14 @@ def main() -> int:
                 "correction_attempt": corrections + 1, "base_branch": "dev",
                 "agent": agent, "prompt": prompt,
                 "prompt_hash": sha256(prompt.encode()).hexdigest(),
+                "reason": "awaiting-human-copilot-correction",
             }
             correction_ready["dispatch_key"] = (
                 f"{dispatch_keys[0]}:correction:{corrections + 1}")
             api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
                 f"body={MARKER}\nCORRECTION_READY "
                 f"{json.dumps(correction_ready, sort_keys=True)}\n"
-                f"dispatch_key:{dispatch_keys[0]}")
+                f"dispatch_key:{correction_ready['dispatch_key']}")
             for state in issue_labels & set(STATES):
                 if state != "workflow:human-decision-required":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")

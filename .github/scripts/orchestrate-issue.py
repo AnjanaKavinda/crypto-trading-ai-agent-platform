@@ -18,6 +18,7 @@ from orchestrator import (
     resolve_dependency_github_numbers, validate_issue, verify_protections,
     extract_routing_inputs, select_capability_tier, required_review_tier,
     build_context_pack, append_governance_event, transition_escalation,
+    CAPABILITY_TIERS, REVIEW_TIERS,
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
@@ -146,7 +147,6 @@ def parse_handoff_comments(comments: list[dict], kind: str) -> list[dict]:
             record = json.loads(line.split(" ", 1)[1])
         except (json.JSONDecodeError, IndexError):
             continue
-        record["_comment_id"] = comment.get("id")
         records.append(record)
     return records
 
@@ -168,16 +168,33 @@ def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
     if len(ready) != 1:
         raise GovernanceError("assignment handoff is missing or ambiguous")
     record = ready[0]
-    required = ("issue_id", "base_branch", "agent", "prompt_hash", "dispatch_key", "prompt")
-    if any(not record.get(key) for key in required) or record["issue_id"] != issue["number"]:
+    required = ("issue_id", "base_branch", "agent", "agent_role", "capability_tier",
+                "review_tier", "risk_classification", "context_pack_id",
+                "context_pack_version", "controller_policy_version",
+                "implementer_session_id", "routing_reason", "retry_count",
+                "prompt_hash", "dispatch_key", "prompt")
+    if any(key not in record or record[key] in (None, "") for key in required) or record["issue_id"] != issue["number"]:
         raise GovernanceError("assignment handoff is stale or mismatched")
     if sha256(record["prompt"].encode()).hexdigest() != record["prompt_hash"]:
         raise GovernanceError("assignment handoff prompt hash does not match")
     if record["base_branch"] != "dev":
         raise GovernanceError("assignment handoff is stale or has an invalid base")
+    if record["capability_tier"] not in CAPABILITY_TIERS or record["review_tier"] not in REVIEW_TIERS:
+        raise GovernanceError("assignment handoff contains an invalid routing tier")
     if record["dispatch_key"] in completed_assignment_keys(comments):
         record["_completed"] = True
     return record
+
+
+def ready_handoff_for_key(comments: list[dict], dispatch_key: str,
+                          expected: dict) -> dict | None:
+    records = parse_handoff_comments(comments, "DISPATCH_READY")
+    matching = [item for item in records if item.get("dispatch_key") == dispatch_key]
+    if len(records) > 1 or len(matching) > 1:
+        raise GovernanceError("dispatch-ready evidence is ambiguous")
+    if matching and matching[0] != expected:
+        raise GovernanceError("dispatch-ready evidence conflicts with current dispatch")
+    return matching[0] if matching else None
 
 
 def validate_assignment_controls(issue_id: str, actor: str, *,
@@ -211,24 +228,26 @@ def main() -> int:
             pilot_enabled=os.environ.get("GOVERNED_PILOT_ENABLED", ""),
             pilot_issues=pilot_issues,
             implementer_session=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""))
-        correction = parse_handoff_comments(comments, "CORRECTION_READY")
         record = validate_assignment_handoff(
             issue, comments, os.environ.get("GITHUB_ACTOR", ""),
             [event.get("assignee") or {}],
-            kind="CORRECTION_READY" if correction else "DISPATCH_READY",
-            latest_correction=bool(correction))
+            kind="DISPATCH_READY")
         if record.get("_completed"):
             return 0
         append_governance_event(
             AppendOnlyAudit(), "assignment",
             {"issue_id": int(issue_id), "correlation_id": record["dispatch_key"],
-             "agent_role": record["agent"], "capability_tier": "strong-coding-reasoning",
-             "routing_reason": "human-supervised assignment confirmation",
-             "risk_classification": "governed", "context_pack_id": "handoff",
-             "context_pack_version": "v1.1", "controller_policy_version": "v1.1",
-             "retry_count": 0, "review_tier": "R1", "outcome": "assigned",
+             "agent_role": record["agent_role"], "capability_tier": record["capability_tier"],
+             "routing_reason": record["routing_reason"],
+             "risk_classification": record["risk_classification"],
+             "context_pack_id": record["context_pack_id"],
+             "context_pack_version": record["context_pack_version"],
+             "controller_policy_version": record["controller_policy_version"],
+             "retry_count": record["retry_count"], "review_tier": record["review_tier"],
+             "outcome": "assigned",
              "timestamp": datetime.now(timezone.utc).isoformat(),
-             "commit_sha": os.environ.get("GITHUB_SHA", "unknown")},
+             "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+             "implementer_session_id": record["implementer_session_id"]},
             os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue_id}.jsonl"))
         gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
@@ -355,12 +374,16 @@ def main() -> int:
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
               f"body={MARKER}\nDISPATCH_INTENT {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}")
-    ready = {**payload, "base_branch": eligibility["base_branch"], "agent": eligibility["agent"],
-             "prompt": prompt, "outcome": "awaiting-human-copilot-assignment"}
-    gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
-              f"body={MARKER}\nDISPATCH_READY {json.dumps(ready, sort_keys=True)}\n"
-              f"dispatch_key:{request['dispatch_key']}\n\n{prompt}\n"
-              f"Include `dispatch_key:{request['dispatch_key']}` in the PR body.")
+    ready = {**payload, "issue_id": int(issue_id), "base_branch": eligibility["base_branch"],
+             "agent": eligibility["agent"], "prompt": prompt,
+             "outcome": "awaiting-human-copilot-assignment",
+             "reason": "awaiting-human-copilot-assignment"}
+    existing_ready = ready_handoff_for_key(comments, request["dispatch_key"], ready)
+    if existing_ready is None:
+        gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
+                  f"body={MARKER}\nDISPATCH_READY {json.dumps(ready, sort_keys=True)}\n"
+                  f"dispatch_key:{request['dispatch_key']}\n\n{prompt}\n"
+                  f"Include `dispatch_key:{request['dispatch_key']}` in the PR body.")
     for state in ("workflow:ready", "workflow:agent-running"):
         if state in labels:
             gh_delete(f"{root}/issues/{issue_id}/labels/{state}")

@@ -303,6 +303,11 @@ class GovernanceTests(unittest.TestCase):
 
     def test_human_assignment_handoff_requires_exact_binding(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "economical-fast",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
                   "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
                   "prompt": "bounded"}
         comments = [{"user": {"login": "github-actions[bot]"},
@@ -327,6 +332,11 @@ class GovernanceTests(unittest.TestCase):
 
     def test_human_assignment_handoff_rejects_stale_or_duplicate_ready_records(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "economical-fast",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
                   "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
                   "prompt": "bounded"}
         comment = {"user": {"login": "github-actions[bot]"},
@@ -343,6 +353,11 @@ class GovernanceTests(unittest.TestCase):
 
     def test_assignment_handoff_duplicate_completion_is_idempotent(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "economical-fast",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
                   "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
                   "prompt": "bounded"}
         comments = [{"user": {"login": "github-actions[bot]"},
@@ -354,6 +369,59 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(orchestrate_issue.validate_assignment_handoff(
             {"number": 6}, comments, "AnjanaKavinda",
             [{"login": "copilot-swe-agent[bot]"}])["_completed"])
+
+    def test_ready_handoff_reuses_exact_record_and_rejects_conflict(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "premium-strongest-available",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                           f"{json.dumps(record, sort_keys=True)}"}
+        self.assertEqual(
+            orchestrate_issue.ready_handoff_for_key([comment], "key", record), record)
+        conflicting = dict(record, prompt="different",
+                            prompt_hash=sha256(b"different").hexdigest())
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.ready_handoff_for_key(
+                [comment, {"user": {"login": "github-actions[bot]"},
+                           "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                                   f"{json.dumps(conflicting, sort_keys=True)}"}],
+                "key", record)
+
+    def test_r3_handoff_preserves_provenance(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "premium-strongest-available",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack-r3", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "high-risk route", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "r3-key",
+                  "prompt": "bounded"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                           f"{json.dumps(record, sort_keys=True)}"}
+        result = orchestrate_issue.validate_assignment_handoff(
+            {"number": 6}, [comment], "AnjanaKavinda",
+            [{"login": "copilot-swe-agent[bot]"}])
+        self.assertEqual({result["capability_tier"], result["review_tier"],
+                          result["context_pack_id"]},
+                         {"premium-strongest-available", "R3", "pack-r3"})
+
+    def test_correction_handoff_keys_are_unique_and_bound(self):
+        payload = {"issue_id": 6, "pr_id": 237, "head_sha": "head",
+                   "dispatch_key": "base:correction:1", "correction_attempt": 1}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nCORRECTION_READY "
+                           f"{json.dumps(payload)}"}
+        self.assertEqual(
+            transition_pr.correction_handoff_keys(
+                [comment, comment], {"github-actions[bot]"}),
+            {"base:correction:1"})
 
     def test_no_user_token_or_assignment_api_capability(self):
         source = (Path(__file__).with_name("orchestrate-issue.py")
