@@ -562,8 +562,8 @@ class GovernanceTests(unittest.TestCase):
     def test_v11_promotion_workflow_has_registered_name_and_dispatch_trigger(self):
         promotion = (Path(__file__).parents[1] / "workflows" /
                      "promote-dev-to-main.yml").read_text(encoding="utf-8")
-        self.assertTrue(promotion.startswith(
-            "name: Governed dev to main promotion\\n\\non:\\n  workflow_dispatch:"))
+        self.assertTrue(promotion.startswith("name: Governed dev to main promotion\n"))
+        self.assertIn("\non:\n  workflow_dispatch:\n", promotion)
         self.assertIn("id: create-pr", promotion)
         self.assertIn("Request and verify mandatory human reviewer", promotion)
 
