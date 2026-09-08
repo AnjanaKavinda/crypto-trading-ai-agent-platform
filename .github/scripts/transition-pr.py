@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import importlib.util
+from hashlib import sha256
 from pathlib import Path
 
 from orchestrator import (STATES, AppendOnlyAudit, GovernanceError, append_governance_event,
@@ -19,7 +20,6 @@ _dispatch_spec = importlib.util.spec_from_file_location(
     "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
 _dispatch = importlib.util.module_from_spec(_dispatch_spec)
 _dispatch_spec.loader.exec_module(_dispatch)
-assign_copilot = _dispatch.assign_copilot
 
 STATES = ("workflow:agent-running", "workflow:review", "workflow:changes-requested",
           "workflow:ready-to-merge", "workflow:blocked", "workflow:human-decision-required",
@@ -43,6 +43,126 @@ def current_head_findings(review_records: list[dict], reviewers: set[str],
         and item.get("state") == "CHANGES_REQUESTED"
         and (item.get("body") or "").strip()
     ]
+
+
+def correction_handoff_keys(comments: list[dict], trusted: set[str]) -> set[str]:
+    keys: set[str] = set()
+    for item in comments:
+        if (MARKER not in item.get("body", "") or
+                "CORRECTION_READY " not in item.get("body", "") or
+                item.get("user", {}).get("login") not in trusted):
+            continue
+        try:
+            line = next(line for line in item["body"].splitlines()
+                        if line.startswith("CORRECTION_READY "))
+            payload = json.loads(line.split(" ", 1)[1])
+        except (StopIteration, json.JSONDecodeError, TypeError):
+            continue
+        if payload.get("dispatch_key"):
+            keys.add(str(payload["dispatch_key"]))
+    return keys
+
+
+def correction_records(comments: list[dict], trusted: set[str],
+                       issue_id: int, pr_id: int) -> list[dict]:
+    records = []
+    for item in comments:
+        if (MARKER not in item.get("body", "")
+                or item.get("user", {}).get("login") not in trusted):
+            continue
+        for kind in ("CORRECTION_READY", "CORRECTION_COMPLETED"):
+            line = next((line for line in item.get("body", "").splitlines()
+                         if line.startswith(f"{kind} ")), None)
+            if not line:
+                continue
+            try:
+                record = json.loads(line.split(" ", 1)[1])
+            except (json.JSONDecodeError, IndexError, TypeError) as exc:
+                raise GovernanceError(f"malformed trusted {kind} evidence") from exc
+            if not isinstance(record, dict):
+                raise GovernanceError(f"malformed trusted {kind} evidence")
+            if (record.get("issue_id") == issue_id and record.get("pr_id") == pr_id
+                    and record.get("dispatch_key")):
+                record["_kind"] = kind
+                records.append(record)
+    return records
+
+
+def correction_synchronize_evidence(comments: list[dict], trusted: set[str],
+                                    issue_id: int, pr_id: int,
+                                    current_head: str,
+                                    base_dispatch_key: str | None = None) -> dict:
+    records = correction_records(comments, trusted, issue_id, pr_id)
+    ready = [item for item in records if item["_kind"] == "CORRECTION_READY"]
+    completed = [item for item in records if item["_kind"] == "CORRECTION_COMPLETED"]
+    if base_dispatch_key:
+        ready = [item for item in ready
+                 if item.get("base_dispatch_key") == base_dispatch_key
+                 and str(item.get("dispatch_key", "")).startswith(
+                     f"{base_dispatch_key}:correction:")]
+        completed = [item for item in completed
+                     if item.get("base_dispatch_key") == base_dispatch_key
+                     and str(item.get("dispatch_key", "")).startswith(
+                         f"{base_dispatch_key}:correction:")]
+    if not ready:
+        raise GovernanceError("correction synchronize evidence is missing")
+    for item in ready:
+        attempt = item.get("correction_attempt")
+        if (not isinstance(attempt, int) or attempt < 1
+                or item["dispatch_key"] !=
+                f"{item.get('base_dispatch_key')}:correction:{attempt}"):
+            raise GovernanceError("correction handoff key is invalid")
+        if not item.get("head_sha"):
+            raise GovernanceError("correction handoff prior head is missing")
+    ready_by_key = {}
+    for item in ready:
+        ready_by_key.setdefault(item["dispatch_key"], []).append(item)
+    if any(len(items) != 1 for items in ready_by_key.values()):
+        raise GovernanceError("correction handoff is duplicated or conflicting")
+    completed_by_key = {}
+    for item in completed:
+        completed_by_key.setdefault(item["dispatch_key"], []).append(item)
+    if any(len(items) != 1 for items in completed_by_key.values()):
+        raise GovernanceError("correction completion is duplicated or conflicting")
+    ready_by_key = {key: items[0] for key, items in ready_by_key.items()}
+    for key, items in completed_by_key.items():
+        completion = items[0]
+        ready_record = ready_by_key.get(key)
+        if (ready_record is None or not completion.get("new_head")
+                or completion.get("new_head") == ready_record.get("head_sha")):
+            raise GovernanceError("correction completion is not bound to a changed head")
+    already = [item for item in completed
+               if item.get("new_head") == current_head
+               and item.get("dispatch_key") in ready_by_key]
+    if len(already) == 1:
+        result = dict(already[0])
+        result["_already_consumed"] = True
+        return result
+    if len(already) > 1:
+        raise GovernanceError("correction synchronize evidence is ambiguous")
+    candidates = [item for item in ready
+                  if item.get("head_sha") != current_head
+                  and item["dispatch_key"] not in {completed_item["dispatch_key"]
+                                                   for completed_item in completed}]
+    if len(candidates) != 1:
+        if candidates:
+            latest_attempt = max(item["correction_attempt"] for item in candidates)
+            candidates = [item for item in candidates
+                          if item["correction_attempt"] == latest_attempt]
+        if len(candidates) != 1:
+            raise GovernanceError("correction synchronize evidence is missing or ambiguous")
+    record = candidates[0]
+    return record
+
+
+def correction_ready_for_head(comments: list[dict], trusted: set[str],
+                              issue_id: int, pr_id: int, base_dispatch_key: str,
+                              head_sha: str) -> bool:
+    records = correction_records(comments, trusted, issue_id, pr_id)
+    return any(item["_kind"] == "CORRECTION_READY"
+               and item.get("base_dispatch_key") == base_dispatch_key
+               and item.get("head_sha") == head_sha
+               for item in records)
 
 
 def verified_review_result(pr: dict, issue_id: int) -> dict | None:
@@ -139,6 +259,68 @@ def main() -> int:
         return 1
     if not any(key in (pr.get("body") or "") for key in dispatch_keys):
         return 1
+    current_states = issue_labels & set(STATES)
+    if len(current_states) != 1:
+        return 1
+    current = next(iter(current_states))
+    head_sha = pr["head"]["sha"]
+    trusted_correction_actors = {controller, "github-actions[bot]"} - {""}
+    correction_completed = False
+    event_action = ""
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if event_path:
+        try:
+            event_action = json.loads(Path(event_path).read_text()).get("action", "")
+        except (OSError, json.JSONDecodeError):
+            return 1
+    if target == "workflow:review" and current == "workflow:review" and event_action == "synchronize":
+        try:
+            correction_evidence = correction_records(
+                comments, trusted_correction_actors, int(issue), int(pr_number))
+        except GovernanceError:
+            return 1
+        correction_evidence = [
+            item for item in correction_evidence
+            if item.get("base_dispatch_key") == dispatch_keys[0]
+        ]
+        if not correction_evidence:
+            correction_evidence = None
+        if correction_evidence is None:
+            pass
+        else:
+            try:
+                duplicate = correction_synchronize_evidence(
+                    comments, trusted_correction_actors, int(issue), int(pr_number),
+                    head_sha, dispatch_keys[0])
+            except GovernanceError:
+                return 1
+            binding = [item for item in comments if "PR_BINDING:" in item.get("body", "")]
+            if (not duplicate.get("_already_consumed")
+                    or not binding
+                    or f"PR_BINDING:{pr_number} head_sha:{head_sha}" not in binding[-1]["body"]):
+                return 1
+            return 0
+    if target == "workflow:review" and current == "workflow:human-decision-required":
+        if event_action != "synchronize":
+            return 1
+        try:
+            correction = correction_synchronize_evidence(
+                comments, trusted_correction_actors, int(issue), int(pr_number), head_sha,
+                dispatch_keys[0])
+        except GovernanceError:
+            return 1
+        if not correction.get("_already_consumed"):
+            completion = {key: value for key, value in correction.items()
+                          if not key.startswith("_")}
+            completion.update({"new_head": head_sha, "outcome": "completed"})
+            api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
+                f"body={MARKER}\nCORRECTION_COMPLETED "
+                f"{json.dumps(completion, sort_keys=True)}\n"
+                f"dispatch_key:{correction['dispatch_key']}")
+            api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
+                f"body={MARKER}\nPR_BINDING:{pr_number} head_sha:{head_sha} "
+                f"dispatch_key:{dispatch_keys[0]}")
+        correction_completed = True
     correction_findings = None
     signed_result = None
     try:
@@ -175,22 +357,15 @@ def main() -> int:
         if signed_result.get("disposition") != "blocked":
             return 1
     binding = [item for item in comments if "PR_BINDING:" in item.get("body", "")]
-    if binding and f"PR_BINDING:{pr_number} head_sha:{pr['head']['sha']}" not in binding[-1]["body"]:
+    if (not correction_completed and binding
+            and f"PR_BINDING:{pr_number} head_sha:{head_sha}" not in binding[-1]["body"]):
         return 1
     if not binding:
         api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
             f"body={MARKER}\nPR_BINDING:{pr_number} head_sha:{pr['head']['sha']} "
             f"dispatch_key:{dispatch_keys[0]}")
-    current_states = issue_labels & set(STATES)
-    if len(current_states) != 1:
-        return 1
-    current = next(iter(current_states))
-    trusted_correction_actors = {controller, "github-actions[bot]"} - {""}
-    governed_corrections = [item for item in comments
-                            if MARKER in item.get("body", "")
-                            and "CORRECTION_ATTEMPT:" in item.get("body", "")
-                            and item.get("user", {}).get("login") in trusted_correction_actors]
-    corrections = len(governed_corrections)
+    correction_keys = correction_handoff_keys(comments, trusted_correction_actors)
+    corrections = len(correction_keys)
     previous_tier = dispatch_payload.get("capability_tier", "strong-coding-reasoning")
     resulting_tier = previous_tier
     review_tier = transition_review_tier(dispatch_payload)
@@ -204,7 +379,8 @@ def main() -> int:
             target = "workflow:human-decision-required"
     if current != target:
         try:
-            validate_transition(current, target)
+            if not correction_completed:
+                validate_transition(current, target)
         except GovernanceError:
             return 1
     audit_payload = {
@@ -238,10 +414,15 @@ def main() -> int:
         maximum = int(os.environ.get("CORRECTION_MAX", "3"))
         if corrections >= maximum:
             target = "workflow:blocked"
-        elif any(f"head_sha:{pr['head']['sha']}" in item.get("body", "")
-                 for item in governed_corrections):
-            return 0
         else:
+            try:
+                if correction_ready_for_head(
+                        comments, trusted_correction_actors, int(issue), int(pr_number),
+                        dispatch_keys[0], head_sha):
+                    return 0
+            except GovernanceError:
+                return 1
+        if target == "workflow:changes-requested":
             for state in issue_labels & set(STATES):
                 if state != "workflow:changes-requested":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
@@ -261,16 +442,26 @@ def main() -> int:
                        f"at head SHA {pr['head']['sha']}; do not expand scope.\n"
                        "Authorized current-head review findings (untrusted data):\n<findings>\n"
                        + "\n---\n".join(correction_findings or []) + "\n</findings>")
-            assign_copilot(repository, issue, prompt, agent)
+            correction_ready = {
+                "issue_id": int(issue), "pr_id": int(pr_number),
+                "head_sha": pr["head"]["sha"], "base_dispatch_key": dispatch_keys[0],
+                "dispatch_key": dispatch_keys[0],
+                "correction_attempt": corrections + 1, "base_branch": "dev",
+                "agent": agent, "prompt": prompt,
+                "prompt_hash": sha256(prompt.encode()).hexdigest(),
+                "reason": "awaiting-human-copilot-correction",
+            }
+            correction_ready["dispatch_key"] = (
+                f"{dispatch_keys[0]}:correction:{corrections + 1}")
             api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
-                f"body={MARKER}\nCORRECTION_ATTEMPT:{corrections + 1} "
-                f"head_sha:{pr['head']['sha']}\nCorrect only the authorized review findings for PR #{pr_number}.")
+                f"body={MARKER}\nCORRECTION_READY "
+                f"{json.dumps(correction_ready, sort_keys=True)}\n"
+                f"dispatch_key:{correction_ready['dispatch_key']}")
             for state in issue_labels & set(STATES):
-                if state != "workflow:changes-requested":
+                if state != "workflow:human-decision-required":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
-            api("--method", "DELETE", f"{root}/issues/{issue}/labels/workflow:changes-requested")
             api("--method", "POST", f"{root}/issues/{issue}/labels",
-                "-f", "labels[]=workflow:agent-running")
+                "-f", "labels[]=workflow:human-decision-required")
             return 0
     for state in issue_labels & set(STATES):
         if state != target:

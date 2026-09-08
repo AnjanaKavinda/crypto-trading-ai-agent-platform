@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+from hashlib import sha256
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -273,6 +274,370 @@ class GovernanceTests(unittest.TestCase):
         self.assertFalse(request["merge_capability"])
         self.assertFalse(request["approval_capability"])
         self.assertFalse(can_dispatch(request["dispatch_key"], [request["dispatch_key"]]))
+
+    def test_incomplete_dispatch_intent_does_not_suppress_retry(self):
+        key = "dispatch-key"
+        comments = [{"body": f"{orchestrate_issue.MARKER}\nDISPATCH_INTENT dispatch_key:{key}"}]
+        self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), set())
+        self.assertTrue(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_completed_assignment_suppresses_same_key_retry(self):
+        key = "dispatch-key"
+        comments = [{"user": {"login": "github-actions[bot]"},
+                    "body": (
+                        f"{orchestrate_issue.MARKER}\n"
+                        f"ASSIGNMENT_COMPLETED dispatch_key:{key}"
+                    )}]
+        self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), {key})
+        self.assertFalse(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_untrusted_completion_comment_does_not_suppress_retry(self):
+        key = "dispatch-key"
+        comments = [{"user": {"login": "untrusted-user"},
+                     "body": (
+                         f"{orchestrate_issue.MARKER}\n"
+                         f"ASSIGNMENT_COMPLETED dispatch_key:{key}"
+                     )}]
+        self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), set())
+        self.assertTrue(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_human_assignment_handoff_requires_exact_binding(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "economical-fast",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comments = [{"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                             f"{json.dumps(record)}"}]
+        issue = {"number": 6}
+        self.assertEqual(
+            orchestrate_issue.validate_assignment_handoff(
+                issue, comments, "AnjanaKavinda",
+                [{"login": "copilot-swe-agent[bot]"}])["dispatch_key"], "key")
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                issue, comments, "other",
+                [{"login": "copilot-swe-agent[bot]"}])
+        orchestrate_issue.validate_assignment_controls(
+            "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
+            pilot_enabled="true", pilot_issues={"6"}, implementer_session="session")
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_controls(
+                "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
+                pilot_enabled="false", pilot_issues={"6"}, implementer_session="session")
+
+    def test_human_assignment_handoff_rejects_stale_or_duplicate_ready_records(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "economical-fast",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                           f"{json.dumps(record)}"}
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                {"number": 7}, [comment], "AnjanaKavinda",
+                [{"login": "copilot-swe-agent[bot]"}])
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                {"number": 6}, [comment, comment], "AnjanaKavinda",
+                [{"login": "copilot-swe-agent[bot]"}])
+
+    def test_assignment_handoff_duplicate_completion_is_idempotent(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "economical-fast",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comments = [{"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                             f"{json.dumps(record)}"},
+                    {"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+                             f"{json.dumps(record)}\ndispatch_key:key"}]
+        self.assertTrue(orchestrate_issue.validate_assignment_handoff(
+            {"number": 6}, comments, "AnjanaKavinda",
+            [{"login": "copilot-swe-agent[bot]"}])["_completed"])
+
+    def test_ready_handoff_reuses_exact_record_and_rejects_conflict(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "premium-strongest-available",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "test", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                           f"{json.dumps(record, sort_keys=True)}"}
+        self.assertEqual(
+            orchestrate_issue.ready_handoff_for_key([comment], "key", record), record)
+        conflicting = dict(record, prompt="different",
+                            prompt_hash=sha256(b"different").hexdigest())
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.ready_handoff_for_key(
+                [comment, {"user": {"login": "github-actions[bot]"},
+                           "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                                   f"{json.dumps(conflicting, sort_keys=True)}"}],
+                "key", record)
+
+    def test_r3_handoff_preserves_provenance(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "agent_role": "Platform Architect", "capability_tier": "premium-strongest-available",
+                  "review_tier": "R3", "risk_classification": "high",
+                  "context_pack_id": "pack-r3", "context_pack_version": "v1.1",
+                  "controller_policy_version": "v1.1", "implementer_session_id": "session",
+                  "routing_reason": "high-risk route", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "r3-key",
+                  "prompt": "bounded"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                           f"{json.dumps(record, sort_keys=True)}"}
+        result = orchestrate_issue.validate_assignment_handoff(
+            {"number": 6}, [comment], "AnjanaKavinda",
+            [{"login": "copilot-swe-agent[bot]"}])
+        self.assertEqual({result["capability_tier"], result["review_tier"],
+                          result["context_pack_id"]},
+                         {"premium-strongest-available", "R3", "pack-r3"})
+
+    def test_correction_handoff_keys_are_unique_and_bound(self):
+        payload = {"issue_id": 6, "pr_id": 237, "head_sha": "head",
+                   "dispatch_key": "base:correction:1", "correction_attempt": 1}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nCORRECTION_READY "
+                           f"{json.dumps(payload)}"}
+        self.assertEqual(
+            transition_pr.correction_handoff_keys(
+                [comment, comment], {"github-actions[bot]"}),
+            {"base:correction:1"})
+
+    def test_synchronize_consumes_old_head_correction_once(self):
+        ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
+                 "new_head": "ignored", "base_dispatch_key": "base",
+                 "dispatch_key": "base:correction:1", "correction_attempt": 1}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
+                           f"{json.dumps(ready)}"}
+        record = transition_pr.correction_synchronize_evidence(
+            [comment], {"github-actions[bot]"}, 6, 237, "new")
+        self.assertEqual(record["head_sha"], "old")
+        completed = dict(ready, new_head="new")
+        completed_comment = {"user": {"login": "github-actions[bot]"},
+                             "body": f"{transition_pr.MARKER}\nCORRECTION_COMPLETED "
+                                     f"{json.dumps(completed)}"}
+        duplicate = transition_pr.correction_synchronize_evidence(
+            [comment, completed_comment], {"github-actions[bot]"}, 6, 237, "new")
+        self.assertTrue(duplicate["_already_consumed"])
+
+    def test_synchronize_rejects_same_head_untrusted_and_mismatched_correction(self):
+        same = {"issue_id": 6, "pr_id": 237, "head_sha": "new",
+                "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                "correction_attempt": 1}
+        wrong_pr = {"issue_id": 6, "pr_id": 999, "head_sha": "old",
+                    "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                    "correction_attempt": 1}
+        comments = [
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(same)}"},
+            {"user": {"login": "untrusted"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(wrong_pr)}"},
+        ]
+        with self.assertRaises(GovernanceError):
+            transition_pr.correction_synchronize_evidence(
+                comments, {"github-actions[bot]"}, 6, 237, "new")
+
+    def test_synchronize_rejects_malformed_and_conflicting_completion(self):
+        ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
+                 "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                 "correction_attempt": 1}
+        malformed = {"user": {"login": "github-actions[bot]"},
+                     "body": f"{transition_pr.MARKER}\nCORRECTION_READY {{bad json}}"}
+        with self.assertRaises(GovernanceError):
+            transition_pr.correction_synchronize_evidence(
+                [malformed], {"github-actions[bot]"}, 6, 237, "new", "base")
+        ready_comment = {"user": {"login": "github-actions[bot]"},
+                         "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
+                                 f"{json.dumps(ready)}"}
+        completion = dict(ready, new_head="other")
+        completion_comment = {"user": {"login": "github-actions[bot]"},
+                              "body": f"{transition_pr.MARKER}\nCORRECTION_COMPLETED "
+                                      f"{json.dumps(completion)}"}
+        with self.assertRaises(GovernanceError):
+            transition_pr.correction_synchronize_evidence(
+                [ready_comment, completion_comment], {"github-actions[bot]"},
+                6, 237, "new", "base")
+
+    def test_transition_main_completes_correction_and_duplicate_sync_is_noop(self):
+        dispatch = {"dispatch_key": "base", "review_tier": "R1",
+                    "capability_tier": "economical-fast"}
+        ready = {"issue_id": 6, "pr_id": 237, "head_sha": "old",
+                 "base_dispatch_key": "base", "dispatch_key": "base:correction:1",
+                 "correction_attempt": 1, "base_branch": "dev", "agent": "Platform Architect",
+                 "prompt": "bounded", "prompt_hash": sha256(b"bounded").hexdigest()}
+        comments = [
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nDISPATCH {json.dumps(dispatch)}\n"
+                     "dispatch_key:base"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(ready)}\n"
+                     "dispatch_key:base:correction:1"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nPR_BINDING:237 head_sha:old "
+                     "dispatch_key:base"},
+        ]
+        issue = {"state": "open", "labels": [{"name": "workflow:human-decision-required"}]}
+        pr = {"number": 237, "body": "Fixes #6 base", "merged": False,
+              "user": {"login": "Copilot"}, "head": {"sha": "new"}}
+        mutations = []
+
+        def fake_api(*args):
+            path = next((item for item in args if isinstance(item, str)
+                         and item.startswith("repos/")), "")
+            if args[:2] == ("--method", "POST"):
+                mutations.append(args)
+                if "/comments" in path:
+                    body = args[-1].split("body=", 1)[1]
+                    comments.append({"user": {"login": "github-actions[bot]"},
+                                      "body": body})
+                elif "/labels" in path:
+                    issue["labels"] = [{"name": "workflow:review"}]
+                return {}
+            if args[:2] == ("--method", "DELETE"):
+                issue["labels"] = []
+                return {}
+            if path.endswith("/pulls/237"):
+                return pr
+            if path.endswith("/issues/6/comments"):
+                return comments
+            if path.endswith("/issues/6"):
+                return issue
+            raise AssertionError(args)
+
+        with tempfile.NamedTemporaryFile("w", delete=False) as event:
+            json.dump({"action": "synchronize"}, event)
+            event_path = event.name
+        audit_file = tempfile.NamedTemporaryFile(delete=False)
+        audit_path = audit_file.name
+        audit_file.close()
+        env = {
+            "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "237",
+            "TARGET_STATE": "workflow:review", "GITHUB_EVENT_PATH": event_path,
+            "GOVERNED_PR_AUTHORS": "Copilot", "GOVERNED_CONTROLLER": "AnjanaKavinda",
+            "GOVERNED_AUDIT_PATH": audit_path,
+        }
+        with patch.dict(os.environ, env, clear=False), patch.object(
+                transition_pr, "api", side_effect=fake_api), patch.object(
+                transition_pr, "append_governance_event"):
+            self.assertEqual(transition_pr.main(), 0)
+            first_mutation_count = len(mutations)
+            self.assertEqual(transition_pr.main(), 0)
+        self.assertEqual(len(mutations), first_mutation_count)
+        self.assertTrue(any("CORRECTION_COMPLETED" in str(item) for item in mutations))
+        self.assertIn("head_sha:new", comments[-1]["body"])
+        self.assertEqual({label["name"] for label in issue["labels"]}, {"workflow:review"})
+        os.unlink(event_path)
+        os.unlink(audit_path)
+
+    def test_transition_main_completes_two_correction_cycles(self):
+        dispatch = {"dispatch_key": "base", "review_tier": "R1",
+                    "capability_tier": "economical-fast"}
+        def ready(head, attempt):
+            return {
+                "issue_id": 6, "pr_id": 237, "head_sha": head,
+                "base_dispatch_key": "base", "dispatch_key": f"base:correction:{attempt}",
+                "correction_attempt": attempt, "base_branch": "dev",
+                "agent": "Platform Architect", "prompt": "bounded",
+                "prompt_hash": sha256(b"bounded").hexdigest(),
+            }
+        first = ready("h1", 1)
+        comments = [
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nDISPATCH {json.dumps(dispatch)}\n"
+                     "dispatch_key:base"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(first)}\n"
+                     "dispatch_key:base:correction:1"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nPR_BINDING:237 head_sha:h1 "
+                     "dispatch_key:base"},
+        ]
+        issue = {"state": "open", "labels": [{"name": "workflow:human-decision-required"}]}
+        pr = {"number": 237, "body": "Fixes #6 base", "merged": False,
+              "user": {"login": "Copilot"}, "head": {"sha": "h2"}}
+        mutations = []
+
+        def fake_api(*args):
+            path = next((item for item in args if isinstance(item, str)
+                         and item.startswith("repos/")), "")
+            if args[:2] == ("--method", "POST"):
+                mutations.append(args)
+                if "/comments" in path:
+                    comments.append({"user": {"login": "github-actions[bot]"},
+                                      "body": args[-1].split("body=", 1)[1]})
+                elif "/labels" in path:
+                    issue["labels"] = [{"name": "workflow:review"}]
+                return {}
+            if args[:2] == ("--method", "DELETE"):
+                issue["labels"] = []
+                return {}
+            if path.endswith("/pulls/237"):
+                return pr
+            if path.endswith("/issues/6/comments"):
+                return comments
+            if path.endswith("/issues/6"):
+                return issue
+            raise AssertionError(args)
+
+        event_file = tempfile.NamedTemporaryFile("w", delete=False)
+        json.dump({"action": "synchronize"}, event_file)
+        event_file.close()
+        audit_file = tempfile.NamedTemporaryFile(delete=False)
+        audit_file.close()
+        env = {
+            "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "237",
+            "TARGET_STATE": "workflow:review", "GITHUB_EVENT_PATH": event_file.name,
+            "GOVERNED_PR_AUTHORS": "Copilot", "GOVERNED_CONTROLLER": "AnjanaKavinda",
+            "GOVERNED_AUDIT_PATH": audit_file.name,
+        }
+        with patch.dict(os.environ, env, clear=False), patch.object(
+                transition_pr, "api", side_effect=fake_api), patch.object(
+                transition_pr, "append_governance_event"):
+            self.assertEqual(transition_pr.main(), 0)
+            issue["labels"] = [{"name": "workflow:human-decision-required"}]
+            second = ready("h2", 2)
+            comments.append({"user": {"login": "github-actions[bot]"},
+                             "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
+                                     f"{json.dumps(second)}\ndispatch_key:base:correction:2"})
+            pr["head"]["sha"] = "h3"
+            self.assertEqual(transition_pr.main(), 0)
+            mutation_count = len(mutations)
+            self.assertEqual(transition_pr.main(), 0)
+        completed = [item for item in comments if "CORRECTION_COMPLETED" in item["body"]]
+        self.assertEqual(len(completed), 2)
+        self.assertEqual(len(mutations), mutation_count)
+        self.assertEqual({label["name"] for label in issue["labels"]}, {"workflow:review"})
+        os.unlink(event_file.name)
+        os.unlink(audit_file.name)
+
+    def test_no_user_token_or_assignment_api_capability(self):
+        source = (Path(__file__).with_name("orchestrate-issue.py")
+                  .read_text(encoding="utf-8"))
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
+        self.assertNotIn("COPILOT_ASSIGNMENT_TOKEN", source + workflow)
+        self.assertNotIn("issues/{issue_id}/assignees", source)
 
     def test_v11_routing_context_and_escalation_are_fail_closed(self):
         inputs = {
@@ -632,6 +997,10 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("trusted_correction_actors", transition_source)
         self.assertIn('GOVERNED_PILOT_ENABLED', transition_source)
         self.assertIn('GOVERNED_PILOT_ISSUES', transition_source)
+        self.assertIn("CORRECTION_READY", transition_source)
+        self.assertNotIn("COPILOT_ASSIGNMENT_TOKEN", transition_source)
+        self.assertIn("DISPATCH_READY", issue_source)
+        self.assertIn("types: [assigned, labeled, reopened]", issue_workflow)
         self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_script)
         self.assertIn('$requiredStatusChecks += @{ context = $FinalGovernanceCheck }',
                       ruleset_script)
