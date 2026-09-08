@@ -559,6 +559,14 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.base.ref == 'dev'", pr_workflow)
         self.assertNotIn("pull-requests: write\n\njobs:", promotion)
 
+    def test_v11_promotion_workflow_has_registered_name_and_dispatch_trigger(self):
+        promotion = (Path(__file__).parents[1] / "workflows" /
+                     "promote-dev-to-main.yml").read_text(encoding="utf-8")
+        self.assertTrue(promotion.startswith("name: Governed dev to main promotion\n"))
+        self.assertIn("\non:\n  workflow_dispatch:\n", promotion)
+        self.assertIn("id: create-pr", promotion)
+        self.assertIn("Request and verify mandatory human reviewer", promotion)
+
     def test_v11_human_owner_is_mandatory_reviewer_not_pr_author(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "copilot-pr-governance.yml").read_text(encoding="utf-8")
