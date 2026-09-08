@@ -15,6 +15,11 @@ spec = importlib.util.spec_from_file_location(
 pr_governance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr_governance)
 
+orchestrate_spec = importlib.util.spec_from_file_location(
+    "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
+orchestrate_issue = importlib.util.module_from_spec(orchestrate_spec)
+orchestrate_spec.loader.exec_module(orchestrate_issue)
+
 transition_spec = importlib.util.spec_from_file_location(
     "transition_pr", Path(__file__).with_name("transition-pr.py"))
 transition_pr = importlib.util.module_from_spec(transition_spec)
@@ -70,6 +75,58 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError): resolve_base_branch("develop")
         validate_transition("workflow:ready", "workflow:agent-running")
         with self.assertRaises(GovernanceError): validate_transition("workflow:complete", "workflow:ready")
+    def test_ruleset_collection_is_hydrated_before_branch_matching(self):
+        summary = [
+            {"id": 101, "name": "protect-dev", "enforcement": "active"},
+            {"id": 202, "name": "protect-main", "enforcement": "active"},
+        ]
+        details = {
+            101: {
+                "id": 101,
+                "name": "protect-dev",
+                "enforcement": "active",
+                "conditions": {"ref_name": {"include": ["refs/heads/dev"]}},
+                "rules": [
+                    {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+                    {"type": "required_status_checks", "parameters": {
+                        "required_status_checks": [{"context": "governance-ci"}, {"context": "governance-gate"}]
+                    }},
+                    {"type": "deletion"},
+                    {"type": "non_fast_forward"},
+                ],
+            },
+            202: {
+                "id": 202,
+                "name": "protect-main",
+                "enforcement": "active",
+                "conditions": {"ref_name": {"include": ["refs/heads/main"]}},
+                "rules": [
+                    {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+                    {"type": "required_status_checks", "parameters": {
+                        "required_status_checks": [{"context": "governance-ci"}]
+                    }},
+                    {"type": "deletion"},
+                    {"type": "non_fast_forward"},
+                ],
+            },
+        }
+
+        def fake_fetcher(path):
+            if path == "repos/o/r/rulesets":
+                return summary
+            return details[int(path.rsplit("/", 1)[1])]
+
+        hydrated = orchestrate_issue.hydrate_rulesets("o/r", summary, fetcher=fake_fetcher)
+        self.assertEqual([item["id"] for item in hydrated], [101, 202])
+        protection = orchestrate_issue.build_protection_snapshot(hydrated, repository_settings={"allow_auto_merge": False})
+        self.assertTrue(protection["dev"]["verified"])
+        self.assertTrue(protection["main"]["verified"])
+        self.assertEqual(protection["dev"]["required_checks"], ["governance-ci", "governance-gate"])
+        self.assertEqual(protection["main"]["required_checks"], ["governance-ci"])
+        self.assertEqual(protection["dev"]["required_reviews"], 1)
+        self.assertEqual(protection["dev"]["bypass_actors"], [])
+        self.assertEqual(protection["dev"]["missing_rules"], [])
+
     def test_reviews_retries_secrets_and_protection(self):
         self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"old","user":"reviewer"}, "new", author="bot", controller="controller", authorized_reviewers=["reviewer"]))
         self.assertFalse(review_is_current({"state":"APPROVED","commit_id":"new","independent":True}, "new", author="bot", controller="controller", authorized_reviewers=["reviewer"]))
