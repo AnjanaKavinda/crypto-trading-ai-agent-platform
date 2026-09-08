@@ -552,8 +552,7 @@ def verify_protections(result: Mapping[str, Any]) -> None:
        result.get(branch, {}).get("enforcement") != "active" or
        not expected_checks[branch].issubset(set(
            result.get(branch, {}).get("required_checks") or ())) or
-           (result.get(branch, {}).get("required_reviews", 0) !=
-            (1 if branch == "main" else 0)) or
+           result.get(branch, {}).get("required_reviews", 0) != 1 or
            result.get(branch, {}).get("bypass_actors") or
            result.get(branch, {}).get("auto_merge") or
            result.get(branch, {}).get("merge_queue") or
