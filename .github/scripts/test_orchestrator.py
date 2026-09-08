@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+from hashlib import sha256
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -300,116 +301,60 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(orchestrate_issue.completed_assignment_keys(comments), set())
         self.assertTrue(can_dispatch(key, orchestrate_issue.completed_assignment_keys(comments)))
 
-    def test_assignment_reconciliation_recovers_without_second_assignment(self):
-        calls = []
+    def test_human_assignment_handoff_requires_exact_binding(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comments = [{"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                             f"{json.dumps(record)}"}]
+        issue = {"number": 6}
         self.assertEqual(
-            orchestrate_issue.reconcile_assignment(
-                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
-                assigner=lambda *args: calls.append(args),
-                fetcher=lambda path: {"assignees": [{"login": "copilot-swe-agent[bot]"}]}),
-            "recovered")
-        self.assertEqual(calls, [])
-
-    def test_assignment_reconciliation_retries_only_when_proven_absent(self):
-        calls = []
-        comments = []
-
-        def writer(*args):
-            comments.append({"user": {"login": "github-actions[bot]"}, "body": args[-1]})
-
-        def reader(*args):
-            return comments
-
-        states = iter([{"assignees": []}, {"assignees": [{"login": "copilot-swe-agent[bot]"}]}])
-        result = orchestrate_issue.reconcile_assignment(
-            "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
-            assigner=lambda *args: calls.append(args) or {"id": "receipt"},
-            fetcher=lambda path: next(states), writer=writer, reader=reader)
-        self.assertEqual(result, "assigned")
-        self.assertEqual(len(calls), 1)
-        self.assertIn("ASSIGNMENT_RECEIPT", comments[-1]["body"])
-
-    def test_assignment_reconciliation_blocks_ambiguous_state(self):
-        calls = []
-        self.assertEqual(
-            orchestrate_issue.reconcile_assignment(
-                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
-                assigner=lambda *args: calls.append(args),
-                fetcher=lambda path: {}),
-            "human-decision-required")
-        self.assertEqual(calls, [])
-
-    def test_assignment_reconciliation_blocks_after_ambiguous_post_call_state(self):
-        calls = []
-        comments = []
-        states = iter([{"assignees": []}, {"unexpected": "shape"}])
-        result = orchestrate_issue.reconcile_assignment(
-            "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
-            assigner=lambda *args: calls.append(args) or {"id": "receipt"},
-            fetcher=lambda path: next(states),
-            writer=lambda *args: comments.append(args[-1]),
-            reader=lambda *args: [{"user": {"login": "github-actions[bot]"},
-                                   "body": comments[-1]}])
-        self.assertEqual(result, "human-decision-required")
-        self.assertEqual(len(calls), 1)
-
-    def test_remote_success_with_receipt_failure_recovers_without_retry(self):
-        calls = []
-        writes = 0
-        comments = []
-
-        def writer(*args):
-            nonlocal writes
-            writes += 1
-            if writes == 2:
-                raise OSError("completion comment unavailable")
-            comments.append({"user": {"login": "github-actions[bot]"},
-                             "body": args[-1]})
-
-        states = iter([
-            {"assignees": []},
-            {"assignees": [{"login": "copilot-swe-agent[bot]"}]},
-        ])
-        with self.assertRaises(OSError):
-            orchestrate_issue.reconcile_assignment(
-                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
-                assigner=lambda *args: calls.append(args) or {"id": "receipt"},
-                fetcher=lambda path: next(states), writer=writer,
-                reader=lambda *args: comments)
-
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(
-            orchestrate_issue.reconcile_assignment(
-                "o/r", "6", "key", "prompt", "agent", "dev", "token", [],
-                assigner=lambda *args: calls.append(args),
-                fetcher=lambda path: {"assignees": [{"login": "copilot-swe-agent[bot]"}]}),
-            "recovered")
-        self.assertEqual(len(calls), 1)
-
-    def test_assignment_requires_isolated_user_token_and_headers(self):
+            orchestrate_issue.validate_assignment_handoff(
+                issue, comments, "AnjanaKavinda",
+                [{"login": "copilot-swe-agent[bot]"}])["dispatch_key"], "key")
         with self.assertRaises(GovernanceError):
-            orchestrate_issue.assign_copilot("o/r", "6", "prompt", "agent", "dev", "")
+            orchestrate_issue.validate_assignment_handoff(
+                issue, comments, "other",
+                [{"login": "copilot-swe-agent[bot]"}])
 
-        completed = type("Completed", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
-        with patch.object(orchestrate_issue.subprocess, "run", return_value=completed) as run:
-            orchestrate_issue.assign_copilot(
-                "o/r", "6", "prompt", "agent", "dev", "user-token")
-        command = run.call_args.args[0]
-        self.assertIn("Accept: application/vnd.github+json", command)
-        self.assertIn("X-GitHub-Api-Version: 2022-11-28", command)
-        self.assertEqual(run.call_args.kwargs["env"]["GH_TOKEN"], "user-token")
-        self.assertNotIn("GITHUB_TOKEN", run.call_args.kwargs["env"])
+    def test_human_assignment_handoff_rejects_stale_or_duplicate_ready_records(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comment = {"user": {"login": "github-actions[bot]"},
+                   "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                           f"{json.dumps(record)}"}
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                {"number": 7}, [comment], "AnjanaKavinda",
+                [{"login": "copilot-swe-agent[bot]"}])
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                {"number": 6}, [comment, comment], "AnjanaKavinda",
+                [{"login": "copilot-swe-agent[bot]"}])
 
-    def test_assignment_failure_redacts_token_and_never_marks_completion(self):
-        failed = type("Completed", (), {
-            "returncode": 1, "stdout": "", "stderr": "token=user-token; forbidden"
-        })()
-        with patch.object(orchestrate_issue.subprocess, "run", return_value=failed):
-            with self.assertRaisesRegex(GovernanceError, r"status 1") as raised:
-                orchestrate_issue.assign_copilot(
-                    "o/r", "6", "prompt", "agent", "dev", "user-token")
-        self.assertNotIn("user-token", str(raised.exception))
-        self.assertIn("[REDACTED]", str(raised.exception))
+    def test_assignment_handoff_duplicate_completion_is_idempotent(self):
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "key",
+                  "prompt": "bounded"}
+        comments = [{"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                             f"{json.dumps(record)}"},
+                    {"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+                             f"{json.dumps(record)}\ndispatch_key:key"}]
+        self.assertTrue(orchestrate_issue.validate_assignment_handoff(
+            {"number": 6}, comments, "AnjanaKavinda",
+            [{"login": "copilot-swe-agent[bot]"}])["_completed"])
+
+    def test_no_user_token_or_assignment_api_capability(self):
+        source = (Path(__file__).with_name("orchestrate-issue.py")
+                  .read_text(encoding="utf-8"))
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
+        self.assertNotIn("COPILOT_ASSIGNMENT_TOKEN", source + workflow)
+        self.assertNotIn("issues/{issue_id}/assignees", source)
 
     def test_v11_routing_context_and_escalation_are_fail_closed(self):
         inputs = {
@@ -769,6 +714,10 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("trusted_correction_actors", transition_source)
         self.assertIn('GOVERNED_PILOT_ENABLED', transition_source)
         self.assertIn('GOVERNED_PILOT_ISSUES', transition_source)
+        self.assertIn("CORRECTION_READY", transition_source)
+        self.assertNotIn("COPILOT_ASSIGNMENT_TOKEN", transition_source)
+        self.assertIn("DISPATCH_READY", issue_source)
+        self.assertIn("types: [assigned, labeled, reopened]", issue_workflow)
         self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_script)
         self.assertIn('$requiredStatusChecks += @{ context = $FinalGovernanceCheck }',
                       ruleset_script)

@@ -57,7 +57,6 @@ jobs:
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
-          COPILOT_ASSIGNMENT_TOKEN: ${{ secrets.COPILOT_ASSIGNMENT_TOKEN }}
         run: python .github/scripts/transition-pr.py
       - name: Publish pending final governance gate
         if: github.event.pull_request.base.ref == 'dev'

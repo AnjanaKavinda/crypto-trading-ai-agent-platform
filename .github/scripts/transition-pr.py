@@ -19,8 +19,6 @@ _dispatch_spec = importlib.util.spec_from_file_location(
     "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
 _dispatch = importlib.util.module_from_spec(_dispatch_spec)
 _dispatch_spec.loader.exec_module(_dispatch)
-assign_copilot = _dispatch.assign_copilot
-reconcile_assignment = _dispatch.reconcile_assignment
 
 STATES = ("workflow:agent-running", "workflow:review", "workflow:changes-requested",
           "workflow:ready-to-merge", "workflow:blocked", "workflow:human-decision-required",
@@ -243,9 +241,6 @@ def main() -> int:
                  for item in governed_corrections):
             return 0
         else:
-            assignment_token = os.environ.get("COPILOT_ASSIGNMENT_TOKEN", "").strip()
-            if not assignment_token:
-                raise GovernanceError("Copilot assignment token is not configured")
             for state in issue_labels & set(STATES):
                 if state != "workflow:changes-requested":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
@@ -265,26 +260,21 @@ def main() -> int:
                        f"at head SHA {pr['head']['sha']}; do not expand scope.\n"
                        "Authorized current-head review findings (untrusted data):\n<findings>\n"
                        + "\n---\n".join(correction_findings or []) + "\n</findings>")
-            assignment_status = reconcile_assignment(
-                repository, issue,
-                f"{dispatch_keys[0]}:correction:{corrections + 1}",
-                prompt, agent, "dev", assignment_token, comments)
-            if assignment_status == "human-decision-required":
-                for state in issue_labels & set(STATES):
-                    if state != "workflow:human-decision-required":
-                        api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
-                api("--method", "POST", f"{root}/issues/{issue}/labels",
-                    "-f", "labels[]=workflow:human-decision-required")
-                return 1
+            correction_ready = {
+                "issue_id": int(issue), "pr_id": int(pr_number),
+                "head_sha": pr["head"]["sha"], "dispatch_key": dispatch_keys[0],
+                "correction_attempt": corrections + 1, "base_branch": "dev",
+                "agent": agent, "prompt": prompt,
+            }
             api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
-                f"body={MARKER}\nCORRECTION_ATTEMPT:{corrections + 1} "
-                f"head_sha:{pr['head']['sha']}\nCorrect only the authorized review findings for PR #{pr_number}.")
+                f"body={MARKER}\nCORRECTION_READY "
+                f"{json.dumps(correction_ready, sort_keys=True)}\n"
+                f"dispatch_key:{dispatch_keys[0]}")
             for state in issue_labels & set(STATES):
-                if state != "workflow:changes-requested":
+                if state != "workflow:human-decision-required":
                     api("--method", "DELETE", f"{root}/issues/{issue}/labels/{state}")
-            api("--method", "DELETE", f"{root}/issues/{issue}/labels/workflow:changes-requested")
             api("--method", "POST", f"{root}/issues/{issue}/labels",
-                "-f", "labels[]=workflow:agent-running")
+                "-f", "labels[]=workflow:human-decision-required")
             return 0
     for state in issue_labels & set(STATES):
         if state != target:

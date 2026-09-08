@@ -23,6 +23,7 @@ from orchestrator import (
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
 TRUSTED_COMPLETION_ACTORS = {"github-actions[bot]"}
 COPILOT_ASSIGNEE = "copilot-swe-agent[bot]"
+HUMAN_CONTROLLER = "AnjanaKavinda"
 
 
 def gh(*args: str) -> object:
@@ -116,37 +117,6 @@ def build_protection_snapshot(rulesets: list[dict], *, repository_settings: dict
     return protection
 
 
-def assign_copilot(repository: str, issue_id: str, prompt: str, agent: str,
-                   base_branch: str, assignment_token: str) -> object:
-    """Use GitHub's full Copilot coding-agent assignment request."""
-    if not assignment_token.strip():
-        raise GovernanceError("Copilot assignment token is not configured")
-    payload = json.dumps({
-        "assignees": [COPILOT_ASSIGNEE],
-        "agent_assignment": {
-            "target_repo": repository,
-            "base_branch": base_branch,
-            "custom_instructions": prompt,
-            "custom_agent": agent,
-        },
-    })
-    assignment_env = os.environ.copy()
-    assignment_env.pop("GITHUB_TOKEN", None)
-    assignment_env.pop("GH_TOKEN", None)
-    assignment_env["GH_TOKEN"] = assignment_token
-    result = subprocess.run(
-        ["gh", "api", "--method", "POST", f"repos/{repository}/issues/{issue_id}/assignees",
-         "-H", "Accept: application/vnd.github+json",
-         "-H", "X-GitHub-Api-Version: 2022-11-28", "--input", "-"],
-        input=payload, check=False, text=True, capture_output=True, env=assignment_env)
-    if result.returncode != 0:
-        diagnostic = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        diagnostic = diagnostic.replace(assignment_token, "[REDACTED]")
-        raise GovernanceError(
-            f"Copilot assignment failed (status {result.returncode}): {diagnostic[:500]}")
-    return json.loads(result.stdout or "null")
-
-
 def completed_assignment_keys(comments: list[dict]) -> set[str]:
     """Return only dispatches with persisted assignment completion evidence."""
     completed: set[str] = set()
@@ -162,80 +132,82 @@ def completed_assignment_keys(comments: list[dict]) -> set[str]:
     return completed
 
 
-def query_assignment_state(repository: str, issue_id: str, *,
-                           fetcher: callable = gh) -> str:
-    """Classify authoritative GitHub assignment state before any retry."""
-    try:
-        issue = fetcher(f"repos/{repository}/issues/{issue_id}")
-    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, TypeError):
-        return "AMBIGUOUS"
-    assignees = issue.get("assignees") if isinstance(issue, dict) else None
-    if not isinstance(assignees, list):
-        return "AMBIGUOUS"
-    if any(isinstance(item, dict) and item.get("login") == COPILOT_ASSIGNEE
-           for item in assignees):
-        return "PROVEN_ASSIGNED"
-    return "PROVEN_NOT_ASSIGNED"
+def parse_handoff_comments(comments: list[dict], kind: str) -> list[dict]:
+    records = []
+    for comment in comments:
+        body = comment.get("body", "")
+        if MARKER not in body or f"{kind} " not in body:
+            continue
+        actor = (comment.get("user") or {}).get("login")
+        if actor != "github-actions[bot]":
+            continue
+        line = next((item for item in body.splitlines() if item.startswith(f"{kind} ")), "")
+        try:
+            record = json.loads(line.split(" ", 1)[1])
+        except (json.JSONDecodeError, IndexError):
+            continue
+        record["_comment_id"] = comment.get("id")
+        records.append(record)
+    return records
 
 
-def assignment_record(kind: str, dispatch_key: str, attempt_id: str,
-                      response: object | None = None) -> dict:
-    """Build a secret-safe durable assignment record."""
-    response_hash = sha256(json.dumps(response, sort_keys=True, default=str).encode()).hexdigest()
-    return {"kind": kind, "dispatch_key": dispatch_key, "attempt_id": attempt_id,
-            "response_hash": response_hash, "outcome": "assigned" if kind == "RECEIPT" else "attempt"}
-
-
-def persist_assignment_record(repository: str, issue_id: str, record: dict,
-                              *, writer: callable = gh_mutate,
-                              reader: callable = gh) -> None:
-    body = f"{MARKER}\nASSIGNMENT_{record['kind']} {json.dumps(record, sort_keys=True)}\n"
-    writer(f"repos/{repository}/issues/{issue_id}/comments", "-f", f"body={body}")
-    comments = reader(f"repos/{repository}/issues/{issue_id}/comments")
-    if not any(record["attempt_id"] in item.get("body", "") and
-               f"ASSIGNMENT_{record['kind']}" in item.get("body", "")
-               and item.get("user", {}).get("login") in TRUSTED_COMPLETION_ACTORS
-               for item in comments):
-        raise GovernanceError("assignment record persistence could not be verified")
-
-
-def reconcile_assignment(repository: str, issue_id: str, dispatch_key: str,
-                         prompt: str, agent: str, base_branch: str,
-                         assignment_token: str, comments: list[dict], *,
-                         assigner: callable = assign_copilot,
-                         fetcher: callable = gh,
-                         writer: callable = gh_mutate,
-                         reader: callable = gh) -> str:
-    """Reconcile remote assignment state and never blindly retry an accepted call."""
-    if dispatch_key in completed_assignment_keys(comments):
-        return "recovered"
-    state = query_assignment_state(repository, issue_id, fetcher=fetcher)
-    if state == "PROVEN_ASSIGNED":
-        return "recovered"
-    if state == "AMBIGUOUS":
-        return "human-decision-required"
-    attempt_id = f"{dispatch_key}:assignment:1"
-    persist_assignment_record(
-        repository, issue_id,
-        assignment_record("ATTEMPT", dispatch_key, attempt_id),
-        writer=writer, reader=reader)
-    response = assigner(repository, issue_id, prompt, agent, base_branch, assignment_token)
-    state = query_assignment_state(repository, issue_id, fetcher=fetcher)
-    if state != "PROVEN_ASSIGNED":
-        return "human-decision-required"
-    persist_assignment_record(
-        repository, issue_id,
-        assignment_record("RECEIPT", dispatch_key, attempt_id, response),
-        writer=writer, reader=reader)
-    return "assigned"
+def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
+                                assignees: list[dict]) -> dict:
+    """Validate the human-triggered Copilot assignment against one ready handoff."""
+    if actor != HUMAN_CONTROLLER:
+        raise GovernanceError("assignment confirmation requires the human controller")
+    if not any(item.get("login") == COPILOT_ASSIGNEE for item in assignees):
+        raise GovernanceError("assignment confirmation is not for Copilot")
+    ready = parse_handoff_comments(comments, "DISPATCH_READY")
+    if len(ready) != 1:
+        raise GovernanceError("assignment handoff is missing or ambiguous")
+    record = ready[0]
+    required = ("issue_id", "base_branch", "agent", "prompt_hash", "dispatch_key", "prompt")
+    if any(not record.get(key) for key in required) or record["issue_id"] != issue["number"]:
+        raise GovernanceError("assignment handoff is stale or mismatched")
+    if sha256(record["prompt"].encode()).hexdigest() != record["prompt_hash"]:
+        raise GovernanceError("assignment handoff prompt hash does not match")
+    if record["base_branch"] != "dev":
+        raise GovernanceError("assignment handoff is already completed or has an invalid base")
+    if record["dispatch_key"] in completed_assignment_keys(comments):
+        record["_completed"] = True
+    return record
 
 
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
-    issue_id = os.environ.get("ISSUE_NUMBER") or str(json.loads(
-        Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["issue"]["number"])
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    issue_id = os.environ.get("ISSUE_NUMBER") or str(event["issue"]["number"])
     root = f"repos/{repository}"
     issue = gh(f"{root}/issues/{issue_id}")
+    comments = gh(f"{root}/issues/{issue_id}/comments")
+    if event.get("action") == "assigned":
+        record = validate_assignment_handoff(
+            issue, comments, os.environ.get("GITHUB_ACTOR", ""),
+            [event.get("assignee") or {}])
+        if record.get("_completed"):
+            return 0
+        append_governance_event(
+            AppendOnlyAudit(), "assignment",
+            {"issue_id": int(issue_id), "correlation_id": record["dispatch_key"],
+             "agent_role": record["agent"], "capability_tier": "strong-coding-reasoning",
+             "routing_reason": "human-supervised assignment confirmation",
+             "risk_classification": "governed", "context_pack_id": "handoff",
+             "context_pack_version": "v1.1", "controller_policy_version": "v1.1",
+             "retry_count": 0, "review_tier": "R1", "outcome": "assigned",
+             "timestamp": datetime.now(timezone.utc).isoformat(),
+             "commit_sha": os.environ.get("GITHUB_SHA", "unknown")},
+            os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue_id}.jsonl"))
+        gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
+                  f"body={MARKER}\nASSIGNMENT_COMPLETED "
+                  f"{json.dumps(record, sort_keys=True)}\n"
+                  f"dispatch_key:{record['dispatch_key']}")
+        for state in ("workflow:ready", "workflow:human-decision-required"):
+            if state in [item["name"] for item in issue.get("labels", [])]:
+                gh_delete(f"{root}/issues/{issue_id}/labels/{state}")
+        gh_mutate(f"{root}/issues/{issue_id}/labels", "-f",
+                  "labels[]=workflow:agent-running")
+        return 0
     catalog_path = Path(__file__).parents[2] / "docs/copilot-team/04-issues/ISSUE-CATALOG.md"
     catalog_titles = parse_catalog_titles(catalog_path.read_text(encoding="utf-8"))
     catalog_dependencies = parse_catalog_dependencies(catalog_path.read_text(encoding="utf-8"))
@@ -250,9 +222,6 @@ def main() -> int:
         raise GovernanceError("governed pilot issue allowlist is empty")
     if "*" not in pilot_issues and str(issue_id) not in pilot_issues:
         raise GovernanceError("issue is not on the governed pilot allowlist")
-    assignment_token = os.environ.get("COPILOT_ASSIGNMENT_TOKEN", "").strip()
-    if not assignment_token:
-        raise GovernanceError("Copilot assignment token is not configured")
     labels = [item["name"] for item in issue.get("labels", [])]
     body = issue.get("body") or ""
     current_canonical, _ = resolve_canonical_number(issue.get("body") or "")
@@ -322,7 +291,6 @@ def main() -> int:
                                "docs/adr/ADR-0001-governed-copilot-development-orchestration.md"],
         context_pack=context_pack,
     )
-    comments = gh(f"{root}/issues/{issue_id}/comments")
     active = completed_assignment_keys(comments)
     request = create_dispatch_request(issue_input, eligibility, prompt_hash)
     if not can_dispatch(request["dispatch_key"], active):
@@ -346,7 +314,7 @@ def main() -> int:
                "timestamp": datetime.now(timezone.utc).isoformat(),
                "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
                "prompt_hash": prompt_hash, "controller_version": "v1.1",
-               "prior_state": "workflow:ready", "new_state": "workflow:agent-running",
+               "prior_state": "workflow:ready", "new_state": "workflow:human-decision-required",
                "implementer_session_id": os.environ.get("GOVERNED_IMPLEMENTER_SESSION", "")}
     if not payload["implementer_session_id"]:
         raise GovernanceError("implementer session is not configured")
@@ -355,34 +323,17 @@ def main() -> int:
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
               f"body={MARKER}\nDISPATCH_INTENT {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}")
-    # Reconcile authoritative assignment state before and after the dispatch call.
-    assignment_status = reconcile_assignment(
-        repository, issue_id, request["dispatch_key"], prompt, eligibility["agent"],
-        eligibility["base_branch"], assignment_token, comments)
-    if assignment_status == "human-decision-required":
-        for state in ("workflow:ready", "workflow:agent-running"):
-            if state in labels:
-                gh_delete(f"{root}/issues/{issue_id}/labels/{state}")
-        gh_mutate(f"{root}/issues/{issue_id}/labels", "-f",
-                  "labels[]=workflow:human-decision-required")
-        return 1
-    append_governance_event(
-        audit, "assignment",
-        {**payload, "outcome": "assigned"},
-        audit_path,
-    )
+    ready = {**payload, "base_branch": eligibility["base_branch"], "agent": eligibility["agent"],
+             "prompt": prompt, "outcome": "awaiting-human-copilot-assignment"}
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
-              f"body={MARKER}\nASSIGNMENT_COMPLETED {json.dumps({**payload, 'outcome': 'assigned'}, sort_keys=True)}\n"
+              f"body={MARKER}\nDISPATCH_READY {json.dumps(ready, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}\n\n{prompt}\n"
               f"Include `dispatch_key:{request['dispatch_key']}` in the PR body.")
-    for state in ("workflow:ready", "workflow:agent-running", "workflow:review",
-                  "workflow:changes-requested", "workflow:ready-to-merge",
-                  "workflow:blocked", "workflow:human-decision-required",
-                  "workflow:complete"):
-        if state in labels and state != "workflow:agent-running":
+    for state in ("workflow:ready", "workflow:agent-running"):
+        if state in labels:
             gh_delete(f"{root}/issues/{issue_id}/labels/{state}")
     gh_mutate(f"{root}/issues/{issue_id}/labels", "-f",
-              "labels[]=workflow:agent-running")
+              "labels[]=workflow:human-decision-required")
     return 0
 
 
