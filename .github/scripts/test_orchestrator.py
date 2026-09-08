@@ -501,6 +501,16 @@ class GovernanceTests(unittest.TestCase):
                 with self.assertRaises(GovernanceError):
                     transition_pr.verified_review_result(pr, 195)
 
+    def test_v11_issue_orchestrator_hydrates_ruleset_details_before_matching(self):
+        source = (Path(__file__).with_name("orchestrate-issue.py")
+                  .read_text(encoding="utf-8"))
+        self.assertIn("ruleset_summaries = gh(f\"{root}/rulesets\")", source)
+        self.assertIn("ruleset_details = [", source)
+        self.assertIn("for item in ruleset_summaries", source)
+        self.assertIn("for branch in (\"dev\", \"main\")", source)
+        self.assertIn("detail for detail in ruleset_details", source)
+        self.assertNotIn("matches = [item for item in rulesets", source)
+
     def test_v11_automation_v1_production_wiring_is_present(self):
         issue_source = (Path(__file__).with_name("orchestrate-issue.py")
                         .read_text(encoding="utf-8"))
