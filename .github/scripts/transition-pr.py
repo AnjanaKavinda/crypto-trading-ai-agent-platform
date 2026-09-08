@@ -140,10 +140,6 @@ def correction_synchronize_evidence(comments: list[dict], trusted: set[str],
         return result
     if len(already) > 1:
         raise GovernanceError("correction synchronize evidence is ambiguous")
-    if any(item.get("dispatch_key") in ready_by_key
-           and item.get("new_head") not in (None, current_head)
-           for item in completed):
-        raise GovernanceError("correction was already consumed for another head")
     candidates = [item for item in ready
                   if item.get("head_sha") != current_head
                   and item["dispatch_key"] not in {completed_item["dispatch_key"]

@@ -550,6 +550,87 @@ class GovernanceTests(unittest.TestCase):
         os.unlink(event_path)
         os.unlink(audit_path)
 
+    def test_transition_main_completes_two_correction_cycles(self):
+        dispatch = {"dispatch_key": "base", "review_tier": "R1",
+                    "capability_tier": "economical-fast"}
+        def ready(head, attempt):
+            return {
+                "issue_id": 6, "pr_id": 237, "head_sha": head,
+                "base_dispatch_key": "base", "dispatch_key": f"base:correction:{attempt}",
+                "correction_attempt": attempt, "base_branch": "dev",
+                "agent": "Platform Architect", "prompt": "bounded",
+                "prompt_hash": sha256(b"bounded").hexdigest(),
+            }
+        first = ready("h1", 1)
+        comments = [
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nDISPATCH {json.dumps(dispatch)}\n"
+                     "dispatch_key:base"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nCORRECTION_READY {json.dumps(first)}\n"
+                     "dispatch_key:base:correction:1"},
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{transition_pr.MARKER}\nPR_BINDING:237 head_sha:h1 "
+                     "dispatch_key:base"},
+        ]
+        issue = {"state": "open", "labels": [{"name": "workflow:human-decision-required"}]}
+        pr = {"number": 237, "body": "Fixes #6 base", "merged": False,
+              "user": {"login": "Copilot"}, "head": {"sha": "h2"}}
+        mutations = []
+
+        def fake_api(*args):
+            path = next((item for item in args if isinstance(item, str)
+                         and item.startswith("repos/")), "")
+            if args[:2] == ("--method", "POST"):
+                mutations.append(args)
+                if "/comments" in path:
+                    comments.append({"user": {"login": "github-actions[bot]"},
+                                      "body": args[-1].split("body=", 1)[1]})
+                elif "/labels" in path:
+                    issue["labels"] = [{"name": "workflow:review"}]
+                return {}
+            if args[:2] == ("--method", "DELETE"):
+                issue["labels"] = []
+                return {}
+            if path.endswith("/pulls/237"):
+                return pr
+            if path.endswith("/issues/6/comments"):
+                return comments
+            if path.endswith("/issues/6"):
+                return issue
+            raise AssertionError(args)
+
+        event_file = tempfile.NamedTemporaryFile("w", delete=False)
+        json.dump({"action": "synchronize"}, event_file)
+        event_file.close()
+        audit_file = tempfile.NamedTemporaryFile(delete=False)
+        audit_file.close()
+        env = {
+            "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "237",
+            "TARGET_STATE": "workflow:review", "GITHUB_EVENT_PATH": event_file.name,
+            "GOVERNED_PR_AUTHORS": "Copilot", "GOVERNED_CONTROLLER": "AnjanaKavinda",
+            "GOVERNED_AUDIT_PATH": audit_file.name,
+        }
+        with patch.dict(os.environ, env, clear=False), patch.object(
+                transition_pr, "api", side_effect=fake_api), patch.object(
+                transition_pr, "append_governance_event"):
+            self.assertEqual(transition_pr.main(), 0)
+            issue["labels"] = [{"name": "workflow:human-decision-required"}]
+            second = ready("h2", 2)
+            comments.append({"user": {"login": "github-actions[bot]"},
+                             "body": f"{transition_pr.MARKER}\nCORRECTION_READY "
+                                     f"{json.dumps(second)}\ndispatch_key:base:correction:2"})
+            pr["head"]["sha"] = "h3"
+            self.assertEqual(transition_pr.main(), 0)
+            mutation_count = len(mutations)
+            self.assertEqual(transition_pr.main(), 0)
+        completed = [item for item in comments if "CORRECTION_COMPLETED" in item["body"]]
+        self.assertEqual(len(completed), 2)
+        self.assertEqual(len(mutations), mutation_count)
+        self.assertEqual({label["name"] for label in issue["labels"]}, {"workflow:review"})
+        os.unlink(event_file.name)
+        os.unlink(audit_file.name)
+
     def test_no_user_token_or_assignment_api_capability(self):
         source = (Path(__file__).with_name("orchestrate-issue.py")
                   .read_text(encoding="utf-8"))
