@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
   statuses: write
 
 jobs:
@@ -21,6 +21,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
+      - name: Enforce mandatory human reviewer separation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          test "$CONTROLLER" = "AnjanaKavinda"
+          if [ "$PR_AUTHOR" = "$CONTROLLER" ]; then
+            echo "Governed PRs must not be authored by the final human reviewer. Recreate this PR through the approved bot/agent path." >&2
+            exit 1
+          fi
+          gh api --method POST \
+            "repos/${{ github.repository }}/pulls/$PR_NUMBER/requested_reviewers" \
+            -f "reviewers[]=$CONTROLLER"
+
       - name: Mark governed PR under review
         env:
           GH_TOKEN: ${{ github.token }}
