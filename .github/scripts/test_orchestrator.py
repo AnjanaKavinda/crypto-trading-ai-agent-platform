@@ -317,6 +317,13 @@ class GovernanceTests(unittest.TestCase):
             orchestrate_issue.validate_assignment_handoff(
                 issue, comments, "other",
                 [{"login": "copilot-swe-agent[bot]"}])
+        orchestrate_issue.validate_assignment_controls(
+            "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
+            pilot_enabled="true", pilot_issues={"6"}, implementer_session="session")
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_controls(
+                "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
+                pilot_enabled="false", pilot_issues={"6"}, implementer_session="session")
 
     def test_human_assignment_handoff_rejects_stale_or_duplicate_ready_records(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",

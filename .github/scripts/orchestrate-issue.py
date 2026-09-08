@@ -152,13 +152,19 @@ def parse_handoff_comments(comments: list[dict], kind: str) -> list[dict]:
 
 
 def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
-                                assignees: list[dict]) -> dict:
+                                assignees: list[dict], *,
+                                kind: str = "DISPATCH_READY",
+                                latest_correction: bool = False) -> dict:
     """Validate the human-triggered Copilot assignment against one ready handoff."""
     if actor != HUMAN_CONTROLLER:
         raise GovernanceError("assignment confirmation requires the human controller")
     if not any(item.get("login") == COPILOT_ASSIGNEE for item in assignees):
         raise GovernanceError("assignment confirmation is not for Copilot")
-    ready = parse_handoff_comments(comments, "DISPATCH_READY")
+    ready = parse_handoff_comments(comments, kind)
+    if latest_correction and ready:
+        attempts = [item.get("correction_attempt") for item in ready]
+        latest = max(attempts)
+        ready = [item for item in ready if item.get("correction_attempt") == latest]
     if len(ready) != 1:
         raise GovernanceError("assignment handoff is missing or ambiguous")
     record = ready[0]
@@ -168,10 +174,23 @@ def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
     if sha256(record["prompt"].encode()).hexdigest() != record["prompt_hash"]:
         raise GovernanceError("assignment handoff prompt hash does not match")
     if record["base_branch"] != "dev":
-        raise GovernanceError("assignment handoff is already completed or has an invalid base")
+        raise GovernanceError("assignment handoff is stale or has an invalid base")
     if record["dispatch_key"] in completed_assignment_keys(comments):
         record["_completed"] = True
     return record
+
+
+def validate_assignment_controls(issue_id: str, actor: str, *,
+                                 allowed_actors: set[str],
+                                 pilot_enabled: str, pilot_issues: set[str],
+                                 implementer_session: str) -> None:
+    if (actor != HUMAN_CONTROLLER or actor not in allowed_actors
+            or pilot_enabled.strip().lower() != "true"):
+        raise GovernanceError("human assignment is outside the governed pilot")
+    if not pilot_issues or ("*" not in pilot_issues and issue_id not in pilot_issues):
+        raise GovernanceError("issue is not on the governed pilot allowlist")
+    if not implementer_session.strip():
+        raise GovernanceError("implementer session is not configured")
 
 
 def main() -> int:
@@ -182,9 +201,22 @@ def main() -> int:
     issue = gh(f"{root}/issues/{issue_id}")
     comments = gh(f"{root}/issues/{issue_id}/comments")
     if event.get("action") == "assigned":
+        allowed_actors = {item for item in os.environ.get(
+            "GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
+        pilot_issues = {item.strip() for item in os.environ.get(
+            "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
+        validate_assignment_controls(
+            str(issue_id), os.environ.get("GITHUB_ACTOR", ""),
+            allowed_actors=allowed_actors,
+            pilot_enabled=os.environ.get("GOVERNED_PILOT_ENABLED", ""),
+            pilot_issues=pilot_issues,
+            implementer_session=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""))
+        correction = parse_handoff_comments(comments, "CORRECTION_READY")
         record = validate_assignment_handoff(
             issue, comments, os.environ.get("GITHUB_ACTOR", ""),
-            [event.get("assignee") or {}])
+            [event.get("assignee") or {}],
+            kind="CORRECTION_READY" if correction else "DISPATCH_READY",
+            latest_correction=bool(correction))
         if record.get("_completed"):
             return 0
         append_governance_event(

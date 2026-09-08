@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import importlib.util
+from hashlib import sha256
 from pathlib import Path
 
 from orchestrator import (STATES, AppendOnlyAudit, GovernanceError, append_governance_event,
@@ -187,7 +188,8 @@ def main() -> int:
     trusted_correction_actors = {controller, "github-actions[bot]"} - {""}
     governed_corrections = [item for item in comments
                             if MARKER in item.get("body", "")
-                            and "CORRECTION_ATTEMPT:" in item.get("body", "")
+                            and ("CORRECTION_ATTEMPT:" in item.get("body", "")
+                                 or "CORRECTION_READY" in item.get("body", ""))
                             and item.get("user", {}).get("login") in trusted_correction_actors]
     corrections = len(governed_corrections)
     previous_tier = dispatch_payload.get("capability_tier", "strong-coding-reasoning")
@@ -265,7 +267,10 @@ def main() -> int:
                 "head_sha": pr["head"]["sha"], "dispatch_key": dispatch_keys[0],
                 "correction_attempt": corrections + 1, "base_branch": "dev",
                 "agent": agent, "prompt": prompt,
+                "prompt_hash": sha256(prompt.encode()).hexdigest(),
             }
+            correction_ready["dispatch_key"] = (
+                f"{dispatch_keys[0]}:correction:{corrections + 1}")
             api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
                 f"body={MARKER}\nCORRECTION_READY "
                 f"{json.dumps(correction_ready, sort_keys=True)}\n"
