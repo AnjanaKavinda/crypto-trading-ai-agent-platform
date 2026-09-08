@@ -126,15 +126,22 @@ def main() -> int:
                     "docs/copilot-team/03-github-workflow/MODEL-ROUTING-GOVERNANCE-V1.1.md"],
         excerpts=[body],
     )
-    # Repository rulesets are the durable protection source; absence is unsafe.
-    rulesets = gh(f"{root}/rulesets")
+    # Repository ruleset collection responses are summaries and do not
+    # reliably include conditions/rules. Hydrate details before matching branches.
+    ruleset_summaries = gh(f"{root}/rulesets")
+    ruleset_details = [
+        gh(f"{root}/rulesets/{item['id']}")
+        for item in ruleset_summaries
+        if isinstance(item, dict) and item.get("id")
+    ]
     repository_settings = gh(root)
     protection = {}
     for branch in ("dev", "main"):
-        matches = [item for item in rulesets
-                   if f"refs/heads/{branch}" in item.get("conditions", {}).get(
-                       "ref_name", {}).get("include", [])]
-        details = [gh(f"{root}/rulesets/{item['id']}") for item in matches if item.get("id")]
+        details = [
+            detail for detail in ruleset_details
+            if f"refs/heads/{branch}" in detail.get("conditions", {}).get(
+                "ref_name", {}).get("include", [])
+        ]
         pull_rules = [rule for detail in details for rule in detail.get("rules", [])
                       if rule.get("type") == "pull_request"]
         check_rules = [rule for detail in details for rule in detail.get("rules", [])
@@ -142,7 +149,8 @@ def main() -> int:
         required_checks = [context for rule in check_rules
                            for context in rule.get("parameters", {}).get("required_status_checks", [])]
         protection[branch] = {
-            "verified": bool(matches) and all(item.get("enforcement") == "active" for item in matches),
+            "verified": bool(details) and all(
+                detail.get("enforcement") == "active" for detail in details),
             "enforcement": "active",
             "required_checks": [item.get("context") for item in required_checks
                                 if item.get("context")],
