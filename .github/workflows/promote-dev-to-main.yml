@@ -1,0 +1,41 @@
+name: Governed dev to main promotion
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  promote:
+    if: github.actor == vars.GOVERNED_CONTROLLER
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Validate promotion state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${{ vars.GOVERNED_CONTROLLER }}" = "AnjanaKavinda"
+          dev_sha="$(git rev-parse origin/dev)"
+          main_sha="$(git rev-parse origin/main)"
+          if git merge-base --is-ancestor "$dev_sha" "$main_sha"; then
+            echo "main already contains dev; no promotion PR is needed." >&2
+            exit 1
+          fi
+          existing="$(gh pr list --base main --head dev --state open --json number --jq 'length')"
+          test "$existing" -eq 0
+      - name: Create bot-authored promotion PR and request human reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base main \
+            --head dev \
+            --title "Promote governed dev baseline to main" \
+            --body "Governed branch promotion only. No new implementation scope. Human reviewer/final approval authority: @AnjanaKavinda. Auto-merge is prohibited; manual merge remains mandatory." \
+            --reviewer "AnjanaKavinda"
