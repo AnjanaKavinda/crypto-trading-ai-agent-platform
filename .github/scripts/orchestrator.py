@@ -98,12 +98,33 @@ def _path_values(value: Any, field: str) -> tuple[str, ...]:
 
 
 def _section_values(body: str, heading: str) -> tuple[str, ...]:
-    match = re.search(rf"(?ims)^\s*##\s+{re.escape(heading)}\s*$([\s\S]*?)(?=^\s*##\s+|\Z)", body)
-    if not match:
+    lines = body.splitlines()
+    heading_re = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*#*\s*$")
+    matches = []
+    for index, line in enumerate(lines):
+        match = heading_re.match(line)
+        if match and match.group(2).strip().casefold() == heading.casefold():
+            matches.append((index, len(match.group(1))))
+        elif (not match and re.match(
+                rf"^\s*{re.escape(heading)}(?:\s*\([^:\n]*\))?\s*:\s*$",
+                line, re.I)):
+            matches.append((index, 0))
+    if len(matches) != 1:
         return ()
+    start, level = matches[0]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        match = heading_re.match(lines[index])
+        if match and (level == 0 or len(match.group(1)) <= level):
+            end = index
+            break
     values = []
-    for line in match.group(1).splitlines():
-        value = re.sub(r"^\s*[-*]\s*", "", line).strip()
+    for line in lines[start + 1:end]:
+        bullet = re.match(r"^\s*[-*]\s+(.*)$", line)
+        if bullet:
+            value = bullet.group(1).strip()
+        else:
+            value = line.strip()
         if value and value.lower() not in {"none", "n/a", "not applicable"}:
             values.append(value)
     return tuple(values)

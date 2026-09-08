@@ -317,11 +317,15 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(
             orchestrate_issue.validate_assignment_handoff(
                 issue, comments, "AnjanaKavinda",
-                [{"login": "copilot-swe-agent[bot]"}])["dispatch_key"], "key")
+                [{"login": "Copilot", "type": "Bot", "id": 198982749}])["dispatch_key"], "key")
         with self.assertRaises(GovernanceError):
             orchestrate_issue.validate_assignment_handoff(
                 issue, comments, "other",
-                [{"login": "copilot-swe-agent[bot]"}])
+                [{"login": "Copilot", "type": "Bot", "id": 198982749}])
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                issue, comments, "AnjanaKavinda",
+                [{"login": "AnjanaKavinda", "type": "User", "id": 1}])
         orchestrate_issue.validate_assignment_controls(
             "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
             pilot_enabled="true", pilot_issues={"6"}, implementer_session="session")
@@ -345,11 +349,11 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             orchestrate_issue.validate_assignment_handoff(
                 {"number": 7}, [comment], "AnjanaKavinda",
-                [{"login": "copilot-swe-agent[bot]"}])
+                [{"login": "Copilot", "type": "Bot", "id": 198982749}])
         with self.assertRaises(GovernanceError):
             orchestrate_issue.validate_assignment_handoff(
                 {"number": 6}, [comment, comment], "AnjanaKavinda",
-                [{"login": "copilot-swe-agent[bot]"}])
+                [{"login": "Copilot", "type": "Bot", "id": 198982749}])
 
     def test_assignment_handoff_duplicate_completion_is_idempotent(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
@@ -368,7 +372,7 @@ class GovernanceTests(unittest.TestCase):
                              f"{json.dumps(record)}\ndispatch_key:key"}]
         self.assertTrue(orchestrate_issue.validate_assignment_handoff(
             {"number": 6}, comments, "AnjanaKavinda",
-            [{"login": "copilot-swe-agent[bot]"}])["_completed"])
+            [{"login": "Copilot", "type": "Bot", "id": 198982749}])["_completed"])
 
     def test_ready_handoff_reuses_exact_record_and_rejects_conflict(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
@@ -407,7 +411,7 @@ class GovernanceTests(unittest.TestCase):
                            f"{json.dumps(record, sort_keys=True)}"}
         result = orchestrate_issue.validate_assignment_handoff(
             {"number": 6}, [comment], "AnjanaKavinda",
-            [{"login": "copilot-swe-agent[bot]"}])
+            [{"login": "Copilot", "type": "Bot", "id": 198982749}])
         self.assertEqual({result["capability_tier"], result["review_tier"],
                           result["context_pack_id"]},
                          {"premium-strongest-available", "R3", "pack-r3"})
@@ -788,7 +792,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
+            required_review_tier="R2", review_tier="R2", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret",
             reviewer_role="QA/Security Reviewer")
         result = review_provenance.verify_artifact(
@@ -797,7 +801,7 @@ class GovernanceTests(unittest.TestCase):
             expected_producer_identity="trusted-producer", controller="human-owner",
             implementer_session_id="implement-session")
         self.assertTrue(result["independent"])
-        self.assertEqual(result["review_tier"], "R3")
+        self.assertEqual(result["review_tier"], "R2")
         self.assertEqual(result["user"], "reviewer-bot")
         raw = [{"id": "review-1", "state": "APPROVED", "commit_id": "head",
                 "user": {"login": "reviewer-bot"}}]
@@ -1059,7 +1063,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
+            required_review_tier="R2", review_tier="R2", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         # Human controller cannot self-assert an artifact using a different secret.
         with self.assertRaises(GovernanceError):
@@ -1176,9 +1180,11 @@ class GovernanceTests(unittest.TestCase):
                       expected_pr_number=1, expected_issue_id=7, expected_head_sha="head",
                       expected_producer_identity="trusted-producer", controller="human-owner",
                       implementer_session_id="implement-session")
-        self.assertTrue(review_provenance.verify_artifact(make("R3", "R2"), **kwargs))
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(make("R3", "R2"), **kwargs)
         with self.assertRaises(GovernanceError):
             review_provenance.verify_artifact(make("R2", "R3"), **kwargs)
+        self.assertTrue(review_provenance.verify_artifact(make("R2", "R2"), **kwargs))
 
     def test_v11_audit_write_failure_blocks_progression(self):
         audit = AppendOnlyAudit()
@@ -1191,7 +1197,7 @@ class GovernanceTests(unittest.TestCase):
             repository="o/r", pr_number=1, issue_id=7, review_id="review-1",
             head_sha="head", reviewer_identity="reviewer-bot",
             reviewer_session_id="review-session", implementer_session_id="implement-session",
-            required_review_tier="R2", review_tier="R3", producer_identity="trusted-producer", producer_run_id="run-1",
+            required_review_tier="R2", review_tier="R2", producer_identity="trusted-producer", producer_run_id="run-1",
             controller_policy_version="v1.1", disposition="approved", secret="signing-secret")
         audit = AppendOnlyAudit()
         verified = pr_governance.verify_reviewer_artifacts(
@@ -1241,7 +1247,7 @@ class GovernanceTests(unittest.TestCase):
             reviewer_configuration=self._reviewer_configuration(),
             implementer_session_id="implement-session", controller="human-owner")
         self.assertEqual(evidence["disposition"], "approved")
-        self.assertEqual(evidence["review_tier"], "R3")
+        self.assertEqual(evidence["review_tier"], "R2")
         self.assertEqual(evidence["reviewer_identity"], "reviewer-bot")
         self.assertEqual(evidence["reviewer_session_id"], "review-session")
         self.assertEqual(evidence["required_review_tier"], "R2")

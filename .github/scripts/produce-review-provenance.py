@@ -118,11 +118,17 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
         expected_model = mapping.get({
             "R1": "economical-fast", "R2": "strong-coding-reasoning",
             "R3": "premium-strongest-available"}[parsed.required_review_tier])
-        if parsed.provider_name != "openai" or parsed.model_name != expected_model:
+        deterministic_r1 = (parsed.required_review_tier == "R1"
+                             and parsed.provider_name == "deterministic"
+                             and parsed.model_name == "no-model-r1")
+        if (not deterministic_r1 and
+                (parsed.provider_name != "openai" or parsed.model_name != expected_model)):
             raise ReviewerExecutionError("review result provider/model is not governed")
-        if parsed.actual_review_tier != config["tier"] or (
+        if parsed.actual_review_tier != parsed.required_review_tier or (
                 reviewer_roles.get(login) and parsed.reviewer_role != reviewer_roles[login]):
-            raise ReviewerExecutionError("review result reviewer identity or tier is untrusted")
+            raise ReviewerExecutionError("review result reviewer identity or required tier is untrusted")
+        if {"R1": 0, "R2": 1, "R3": 2}[config["tier"]] < {"R1": 0, "R2": 1, "R3": 2}[required]:
+            raise ReviewerExecutionError("configured reviewer tier is below the required tier")
         original_request.validate()
         parsed.validate_against(original_request)
         verify_execution_handoff(

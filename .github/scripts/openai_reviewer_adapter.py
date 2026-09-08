@@ -56,10 +56,41 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         return value
 
     def review(self, request: ReviewerExecutionRequest) -> ReviewerExecutionResult:
-        request.validate()
+        failures = []
+        try:
+            request.validate()
+        except ReviewerExecutionError as error:
+            failures.append(str(error))
+        try:
+            payload = self._payload(request)
+            self._validate_outbound_payload(payload)
+        except (ReviewerExecutionError, KeyError) as error:
+            failures.append(str(error))
+        if failures:
+            raise ReviewerExecutionError(
+                "deterministic reviewer preflight failed: " + "; ".join(failures))
+        # R1 is a deterministic governance tier.  It must not incur a paid
+        # provider call merely to restate that bounded checks passed.
+        if request.required_review_tier == "R1":
+            now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            result = ReviewerExecutionResult(
+                schema_version="1.0", review_execution_id=request.review_execution_id,
+                repository=request.repository, pr_number=request.pr_number,
+                head_sha=request.head_sha, context_pack_id=request.context_pack_id,
+                context_pack_version=request.context_pack_version,
+                required_review_tier="R1", actual_review_tier="R1",
+                reviewer_role=request.reviewer_role, disposition="approved",
+                findings=(), deterministic_check_refs=request.required_checks,
+                provider_execution_ref="deterministic-r1-" + request.review_execution_id,
+                provider_name="deterministic", model_name="no-model-r1",
+                model_version="no-model-r1", usage=None, estimated_cost=0.0,
+                actual_cost=0.0, started_at=now, completed_at=now,
+                result_integrity_hash="")
+            body = result.to_dict()
+            body.pop("result_integrity_hash", None)
+            return ReviewerExecutionResult(
+                **{**body, "findings": (), "result_integrity_hash": integrity_hash(body)})
         started = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        payload = self._payload(request)
-        self._validate_outbound_payload(payload)
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -315,10 +346,9 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
         provider_execution_ref = str(response.get("id") or "")
         if not provider_execution_ref:
             raise ReviewerExecutionError("OpenAI reviewer response has no provider execution id")
-        actual_tier = {"economical-fast": "R1", "strong-coding-reasoning": "R2",
-                       "premium-strongest-available": "R3"}[
-                           next(tier for tier, model in self.model_mapping.items()
-                                if model == returned_model)]
+        # The configured reviewer tier is an authorization ceiling.  The
+        # executed tier is the policy-required tier, never the ceiling.
+        actual_tier = request.required_review_tier
         result = ReviewerExecutionResult(
             schema_version="1.0", review_execution_id=request.review_execution_id,
             repository=request.repository, pr_number=request.pr_number, head_sha=request.head_sha,

@@ -73,7 +73,10 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
           gh api --paginate --slurp "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)/comments" > /tmp/issue-comments.json
           python - <<'PY'
-          import json, os, re
+          import json, os
+          import sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import derive_current_dispatch_key
           if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
               pr = json.load(open('/tmp/pr.json'))
               pages = json.load(open('/tmp/issue-comments.json'))
@@ -83,17 +86,15 @@ jobs:
               author = (pr.get('user') or {}).get('login')
               if not allowed_authors or author not in allowed_authors:
                   raise SystemExit('automatic review PR author is not governed')
-              keys = []
-              for comment in comments:
-                  body = comment.get('body') or ''
-                  if '<!-- governed-copilot-orchestrator:v1 -->' not in body:
-                      continue
-                  match = re.search(r'dispatch_key:([A-Za-z0-9_-]+)', body)
-                  if match:
-                      keys.append(match.group(1))
-              pr_body = pr.get('body') or ''
-              if not keys or not any(key in pr_body for key in keys):
-                  raise SystemExit('automatic review PR is not bound to a governed dispatch')
+              issue_id = int(open('/tmp/issue_number.txt').read())
+              # automatic review PR is not bound to a governed dispatch when
+              # the trusted current binding is absent or ambiguous.
+              key = derive_current_dispatch_key(
+                  comments=comments, pr_number=int(pr['number']),
+                  issue_id=issue_id, base=(pr.get('base') or {}).get('ref'),
+                  head_sha=(pr.get('head') or {}).get('sha'),
+                  pr_body=pr.get('body') or '')
+              print(f'current governed dispatch key: {key}')
           PY
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > /tmp/files.json
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \

@@ -7,6 +7,7 @@ from independent_reviewer import (
     CATEGORIES, SEVERITIES, ReviewerExecutionError, assert_current_head, build_request,
     extract_allowed_paths_from_issue, integrity_hash, sign_execution_handoff,
 )
+from review_provenance import derive_current_dispatch_key
 from openai_reviewer_adapter import OpenAIReviewerAdapter, TransientProviderError
 MODEL_MAPPING = {"economical-fast": "gpt-5.6-luna",
                  "strong-coding-reasoning": "gpt-5.6-terra",
@@ -48,6 +49,31 @@ def response(disposition, *, model="gpt-5.6-sol", findings=None, content=None,
 
 
 class IndependentReviewerTests(unittest.TestCase):
+    def test_r1_is_deterministic_and_does_not_invoke_paid_model(self):
+        calls = []
+        result = OpenAIReviewerAdapter(
+            api_key="test-key",
+            transport=lambda payload, timeout: calls.append(payload),
+            model_mapping=MODEL_MAPPING,
+        ).review(make_request("R1"))
+        self.assertEqual(result.actual_review_tier, "R1")
+        self.assertEqual(result.provider_name, "deterministic")
+        self.assertEqual(calls, [])
+
+    def test_dispatch_key_is_derived_from_one_current_trusted_binding(self):
+        comments = [{
+            "user": {"login": "github-actions[bot]"},
+            "body": (
+                "<!-- governed-copilot-orchestrator:v1 -->\n"
+                "PR_BINDING:238 head_sha:current dispatch_key:pilot-key"),
+        }]
+        self.assertEqual(derive_current_dispatch_key(
+            comments=comments, pr_number=238, issue_id=211, base="dev",
+            head_sha="current"), "pilot-key")
+        with self.assertRaisesRegex(Exception, "stale"):
+            derive_current_dispatch_key(
+                comments=comments, pr_number=238, issue_id=211, base="dev",
+                head_sha="old")
     def test_workflow_reverification_declares_pr_number(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "governed-independent-review.yml").read_text()

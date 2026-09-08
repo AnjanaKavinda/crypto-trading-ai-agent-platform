@@ -105,3 +105,22 @@ jobs:
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
+
+  terminal-governance-diagnostic:
+    if: >-
+      always() &&
+      (needs.track-review.result == 'failure' ||
+       needs.handle-unmerged-close.result == 'failure' ||
+       needs.complete-after-human-merge.result == 'failure')
+    needs: [track-review, handle-unmerged-close, complete-after-human-merge]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish terminal governance failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="${{ github.event.pull_request.head.sha }}"
+          gh api --method POST \
+            "repos/${{ github.repository }}/statuses/$head" \
+            -f state=failure -f context=governance-gate \
+            -f description='Governance lifecycle failed; inspect job diagnostics and recover under ADR-0003'
