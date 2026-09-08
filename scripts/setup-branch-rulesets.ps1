@@ -1,6 +1,7 @@
 param(
     [string]$Repo = "",
     [string]$RequiredCheck = "governance-ci",
+    [string]$FinalGovernanceCheck = "governance-gate",
     [ValidateSet("dev", "main", "all")][string]$Branch = "all"
 )
 
@@ -32,7 +33,13 @@ function Assert-WorkflowPresent {
     param([Parameter(Mandatory=$true)][string]$TargetBranch)
     gh api "repos/$Repo/contents/.github/workflows/governance-ci.yml?ref=$TargetBranch" --silent
     if ($LASTEXITCODE -ne 0) {
-        throw "Refusing to protect $TargetBranch: governance-ci workflow is not present on that branch."
+        throw "Refusing to protect ${TargetBranch}: governance-ci workflow is not present on that branch."
+    }
+    if ($TargetBranch -eq "dev") {
+        gh api "repos/$Repo/contents/.github/workflows/governed-independent-review.yml?ref=$TargetBranch" --silent
+        if ($LASTEXITCODE -ne 0) {
+            throw "Refusing to protect dev: governed independent-review workflow is not present."
+        }
     }
 }
 
@@ -42,6 +49,13 @@ function New-ProtectionPayload {
         [Parameter(Mandatory=$true)][string]$TargetBranch
     )
 
+    # Governed PRs are opened by Copilot/automation, while AnjanaKavinda is the
+    # mandatory independent human reviewer/final approval authority on both branches.
+    $requiredApprovingReviewCount = 1
+    $requiredStatusChecks = @(@{ context = $RequiredCheck })
+    if ($TargetBranch -eq "dev") {
+        $requiredStatusChecks += @{ context = $FinalGovernanceCheck }
+    }
     return @{
         name = $Name
         target = "branch"
@@ -54,7 +68,7 @@ function New-ProtectionPayload {
             @{
                 type = "pull_request"
                 parameters = @{
-                    required_approving_review_count = 1
+                    required_approving_review_count = $requiredApprovingReviewCount
                     dismiss_stale_reviews_on_push = $true
                     required_reviewers = @()
                     require_code_owner_review = $false
@@ -67,7 +81,7 @@ function New-ProtectionPayload {
             @{
                 type = "required_status_checks"
                 parameters = @{
-                    required_status_checks = @( @{ context = $RequiredCheck } )
+                    required_status_checks = $requiredStatusChecks
                     strict_required_status_checks_policy = $true
                     do_not_enforce_on_create = $false
                 }
@@ -117,4 +131,6 @@ Write-Host "Setting governed required check variable to '$RequiredCheck'..."
 gh variable set GOVERNED_REQUIRED_CHECKS --body $RequiredCheck --repo $Repo
 if ($LASTEXITCODE -ne 0) { throw "Failed to set GOVERNED_REQUIRED_CHECKS repository variable." }
 
-Write-Host "Requested ruleset phase applied. Do not enable any governed pilot until both branches pass verification."
+Write-Host "Requested ruleset phase applied."
+Write-Host "dev requires '$RequiredCheck', '$FinalGovernanceCheck', and one human approval; main requires '$RequiredCheck' and one human approval."
+Write-Host "Do not enable any governed pilot until both branches pass verification."

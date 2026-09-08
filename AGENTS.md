@@ -1392,3 +1392,13 @@ All development agents must prefer:
 **NO_TRADE > UNCERTAIN_TRADE**
 
 The platform is designed to be supervised and autonomous, but never uncontrolled.
+
+
+## Human reviewer separation
+
+- `AnjanaKavinda` is the mandatory human reviewer and final approval authority for every governed PR.
+- The final human reviewer must not be the PR author. GitHub does not permit authors to approve their own PRs.
+- Governed PRs must therefore be opened by Copilot or an approved automation identity.
+- If a governed PR is accidentally opened by `AnjanaKavinda`, it must be recreated through the approved bot/agent path rather than bypassing review.
+- No AI agent, GitHub Action, or controller may approve or merge on behalf of `AnjanaKavinda`.
+- Manual merge by `AnjanaKavinda` remains mandatory after all technical and review gates pass.

@@ -23,4 +23,14 @@ jobs:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GOVERNED_DISPATCH_ACTORS: ${{ vars.GOVERNED_DISPATCH_ACTORS }}
           GOVERNED_PILOT_ENABLED: ${{ vars.GOVERNED_PILOT_ENABLED }}
+          GOVERNED_PILOT_ISSUES: ${{ vars.GOVERNED_PILOT_ISSUES }}
+          GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
         run: python .github/scripts/orchestrate-issue.py
+      - name: Upload dispatch audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: governed-dispatch-${{ github.event.issue.number }}-${{ github.run_id }}
+          path: /tmp/governed-audit-${{ github.event.issue.number }}.jsonl
+          if-no-files-found: ignore
+          retention-days: 90

@@ -1,6 +1,7 @@
 param(
     [string]$Repo = "",
-    [string]$RequiredCheck = "governance-ci"
+    [string]$RequiredCheck = "governance-ci",
+    [string]$FinalGovernanceCheck = "governance-gate"
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,7 +53,7 @@ foreach ($branch in @("dev", "main")) {
     $prRules = @($detail.rules | Where-Object { $_.type -eq "pull_request" })
     Assert-True ($prRules.Count -eq 1) "$name must contain exactly one pull_request rule."
     $pr = $prRules[0].parameters
-    Assert-True ([int]$pr.required_approving_review_count -ge 1) "$name must require at least one approval."
+    Assert-True ([int]$pr.required_approving_review_count -eq 1) "$name must require exactly one human approval."
     Assert-True ([bool]$pr.dismiss_stale_reviews_on_push) "$name must dismiss stale approvals."
     Assert-True ([bool]$pr.required_review_thread_resolution) "$name must require review-thread resolution."
 
@@ -62,6 +63,11 @@ foreach ($branch in @("dev", "main")) {
     Assert-True ([bool]$status.strict_required_status_checks_policy) "$name must use strict required status checks."
     $contexts = @($status.required_status_checks | ForEach-Object { $_.context })
     Assert-True ($contexts -contains $RequiredCheck) "$name must require status check '$RequiredCheck'."
+    if ($branch -eq "dev") {
+        Assert-True ($contexts -contains $FinalGovernanceCheck) "$name must require final governance status '$FinalGovernanceCheck'."
+    } else {
+        Assert-True (-not ($contexts -contains $FinalGovernanceCheck)) "$name must not require '$FinalGovernanceCheck'."
+    }
 
     Write-Host "PASS: $name"
 }
