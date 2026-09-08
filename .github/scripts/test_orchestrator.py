@@ -87,7 +87,7 @@ class GovernanceTests(unittest.TestCase):
                 "enforcement": "active",
                 "conditions": {"ref_name": {"include": ["refs/heads/dev"]}},
                 "rules": [
-                    {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+                    {"type": "pull_request", "parameters": {"required_approving_review_count": 0}},
                     {"type": "required_status_checks", "parameters": {
                         "required_status_checks": [{"context": "governance-ci"}, {"context": "governance-gate"}]
                     }},
@@ -123,7 +123,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(protection["main"]["verified"])
         self.assertEqual(protection["dev"]["required_checks"], ["governance-ci", "governance-gate"])
         self.assertEqual(protection["main"]["required_checks"], ["governance-ci"])
-        self.assertEqual(protection["dev"]["required_reviews"], 1)
+        self.assertEqual(protection["dev"]["required_reviews"], 0)
+        self.assertEqual(protection["main"]["required_reviews"], 1)
         self.assertEqual(protection["dev"]["bypass_actors"], [])
         self.assertEqual(protection["dev"]["missing_rules"], [])
 
@@ -136,7 +137,7 @@ class GovernanceTests(unittest.TestCase):
         good = {
             "dev": {"verified": True, "enforcement": "active",
                     "required_checks": ["governance-ci", "governance-gate"],
-                    "required_reviews": 1, "bypass_actors": [],
+                    "required_reviews": 0, "bypass_actors": [],
                     "auto_merge": False, "merge_queue": False},
             "main": {"verified": True, "enforcement": "active",
                      "required_checks": ["governance-ci"],
@@ -150,7 +151,7 @@ class GovernanceTests(unittest.TestCase):
                 "dev": {**good["dev"], "required_checks": ["governance-ci"]},
             })
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
-        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 0},
+        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
                             "main": {**good["main"], "required_reviews": 0}}
         with self.assertRaises(GovernanceError): verify_protections(reversed_reviews)
     def test_review_diff_secret_scan_allows_identifiers_and_test_fixtures(self):
@@ -636,9 +637,9 @@ class GovernanceTests(unittest.TestCase):
                       ruleset_script)
         self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_verifier)
         self.assertIn("$contexts -contains $FinalGovernanceCheck", ruleset_verifier)
-        self.assertIn("$requiredApprovingReviewCount = 1", ruleset_script)
-        self.assertIn("must require exactly one human approval", ruleset_verifier)
-        self.assertIn("required_reviews\", 0) != 1", (Path(__file__).with_name("orchestrator.py")
+        self.assertIn("$requiredApprovingReviewCount = if ($TargetBranch -eq \"dev\") { 0 } else { 1 }", ruleset_script)
+        self.assertIn("must require exactly $expectedApprovalCount native approval(s)", ruleset_verifier)
+        self.assertIn('required_reviews", 0) != expected_reviews[branch]', (Path(__file__).with_name("orchestrator.py")
                       .read_text(encoding="utf-8")))
 
     def test_v11_promotion_uses_dedicated_app_identity_and_main_lifecycle(self):
