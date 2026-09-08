@@ -79,7 +79,7 @@ class GovernanceTests(unittest.TestCase):
         good = {
             "dev": {"verified": True, "enforcement": "active",
                     "required_checks": ["governance-ci", "governance-gate"],
-                    "required_reviews": 0, "bypass_actors": [],
+                    "required_reviews": 1, "bypass_actors": [],
                     "auto_merge": False, "merge_queue": False},
             "main": {"verified": True, "enforcement": "active",
                      "required_checks": ["governance-ci"],
@@ -93,7 +93,7 @@ class GovernanceTests(unittest.TestCase):
                 "dev": {**good["dev"], "required_checks": ["governance-ci"]},
             })
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
-        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
+        reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 0},
                             "main": {**good["main"], "required_reviews": 0}}
         with self.assertRaises(GovernanceError): verify_protections(reversed_reviews)
     def test_review_diff_secret_scan_allows_identifiers_and_test_fixtures(self):
@@ -540,6 +540,22 @@ class GovernanceTests(unittest.TestCase):
                       ruleset_script)
         self.assertIn('$FinalGovernanceCheck = "governance-gate"', ruleset_verifier)
         self.assertIn("$contexts -contains $FinalGovernanceCheck", ruleset_verifier)
+        self.assertIn("$requiredApprovingReviewCount = 1", ruleset_script)
+        self.assertIn("must require exactly one human approval", ruleset_verifier)
+        self.assertIn("required_reviews\", 0) != 1", (Path(__file__).with_name("orchestrator.py")
+                      .read_text(encoding="utf-8")))
+
+    def test_v11_human_owner_is_mandatory_reviewer_not_pr_author(self):
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        promotion = (Path(__file__).parents[1] / "workflows" /
+                     "promote-dev-to-main.yml").read_text(encoding="utf-8")
+        codeowners = (Path(__file__).parents[1] / "CODEOWNERS").read_text(encoding="utf-8")
+        self.assertIn("* @AnjanaKavinda", codeowners)
+        self.assertIn("Governed PRs must not be authored by the final human reviewer", workflow)
+        self.assertIn("requested_reviewers", workflow)
+        self.assertIn("--reviewer \"AnjanaKavinda\"", promotion)
+        self.assertIn("pull-requests: write", promotion)
 
     def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
