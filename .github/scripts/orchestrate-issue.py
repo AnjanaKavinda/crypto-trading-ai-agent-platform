@@ -23,7 +23,8 @@ from orchestrator import (
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
 TRUSTED_COMPLETION_ACTORS = {"github-actions[bot]"}
-COPILOT_ASSIGNEE = "copilot-swe-agent[bot]"
+COPILOT_ASSIGNEE = "Copilot"
+COPILOT_ASSIGNEE_ID = 198982749
 HUMAN_CONTROLLER = "AnjanaKavinda"
 
 
@@ -158,8 +159,20 @@ def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
     """Validate the human-triggered Copilot assignment against one ready handoff."""
     if actor != HUMAN_CONTROLLER:
         raise GovernanceError("assignment confirmation requires the human controller")
-    if not any(item.get("login") == COPILOT_ASSIGNEE for item in assignees):
-        raise GovernanceError("assignment confirmation is not for Copilot")
+    copilot = []
+    for item in assignees:
+        try:
+            matches = (item.get("login") == COPILOT_ASSIGNEE
+                       and item.get("type") == "Bot"
+                       and int(item.get("id", -1)) == COPILOT_ASSIGNEE_ID)
+        except (TypeError, ValueError):
+            matches = False
+        if matches:
+            copilot.append(item)
+    if len(copilot) != 1:
+        raise GovernanceError(
+            "assignment confirmation must target the Copilot bot "
+            f"{COPILOT_ASSIGNEE} ({COPILOT_ASSIGNEE_ID})")
     ready = parse_handoff_comments(comments, kind)
     if latest_correction and ready:
         attempts = [item.get("correction_attempt") for item in ready]

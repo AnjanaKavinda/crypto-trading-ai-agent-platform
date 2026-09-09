@@ -14,7 +14,8 @@ from orchestrator import (STATES, AppendOnlyAudit, GovernanceError, append_gover
                           build_launch_prompt, resolve_agent, safe_content, transition_escalation,
                           validate_transition)
 from independent_reviewer import integrity_hash
-from review_provenance import extract_linked_issue, verify_artifact
+from review_provenance import extract_linked_issue
+from review_provenance import derive_current_dispatch_key, verify_artifact
 
 _dispatch_spec = importlib.util.spec_from_file_location(
     "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
@@ -25,6 +26,12 @@ STATES = ("workflow:agent-running", "workflow:review", "workflow:changes-request
           "workflow:ready-to-merge", "workflow:blocked", "workflow:human-decision-required",
           "workflow:complete", "workflow:ready")
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
+
+
+def blocked(reason: str) -> int:
+    """Make every terminal failure visible to the workflow operator."""
+    print(f"governance transition blocked: {reason}", file=sys.stderr)
+    return 1
 
 
 def api(*args: str) -> object:
@@ -214,23 +221,35 @@ def main() -> int:
     root = f"repos/{repository}"
     pr = api(f"{root}/pulls/{pr_number}")
     if target not in STATES:
-        return 1
+        return blocked("required governance evidence or state validation failed")
     try:
         issue = str(extract_linked_issue(pr.get("body") or ""))
     except GovernanceError:
-        return 1
+        return blocked("required governance evidence or state validation failed")
     comments = api(f"{root}/issues/{issue}/comments")
     issue_record = api(f"{root}/issues/{issue}")
     issue_labels = {label["name"] for label in issue_record.get("labels", [])}
-    linked_dispatch = any(MARKER in item.get("body", "") and "dispatch_key:" in item.get("body", "")
-                          for item in comments)
-    dispatch_comments = [item for item in comments if MARKER in item.get("body", "")
-                         and ("DISPATCH " in item.get("body", "")
-                              or "DISPATCH_INTENT" in item.get("body", "")
-                              or "ASSIGNMENT_COMPLETED" in item.get("body", ""))
-                         and "dispatch_key:" in item.get("body", "")]
+    trusted_dispatch_comments = [item for item in comments
+                                if item.get("user", {}).get("login") == "github-actions[bot]"
+                                and MARKER in item.get("body", "")
+                                and "dispatch_key:" in item.get("body", "")]
+    linked_dispatch = bool(trusted_dispatch_comments)
+    dispatch_comments = [
+        item for item in trusted_dispatch_comments
+        if ("DISPATCH " in item.get("body", "")
+            or "DISPATCH_INTENT" in item.get("body", "")
+            or "ASSIGNMENT_COMPLETED" in item.get("body", ""))
+    ]
     dispatch_keys = [dispatch_comments[-1]["body"].split("dispatch_key:", 1)[1].split()[0]
                      ] if dispatch_comments else []
+    try:
+        dispatch_keys = [derive_current_dispatch_key(
+            comments=comments, pr_number=int(pr_number), issue_id=int(issue),
+            base=(pr.get("base") or {}).get("ref", "dev"),
+            head_sha=(pr.get("head") or {}).get("sha", ""),
+            pr_body=pr.get("body") or "", require_current_binding=False)]
+    except GovernanceError as error:
+        return blocked(f"current trusted dispatch binding unavailable: {error}")
     dispatch_payload = {}
     if dispatch_comments:
         match = __import__("re").search(
@@ -240,28 +259,26 @@ def main() -> int:
             try:
                 dispatch_payload = json.loads(match.group(1))
             except json.JSONDecodeError:
-                return 1
+                return blocked("required governance evidence or state validation failed")
     authorized_authors = {item for item in os.environ.get(
         "GOVERNED_PR_AUTHORS", "").split(",") if item}
     controller = os.environ.get("GOVERNED_CONTROLLER", "")
     if target == "workflow:complete":
         if not pr.get("merged") or issue_record.get("state") != "open":
-            return 1
+            return blocked("required governance evidence or state validation failed")
     elif issue_record.get("state") != "open" or not linked_dispatch or not (
             issue_labels & {"workflow:agent-running", "workflow:review",
                             "workflow:ready-to-merge",
                             "workflow:changes-requested",
                             "workflow:human-decision-required"}):
-        return 1
+        return blocked("required governance evidence or state validation failed")
     if not authorized_authors or pr.get("user", {}).get("login") not in authorized_authors:
-        return 1
+        return blocked("required governance evidence or state validation failed")
     if not controller:
-        return 1
-    if not any(key in (pr.get("body") or "") for key in dispatch_keys):
-        return 1
+        return blocked("required governance evidence or state validation failed")
     current_states = issue_labels & set(STATES)
     if len(current_states) != 1:
-        return 1
+        return blocked("required governance evidence or state validation failed")
     current = next(iter(current_states))
     head_sha = pr["head"]["sha"]
     trusted_correction_actors = {controller, "github-actions[bot]"} - {""}
@@ -272,13 +289,13 @@ def main() -> int:
         try:
             event_action = json.loads(Path(event_path).read_text()).get("action", "")
         except (OSError, json.JSONDecodeError):
-            return 1
+            return blocked("required governance evidence or state validation failed")
     if target == "workflow:review" and current == "workflow:review" and event_action == "synchronize":
         try:
             correction_evidence = correction_records(
                 comments, trusted_correction_actors, int(issue), int(pr_number))
         except GovernanceError:
-            return 1
+            return blocked("required governance evidence or state validation failed")
         correction_evidence = [
             item for item in correction_evidence
             if item.get("base_dispatch_key") == dispatch_keys[0]
@@ -293,22 +310,22 @@ def main() -> int:
                     comments, trusted_correction_actors, int(issue), int(pr_number),
                     head_sha, dispatch_keys[0])
             except GovernanceError:
-                return 1
+                return blocked("required governance evidence or state validation failed")
             binding = [item for item in comments if "PR_BINDING:" in item.get("body", "")]
             if (not duplicate.get("_already_consumed")
                     or not binding
                     or f"PR_BINDING:{pr_number} head_sha:{head_sha}" not in binding[-1]["body"]):
-                return 1
+                return blocked("required governance evidence or state validation failed")
             return 0
     if target == "workflow:review" and current == "workflow:human-decision-required":
         if event_action != "synchronize":
-            return 1
+            return blocked("required governance evidence or state validation failed")
         try:
             correction = correction_synchronize_evidence(
                 comments, trusted_correction_actors, int(issue), int(pr_number), head_sha,
                 dispatch_keys[0])
         except GovernanceError:
-            return 1
+            return blocked("required governance evidence or state validation failed")
         if not correction.get("_already_consumed"):
             completion = {key: value for key, value in correction.items()
                           if not key.startswith("_")}
@@ -326,17 +343,17 @@ def main() -> int:
     try:
         signed_result = verified_review_result(pr, int(issue))
     except (GovernanceError, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return 1
+        return blocked("required governance evidence or state validation failed")
     if target == "workflow:changes-requested":
         if os.environ.get("GOVERNED_PILOT_ENABLED", "").strip().lower() != "true":
-            return 1
+            return blocked("required governance evidence or state validation failed")
         pilot_issues = {item.strip() for item in os.environ.get(
             "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
         if "*" not in pilot_issues and issue not in pilot_issues:
-            return 1
+            return blocked("required governance evidence or state validation failed")
         if signed_result is not None:
             if signed_result.get("disposition") != "changes-requested":
-                return 1
+                return blocked("required governance evidence or state validation failed")
             correction_findings = [
                 safe_content(json.dumps(item, sort_keys=True))
                 for item in signed_result.get("findings", [])
@@ -352,14 +369,14 @@ def main() -> int:
             return 0
     if target == "workflow:ready-to-merge" and signed_result is not None:
         if signed_result.get("disposition") != "approved":
-            return 1
+            return blocked("required governance evidence or state validation failed")
     if target == "workflow:human-decision-required" and signed_result is not None:
         if signed_result.get("disposition") != "blocked":
-            return 1
+            return blocked("required governance evidence or state validation failed")
     binding = [item for item in comments if "PR_BINDING:" in item.get("body", "")]
     if (not correction_completed and binding
             and f"PR_BINDING:{pr_number} head_sha:{head_sha}" not in binding[-1]["body"]):
-        return 1
+        return blocked("required governance evidence or state validation failed")
     if not binding:
         api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
             f"body={MARKER}\nPR_BINDING:{pr_number} head_sha:{pr['head']['sha']} "
@@ -374,7 +391,7 @@ def main() -> int:
             resulting_tier = transition_escalation(
                 previous_tier, blocked=True, retries=corrections)
         except GovernanceError:
-            return 1
+            return blocked("required governance evidence or state validation failed")
         if resulting_tier == "human-decision-required":
             target = "workflow:human-decision-required"
     if current != target:
@@ -382,7 +399,7 @@ def main() -> int:
             if not correction_completed:
                 validate_transition(current, target)
         except GovernanceError:
-            return 1
+            return blocked("required governance evidence or state validation failed")
     audit_payload = {
         "issue_id": int(issue), "pr_id": int(pr_number),
         "correlation_id": dispatch_keys[0], "agent_role": dispatch_payload.get(
@@ -409,7 +426,7 @@ def main() -> int:
             AppendOnlyAudit(), "review" if target == "workflow:review" else "disposition",
             audit_payload, os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue}.jsonl"))
     except GovernanceError:
-        return 1
+        return blocked("required governance evidence or state validation failed")
     if target == "workflow:changes-requested":
         maximum = int(os.environ.get("CORRECTION_MAX", "3"))
         if corrections >= maximum:
@@ -421,7 +438,7 @@ def main() -> int:
                         dispatch_keys[0], head_sha):
                     return 0
             except GovernanceError:
-                return 1
+                return blocked("required governance evidence or state validation failed")
         if target == "workflow:changes-requested":
             for state in issue_labels & set(STATES):
                 if state != "workflow:changes-requested":
@@ -469,7 +486,7 @@ def main() -> int:
     api("--method", "POST", f"{root}/issues/{issue}/labels", "-f", f"labels[]={target}")
     resulting = {label["name"] for label in api(f"{root}/issues/{issue}")["labels"]}
     if len(resulting & set(STATES)) != 1 or target not in resulting:
-        return 1
+        return blocked("required governance evidence or state validation failed")
     api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
         f"body={MARKER}\nSTATE_TRANSITION:{target} pr:{pr_number} head_sha:{pr['head']['sha']}")
     if target == "workflow:complete":

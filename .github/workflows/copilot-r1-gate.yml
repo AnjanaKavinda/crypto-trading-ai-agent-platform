@@ -1,0 +1,136 @@
+name: Governed R1 human gate
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+  statuses: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.base.ref == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - name: Fetch trusted current-head snapshots
+        id: fetch
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p .governance/r1
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance/r1/pr.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > .governance/r1/reviews.json
+          linked="$(python - <<'PY'
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import extract_linked_issue
+          print(extract_linked_issue(json.load(open('.governance/r1/pr.json')).get('body') or ''))
+          PY
+          )"
+          gh api "repos/${{ github.repository }}/issues/$linked" > .governance/r1/issue.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/issues/$linked/comments" > .governance/r1/issue-comments.json
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          gh api "repos/${{ github.repository }}/commits/$head/status" > .governance/r1/status.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$head/check-runs" > .governance/r1/checks.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > .governance/r1/files.json
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \
+            -H 'Accept: application/vnd.github.v3.diff' > .governance/r1/pr.diff
+      - name: Publish terminal error when trusted snapshots cannot be fetched
+        if: steps.fetch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+          if [ -n "$head" ]; then
+           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+             -f state=error -f context=governance-gate \
+             -f description='R1 trusted snapshot resolution failed; inspect workflow diagnostics'
+          fi
+          exit 1
+      - name: Classify linked issue review tier
+        id: classify
+        if: steps.fetch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import required_review_tier_from_labels
+          issue = json.load(open('.governance/r1/issue.json'))
+          print("tier=" + required_review_tier_from_labels(issue.get("labels", [])))
+          PY
+      - name: Leave non-R1 review untouched
+        if: steps.classify.outcome == 'success' && steps.classify.outputs.tier != 'R1'
+        run: echo "Linked issue is not R1; this workflow performs no governance status writes."
+      - name: Leave R1 pending before approval and on invalidation
+        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+            -f state=pending -f context=governance-gate \
+            -f description='R1 requires current-head AnjanaKavinda approval and deterministic checks'
+      - name: Publish trusted R1 result
+        id: evaluate
+        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, '.github/scripts')
+          from r1_gate import evaluate_r1_gate
+          pr = json.load(open('.governance/r1/pr.json'))
+          reviews = json.load(open('.governance/r1/reviews.json'))
+          if reviews and isinstance(reviews[0], list):
+              reviews = [item for page in reviews for item in page]
+          issue = json.load(open('.governance/r1/issue.json'))
+          status = json.load(open('.governance/r1/status.json'))
+          checks = json.load(open('.governance/r1/checks.json'))
+          comments = [item for page in json.load(open('.governance/r1/issue-comments.json'))
+                      for item in page]
+          files = [item for page in json.load(open('.governance/r1/files.json'))
+                   for item in page]
+          result = evaluate_r1_gate(
+              pr, reviews, issue, status, checks,
+              required_checks=[x.strip() for x in os.environ.get('REQUIRED_CHECKS', '').split(',') if x.strip()],
+              comments=comments,
+              changed_files=tuple(item.get('filename', '') for item in files),
+              diff=open('.governance/r1/pr.diff', encoding='utf-8').read())
+          json.dump(result, open('.governance/r1/result.json', 'w'), sort_keys=True)
+          PY
+          head="$(jq -r .head_sha .governance/r1/result.json)"
+          state="$(jq -r .state .governance/r1/result.json)"
+          test "$state" = not-applicable && exit 0 || true
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+            -f state="$state" -f context=governance-gate \
+            -f description="$(jq -r .reason .governance/r1/result.json)"
+          touch .governance/r1/final-status-emitted
+      - name: Publish terminal evaluation error
+        if: >-
+          always() &&
+          steps.fetch.outcome == 'success' &&
+          (steps.classify.outcome == 'failure' || steps.evaluate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          if [ ! -e .governance/r1/final-status-emitted ]; then
+           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+             -f state=error -f context=governance-gate \
+             -f description='R1 evaluation or publication failed; inspect workflow diagnostics'
+          fi

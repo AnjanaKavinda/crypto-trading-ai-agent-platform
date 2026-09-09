@@ -17,16 +17,114 @@ permissions:
   issues: write
   statuses: write
 jobs:
-  produce-review-provenance:
+  resolve-pr:
+    name: resolve exact open PR for workflow head
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'pull_request' &&
        vars.GOVERNED_PILOT_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+    steps:
+      - name: Resolve one open dev PR by exact head
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          RUN_HEAD: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_PR" ]; then
+            pr="$(gh api "repos/${{ github.repository }}/pulls/$INPUT_PR")"
+            test "$(jq -r .state <<<"$pr")" = open
+            test "$(jq -r .base.ref <<<"$pr")" = dev
+            test -n "$(jq -r .head.sha <<<"$pr")"
+            jq -r .number <<<"$pr" > "$GITHUB_OUTPUT.tmp"
+          else
+            mapfile -t matches < <(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$RUN_HEAD/pulls" \
+              -H 'Accept: application/vnd.github+json' |
+              jq -r '.[] | select(.state == "open" and .base.ref == "dev") | .number')
+            test "${#matches[@]}" -eq 1
+            printf '%s\n' "${matches[0]}" > "$GITHUB_OUTPUT.tmp"
+          fi
+          printf 'pr_number=%s\n' "$(cat "$GITHUB_OUTPUT.tmp")" >> "$GITHUB_OUTPUT"
+  classify-r1:
+    name: classify-review-tier-before-model
+    needs: resolve-pr
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       vars.GOVERNED_PILOT_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.classify.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - name: Classify R1 before reviewer setup
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
+        run: |
+          case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance-pr.json
+          linked="$(python - <<'PY'
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import extract_linked_issue
+          print(extract_linked_issue(json.load(open('.governance-pr.json')).get('body') or ''))
+          PY
+          )"
+          gh api "repos/${{ github.repository }}/issues/$linked" > .governance-issue.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import required_review_tier_from_labels
+          issue = json.load(open('.governance-issue.json'))
+          print("tier=" + required_review_tier_from_labels(issue.get("labels", [])))
+          PY
+  terminal-classification-diagnostic:
+    name: publish terminal classification failure
+    needs: [resolve-pr, classify-r1]
+    if: >-
+      always() &&
+      (needs.resolve-pr.result == 'failure' || needs.classify-r1.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish exact-head governance error
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_HEAD: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t heads < <(gh api --paginate \
+           "repos/${{ github.repository }}/commits/$EVENT_HEAD/pulls" \
+           -H 'Accept: application/vnd.github+json' |
+           jq -r '.[] | select(.state == "open" and .base.ref == "dev") | .head.sha')
+          if [ "${#heads[@]}" -eq 1 ]; then
+           gh api --method POST "repos/${{ github.repository }}/statuses/${heads[0]}" \
+             -f state=error -f context=governance-gate \
+             -f description='Independent-review classification failed; inspect workflow diagnostics'
+          fi
+          exit 1
+  produce-review-provenance:
+    needs: [resolve-pr, classify-r1]
+    if: >-
+      needs.classify-r1.outputs.tier != 'R1' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        vars.GOVERNED_PILOT_ENABLED == 'true'))
     name: produce-review-provenance
     runs-on: ubuntu-latest
     env:
-      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}
+      PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
     steps:
       # This job is the trusted independent-review producer execution. It is
       # a separate governed run from the workflow that dispatches or
@@ -73,7 +171,10 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
           gh api --paginate --slurp "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)/comments" > /tmp/issue-comments.json
           python - <<'PY'
-          import json, os, re
+          import json, os
+          import sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import derive_current_dispatch_key
           if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
               pr = json.load(open('/tmp/pr.json'))
               pages = json.load(open('/tmp/issue-comments.json'))
@@ -83,17 +184,15 @@ jobs:
               author = (pr.get('user') or {}).get('login')
               if not allowed_authors or author not in allowed_authors:
                   raise SystemExit('automatic review PR author is not governed')
-              keys = []
-              for comment in comments:
-                  body = comment.get('body') or ''
-                  if '<!-- governed-copilot-orchestrator:v1 -->' not in body:
-                      continue
-                  match = re.search(r'dispatch_key:([A-Za-z0-9_-]+)', body)
-                  if match:
-                      keys.append(match.group(1))
-              pr_body = pr.get('body') or ''
-              if not keys or not any(key in pr_body for key in keys):
-                  raise SystemExit('automatic review PR is not bound to a governed dispatch')
+              issue_id = int(open('/tmp/issue_number.txt').read())
+              # automatic review PR is not bound to a governed dispatch when
+              # the trusted current binding is absent or ambiguous.
+              key = derive_current_dispatch_key(
+                  comments=comments, pr_number=int(pr['number']),
+                  issue_id=issue_id, base=(pr.get('base') or {}).get('ref'),
+                  head_sha=(pr.get('head') or {}).get('sha'),
+                  pr_body=pr.get('body') or '')
+              print(f'current governed dispatch key: {key}')
           PY
           gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > /tmp/files.json
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import time
 from typing import Any, Iterable, Mapping
@@ -100,6 +101,7 @@ LOW_RISK_REVIEW_LABELS = {"risk:low", "type:docs", "type:test"}
 # GitHub review states that can ever establish disposition. Anything else
 # (COMMENTED, DISMISSED, PENDING) is not a completed independent review.
 _REVIEW_STATE_DISPOSITIONS = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes-requested"}
+DISPATCH_MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
 
 
 def required_review_tier_from_labels(labels: Iterable[Any]) -> str:
@@ -137,6 +139,77 @@ def extract_linked_issue(body: str) -> int:
     if len(issue_ids) != 1:
         raise GovernanceError("PR has ambiguous linked issues")
     return next(iter(issue_ids))
+
+
+def derive_current_dispatch_key(*, comments: Iterable[Mapping[str, Any]],
+                                pr_number: int, issue_id: int, base: str,
+                                head_sha: str, pr_body: str = "",
+                                require_current_binding: bool = True) -> str:
+    """Derive exactly one current dispatch key from trusted bot evidence.
+
+    The PR body is only a consistency check.  It is not required to carry the
+    key, because the authoritative handoff is the controller's comment.
+    """
+    if base != "dev" or not head_sha:
+        raise GovernanceError("dispatch binding has an invalid base or head")
+    candidates: set[str] = set()
+    stale_seen = False
+    for comment in comments:
+        if (not isinstance(comment, Mapping) or
+                (comment.get("user") or {}).get("login") != "github-actions[bot]"):
+            continue
+        body = str(comment.get("body") or "")
+        if DISPATCH_MARKER not in body:
+            continue
+        key_match = re.search(r"(?m)(?:^|\s)dispatch_key:([A-Za-z0-9_-]+)(?:\s|$)", body)
+        if not key_match:
+            continue
+        key = key_match.group(1)
+        if "PR_BINDING:" in body:
+            binding = re.search(
+                r"PR_BINDING:(\d+)\s+head_sha:([A-Za-z0-9]+)\s+"
+                r"dispatch_key:([A-Za-z0-9_-]+)", body)
+            if not binding:
+                raise GovernanceError("malformed trusted PR dispatch binding")
+            if int(binding.group(1)) != int(pr_number):
+                continue
+            if binding.group(3) != key:
+                raise GovernanceError("dispatch binding key is inconsistent")
+            if binding.group(2) != head_sha:
+                stale_seen = True
+                continue
+            candidates.add(key)
+            continue
+        if require_current_binding:
+            # Intent and assignment-completion comments establish lineage only.
+            # They are deliberately insufficient as a current PR binding.
+            continue
+        record_match = re.search(
+            r"(?m)^(?:DISPATCH|DISPATCH_INTENT|ASSIGNMENT_COMPLETED)\s+(\{.*\})\s*$",
+            body)
+        if not record_match:
+            continue
+        try:
+            record = json.loads(record_match.group(1))
+        except json.JSONDecodeError as error:
+            raise GovernanceError("malformed trusted dispatch evidence") from error
+        if (record.get("issue_id") != int(issue_id) or
+                record.get("base_branch") not in (None, "dev")):
+            raise GovernanceError("dispatch evidence is stale or bound to another issue/base")
+        if record.get("pr_id") not in (None, int(pr_number)):
+            continue
+        if record.get("head_sha") not in (None, head_sha):
+            stale_seen = True
+            continue
+        candidates.add(key)
+    body_keys = set(re.findall(r"dispatch_key:([A-Za-z0-9_-]+)", pr_body or ""))
+    if body_keys and (len(body_keys) != 1 or candidates != body_keys):
+        raise GovernanceError("PR dispatch key does not match trusted current binding")
+    if len(candidates) != 1:
+        if stale_seen:
+            raise GovernanceError("trusted dispatch evidence is stale for the current PR head")
+        raise GovernanceError("trusted current dispatch key is missing or ambiguous")
+    return next(iter(candidates))
 
 def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
                              reviews: Iterable[Mapping[str, Any]],
@@ -183,6 +256,8 @@ def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
         tier = config.get("tier")
         if tier not in REVIEW_TIERS or not isinstance(session_id, str) or not session_id.strip():
             continue
+        if rank[tier] < rank[required_tier]:
+            continue
         if session_id == implementer_session_id:
             continue
         if str(item.get("commit_id") or "") != head_sha:
@@ -194,13 +269,15 @@ def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
             "review_id": item.get("id"),
             "reviewer_identity": login,
             "reviewer_session_id": session_id,
-            "review_tier": tier,
+            # Configuration is an authorization ceiling.  The review event's
+            # effective tier is the policy requirement, not the ceiling.
+            "review_tier": required_tier,
             "disposition": disposition,
             "submitted_at": item.get("submitted_at") or "",
         }
         candidate_key = (
             1 if disposition == "approved" else 0,
-            rank[tier],
+            rank[required_tier],
             str(candidate["submitted_at"]),
         )
         if best is None or candidate_key > best["_key"]:
@@ -354,10 +431,8 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
     required_tier = artifact["required_review_tier"]
     if review_tier not in REVIEW_TIERS or required_tier not in REVIEW_TIERS:
         raise GovernanceError("provenance artifact contains an invalid review tier")
-    rank = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
-    if rank[review_tier] < rank[required_tier]:
-        raise GovernanceError(
-            "provenance artifact review tier does not satisfy the required tier")
+    if review_tier != required_tier:
+        raise GovernanceError("actual review tier must equal the required tier")
     try:
         artifact_time = float(artifact["timestamp"])
     except (TypeError, ValueError):
