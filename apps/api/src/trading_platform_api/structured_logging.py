@@ -41,6 +41,7 @@ _PREFIX_SENSITIVE_FIELD_NAMES = frozenset(
     }
 )
 _SCALAR_TYPES = (str, int, float, bool, type(None))
+_KNOWN_LOG_LEVEL_NAMES = frozenset(logging.getLevelNamesMapping().keys())
 _REQUIRED_STRUCTURED_LOG_FIELDS = frozenset(
     {
         "timestamp",
@@ -68,14 +69,18 @@ class CorrelationContext:
     correlation_id: str
     trace_id: str
 
+    def __post_init__(self) -> None:
+        _require_non_blank_string("correlation_id", self.correlation_id)
+        _require_non_blank_string("trace_id", self.trace_id)
+
 
 def create_correlation_context(
     *, correlation_id: str | None = None, trace_id: str | None = None
 ) -> CorrelationContext:
-    resolved_correlation_id = str(uuid4()) if correlation_id is None else _require_string_identifier(
+    resolved_correlation_id = str(uuid4()) if correlation_id is None else _require_non_blank_string(
         "correlation_id", correlation_id
     )
-    resolved_trace_id = str(uuid4()) if trace_id is None else _require_string_identifier(
+    resolved_trace_id = str(uuid4()) if trace_id is None else _require_non_blank_string(
         "trace_id", trace_id
     )
     return CorrelationContext(
@@ -98,6 +103,12 @@ def build_structured_log_entry(
     details: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_level = _normalize_level(level)
+    _require_non_blank_string("service", service)
+    _require_non_blank_string("component", component)
+    _require_non_blank_string("event", event)
+    _require_optional_non_blank_string("event_id", event_id)
+    _require_optional_string("status", status)
+    _require_optional_string("error_code", error_code)
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         "level": normalized_level,
@@ -121,7 +132,11 @@ def redact_sensitive_values(value: Any) -> Any:
 
 def serialize_log_entry(entry: Mapping[str, Any]) -> str:
     _validate_required_fields(entry)
-    validated_entry = _validate_supported_value(redact_sensitive_values(dict(entry)), "$")
+    _validate_structured_field_values(entry)
+    normalized_entry = dict(entry)
+    normalized_entry["level"] = _normalize_level(entry["level"])
+    normalized_entry["severity"] = _normalize_level(entry["severity"])
+    validated_entry = _validate_supported_value(redact_sensitive_values(normalized_entry), "$")
     return json.dumps(validated_entry, separators=(",", ":"), allow_nan=False)
 
 
@@ -145,7 +160,10 @@ def _normalize_level(level: str | int) -> str:
     stripped_level = level.strip()
     if not stripped_level:
         raise StructuredLoggingError("Logging level must not be blank.")
-    return stripped_level.upper()
+    normalized_level = stripped_level.upper()
+    if normalized_level not in _KNOWN_LOG_LEVEL_NAMES:
+        raise StructuredLoggingError("Logging level must be a known logging level.")
+    return normalized_level
 
 
 def _normalize_field_name(value: str) -> str:
@@ -236,9 +254,11 @@ def _validate_supported_value(value: Any, path: str) -> Any:
     raise StructuredLoggingError(f"Unsupported value type in structured log entry at {path}.")
 
 
-def _require_string_identifier(identifier_name: str, value: str) -> str:
+def _require_non_blank_string(identifier_name: str, value: str) -> str:
     if not isinstance(value, str):
-        raise StructuredLoggingError(f"{identifier_name} must be a string when supplied.")
+        raise StructuredLoggingError(f"{identifier_name} must be a string.")
+    if not value.strip():
+        raise StructuredLoggingError(f"{identifier_name} must not be blank.")
     return value
 
 
@@ -258,3 +278,31 @@ def _validate_required_fields(entry: Mapping[str, Any]) -> None:
     if missing_fields:
         missing_fields_text = ", ".join(missing_fields)
         raise StructuredLoggingError(f"Structured log entry is missing required field(s): {missing_fields_text}.")
+
+
+def _require_optional_non_blank_string(field_name: str, value: Any) -> None:
+    if value is None:
+        return
+    _require_non_blank_string(field_name, value)
+
+
+def _require_optional_string(field_name: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise StructuredLoggingError(f"{field_name} must be a string.")
+
+
+def _validate_structured_field_values(entry: Mapping[str, Any]) -> None:
+    normalized_level = _normalize_level(entry["level"])
+    normalized_severity = _normalize_level(entry["severity"])
+    if normalized_level != normalized_severity:
+        raise StructuredLoggingError("severity must match level.")
+    _require_non_blank_string("service", entry["service"])
+    _require_non_blank_string("component", entry["component"])
+    _require_non_blank_string("event", entry["event"])
+    _require_non_blank_string("correlation_id", entry["correlation_id"])
+    _require_non_blank_string("trace_id", entry["trace_id"])
+    _require_optional_non_blank_string("event_id", entry["event_id"])
+    _require_optional_string("status", entry["status"])
+    _require_optional_string("error_code", entry["error_code"])

@@ -34,6 +34,24 @@ def _is_valid_uuid(value: str) -> bool:
         return False
 
 
+def _manual_valid_entry() -> dict[str, object]:
+    return {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "level": "INFO",
+        "severity": "INFO",
+        "service": "api",
+        "component": "structured-logging",
+        "event": "log.test",
+        "correlation_id": "corr-1",
+        "trace_id": "trace-1",
+        "event_id": None,
+        "status": None,
+        "duration_ms": None,
+        "error_code": None,
+        "details": {},
+    }
+
+
 def test_generated_context_contains_non_empty_uuid_identifiers() -> None:
     context = create_correlation_context()
 
@@ -55,6 +73,23 @@ def test_supplied_identifiers_are_preserved_exactly() -> None:
     context = create_correlation_context(correlation_id="corr-123", trace_id="trace-xyz")
 
     assert context == CorrelationContext(correlation_id="corr-123", trace_id="trace-xyz")
+
+
+@pytest.mark.parametrize("identifier_value", ["", " ", "\t"])
+def test_create_context_rejects_blank_supplied_identifiers(identifier_value: str) -> None:
+    with pytest.raises(StructuredLoggingError):
+        create_correlation_context(correlation_id=identifier_value)
+
+    with pytest.raises(StructuredLoggingError):
+        create_correlation_context(trace_id=identifier_value)
+
+
+@pytest.mark.parametrize("correlation_id, trace_id", [("", "trace"), ("corr", " "), ("\n", "trace")])
+def test_direct_correlation_context_construction_rejects_blank_identifiers(
+    correlation_id: str, trace_id: str
+) -> None:
+    with pytest.raises(StructuredLoggingError):
+        CorrelationContext(correlation_id=correlation_id, trace_id=trace_id)
 
 
 def test_event_id_is_null_when_absent_and_preserved_when_supplied() -> None:
@@ -147,6 +182,17 @@ def test_level_and_severity_are_normalized_to_uppercase(level_input: str | int) 
 
     assert parsed["level"] == parsed["severity"]
     assert parsed["level"].isupper()
+
+
+def test_unknown_string_level_is_rejected() -> None:
+    with pytest.raises(StructuredLoggingError):
+        build_structured_log_entry(
+            level="banana",
+            service="api",
+            component="structured-logging",
+            event="log.test",
+            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+        )
 
 
 def test_optional_status_duration_and_error_code_are_serialized() -> None:
@@ -440,6 +486,135 @@ def test_serialization_fails_when_required_fields_are_missing() -> None:
         serialize_log_entry({"service": "api"})
 
     assert "missing required field(s)" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("event_id_value", [123, object(), "", " "])
+def test_event_id_validation_rejects_invalid_values(event_id_value: object) -> None:
+    with pytest.raises(StructuredLoggingError):
+        build_structured_log_entry(
+            level="info",
+            service="api",
+            component="structured-logging",
+            event="log.test",
+            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+            event_id=event_id_value,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "field_name, field_value",
+    [
+        ("service", 1),
+        ("component", object()),
+        ("event", 1.2),
+        ("status", 1),
+        ("error_code", object()),
+    ],
+)
+def test_build_entry_rejects_non_string_values_for_string_fields(
+    field_name: str, field_value: object
+) -> None:
+    kwargs: dict[str, object] = {
+        "level": "info",
+        "service": "api",
+        "component": "structured-logging",
+        "event": "log.test",
+        "context": create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+    }
+    kwargs[field_name] = field_value
+    with pytest.raises(StructuredLoggingError):
+        build_structured_log_entry(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field_name, blank_value", [("service", ""), ("component", " "), ("event", "\n")])
+def test_build_entry_rejects_blank_required_string_fields(field_name: str, blank_value: str) -> None:
+    kwargs: dict[str, object] = {
+        "level": "info",
+        "service": "api",
+        "component": "structured-logging",
+        "event": "log.test",
+        "context": create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+    }
+    kwargs[field_name] = blank_value
+    with pytest.raises(StructuredLoggingError):
+        build_structured_log_entry(**kwargs)  # type: ignore[arg-type]
+
+
+def test_manual_serialization_enforces_non_blank_context_identifiers() -> None:
+    entry = _manual_valid_entry()
+    entry["correlation_id"] = " "
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
+
+    entry = _manual_valid_entry()
+    entry["trace_id"] = ""
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
+
+
+@pytest.mark.parametrize("event_id_value", [123, object(), "", " \t"])
+def test_manual_serialization_enforces_event_id_constraints(event_id_value: object) -> None:
+    entry = _manual_valid_entry()
+    entry["event_id"] = event_id_value
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
+
+
+@pytest.mark.parametrize(
+    "field_name, invalid_value",
+    [
+        ("service", 1),
+        ("component", []),
+        ("event", {}),
+        ("status", 3),
+        ("error_code", False),
+    ],
+)
+def test_manual_serialization_rejects_non_string_values_for_string_fields(
+    field_name: str, invalid_value: object
+) -> None:
+    entry = _manual_valid_entry()
+    entry[field_name] = invalid_value
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
+
+
+@pytest.mark.parametrize("field_name, invalid_value", [("service", ""), ("component", " "), ("event", "\t")])
+def test_manual_serialization_rejects_blank_required_string_fields(
+    field_name: str, invalid_value: str
+) -> None:
+    entry = _manual_valid_entry()
+    entry[field_name] = invalid_value
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
+
+
+@pytest.mark.parametrize("level_value", ["info", "WaRnInG", "critical"])
+def test_manual_serialization_accepts_known_string_levels_case_insensitively(level_value: str) -> None:
+    entry = _manual_valid_entry()
+    entry["level"] = level_value
+    entry["severity"] = level_value
+
+    serialized = serialize_log_entry(entry)
+    parsed = json.loads(serialized)
+    assert parsed["level"] == level_value.upper()
+    assert parsed["severity"] == level_value.upper()
+
+
+@pytest.mark.parametrize("field_name", ["level", "severity"])
+def test_manual_serialization_rejects_unknown_string_levels(field_name: str) -> None:
+    entry = _manual_valid_entry()
+    entry[field_name] = "banana"
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
+
+
+def test_manual_serialization_rejects_level_severity_mismatch() -> None:
+    entry = _manual_valid_entry()
+    entry["level"] = "INFO"
+    entry["severity"] = "ERROR"
+    with pytest.raises(StructuredLoggingError):
+        serialize_log_entry(entry)
 
 
 def test_module_import_has_no_logging_output_or_root_reconfiguration(
