@@ -10,6 +10,8 @@ This package provides the minimal FastAPI bootstrap entrypoint for the backend r
 - Adds typed runtime context settings for deployment environment and operating mode.
 - Adds deterministic standard-library structured logging primitives in
   `trading_platform_api.structured_logging`.
+- Adds read-only `/health`, `/health/live`, and fail-closed
+  `/health/trading-readiness` operational endpoints.
 
 ## Configuration
 
@@ -30,4 +32,4 @@ This skeleton intentionally does **not** include:
 - trading or strategy logic
 - execution or exchange integrations
 - persistence or database integration
-- health/readiness/liveness endpoints
+- an authoritative trading-readiness evaluator
