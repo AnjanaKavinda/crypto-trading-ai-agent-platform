@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from r1_gate import evaluate_r1_gate
+from review_provenance import required_review_tier_from_labels
 
 
 def snapshots(review_state="COMMENTED", commit="head", checks="success"):
@@ -26,6 +27,31 @@ def snapshots(review_state="COMMENTED", commit="head", checks="success"):
 
 
 class R1GateTests(unittest.TestCase):
+    @staticmethod
+    def run_workflow_fixture(fetched, required_checks=("governance-ci",),
+                             fetch_failed=False, evaluate_failed=False):
+        """Model the trusted shell path's status writes with mocked gh calls."""
+        writes = []
+        head = fetched["pr"]["head"]["sha"]
+        if fetch_failed:
+            writes.append((head, "error"))
+            return writes
+        tier = required_review_tier_from_labels(fetched["issue"].get("labels", []))
+        if tier != "R1":
+            return writes
+        writes.append((head, "pending"))
+        if evaluate_failed:
+            writes.append((head, "error"))
+            return writes
+        result = evaluate_r1_gate(
+            fetched["pr"], fetched["reviews"], fetched["issue"],
+            fetched["status"], fetched["checks"],
+            required_checks=required_checks, comments=fetched["comments"],
+            changed_files=tuple(item["filename"] for item in fetched["files"]),
+            diff=fetched["diff"])
+        writes.append((head, result["state"]))
+        return writes
+
     def test_mocked_workflow_snapshot_harness_success_and_terminal_failures(self):
         args, options = snapshots("APPROVED")
         pr, reviews, issue, status, checks = args
@@ -76,6 +102,28 @@ class R1GateTests(unittest.TestCase):
             for failure in ("pr", "issue_comments", "files", "diff"):
                 with self.assertRaisesRegex(RuntimeError, "mock gh failure"):
                     fetch(Path(directory) / failure, failure)
+            self.assertEqual(self.run_workflow_fixture(fetched), [
+                ("head", "pending"), ("head", "success")])
+            self.assertEqual(self.run_workflow_fixture(
+                fetched, fetch_failed=True), [("head", "error")])
+            self.assertEqual(self.run_workflow_fixture(
+                fetched, evaluate_failed=True), [
+                ("head", "pending"), ("head", "error")])
+
+    def test_r2_and_r3_terminal_statuses_are_never_overwritten(self):
+        args, options = snapshots("APPROVED")
+        pr, reviews, issue, status, checks = args
+        fetched = {
+            "pr": pr, "reviews": reviews, "issue": issue, "status": status,
+            "checks": checks, "comments": options["comments"],
+            "files": [{"filename": ".github/scripts/x.py"}],
+            "diff": options["diff"],
+        }
+        for tier in ("R2", "R3"):
+            issue["labels"] = [{"name": f"risk:{'normal' if tier == 'R2' else 'high'}"}]
+            existing = [("head", "success" if tier == "R2" else "failure")]
+            self.assertEqual(self.run_workflow_fixture(fetched), [])
+            self.assertEqual(existing, [("head", "success" if tier == "R2" else "failure")])
 
     def test_preapproval_is_pending_without_invoking_any_adapter(self):
         args, options = snapshots()
@@ -129,6 +177,10 @@ class R1GateTests(unittest.TestCase):
         self.assertIn("--paginate --slurp", workflow)
         self.assertIn("for page in json.load", workflow)
         self.assertIn("Publish terminal evaluation error", workflow)
+        self.assertIn("Classify linked issue review tier", workflow)
+        self.assertIn("steps.classify.outputs.tier != 'R1'", workflow)
+        self.assertIn("steps.classify.outputs.tier == 'R1'", workflow)
+        self.assertIn("no governance status writes", workflow)
         self.assertIn("ref: dev", workflow)
         self.assertIn("pulls/$PR_NUMBER.diff", workflow)
         self.assertIn("if: steps.fetch.outcome == 'failure'", workflow)

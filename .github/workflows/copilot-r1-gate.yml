@@ -58,8 +58,23 @@ jobs:
              -f description='R1 trusted snapshot resolution failed; inspect workflow diagnostics'
           fi
           exit 1
-      - name: Leave R1 pending before approval and on invalidation
+      - name: Classify linked issue review tier
+        id: classify
         if: steps.fetch.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import required_review_tier_from_labels
+          issue = json.load(open('.governance/r1/issue.json'))
+          print("tier=" + required_review_tier_from_labels(issue.get("labels", [])))
+          PY
+      - name: Leave non-R1 review untouched
+        if: steps.classify.outcome == 'success' && steps.classify.outputs.tier != 'R1'
+        run: echo "Linked issue is not R1; this workflow performs no governance status writes."
+      - name: Leave R1 pending before approval and on invalidation
+        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -69,7 +84,7 @@ jobs:
             -f description='R1 requires current-head AnjanaKavinda approval and deterministic checks'
       - name: Publish trusted R1 result
         id: evaluate
-        if: steps.fetch.outcome == 'success'
+        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -109,7 +124,7 @@ jobs:
         if: >-
           always() &&
           steps.fetch.outcome == 'success' &&
-          steps.evaluate.outcome == 'failure'
+          (steps.classify.outcome == 'failure' || steps.evaluate.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
