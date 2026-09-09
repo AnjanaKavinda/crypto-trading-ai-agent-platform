@@ -2,7 +2,8 @@
 
 | Step | Producer | Canonical output | Consumer | Validation / authority gate | Fail-closed behavior |
 |---|---|---|---|---|---|
-| 1 | Data + Data Quality | `C-002 MarketSnapshot`, `C-003 DataQualityReport` | Analysis agents | Schema/version compatibility, freshness window, source lineage/provenance (`C-091`, `C-092`) | Missing/stale/degraded/unknown quality blocks downstream advancement toward execution. |
+| 1a | Data | `C-002 MarketSnapshot` | Data Quality + Analysis agents | Schema/version compatibility, source lineage/provenance (`C-091`) | Missing/invalid/unknown snapshot blocks quality and analysis progression. |
+| 1b | Data Quality | `C-003 DataQualityReport` | Analysis agents | Freshness/completeness/agreement checks using governed data/source/dataset references (`C-001`, `C-091`, `C-092`) | Missing/stale/degraded/unknown quality blocks downstream advancement toward execution. |
 | 2 | Analysis agents | `C-007 AnalysisSnapshot`, `C-008 EvidenceItem` | Meta-analysis + critic | Evidence attribution, method/version traceability, expiry/freshness validity | Invalid/expired/unattributed evidence is rejected or quarantined. |
 | 3 | Meta-analysis + critic | `C-006 MarketContext`, `C-009 ConfluenceAssessment`, `C-010 ConflictAssessment`, `C-019 AdversarialAssessment` | Strategy engine | Independence/correlation review (`C-093`), unresolved critical conflicts, explicit uncertainty (`C-069`) | Critical unresolved conflicts/low independence/unknown uncertainty state => `NO_TRADE` path only. |
 | 4 | Strategy engine | `C-022 StrategyEligibility` | Signal engine | Strategy/version eligibility (`C-021`, `C-022`), regime compatibility | Ineligible strategy state cannot create signal candidate. |
