@@ -83,34 +83,44 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-060 | AuditEvent | Audit | Audit Store, Security | Immutable material action/decision event. |
 | C-061 | AgentDefinition | Agent Governance | Orchestrator, Evaluation, Safety | Declares bounded role, allowed inputs/outputs, and non-escalatable authority. |
 | C-062 | AgentResult | Agent Runtime | Orchestrator, Handoff, Audit | Structured, attributable, time-bounded output for a specific task context. |
-| C-063 | AgentPermissionProfile | Security/Agent Governance | Orchestrator, Safety, Approval | Machine-enforceable least-privilege profile bound to agent role and mode. |
+| C-063 | AgentPermissionProfile | Security Governance | Orchestrator, Safety, Approval | Machine-enforceable least-privilege runtime grant bound to role/mode and constrained by `AgentPermissionPolicy`. |
 | C-064 | AgentToolAccess | Orchestrator Security | Runtime Agent Shell, Audit | Tool grant is explicit, scoped, revocable, and never implies execution authority. |
 | C-065 | AgentHandoff | Orchestrator | Downstream Agents, Audit, Learning | Handoff preserves provenance, unresolved risks, and bounded responsibilities. |
 | C-066 | AgentEvaluation | Evaluation | Governance, Learning, Orchestrator | Evaluation is evidence-based and cannot directly modify production execution/risk behavior. |
 | C-067 | ModelRoutingDecision | Model Governance | Runtime Agent Router, Audit, Safety | Model/provider choice must be explicit, attributable, and policy-compliant. |
 | C-068 | FibonacciAssessment | Technical Analysis | MarketContext, Strategy | Fibonacci findings are reproducible from deterministic inputs and include invalidation context. |
 | C-069 | AnalyticalUncertainty | Analysis | Strategy, UX, Safety | Uncertainty must be explicit and cannot be converted into trade authority. |
-| C-070 | Signal | Signal/Validation | Risk, Approval, Execution, UX | Qualified signal only; a generic signal never bypasses qualification or NO_TRADE gates. |
+| C-070 | Signal | Signal Engine | Risk, Approval, UX | Qualified signal only; never executable authority and never a substitute for `ExecutionIntent`. |
 | C-071 | OOSResult | Quant Validation | ValidationResult, Governance, Risk | Out-of-sample evidence is explicitly partitioned from in-sample optimization. |
 | C-072 | MonteCarloResult | Quant Validation | RobustnessResult, Risk, Governance | Simulation assumptions, sample size, and seed context are traceable and reproducible. |
 | C-073 | SensitivityResult | Quant Validation | RobustnessResult, Risk | Parameter sensitivity must expose degradation boundaries, not only best-case points. |
 | C-074 | RegimeValidationResult | Quant Validation | ValidationResult, Strategy, Risk | Validation must state regime scope and reject regime-mismatched deployment. |
-| C-075 | PositionSnapshot | Risk/Execution | Risk, Reconciliation, UX | Point-in-time position truth is attributable and reconcilable to fills/orders. |
+| C-075 | PositionSnapshot | Portfolio | Risk, Reconciliation, UX | Point-in-time position truth is attributable and reconcilable to fills/orders. |
 | C-076 | LeverageAssessment | Risk | RiskProposal, Approval | Leverage limits are deterministic and fail-closed on unknown account/exchange state. |
 | C-077 | LiquidationAssessment | Risk | RiskProposal, Approval, Safety | Liquidation distance assumptions are explicit, deterministic, and conservative. |
 | C-078 | StopLossAssessment | Risk | RiskProposal, Approval | Stop-loss validity must align with strategy logic and maximum-loss policy bounds. |
 | C-079 | TakeProfitAssessment | Risk | RiskProposal, Approval | Take-profit targets must preserve risk-reward and invalidation consistency. |
-| C-080 | PortfolioImpact | Risk/Portfolio | Approval, Safety, UX | New proposal impact must not violate portfolio-wide exposure constraints. |
-| C-081 | StressTestResult | Risk/Validation | Risk, Governance, Safety | Stress scenarios and resulting breaches must be explicit and auditable. |
-| C-082 | RiskDecision | Risk | Approval, Execution, Audit | Deterministic risk verdict is authoritative and blocks execution on critical failures. |
+| C-080 | PortfolioImpact | Risk Engine | Approval, Safety, UX | New proposal impact must not violate portfolio-wide exposure constraints. |
+| C-081 | StressTestResult | Risk Engine | Risk, Governance, Safety | Stress scenarios and resulting breaches must be explicit and auditable. |
+| C-082 | RiskDecision | Risk | Approval, Execution, Audit | Deterministic risk verdict is authoritative for risk gating and cannot independently authorize execution outside approved/revalidated `ExecutionIntent` flow. |
 | C-083 | RiskRevalidationResult | Risk | Approval, Execution, Safety | Material changes or stale context require revalidation before any execution path. |
 | C-084 | OrderRequest | Execution Gateway | Exchange Adapter, Audit | Exchange submission request must derive from approved intent and enforce idempotency binding. |
 | C-085 | ExchangeOrder | Exchange Adapter | Execution, Reconciliation, Monitoring | Exchange-specific order state must reconcile back to canonical `Order` without semantic drift. |
 | C-086 | SecurityEvent | Security | Safety, Audit, Governance | Security-critical event triggers governed response paths; no silent suppression. |
 | C-087 | FailureEvent | Runtime Services | Safety, Recovery, Audit | Critical failure events are explicit, attributable, and policy-routable. |
 | C-088 | RecoveryAction | Recovery Control Plane | Runtime Services, Audit, Governance | Recovery actions are policy-bounded, idempotent where required, and never bypass safety gates. |
-| C-089 | PromptInjectionAssessment | Security/Agent Safety | Safety, Agent Governance, Audit | Prompt-injection risk is explicit and must gate unsafe tool/authority escalation. |
-| C-090 | CounterfactualAnalysis | Learning/Evaluation | Governance, Strategy Evaluation | Counterfactual outcomes remain distinct from factual trade outcomes and audit history. |
+| C-089 | PromptInjectionAssessment | Security | Safety, Agent Governance, Audit | Prompt-injection risk is explicit and must gate unsafe tool/authority escalation. |
+| C-090 | CounterfactualAnalysis | Evaluation | Governance, Strategy Evaluation | Counterfactual outcomes remain distinct from factual trade outcomes and audit history. |
+| C-091 | DataSourceRecord | Data | Analysis, Validation, Audit | Immutable source/provider/time/licensing/provenance identity for ingested data. |
+| C-092 | DatasetVersion | Data Governance | Validation, Research, Audit | Exact reproducible dataset composition and lineage; never silently mutated. |
+| C-093 | AgentIndependenceReport | Evaluation | Meta Analysis, Governance, Audit | Independence and correlation limits must prevent duplicate evidence/agent reasoning from being counted as independent confirmation. |
+| C-094 | BiasCheckReport | Quant Validation | Validation, Governance, Audit | Leakage, survivorship, look-ahead, and selection-bias checks are explicit and auditable. |
+| C-095 | ExecutionReport | Execution | Reconciliation, Monitoring, Audit, Safety | Attributable execution outcome including partial/unknown/failure states; never treated as reconciled by assumption. |
+| C-096 | ReconciliationReport | Reconciliation | Portfolio, Risk, Safety, Audit | Internal-versus-exchange deltas remain explicit and block conflicting action while unresolved. |
+| C-097 | SafetyPolicy | Safety Governance | Safety Control Plane, Approval, Execution, Audit | Versioned fail-closed policy authority that control decisions must enforce. |
+| C-098 | AgentPermissionPolicy | Security Governance | Orchestrator, Safety, Audit | Versioned least-privilege authority ceiling that runtime profiles cannot exceed. |
+| C-099 | SafetyIncidentReport | Security | Safety, Operations, Governance, Audit | Immutable incident scope/evidence/response status with no silent suppression. |
+| C-100 | ChampionChallengerRecord | Evaluation | Validation, Governance, Registry, Audit | Versioned champion/challenger comparison record; cannot authorize automatic production promotion. |
 
 ## Canonical name / alias / supersession clarifications
 
@@ -119,7 +129,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-045 Experience | ExperienceRecord | Alias for canonical cross-domain meaning in Chat 13 usage. |
 | C-070 Signal | SignalCandidate (C-023), SignalQualification (C-025), NoTradeDecision (C-026) | Distinct lifecycle contracts: candidate → qualification/NO_TRADE → qualified signal. `Signal` cannot bypass qualification. |
 | C-024 SignalEvidencePackage | EvidenceGraph | `EvidenceGraph` is an embedded/value-object structure within the package, not a separate canonical contract. |
-| C-063 AgentPermissionProfile | AgentPermissionPolicy | Profile is canonical runtime contract; policy is governance artifact that constrains profile definitions and approval workflow. |
+| C-063 AgentPermissionProfile | AgentPermissionPolicy (C-098) | `AgentPermissionPolicy` is the canonical versioned authority ceiling; `AgentPermissionProfile` is a runtime grant constrained by that ceiling. Neither grants trade approval or exchange execution authority. |
 | C-031 CalibrationResult | CalibrationRecord | Alias in Chat 13 terminology. |
 
 ## Chats 2–13 coverage and disposition
@@ -129,17 +139,17 @@ Every explicit required name is dispositioned as registered canonical contract, 
 | Chat | Required names | Disposition |
 |---|---|---|
 | Chat 2 | SystemContext, ArchitectureDecisionRecord, PlaneBoundary, ServiceBoundary, EventBoundary, DeploymentBoundary, IntegrationBoundary, RuntimeMode, EnvironmentBoundary | Governance artifacts except `RuntimeMode` (enum/state vocabulary). |
-| Chat 3 | AgentDefinition, AgentResult, AgentPermissionProfile, AgentToolAccess, AgentHandoff, AgentEvaluation, AdversarialAssessment, AgentIndependenceReport, ModelRoutingDecision | Registered: C-061, C-062, C-063, C-064, C-065, C-066, C-019, C-067. `AgentIndependenceReport` = internal service record. |
-| Chat 4 | MarketData, MarketSnapshot, DataQualityReport, DataSourceRecord, DatasetVersion, EventData, FundamentalData, OnChainData, DerivativesData, SentimentData, MacroData, FeatureSet | Registered: C-001, C-002, C-003, C-004. `DataSourceRecord` internal service record. `DatasetVersion` and data-type payloads (`EventData`, `FundamentalData`, `OnChainData`, `DerivativesData`, `SentimentData`, `MacroData`) are embedded/value objects. |
+| Chat 3 | AgentDefinition, AgentResult, AgentPermissionProfile, AgentToolAccess, AgentHandoff, AgentEvaluation, AdversarialAssessment, AgentIndependenceReport, ModelRoutingDecision | Registered: C-061, C-062, C-063, C-064, C-065, C-066, C-019, C-093, C-067. |
+| Chat 4 | MarketData, MarketSnapshot, DataQualityReport, DataSourceRecord, DatasetVersion, EventData, FundamentalData, OnChainData, DerivativesData, SentimentData, MacroData, FeatureSet | Registered: C-001, C-002, C-003, C-091, C-092, C-004. Data-type payloads (`EventData`, `FundamentalData`, `OnChainData`, `DerivativesData`, `SentimentData`, `MacroData`) are embedded/value objects. |
 | Chat 5 | MarketContext, AnalysisSnapshot, EvidenceItem, TechnicalAssessment, FundamentalAssessment, SMCAssessment, WyckoffAssessment, FibonacciAssessment, DerivativesAssessment, OnChainAssessment, SentimentAssessment, EventRiskAssessment, MarketRegime, ConfluenceAssessment, ConflictAssessment, AdversarialAssessment, AnalyticalUncertainty | Registered: C-006, C-007, C-008, C-012, C-011, C-013, C-014, C-068, C-015, C-016, C-017, C-018, C-005, C-009, C-010, C-019, C-069. |
 | Chat 6 | Strategy, StrategyVersion, StrategyEligibility, StrategyCondition, SignalCandidate, Signal, SignalEvidencePackage, EvidenceGraph, SignalQualification, QualificationRuleSet, NoTradeDecision, NoTradeReason, SignalLifecycleState | Registered: C-020, C-021, C-022, C-023, C-070, C-024, C-025, C-026. `StrategyCondition`, `QualificationRuleSet`, `NoTradeReason` are embedded/value objects. `EvidenceGraph` embedded/value object alias under C-024. `SignalLifecycleState` enum/state vocabulary. |
-| Chat 7 | BacktestResult, ValidationResult, OOSResult, WalkForwardResult, RobustnessResult, BiasCheckReport, MonteCarloResult, SensitivityResult, RegimeValidationResult, ValidationFreshness, DatasetVersion, StrategyValidationStatus | Registered: C-027, C-028, C-071, C-029, C-030, C-072, C-073, C-074. `BiasCheckReport` internal service record. `ValidationFreshness`, `StrategyValidationStatus` enum/state vocabularies. `DatasetVersion` embedded/value object. |
+| Chat 7 | BacktestResult, ValidationResult, OOSResult, WalkForwardResult, RobustnessResult, BiasCheckReport, MonteCarloResult, SensitivityResult, RegimeValidationResult, ValidationFreshness, DatasetVersion, StrategyValidationStatus | Registered: C-027, C-028, C-071, C-029, C-030, C-094, C-072, C-073, C-074, C-092. `ValidationFreshness`, `StrategyValidationStatus` enum/state vocabularies. |
 | Chat 8 | AccountSnapshot, PortfolioSnapshot, PositionSnapshot, RiskProposal, RiskAssessment, PositionSizingResult, LeverageAssessment, LiquidationAssessment, StopLossAssessment, TakeProfitAssessment, PortfolioImpact, StressTestResult, RiskDecision, RiskRevalidationResult | Registered: C-032, C-033, C-075, C-034, C-035, C-036, C-076, C-077, C-078, C-079, C-080, C-081, C-082, C-083. |
-| Chat 9 | ApprovalRequest, ApprovalDecision, ApprovalBindingHash, ExecutionIntent, OrderRequest, Order, ExchangeOrder, Fill, Position, Trade, ExecutionReport, ReconciliationReport, IdempotencyKey, ExecutionState | Registered: C-037, C-038, C-039, C-084, C-040, C-085, C-041, C-042, C-043. `ApprovalBindingHash`, `IdempotencyKey` embedded/value objects. `ExecutionState` enum/state vocabulary. `ExecutionReport`, `ReconciliationReport` internal service records. |
-| Chat 10 | SafetyPolicy, SafetyDecision, TradingReadinessState, KillSwitchState, CircuitBreakerState, SecurityEvent, AuditEvent, FailureEvent, RecoveryAction, AgentPermissionPolicy, PromptInjectionAssessment, SafetyIncidentReport | Registered: C-058, C-059, C-086, C-060, C-087, C-088, C-089. `SafetyPolicy`, `AgentPermissionPolicy` governance artifacts. `KillSwitchState`, `CircuitBreakerState` enum/state vocabularies. `SafetyIncidentReport` internal service record. |
+| Chat 9 | ApprovalRequest, ApprovalDecision, ApprovalBindingHash, ExecutionIntent, OrderRequest, Order, ExchangeOrder, Fill, Position, Trade, ExecutionReport, ReconciliationReport, IdempotencyKey, ExecutionState | Registered: C-037, C-038, C-039, C-084, C-040, C-085, C-041, C-042, C-043, C-095, C-096. `ApprovalBindingHash`, `IdempotencyKey` embedded/value objects. `ExecutionState` enum/state vocabulary. |
+| Chat 10 | SafetyPolicy, SafetyDecision, TradingReadinessState, KillSwitchState, CircuitBreakerState, SecurityEvent, AuditEvent, FailureEvent, RecoveryAction, AgentPermissionPolicy, PromptInjectionAssessment, SafetyIncidentReport | Registered: C-097, C-058, C-059, C-086, C-060, C-087, C-088, C-098, C-089, C-099. `KillSwitchState`, `CircuitBreakerState` enum/state vocabularies. |
 | Chat 11 | SignalViewModel, EvidenceReportView, RiskProposalView, ApprovalView, NoTradeView, AgentHealthView, SystemAwarenessView, StrategyPerformanceView, AuditTimelineView, ExecutionMonitorView, GovernanceQueueView | All classified as UI/read-model DTOs (presentation contracts only; no `C-###`). |
-| Chat 12 | RepositoryMap, ImplementationSlice, CopilotTaskPrompt, DefinitionOfDone, TestTraceabilityMatrix, ContractRegistry, ADR, MigrationPlan, ReleaseGate, EnvironmentConfig, CIValidationReport | Governance artifacts except `EnvironmentConfig` (embedded/value object in deployment configuration contexts). No `C-###`. |
-| Chat 13 | ExperienceRecord, LearningObservation, LearningInsight, Hypothesis, Experiment, ExperimentResult, CounterfactualAnalysis, AgentPerformance, StrategyPerformance, CalibrationRecord, DriftAssessment, SystemAwarenessSnapshot, KnowledgeArtifact, GovernanceDecision, StrategyChangeProposal, ChampionChallengerRecord | Registered: C-045 (alias `ExperienceRecord`), C-046, C-047, C-048, C-049, C-050, C-090, C-052, C-053, C-031 (alias `CalibrationRecord`), C-055, C-054, C-056, C-057, C-051. `ChampionChallengerRecord` internal service record. |
+| Chat 12 | MethodologyCategory, IndicatorMetadata, FundamentalAssessment, TechnicalIndicatorAssessment, OnChainAssessment, SentimentAssessment, ConfluenceIndependenceAssessment, TraderFacingExplanation, RepositoryMap, ImplementationSlice, CopilotTaskPrompt, DefinitionOfDone, TestTraceabilityMatrix, ContractRegistry, ADR, MigrationPlan, ReleaseGate, EnvironmentConfig, CIValidationReport, agent matrix, handoff matrix, evidence graph, decision provenance, permission matrix, state machines, version registry, audit matrix, failure matrix, test traceability matrix | Registered: C-011, C-012, C-016, C-017. `TechnicalIndicatorAssessment` aliases Technical scope under C-012. `ConfluenceIndependenceAssessment` aliases independence logic across C-009 and C-093. `MethodologyCategory` enum/state vocabulary. `IndicatorMetadata`, `EnvironmentConfig` embedded/value objects. `TraderFacingExplanation` UI/read-model DTO. Remaining names are governance artifacts. |
+| Chat 13 | ExperienceRecord, LearningObservation, LearningInsight, Hypothesis, Experiment, ExperimentResult, CounterfactualAnalysis, AgentPerformance, StrategyPerformance, CalibrationRecord, DriftAssessment, SystemAwarenessSnapshot, KnowledgeArtifact, GovernanceDecision, StrategyChangeProposal, ChampionChallengerRecord | Registered: C-045 (alias `ExperienceRecord`), C-046, C-047, C-048, C-049, C-050, C-090, C-052, C-053, C-031 (alias `CalibrationRecord`), C-055, C-054, C-056, C-057, C-051, C-100. |
 
 ## Approval scope and change control
 
@@ -159,6 +169,6 @@ Every explicit required name is dispositioned as registered canonical contract, 
 ## Validation evidence for this update
 
 - Existing IDs `C-001`–`C-060` preserved and unique.
-- New IDs appended sequentially `C-061`–`C-090`, unique and not reused.
+- New IDs appended sequentially `C-061`–`C-100`, unique and not reused.
 - Every explicit Chats 2–13 required name has a disposition in this document.
 - Every newly registered contract includes authoritative producer, primary consumers, and safety-relevant invariant.
