@@ -1,27 +1,50 @@
 # State Machine Registry
 
-## Signal
-`DRAFT → CANDIDATE → QUALIFIED | REJECTED | WATCH | NO_TRADE → EXPIRED | SUPERSEDED`
+This registry defines the compact lifecycle baseline for governed implementation.
+It references canonical contracts and safety controls without redefining contract
+schemas.
 
-## Validation
-`NOT_RUN → RUNNING → PASSED | FAILED | INCONCLUSIVE → STALE/EXPIRED`
+## Common rules
 
-## Risk Proposal
-`PENDING → ACCEPTABLE | REJECTED → INVALIDATED/EXPIRED`
+- Owner/authority is the only bounded domain allowed to advance a state.
+- Illegal, unmapped, duplicate, out-of-order, or unauthorized transitions must
+  be rejected and recorded as `AuditEvent`.
+- A transition is valid only when its required guard passes at transition time;
+  prior success does not grant future authority.
+- Expiry, invalidation, supersession, unknown, and reconciliation-required paths
+  are fail-closed and block downstream authority until the required recovery or
+  regeneration path succeeds.
+- Execution-adjacent transitions additionally require current approval binding,
+  deterministic risk/revalidation, safety/readiness clearance, idempotency, and
+  resolved reconciliation state. Production eligibility is never per-trade
+  execution authority.
 
-## Approval
-`DRAFT → PENDING_APPROVAL → APPROVED | REJECTED | MODIFIED | CANCELLED | EXPIRED → INVALIDATED`
+## Lifecycle registry
 
-## Execution
-`DRAFT → PRE_EXECUTION_VALIDATION → READY_TO_EXECUTE → SUBMITTING → SUBMITTED → PARTIALLY_FILLED → FILLED | CANCEL_PENDING → CANCELLED | REJECTED | FAILED | UNKNOWN → RECONCILING → RECONCILED`
+| Lifecycle group | Owner / authority | States | Allowed transitions | Transition trigger / event | Required guard | Timeout / expiry / invalidation | Terminal states | Fail-closed handling |
+|---|---|---|---|---|---|---|---|---|
+| Signal and `NO_TRADE` | Signal / Qualification | `CANDIDATE`, `QUALIFIED`, `REJECTED`, `WATCH`, `NO_TRADE`, `VALIDATED_SIGNAL`, `EXPIRED`, `INVALIDATED`, `SUPERSEDED` | `CANDIDATE → QUALIFIED \| REJECTED \| WATCH \| NO_TRADE`; `WATCH → QUALIFIED \| REJECTED \| NO_TRADE \| EXPIRED`; `QUALIFIED → VALIDATED_SIGNAL \| EXPIRED \| INVALIDATED \| SUPERSEDED`; `VALIDATED_SIGNAL → EXPIRED \| INVALIDATED \| SUPERSEDED` | strategy match, qualification decision, validation handoff/result received, freshness timeout, contradictory evidence, superseding candidate | complete evidence graph, acceptable data quality/freshness, regime fit, qualification rules satisfied; no execution authority implied | evidence freshness, signal expiry window, strategy/evidence/regime/data-quality/material-input change invalidates prior state | `REJECTED`, `NO_TRADE`, `EXPIRED`, `INVALIDATED`, `SUPERSEDED` | anything other than current `VALIDATED_SIGNAL` is non-executable; stale or unverifiable signal state becomes `INVALIDATED`/`EXPIRED` and must not progress silently |
+| Validation | Quant Validation | `NOT_RUN`, `RUNNING`, `PASSED`, `FAILED`, `INCONCLUSIVE`, `STALE`, `EXPIRED` | `NOT_RUN → RUNNING`; `RUNNING → PASSED \| FAILED \| INCONCLUSIVE`; `PASSED \| FAILED \| INCONCLUSIVE → STALE \| EXPIRED`; `STALE → RUNNING` | validation job start, result publish, freshness timeout, methodology/data/version change, re-run request | reproducible dataset/version resolution, strategy/version resolution, methodology version, bias/leakage checks, cost assumptions present | stale/expired when data, strategy, parameters, methodology, regime scope, or freshness window changes | `FAILED`, `EXPIRED` | `NOT_RUN`, `RUNNING`, `INCONCLUSIVE`, `STALE`, or `EXPIRED` is insufficient for downstream authority and must block qualification/risk/execution paths that require current validation |
+| Risk proposal and revalidation | Risk | `PENDING`, `ACCEPTABLE`, `REJECTED`, `VETOED`, `INVALIDATED`, `EXPIRED` | `PENDING → ACCEPTABLE \| REJECTED \| VETOED`; `ACCEPTABLE → INVALIDATED \| EXPIRED \| PENDING`; `REJECTED \| VETOED → PENDING` only through fresh deterministic recalculation | risk calculation complete, hard-limit veto, material parameter/account/portfolio/market change, revalidation request, expiry timeout | current validated signal, deterministic calculations, current account/portfolio snapshots, current risk-model/policy versions, no unresolved unknown/reconciliation state | market/account/portfolio/evidence/strategy/model/policy/material-parameter change invalidates prior acceptable result; approval timeout can also force revalidation | `REJECTED`, `VETOED`, `EXPIRED` | any non-current or non-`ACCEPTABLE` risk state blocks approval and execution; material change always returns flow to `PENDING` before further use |
+| Human approval | Human supervisor via Approval Gateway | `REQUESTED`, `APPROVED`, `REJECTED`, `MODIFIED`, `CANCELLED`, `EXPIRED`, `INVALIDATED` | `REQUESTED → APPROVED \| REJECTED \| MODIFIED \| CANCELLED \| EXPIRED`; `MODIFIED → REQUESTED` after deterministic re-risk and new binding; `APPROVED → INVALIDATED \| EXPIRED` | authenticated human decision, approval timeout, material parameter/version/readiness/risk change, cancellation, re-request after modification | explicit authenticated actor, exact immutable parameter binding hash, current acceptable risk/revalidation, current readiness/safety permission, current evidence/validation linkage | approval expires on policy timeout; any bound field, snapshot, version, or safety/risk change invalidates prior approval | `REJECTED`, `CANCELLED`, `EXPIRED`, `INVALIDATED` | only a current `APPROVED` state with matching immutable binding can feed execution; modified, stale, expired, or mismatched approval means no execution |
+| Execution and reconciliation | Execution Gateway / Execution / Reconciliation | `INTENT_CREATED`, `PRE_EXECUTION_VALIDATION`, `READY_TO_SUBMIT`, `SUBMITTING`, `ORDER_OPEN`, `PARTIALLY_FILLED`, `FILLED`, `CANCEL_PENDING`, `CANCELLED`, `REJECTED`, `FAILED`, `UNKNOWN`, `RECONCILING`, `RECONCILED` | `INTENT_CREATED → PRE_EXECUTION_VALIDATION → READY_TO_SUBMIT → SUBMITTING`; `SUBMITTING → ORDER_OPEN \| PARTIALLY_FILLED \| FILLED \| REJECTED \| FAILED \| UNKNOWN`; `ORDER_OPEN → PARTIALLY_FILLED \| FILLED \| CANCEL_PENDING \| UNKNOWN`; `PARTIALLY_FILLED → FILLED \| CANCEL_PENDING \| UNKNOWN`; `CANCEL_PENDING → CANCELLED \| PARTIALLY_FILLED \| FILLED \| UNKNOWN`; `UNKNOWN → RECONCILING`; `ORDER_OPEN \| PARTIALLY_FILLED \| FILLED \| CANCELLED \| REJECTED \| FAILED → RECONCILING → RECONCILED` when reconciliation is required | final pre-execution validation, exchange submit response, fill/cancel/reject event, uncertain submission response, reconciliation result | current non-expired approval binding, current acceptable risk/revalidation, safety decision permits progression for the projected readiness state, idempotency key present, no unresolved conflicting reconciliation | approval expiry, risk invalidation, readiness downgrade/block, uncertain exchange response, or stale/unreconciled order state forces `UNKNOWN` or reconciliation path before any new conflicting action | `FILLED`, `CANCELLED`, `REJECTED`, `FAILED`, `RECONCILED` | `UNKNOWN` or unreconciled state blocks conflicting execution, duplicate submission, and unsafe retries; no state may skip pre-execution validation, approval, risk, idempotency, or reconciliation gates |
+| Position / trade / outcome | Portfolio / Trade Lifecycle / Reconciliation | `PENDING_OPEN`, `OPEN`, `INCREASING`, `REDUCING`, `CLOSING`, `CLOSED`, `OUTCOME_RECORDED`, `UNKNOWN`, `RECONCILIATION_REQUIRED` | `PENDING_OPEN → OPEN \| UNKNOWN`; `OPEN → INCREASING \| REDUCING \| CLOSING \| UNKNOWN`; `INCREASING \| REDUCING → OPEN \| RECONCILIATION_REQUIRED`; `CLOSING → CLOSED \| UNKNOWN`; `CLOSED → OUTCOME_RECORDED`; any active state may enter `RECONCILIATION_REQUIRED` or `UNKNOWN` on state mismatch | fill aggregation, position change request, close completion, outcome publication, reconciliation discrepancy detected | reconciled orders/fills, authoritative position snapshot, immutable trade linkage, no conflicting unresolved exchange state | mismatch between internal and exchange/account truth forces reconciliation-required path; unresolved unknown state invalidates downstream calculations | `OUTCOME_RECORDED` | unknown or reconciliation-required position/trade state blocks conflicting new exposure changes and must be reconciled before authoritative reuse |
+| Trading readiness / safety | Safety Control Plane | `INITIALIZING`, `READY`, `DEGRADED`, `RESTRICTED`, `BLOCKED`, `EMERGENCY_STOP`, `RECOVERY`, `UNKNOWN` (internal operational states project to canonical `TradingReadinessState`) | `INITIALIZING → READY \| DEGRADED \| BLOCKED \| EMERGENCY_STOP \| UNKNOWN`; `READY → DEGRADED \| RESTRICTED \| BLOCKED \| EMERGENCY_STOP`; `DEGRADED → READY \| RESTRICTED \| BLOCKED \| EMERGENCY_STOP`; `RESTRICTED → DEGRADED \| BLOCKED \| RECOVERY`; `BLOCKED → RECOVERY \| EMERGENCY_STOP`; `EMERGENCY_STOP → RECOVERY`; `RECOVERY → READY \| DEGRADED \| BLOCKED \| UNKNOWN` | health-policy evaluation, kill switch, incident/failure event, recovery action, heartbeat timeout, operator/safety decision | safety policy evaluation, current system awareness, incident status, recovery prerequisites, no unverifiable critical dependency | stale or missing readiness signal projects to fail-closed `UNKNOWN`; unresolved safety incident or policy veto prevents recovery to `READY` | none until controlled shutdown; `EMERGENCY_STOP` is operationally terminal until governed recovery begins | unknown, unmapped, invalid, or policy-blocked readiness prohibits new approval/execution; readiness does not by itself authorize execution |
+| Learning / hypothesis / experiment | Learning / Research / Governance | `OBSERVED`, `HYPOTHESIS`, `EXPERIMENT_PLANNED`, `EXPERIMENT_RUNNING`, `VALIDATED`, `INVALIDATED`, `INCONCLUSIVE`, `GOVERNANCE_REVIEW` | `OBSERVED → HYPOTHESIS → EXPERIMENT_PLANNED → EXPERIMENT_RUNNING`; `EXPERIMENT_RUNNING → VALIDATED \| INVALIDATED \| INCONCLUSIVE`; `VALIDATED \| INCONCLUSIVE → GOVERNANCE_REVIEW` | observation recorded, hypothesis approved for experiment, experiment launched, experiment result evaluated, governance review opened | immutable experience/provenance chain, versioned experiment definition, bounded scope, no production authority, actual vs counterfactual distinction preserved | stale data, missing provenance, or experiment drift invalidates result for promotion use and requires a new experiment/version | `INVALIDATED`; `GOVERNANCE_REVIEW` until explicit decision | learning may propose only; it cannot bypass risk, approval, safety, execution, or promotion governance and cannot self-promote artifacts |
+| Strategy / model / prompt candidate promotion | Governance | `RESEARCH`, `VALIDATION`, `SHADOW`, `PAPER`, `PRODUCTION_ELIGIBLE`, `REJECTED`, `ROLLED_BACK` | `RESEARCH → VALIDATION → SHADOW → PAPER → PRODUCTION_ELIGIBLE`; `VALIDATION \| SHADOW \| PAPER → REJECTED`; `PRODUCTION_ELIGIBLE → ROLLED_BACK` through governed rollback; post-rollback candidates re-enter via new immutable version in `RESEARCH` or `VALIDATION` | validation evidence accepted, governance decision issued, shadow/paper completion, rollback decision | immutable version record, dependency/compatibility checks, applicable validation evidence, explicit governance decision, environment/mode eligibility; no direct trade authority | missing evidence, incompatible dependency resolution, failed validation, or superseding governed decision blocks promotion; rollback never rewrites history | `REJECTED`, `ROLLED_BACK` | `PRODUCTION_ELIGIBLE` only means governed deployability/selection eligibility; it does not bypass readiness, risk, human approval, or execution state machines |
 
-## Position
-`PENDING_OPEN → OPEN → REDUCING/INCREASING → CLOSING → CLOSED`, with exceptional `UNKNOWN/RECONCILIATION_REQUIRED`.
+## C-059 canonical readiness projection
 
-## Learning hypothesis
-`OBSERVED → HYPOTHESIS → EXPERIMENT_PLANNED → EXPERIMENTAL → VALIDATED | INVALIDATED | INCONCLUSIVE → GOVERNANCE_REVIEW → SHADOW/PAPER/REJECTED → PRODUCTION_ELIGIBLE`
+`TradingReadinessState` external canonical values remain exactly:
+`READY`, `DEGRADED`, `BLOCKED`, `EMERGENCY`, `UNKNOWN`.
 
-## Trading readiness
-`INITIALIZING → READY | DEGRADED | RESTRICTED | BLOCKED | EMERGENCY_STOP → RECOVERY → READY`
-
-Illegal transitions must be rejected and audited.
+| Internal operational state | Canonical C-059 projection | Execution effect |
+|---|---|---|
+| `READY` | `READY` | usable only when all other guards also pass |
+| `DEGRADED` | `DEGRADED` | governed restrictions apply; no implicit execution authority |
+| `INITIALIZING` | `UNKNOWN` | fail closed; prohibit new execution until readiness is established |
+| `RESTRICTED` | `DEGRADED` | restrict authority per safety policy; default to no new conflicting execution |
+| `BLOCKED` | `BLOCKED` | prohibit new approval/execution |
+| `EMERGENCY_STOP` | `EMERGENCY` | emergency halt; prohibit new approval/execution |
+| `RECOVERY` | `DEGRADED` | recovery is controlled and non-authoritative until safety policy re-establishes readiness |
+| unknown / unmapped / invalid value | `UNKNOWN` | fail closed; prohibit new execution and require audit + remediation |
