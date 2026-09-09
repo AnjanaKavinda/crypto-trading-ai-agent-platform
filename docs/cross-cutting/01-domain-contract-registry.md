@@ -44,11 +44,11 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-021 | StrategyVersion | Strategy Governance | Validation, Signal, Learning | Versioned rules/parameters/eligibility with lifecycle status. |
 | C-022 | StrategyEligibility | Strategy | Signal | Eligibility by asset/timeframe/regime/data state. |
 | C-023 | SignalCandidate | Signal | Qualification | Candidate setup; never an order. |
-| C-024 | SignalEvidencePackage | Signal | Validation, Risk, Approval, UX | Evidence and qualification context for candidate/qualified signal paths. |
+| C-024 | SignalEvidencePackage | Signal | Validation, Risk, Approval, UX | Evidence graph and qualification context. |
 | C-025 | SignalQualification | Signal/Validation | Risk, UX | Historical conditional qualification, not probability. |
 | C-026 | NoTradeDecision | Signal | UX, Risk, Safety, Learning | First-class abstention with machine-readable reasons. |
 | C-027 | BacktestResult | Quant Validation | Validation, Research | Reproducible backtest with costs/assumptions. |
-| C-028 | ValidationResult | Quant Validation | Risk, Approval | Aggregated quantitative validation decision status. |
+| C-028 | ValidationResult | Quant Validation | Risk, Approval | OOS/walk-forward/robustness and validation status. |
 | C-029 | WalkForwardResult | Quant Validation | Validation, Learning | Walk-forward folds/results. |
 | C-030 | RobustnessResult | Quant Validation | Risk, Governance | Sensitivity/Monte Carlo/regime robustness summary. |
 | C-031 | CalibrationResult | Quant/Model Evaluation | Meta Analysis, Learning | Calibration separate from AI confidence. |
@@ -65,7 +65,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-042 | Position | Portfolio/Execution | Monitoring, Risk, UX | Authoritative position state. |
 | C-043 | Trade | Trade Lifecycle | Learning, Audit | Lifecycle aggregate of approved execution. |
 | C-044 | TradeOutcome | Trade Lifecycle | Learning, Performance | Actual outcome distinct from counterfactuals. |
-| C-045 | Experience | Learning | Evaluation, Memory | Immutable decision lifecycle reference; append-only linkage to underlying facts. |
+| C-045 | Experience | Learning | Evaluation, Memory | Immutable decision lifecycle reference. |
 | C-046 | LearningObservation | Learning | Insight | Observed pattern with support and scope. |
 | C-047 | LearningInsight | Learning | Hypothesis | Evidence-bounded insight; not production authority. |
 | C-048 | Hypothesis | Research/Learning | Experiment | Falsifiable proposed improvement. |
@@ -101,7 +101,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-078 | StopLossAssessment | Risk | RiskProposal, Approval | Stop-loss validity must align with strategy logic and maximum-loss policy bounds. |
 | C-079 | TakeProfitAssessment | Risk | RiskProposal, Approval | Take-profit targets must preserve risk-reward and invalidation consistency. |
 | C-080 | PortfolioImpact | Risk/Portfolio | Approval, Safety, UX | New proposal impact must not violate portfolio-wide exposure constraints. |
-| C-081 | StressTestResult | Risk/Validation | RiskDecision, Governance, Safety | Stress scenarios and resulting breaches must be explicit and auditable. |
+| C-081 | StressTestResult | Risk/Validation | Risk, Governance, Safety | Stress scenarios and resulting breaches must be explicit and auditable. |
 | C-082 | RiskDecision | Risk | Approval, Execution, Audit | Deterministic risk verdict is authoritative and blocks execution on critical failures. |
 | C-083 | RiskRevalidationResult | Risk | Approval, Execution, Safety | Material changes or stale context require revalidation before any execution path. |
 | C-084 | OrderRequest | Execution Gateway | Exchange Adapter, Audit | Exchange submission request must derive from approved intent and enforce idempotency binding. |
@@ -153,6 +153,7 @@ Every explicit required name is dispositioned as registered canonical contract, 
 ## Deferred consistency work (out of scope for this issue)
 
 - Align non-registry artifacts that still use deprecated or context-local names with canonical names/aliases above (without changing semantics).
+- Resolve cross-artifact `TradingReadinessState` vocabulary drift (`01-domain-contract-registry.md`, `08-state-machine-registry.md`, Chat 10) through governed impact analysis and ADR/human approval before any semantic harmonization.
 - Add schema-level contract definitions and compatibility tests in later implementation phases.
 
 ## Validation evidence for this update
