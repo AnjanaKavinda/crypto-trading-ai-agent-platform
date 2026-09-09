@@ -8,6 +8,8 @@ This package provides the minimal FastAPI bootstrap entrypoint for the backend r
 - Provides `create_app()` and module-level `app` ASGI objects.
 - Uses static non-secret application metadata (title and version).
 - Adds typed runtime context settings for deployment environment and operating mode.
+- Adds deterministic standard-library structured logging primitives in
+  `trading_platform_api.structured_logging`.
 
 ## Configuration
 
@@ -28,5 +30,4 @@ This skeleton intentionally does **not** include:
 - trading or strategy logic
 - execution or exchange integrations
 - persistence or database integration
-- logging infrastructure
 - health/readiness/liveness endpoints
