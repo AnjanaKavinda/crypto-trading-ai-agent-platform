@@ -41,6 +41,22 @@ _PREFIX_SENSITIVE_FIELD_NAMES = frozenset(
     }
 )
 _SCALAR_TYPES = (str, int, float, bool, type(None))
+_REQUIRED_STRUCTURED_LOG_FIELDS = frozenset(
+    {
+        "timestamp",
+        "level",
+        "severity",
+        "service",
+        "component",
+        "event",
+        "correlation_id",
+        "trace_id",
+        "event_id",
+        "status",
+        "duration_ms",
+        "error_code",
+    }
+)
 
 
 class StructuredLoggingError(ValueError):
@@ -104,6 +120,7 @@ def redact_sensitive_values(value: Any) -> Any:
 
 
 def serialize_log_entry(entry: Mapping[str, Any]) -> str:
+    _validate_required_fields(entry)
     validated_entry = _validate_supported_value(redact_sensitive_values(dict(entry)), "$")
     return json.dumps(validated_entry, separators=(",", ":"), allow_nan=False)
 
@@ -230,3 +247,14 @@ def _check_for_cycles(value: Any, seen_object_ids: set[int]) -> None:
     if object_id in seen_object_ids:
         raise StructuredLoggingError("Cyclic structured log payload is not supported.")
     seen_object_ids.add(object_id)
+
+
+def _validate_required_fields(entry: Mapping[str, Any]) -> None:
+    missing_fields = sorted(
+        required_field
+        for required_field in _REQUIRED_STRUCTURED_LOG_FIELDS
+        if required_field not in entry
+    )
+    if missing_fields:
+        missing_fields_text = ", ".join(missing_fields)
+        raise StructuredLoggingError(f"Structured log entry is missing required field(s): {missing_fields_text}.")

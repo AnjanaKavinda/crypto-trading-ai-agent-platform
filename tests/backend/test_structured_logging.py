@@ -435,6 +435,13 @@ def test_structured_formatter_outputs_structured_json_only() -> None:
     assert parsed["component"] == "structured-logging"
 
 
+def test_serialization_fails_when_required_fields_are_missing() -> None:
+    with pytest.raises(StructuredLoggingError) as exc_info:
+        serialize_log_entry({"service": "api"})
+
+    assert "missing required field(s)" in str(exc_info.value)
+
+
 def test_module_import_has_no_logging_output_or_root_reconfiguration(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
