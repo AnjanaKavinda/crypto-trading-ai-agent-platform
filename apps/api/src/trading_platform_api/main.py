@@ -10,7 +10,7 @@ APP_VERSION = "0.1.0"
 def create_app(settings: AppSettings | None = None) -> FastAPI:
     app = FastAPI(title=APP_TITLE, version=APP_VERSION)
     app.state.settings = settings if settings is not None else load_app_settings()
-    app.include_router(create_health_router())
+    app.router.routes.extend(create_health_router().routes)
     return app
 
 
