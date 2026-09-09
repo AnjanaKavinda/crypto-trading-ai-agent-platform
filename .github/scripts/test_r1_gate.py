@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +26,57 @@ def snapshots(review_state="COMMENTED", commit="head", checks="success"):
 
 
 class R1GateTests(unittest.TestCase):
+    def test_mocked_workflow_snapshot_harness_success_and_terminal_failures(self):
+        args, options = snapshots("APPROVED")
+        pr, reviews, issue, status, checks = args
+        api = {
+            "pr": pr, "reviews": [reviews], "issue": issue,
+            "issue_comments": [options["comments"][:1], []],
+            "status": status, "checks": [checks],
+            "files": [[{"filename": ".github/scripts/x.py"}], []],
+            "diff": options["diff"],
+        }
+
+        def fetch(root, fail=None):
+            root.mkdir()
+            names = ("pr", "reviews", "issue", "issue_comments", "status",
+                     "checks", "files", "diff")
+            for name in names:
+                if name == fail:
+                    raise RuntimeError(f"mock gh failure: {name}")
+                value = api[name]
+                (root / f"{name}.json").write_text(
+                    value if isinstance(value, str) else json.dumps(value),
+                    encoding="utf-8")
+            return {
+                "pr": json.loads((root / "pr.json").read_text()),
+                "reviews": [item for page in json.loads(
+                    (root / "reviews.json").read_text()) for item in page],
+                "issue": json.loads((root / "issue.json").read_text()),
+                "status": json.loads((root / "status.json").read_text()),
+                "checks": json.loads((root / "checks.json").read_text()),
+                "comments": [item for page in json.loads(
+                    (root / "issue_comments.json").read_text()) for item in page],
+                "files": [item for page in json.loads(
+                    (root / "files.json").read_text()) for item in page],
+                "diff": (root / "diff.json").read_text(),
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "success"
+            fetched = fetch(root)
+            result = evaluate_r1_gate(
+                fetched["pr"], fetched["reviews"], fetched["issue"],
+                fetched["status"], fetched["checks"],
+                required_checks=("governance-ci",), comments=fetched["comments"],
+                changed_files=tuple(item["filename"] for item in fetched["files"]),
+                diff=fetched["diff"])
+            self.assertEqual(result["state"], "success")
+            self.assertEqual(len(fetched["files"]), 1)
+            for failure in ("pr", "issue_comments", "files", "diff"):
+                with self.assertRaisesRegex(RuntimeError, "mock gh failure"):
+                    fetch(Path(directory) / failure, failure)
+
     def test_preapproval_is_pending_without_invoking_any_adapter(self):
         args, options = snapshots()
         result = evaluate_r1_gate(*args, **options)
@@ -72,6 +125,10 @@ class R1GateTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.number", workflow)
         self.assertNotIn("pull_request_review.pull_request.number", workflow)
         self.assertIn("pulls/$PR_NUMBER/files", workflow)
+        self.assertIn("issues/$linked/comments", workflow)
+        self.assertIn("--paginate --slurp", workflow)
+        self.assertIn("for page in json.load", workflow)
+        self.assertIn("Publish terminal evaluation error", workflow)
         self.assertIn("ref: dev", workflow)
         self.assertIn("pulls/$PR_NUMBER.diff", workflow)
         self.assertIn("if: steps.fetch.outcome == 'failure'", workflow)

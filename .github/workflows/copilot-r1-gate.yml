@@ -31,8 +31,19 @@ jobs:
           mkdir -p .governance/r1
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance/r1/pr.json
           gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > .governance/r1/reviews.json
-          gh api --paginate --slurp "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > .governance/r1/pr-comments.json
-          gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > .governance/r1/files.json
+          linked="$(python - <<'PY'
+          import json, sys
+          sys.path.insert(0, '.github/scripts')
+          from review_provenance import extract_linked_issue
+          print(extract_linked_issue(json.load(open('.governance/r1/pr.json')).get('body') or ''))
+          PY
+          )"
+          gh api "repos/${{ github.repository }}/issues/$linked" > .governance/r1/issue.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/issues/$linked/comments" > .governance/r1/issue-comments.json
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          gh api "repos/${{ github.repository }}/commits/$head/status" > .governance/r1/status.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$head/check-runs" > .governance/r1/checks.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > .governance/r1/files.json
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \
             -H 'Accept: application/vnd.github.v3.diff' > .governance/r1/pr.diff
       - name: Publish terminal error when trusted snapshots cannot be fetched
@@ -47,18 +58,8 @@ jobs:
              -f description='R1 trusted snapshot resolution failed; inspect workflow diagnostics'
           fi
           exit 1
-          linked="$(python - <<'PY'
-          import json, sys
-          sys.path.insert(0, '.github/scripts')
-          from review_provenance import extract_linked_issue
-          print(extract_linked_issue(json.load(open('.governance/r1/pr.json')).get('body') or ''))
-          PY
-          )"
-          gh api "repos/${{ github.repository }}/issues/$linked" > .governance/r1/issue.json
-          head="$(jq -r .head.sha .governance/r1/pr.json)"
-          gh api "repos/${{ github.repository }}/commits/$head/status" > .governance/r1/status.json
-          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$head/check-runs" > .governance/r1/checks.json
       - name: Leave R1 pending before approval and on invalidation
+        if: steps.fetch.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -67,6 +68,9 @@ jobs:
             -f state=pending -f context=governance-gate \
             -f description='R1 requires current-head AnjanaKavinda approval and deterministic checks'
       - name: Publish trusted R1 result
+        id: evaluate
+        if: steps.fetch.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
@@ -82,9 +86,10 @@ jobs:
           issue = json.load(open('.governance/r1/issue.json'))
           status = json.load(open('.governance/r1/status.json'))
           checks = json.load(open('.governance/r1/checks.json'))
-          comments = [item for page in json.load(open('.governance/r1/pr-comments.json'))
+          comments = [item for page in json.load(open('.governance/r1/issue-comments.json'))
                       for item in page]
-          files = json.load(open('.governance/r1/files.json'))
+          files = [item for page in json.load(open('.governance/r1/files.json'))
+                   for item in page]
           result = evaluate_r1_gate(
               pr, reviews, issue, status, checks,
               required_checks=[x.strip() for x in os.environ.get('REQUIRED_CHECKS', '').split(',') if x.strip()],
@@ -99,3 +104,18 @@ jobs:
           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
             -f state="$state" -f context=governance-gate \
             -f description="$(jq -r .reason .governance/r1/result.json)"
+          touch .governance/r1/final-status-emitted
+      - name: Publish terminal evaluation error
+        if: >-
+          always() &&
+          steps.fetch.outcome == 'success' &&
+          steps.evaluate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          if [ ! -e .governance/r1/final-status-emitted ]; then
+           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+             -f state=error -f context=governance-gate \
+             -f description='R1 evaluation or publication failed; inspect workflow diagnostics'
+          fi
