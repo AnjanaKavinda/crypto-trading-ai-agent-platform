@@ -1,20 +1,23 @@
 # Agent / Service Handoff Matrix
 
-| Producer | Output contract | Consumer | Validation gate | Failure behavior |
-|---|---|---|---|---|
-| Data | MarketSnapshot + DataQualityReport | Analysis | freshness/schema/quality | NO_TRADE / degraded |
-| Analysis | MarketContext | Strategy | schema/evidence/conflict | reject / request analysis |
-| Strategy | StrategyEligibility/SignalCandidate | Signal/Validation | version + setup rules | no setup / NO_TRADE |
-| Signal | SignalEvidencePackage/Qualification | Quant Validation | completeness/freshness | rejected candidate |
-| Quant Validation | ValidationResult | Risk | reproducible status/freshness | NO_TRADE |
-| Risk | RiskProposal | Approval Gateway | deterministic limits | reject |
-| Approval Gateway | ApprovalDecision | Execution Gateway | auth + exact-parameter binding + expiry | no execution |
-| Execution Gateway | ExecutionIntent | Execution Engine | idempotency + readiness + final validation | no execution |
-| Execution | Order/Fill | Reconciliation/Portfolio | exchange acknowledgement | reconcile / UNKNOWN |
-| Trade Lifecycle | TradeOutcome | Learning | actual vs counterfactual distinction | incomplete experience |
-| Learning | Hypothesis | Experiment | provenance/falsifiability | reject hypothesis |
-| Experiment/Quant | ExperimentResult | Governance | OOS/WF/robustness | no promotion |
-| Governance | GovernanceDecision | Version/Deployment | explicit approval | remain shadow/paper |
+| Step | Producer | Canonical output | Consumer | Validation / authority gate | Fail-closed behavior |
+|---|---|---|---|---|---|
+| 1a | Data | `C-002 MarketSnapshot` | Data Quality + Analysis agents | Schema/version compatibility, source lineage/provenance (`C-091`) | Missing/invalid/unknown snapshot blocks quality and analysis progression. |
+| 1b | Data Quality | `C-003 DataQualityReport` | Analysis agents | Freshness/completeness/agreement checks using governed data/source/dataset references (`C-001`, `C-091`, `C-092`) | Missing/stale/degraded/unknown quality blocks downstream advancement toward execution. |
+| 2 | Analysis agents | `C-007 AnalysisSnapshot`, `C-008 EvidenceItem` | Meta-analysis + critic | Evidence attribution, method/version traceability, expiry/freshness validity | Invalid/expired/unattributed evidence is rejected or quarantined. |
+| 3 | Meta-analysis + critic | `C-006 MarketContext`, `C-009 ConfluenceAssessment`, `C-010 ConflictAssessment`, `C-019 AdversarialAssessment` | Strategy engine | Independence/correlation review (`C-093`), unresolved critical conflicts, explicit uncertainty (`C-069`) | Critical unresolved conflicts/low independence/unknown uncertainty state => `NO_TRADE` path only. |
+| 4 | Strategy engine | `C-022 StrategyEligibility` | Signal engine | Strategy/version eligibility (`C-021`, `C-022`), regime compatibility | Ineligible strategy state cannot create signal candidate. |
+| 5 | Signal engine | `C-023 SignalCandidate`, `C-024 SignalEvidencePackage`, `C-025 SignalQualification` or `C-026 NoTradeDecision` | Quant validation (+ risk/UX for `C-026`) | Package completeness, qualification rules, expiry/freshness, contradiction handling | Invalid/incomplete/expired/conflicted candidate cannot advance; retain/emit `NO_TRADE` when applicable. |
+| 6 | Quant validation | `C-028 ValidationResult` (+ `C-071`/`C-029`/`C-030`/`C-094`) | Signal engine | Reproducibility, sample sufficiency, OOS/WF/robustness/bias gates | Failed/inconclusive/expired validation blocks progression to executable signal path. |
+| 7 | Signal engine | `C-070 Signal` or `C-026 NoTradeDecision` | Risk engine | Validation pass requirement (`C-028`), non-expired context, unresolved conflict check | No validated non-expired signal => risk/execution path does not start. |
+| 8 | Risk engine | `C-034 RiskProposal`, `C-035 RiskAssessment`, `C-082 RiskDecision`, `C-083 RiskRevalidationResult` | Approval gateway | Deterministic limits, account/portfolio state truth, readiness (`C-059`) | Any breach/unknown state/veto => no approval request for execution. |
+| 9 | Approval gateway | `C-037 ApprovalRequest` | Authenticated human supervisor | Exact-parameter binding context, integrity/audit references, decision window/expiry | No authenticated decision => no `ApprovalDecision`; execution remains blocked. |
+| 10 | Authenticated human supervisor (captured by gateway) | `C-038 ApprovalDecision` | Execution gateway | Authentication, explicit consent, unchanged bound parameters, non-expired approval | Rejected/expired/invalidated/unapproved decision cannot create execution intent. |
+| 11 | Execution gateway | `C-039 ExecutionIntent`, `C-084 OrderRequest` | Execution engine / exchange adapter | Final revalidation (`C-083`), safety readiness (`C-058`/`C-059`), idempotency key integrity | Unapproved/revalidation-failed/unsafe/duplicate intent => no submission. |
+| 12 | Execution engine / exchange adapter | `C-040 Order`, `C-041 Fill`, `C-085 ExchangeOrder`, `C-095 ExecutionReport` | Reconciliation + portfolio/trade lifecycle | Exchange acknowledgement semantics, state transition validity, idempotent update handling | Unknown/partial/conflicting execution state routes to reconcile; no blind retry-to-trade escalation. |
+| 13 | Reconciliation + portfolio/trade lifecycle | `C-096 ReconciliationReport`, `C-042 Position`, `C-043 Trade`, `C-044 TradeOutcome` | Learning + risk + safety + governance | Internal vs exchange delta resolution, causation/correlation trace, unresolved-state detection | Unreconciled critical state blocks conflicting execution and promotion decisions. |
+| 14 | Learning + research/experiment | `C-047 LearningInsight`, `C-048 Hypothesis`, `C-049 Experiment`, `C-050 ExperimentResult`, `C-100 ChampionChallengerRecord` | Governance | Falsifiability, evidence quality, regime/context applicability, counterfactual separation (`C-090`) | Weak/non-reproducible results cannot alter production behavior. |
+| 15 | Governance | `C-057 GovernanceDecision` | Version/deployment controls | Explicit governed promotion approval, policy compliance, rollback path | No promotion decision => remain in research/shadow/paper; never infer live authority. |
 
 ## Mandatory rule
-No downstream component may reinterpret an upstream contract in order to bypass the upstream authority boundary.
+No downstream component may reinterpret an upstream contract in order to bypass the upstream authority boundary. Stale, missing, conflicting, invalid, unknown, expired, unapproved, or unreconciled critical state must not advance toward execution.
