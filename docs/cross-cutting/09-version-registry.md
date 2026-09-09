@@ -13,7 +13,7 @@ schemas.
 | Version identity | immutable version ID / semantic label for one exact meaning | any new meaning, configuration, ruleset, or behavior requires a new version |
 | Content / configuration hash | deterministic hash of governed content and configuration | identical version ID must always resolve to the same content hash |
 | Lineage | parent version, supersedes target, rollback target where applicable | lineage is append-only and must preserve historical ancestry |
-| Lifecycle status | `DRAFT`, `CANDIDATE`, `VALIDATED`, `SHADOW`, `PAPER`, `PRODUCTION_ELIGIBLE`, `ACTIVE`, `REJECTED`, `RETIRED`, `ROLLED_BACK` as applicable | drafts/candidates are not production authority; status changes are governed events, not in-place rewrites |
+| Lifecycle status | `DRAFT`, `CANDIDATE`, `VALIDATED`, `APPROVED_FOR_SHADOW`, `APPROVED_FOR_PAPER`, `APPROVED_FOR_PRODUCTION`, `ACTIVE`, `REJECTED`, `RETIRED`, `ROLLED_BACK` as applicable | drafts/candidates are not production authority; shadow/paper/production-eligible progression is governed and status changes are append-only events, not in-place rewrites |
 | Governance identity | creator, governed approver, and governing decision authority | creation and promotion are attributable and machine-verifiable |
 | Timestamps | created, approved, effective, retired timestamps | time fields record when the version existed, not when history is viewed later |
 | Compatibility constraints | contract/schema compatibility, required consumers/producers, migration notes | incompatible or unresolved compatibility blocks governed use |
@@ -49,11 +49,11 @@ schemas.
 |---|---|
 | New meaning = new version | changing strategy logic, parameters, prompts, models, policies, contracts, dependencies, or governed configuration creates a new immutable version |
 | Drafts and candidates | `DRAFT` and `CANDIDATE` versions may be reviewed or validated, but they are never production authority |
-| Validation before promotion | applicable validation/evidence must exist before `SHADOW`, `PAPER`, `PRODUCTION_ELIGIBLE`, or `ACTIVE` status is granted |
+| Validation before promotion | applicable validation/evidence must exist before `APPROVED_FOR_SHADOW`, `APPROVED_FOR_PAPER`, `APPROVED_FOR_PRODUCTION`, or `ACTIVE` status is granted |
 | Explicit governance | promotion, rejection, retirement, and rollback require an explicit governed decision with audit references |
 | Learning boundary | learning/research may propose candidate versions and experiments, but cannot promote, activate, or retire production authority |
 | Rollback | rollback is an auditable governed pointer/state change to another known-good version; it never mutates historical version records |
-| Eligibility vs authorization | `PRODUCTION_ELIGIBLE` or `ACTIVE` never bypasses readiness, deterministic risk, human approval, idempotency, reconciliation, or execution gates |
+| Eligibility vs authorization | `APPROVED_FOR_PRODUCTION` (production-eligible) or `ACTIVE` never bypasses readiness, deterministic risk, human approval, idempotency, reconciliation, or execution gates |
 | Fail-closed resolution | missing, unknown, incompatible, or unverifiable version resolution blocks safety-critical approval/execution/use until corrected |
 
 ## Historical reconstruction baseline
