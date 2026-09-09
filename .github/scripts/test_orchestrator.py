@@ -1004,6 +1004,9 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("GOVERNED_REVIEW_ARTIFACT_FILE", review_workflow)
         self.assertIn("run-pr-governance.py", review_workflow)
         self.assertIn("transition-pr.py", review_workflow)
+        self.assertIn("governance-review-claim", review_workflow)
+        self.assertIn("skip_provider=true", review_workflow)
+        self.assertIn("Duplicate automatic review run detected for exact head; no-op", review_workflow)
         self.assertIn("governance-dispatch", gate_workflow)
         self.assertIn("governance-review", gate_workflow)
         self.assertIn("governance-ci", gate_workflow)
@@ -1532,6 +1535,80 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         os.unlink(event_path)
 
+    def test_assignment_completion_reconciles_existing_pr_binding_without_new_commit(self):
+        issue = {
+            "number": 6, "state": "open", "title": "Issue",
+            "body": "# Issue 004 — Issue\n## Allowed paths\n- .github/scripts/**\n"
+                    "## Affected paths\n- .github/scripts/**\n## Forbidden paths\n- services/execution/**",
+            "routing_inputs": {
+                "canonical_issue": 4, "agent_role": "Backend/Foundation Engineer",
+                "phase": "governance", "risk_label": "low", "issue_type": "test",
+                "affected_paths": [".github/scripts/**"], "allowed_paths": [".github/scripts/**"],
+                "forbidden_paths": ["services/execution/**"],
+                "architecture_impact": False, "shared_contract_impact": False,
+                "security_impact": False, "trading_risk_statistical_impact": False,
+                "approval_execution_ccxt_impact": False,
+            },
+            "labels": [{"name": "workflow:human-decision-required"}, {"name": "agent:backend-foundation"},
+                        {"name": "phase:governance"}, {"name": "risk:low"}, {"name": "type:test"},
+                        {"name": "impact:architecture"}, {"name": "impact:shared-contract"},
+                        {"name": "impact:security"}, {"name": "impact:trading-risk"},
+                        {"name": "impact:approval-execution-ccxt"}],
+        }
+        event = {"action": "assigned", "issue": {"number": 6},
+                 "assignee": {"login": "Copilot", "type": "Bot", "id": 198982749}}
+        record = {"issue_id": 6, "base_branch": "dev", "agent": "Backend/Foundation Engineer",
+                  "agent_role": "Backend/Foundation Engineer", "capability_tier": "strong-coding-reasoning",
+                  "review_tier": "R2", "risk_classification": "low", "context_pack_id": "ctx",
+                  "context_pack_version": "v1.1", "controller_policy_version": "v1.1",
+                  "implementer_session_id": "session", "routing_reason": "test", "retry_count": 0,
+                  "prompt_hash": sha256(b"bounded").hexdigest(), "dispatch_key": "dispatch-key",
+                  "prompt": "bounded"}
+        comments = [{"user": {"login": "github-actions[bot]"},
+                     "body": f"{orchestrate_issue.MARKER}\nDISPATCH_READY {json.dumps(record)}\n"
+                             "dispatch_key:dispatch-key"}]
+        pr = {"number": 99, "state": "open", "body": "Fixes #6\ndispatch_key:dispatch-key",
+              "base": {"ref": "dev"}, "head": {"sha": "head"},
+              "user": {"login": "Copilot", "type": "Bot", "id": 198982749}}
+
+        def fake_gh(*args):
+            path = args[0]
+            if path.endswith("/issues/6"):
+                return issue
+            if path.endswith("/issues/6/comments"):
+                return comments
+            if path.endswith("/pulls?state=open&base=dev&per_page=100"):
+                return [pr]
+            if path.endswith("/pulls/99/files?per_page=100"):
+                return [{"filename": ".github/scripts/orchestrator.py"}]
+            if args[:2] == ("--method", "POST"):
+                last = str(args[-1])
+                if "body=" in last:
+                    body = last.split("body=", 1)[1]
+                    comments.append({"user": {"login": "github-actions[bot]"}, "body": body})
+                return {}
+            if args[:2] == ("--method", "DELETE"):
+                return {}
+            raise AssertionError(args)
+
+        with tempfile.NamedTemporaryFile("w", delete=False) as stream:
+            json.dump(event, stream)
+            event_path = stream.name
+        env = {
+            "GITHUB_REPOSITORY": "o/r", "GITHUB_EVENT_PATH": event_path,
+            "GITHUB_ACTOR": "AnjanaKavinda", "GOVERNED_DISPATCH_ACTORS": "AnjanaKavinda",
+            "GOVERNED_PILOT_ENABLED": "true", "GOVERNED_PILOT_ISSUES": "6",
+            "GOVERNED_IMPLEMENTER_SESSION": "session",
+        }
+        with patch.dict(os.environ, env, clear=False), \
+             patch.object(orchestrate_issue, "gh", side_effect=fake_gh), \
+             patch.object(orchestrate_issue, "gh_paginated", side_effect=lambda path: fake_gh(path)), \
+             patch.object(orchestrate_issue, "append_governance_event"):
+            self.assertEqual(orchestrate_issue.main(), 0)
+        self.assertTrue(any("PR_BINDING:99 head_sha:head dispatch_key:dispatch-key"
+                            in item.get("body", "") for item in comments))
+        os.unlink(event_path)
+
     def test_merged_pr_complete_accepts_already_closed_issue(self):
         comments = [{"user": {"login": "github-actions[bot]"},
                      "body": f"{transition_pr.MARKER}\nDISPATCH_INTENT "
@@ -1633,21 +1710,68 @@ class GovernanceTests(unittest.TestCase):
         issues = [
             {"number": 11, "state": "open", "title": "A",
              "body": "# Issue 004 — A\n## Allowed paths\n- .github/scripts/**\n## Affected paths\n- .github/scripts/**\n## Forbidden paths\n- services/execution/**",
-             "labels": ["workflow:ready", "agent:backend-foundation", "phase:governance", "risk:low", "type:test"]},
+             "routing_inputs": {
+                 "canonical_issue": 4, "agent_role": "Backend/Foundation Engineer",
+                 "phase": "governance", "risk_label": "low", "issue_type": "test",
+                 "affected_paths": [".github/scripts/**"], "allowed_paths": [".github/scripts/**"],
+                 "forbidden_paths": ["services/execution/**"], "architecture_impact": False,
+                 "shared_contract_impact": False, "security_impact": False,
+                 "trading_risk_statistical_impact": False, "approval_execution_ccxt_impact": False,
+             },
+             "labels": ["workflow:ready", "agent:backend-foundation", "phase:governance", "risk:low", "type:test",
+                        "impact:architecture", "impact:shared-contract", "impact:security",
+                        "impact:trading-risk", "impact:approval-execution-ccxt"]},
             {"number": 12, "state": "open", "title": "B",
              "body": "# Issue 005 — B\n## Allowed paths\n- .github/scripts/**\n## Affected paths\n- .github/scripts/**\n## Forbidden paths\n- services/execution/**",
-             "labels": ["workflow:ready", "agent:backend-foundation", "phase:governance", "risk:low", "type:test"]},
+             "routing_inputs": {
+                 "canonical_issue": 5, "agent_role": "Backend/Foundation Engineer",
+                 "phase": "governance", "risk_label": "low", "issue_type": "test",
+                 "affected_paths": [".github/scripts/**"], "allowed_paths": [".github/scripts/**"],
+                 "forbidden_paths": ["services/execution/**"], "architecture_impact": False,
+                 "shared_contract_impact": False, "security_impact": False,
+                 "trading_risk_statistical_impact": False, "approval_execution_ccxt_impact": False,
+             },
+             "labels": ["workflow:ready", "agent:backend-foundation", "phase:governance", "risk:low", "type:test",
+                        "impact:architecture", "impact:shared-contract", "impact:security",
+                        "impact:trading-risk", "impact:approval-execution-ccxt"]},
         ]
-        selected = selector.select_next_eligible_issue(issues, catalog_text=catalog)
+        snapshot = {"verified": True, "complete": True, "issues": issues}
+        selected = selector.select_next_eligible_issue(snapshot, catalog_text=catalog)
         self.assertEqual(selected["mode"], "shadow")
         self.assertEqual(selected["selected_issue"], 11)
         self.assertEqual(selected["mutations"], [])
         issues[0]["state"] = "closed"
-        selected = selector.select_next_eligible_issue(issues, catalog_text=catalog)
+        selected = selector.select_next_eligible_issue(snapshot, catalog_text=catalog)
         self.assertEqual(selected["selected_issue"], 12)
         issues[1]["labels"].append("workflow:agent-running")
-        selected = selector.select_next_eligible_issue(issues, catalog_text=catalog)
+        selected = selector.select_next_eligible_issue(snapshot, catalog_text=catalog)
         self.assertIsNone(selected["selected_issue"])
+
+    def test_shadow_selector_fail_closed_on_incomplete_snapshot_or_missing_metadata(self):
+        with self.assertRaises(GovernanceError):
+            selector.select_next_eligible_issue([], catalog_text="| 001 | x | x | x | x | |")
+        with self.assertRaises(GovernanceError):
+            selector.select_next_eligible_issue(
+                {"verified": True, "complete": False, "issues": []},
+                catalog_text="| 001 | x | x | x | x | |")
+        issue = {"number": 21, "state": "open", "title": "X",
+                 "body": "# Issue 001 — X\n## Allowed paths\n- .github/scripts/**\n## Affected paths\n- .github/scripts/**\n## Forbidden paths\n- services/execution/**",
+                 "labels": ["workflow:ready", "agent:backend-foundation", "phase:governance", "risk:low", "type:test",
+                            "impact:architecture", "impact:shared-contract", "impact:security",
+                            "impact:trading-risk", "impact:approval-execution-ccxt"]}
+        selected = selector.select_next_eligible_issue(
+            {"verified": True, "complete": True, "issues": [issue]},
+            catalog_text="| 001 | x | x | X | x | |")
+        self.assertIsNone(selected["selected_issue"])
+
+    def test_workflows_have_single_governance_gate_writer(self):
+        workflows = list((Path(__file__).parents[1] / "workflows").glob("*.yml"))
+        occurrences = {}
+        for path in workflows:
+            text = path.read_text(encoding="utf-8")
+            if "context=governance-gate" in text:
+                occurrences[path.name] = text.count("context=governance-gate")
+        self.assertEqual(list(occurrences.keys()), ["final-governance-gate.yml"])
 
 
 def load_tests(loader, tests, pattern):

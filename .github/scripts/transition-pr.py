@@ -11,8 +11,8 @@ from hashlib import sha256
 from pathlib import Path
 
 from orchestrator import (STATES, AppendOnlyAudit, GovernanceError, append_governance_event,
-                          build_launch_prompt, resolve_agent, safe_content, transition_escalation,
-                          validate_transition)
+                          build_launch_prompt, build_terminal_diagnostic, resolve_agent,
+                          safe_content, transition_escalation, validate_transition)
 from independent_reviewer import integrity_hash
 from review_provenance import extract_linked_issue
 from review_provenance import derive_current_dispatch_key, verify_artifact
@@ -28,9 +28,21 @@ STATES = ("workflow:agent-running", "workflow:review", "workflow:changes-request
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
 
 
-def blocked(reason: str) -> int:
+def blocked(reason: str, *, repository: str = "", issue_id: str = "", pr_number: str = "",
+            head_sha: str = "", current_state: str = "", attempted_transition: str = "") -> int:
     """Make every terminal failure visible to the workflow operator."""
     print(f"governance transition blocked: {reason}", file=sys.stderr)
+    print(json.dumps(build_terminal_diagnostic(
+        repository=repository or os.environ.get("GITHUB_REPOSITORY", ""),
+        issue_id=issue_id or os.environ.get("ISSUE_NUMBER", ""),
+        pr_number=pr_number or os.environ.get("PR_NUMBER", ""),
+        head_sha=head_sha,
+        current_state=current_state,
+        attempted_transition=attempted_transition or os.environ.get("TARGET_STATE", ""),
+        failed_invariant=reason,
+        recovery_action=("Inspect trusted dispatch evidence and workflow-state labels; "
+                         "record a human decision before retrying."),
+    ), sort_keys=True), file=sys.stderr)
     return 1
 
 
@@ -525,4 +537,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (GovernanceError, KeyError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        print(json.dumps(build_terminal_diagnostic(
+            repository=os.environ.get("GITHUB_REPOSITORY", ""),
+            issue_id=os.environ.get("ISSUE_NUMBER") or None,
+            pr_number=os.environ.get("PR_NUMBER") or None,
+            failed_invariant=str(error),
+            attempted_transition=os.environ.get("TARGET_STATE", ""),
+            recovery_action=("Inspect trusted dispatch/PR binding evidence and workflow labels; "
+                             "record a human decision, then re-run transition."),
+        ), sort_keys=True), file=sys.stderr)
+        raise SystemExit(1)

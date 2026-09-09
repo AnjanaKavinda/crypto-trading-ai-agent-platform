@@ -7,6 +7,8 @@ import os
 import subprocess
 import sys
 import re
+import time
+import fnmatch
 from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,9 +19,10 @@ from orchestrator import (
     create_dispatch_request, parse_dependencies, resolve_canonical_number,
     resolve_dependency_github_numbers, validate_issue, verify_protections,
     extract_routing_inputs, select_capability_tier, required_review_tier,
-    build_context_pack, append_governance_event, transition_escalation,
+    build_context_pack, append_governance_event, build_terminal_diagnostic, transition_escalation,
     CAPABILITY_TIERS, REVIEW_TIERS, STATES,
 )
+from review_provenance import extract_linked_issue
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
 TRUSTED_COMPLETION_ACTORS = {"github-actions[bot]"}
@@ -223,6 +226,80 @@ def validate_assignment_controls(issue_id: str, actor: str, *,
         raise GovernanceError("implementer session is not configured")
 
 
+def _valid_copilot_pr(pr: dict, *, issue_id: int, dispatch_key: str,
+                      allowed_paths: tuple[str, ...], forbidden_paths: tuple[str, ...]) -> bool:
+    try:
+        author = pr.get("user") or {}
+        if (author.get("login"), author.get("type"), int(author.get("id", -1))) != (
+                COPILOT_ASSIGNEE, "Bot", COPILOT_ASSIGNEE_ID):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if (pr.get("state") != "open"
+            or (pr.get("base") or {}).get("ref") != "dev"
+            or not (pr.get("head") or {}).get("sha")):
+        return False
+    if extract_linked_issue(pr.get("body") or "") != issue_id:
+        return False
+    if f"dispatch_key:{dispatch_key}" not in (pr.get("body") or ""):
+        return False
+    files = pr.get("_files", [])
+    for item in files:
+        path = str(item.get("filename") or "")
+        if not path:
+            return False
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in forbidden_paths):
+            return False
+        if not any(fnmatch.fnmatchcase(path, pattern) for pattern in allowed_paths):
+            return False
+    return True
+
+
+def reconcile_pr_binding_after_assignment(*, repository: str, root: str, issue: dict,
+                                          comments: list[dict], dispatch_record: dict,
+                                          retries: int = 2) -> bool:
+    """Bounded, non-paid reconciliation for assignment completion after PR creation."""
+    issue_id = int(issue["number"])
+    dispatch_key = str(dispatch_record["dispatch_key"])
+    binding_prefix = f"PR_BINDING:"
+    if any(binding_prefix in item.get("body", "") and f"dispatch_key:{dispatch_key}" in item.get("body", "")
+           for item in comments):
+        return True
+    routing = extract_routing_inputs(issue)
+    for attempt in range(1, retries + 1):
+        pulls = gh_paginated(f"{root}/pulls?state=open&base=dev&per_page=100")
+        candidates = []
+        for pr in pulls:
+            try:
+                files = gh_paginated(f"{root}/pulls/{pr['number']}/files?per_page=100")
+                candidate = dict(pr)
+                candidate["_files"] = files
+                if _valid_copilot_pr(
+                        candidate, issue_id=issue_id, dispatch_key=dispatch_key,
+                        allowed_paths=routing.allowed_paths,
+                        forbidden_paths=routing.forbidden_paths):
+                    candidates.append(candidate)
+            except (GovernanceError, KeyError, ValueError):
+                continue
+        if len(candidates) == 1:
+            pr = candidates[0]
+            head = pr["head"]["sha"]
+            binding_line = (f"{MARKER}\nPR_BINDING:{pr['number']} head_sha:{head} "
+                            f"dispatch_key:{dispatch_key}")
+            if not any(binding_line in item.get("body", "") for item in comments):
+                gh_mutate(f"{root}/issues/{issue_id}/comments", "-f", f"body={binding_line}")
+            return True
+        if len(candidates) > 1:
+            raise GovernanceError("assignment reconciliation found ambiguous governed PR candidates")
+        if attempt < retries:
+            time.sleep(2)
+    gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
+              "body="
+              f"{MARKER}\nASSIGNMENT_RECONCILIATION_PENDING "
+              f"{json.dumps({'issue_id': issue_id, 'dispatch_key': dispatch_key, 'retry_count': retries, 'outcome': 'pending-pr-binding'}, sort_keys=True)}")
+    return False
+
+
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
@@ -277,6 +354,11 @@ def main() -> int:
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
                   f"{json.dumps(record, sort_keys=True)}\n"
                   f"dispatch_key:{record['dispatch_key']}")
+        reconcile_pr_binding_after_assignment(
+            repository=repository, root=root, issue=issue, comments=gh(f"{root}/issues/{issue_id}/comments"),
+            dispatch_record=record,
+            retries=max(1, int(os.environ.get("GOVERNED_ASSIGNMENT_RECONCILE_RETRIES", "2"))),
+        )
         for state in STATES:
             if state in [item["name"] for item in issue.get("labels", [])]:
                 gh_delete(f"{root}/issues/{issue_id}/labels/{state}")
@@ -332,7 +414,8 @@ def main() -> int:
     }
     # V1.1 routing metadata is an explicit dispatch prerequisite; never infer it
     # from free-form issue prose.
-    routing_inputs = extract_routing_inputs(issue, catalog_titles=catalog_titles)
+    routing_inputs = extract_routing_inputs(
+        issue, catalog_titles=catalog_titles, strict_explicit=True)
     capability_tier = select_capability_tier(routing_inputs)
     review_tier = required_review_tier(routing_inputs)
     escalation_tier = transition_escalation(capability_tier, retries=0)
@@ -425,4 +508,12 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (GovernanceError, KeyError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
         print(f"governed dispatch blocked: {error}", file=sys.stderr)
+        print(json.dumps(build_terminal_diagnostic(
+            repository=os.environ.get("GITHUB_REPOSITORY", ""),
+            issue_id=os.environ.get("ISSUE_NUMBER") or None,
+            failed_invariant=str(error),
+            attempted_transition="issue-dispatch-or-assignment",
+            recovery_action=("Fix the violated invariant and re-run issue orchestration; "
+                             "if state is ambiguous, record human decision and retry."),
+        ), sort_keys=True), file=sys.stderr)
         raise SystemExit(1)
