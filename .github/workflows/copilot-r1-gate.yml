@@ -3,8 +3,8 @@ name: Governed R1 human gate
 on:
   pull_request_review:
     types: [submitted, dismissed]
-  pull_request:
-    types: [synchronize]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -15,20 +15,38 @@ permissions:
 
 jobs:
   finalize:
-    if: github.event.pull_request.base.ref == 'dev' || github.event.pull_request_review.pull_request.base.ref == 'dev'
+    if: github.event.pull_request.base.ref == 'dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: dev
       - name: Fetch trusted current-head snapshots
+        id: fetch
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.pull_request_review.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           mkdir -p .governance/r1
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance/r1/pr.json
           gh api --paginate --slurp "repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews" > .governance/r1/reviews.json
+          gh api --paginate --slurp "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" > .governance/r1/pr-comments.json
+          gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" > .governance/r1/files.json
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER.diff" \
+            -H 'Accept: application/vnd.github.v3.diff' > .governance/r1/pr.diff
+      - name: Publish terminal error when trusted snapshots cannot be fetched
+        if: steps.fetch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+          if [ -n "$head" ]; then
+           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+             -f state=error -f context=governance-gate \
+             -f description='R1 trusted snapshot resolution failed; inspect workflow diagnostics'
+          fi
+          exit 1
           linked="$(python - <<'PY'
           import json, sys
           sys.path.insert(0, '.github/scripts')
@@ -64,9 +82,15 @@ jobs:
           issue = json.load(open('.governance/r1/issue.json'))
           status = json.load(open('.governance/r1/status.json'))
           checks = json.load(open('.governance/r1/checks.json'))
+          comments = [item for page in json.load(open('.governance/r1/pr-comments.json'))
+                      for item in page]
+          files = json.load(open('.governance/r1/files.json'))
           result = evaluate_r1_gate(
               pr, reviews, issue, status, checks,
-              required_checks=[x for x in os.environ.get('REQUIRED_CHECKS', '').split(',') if x])
+              required_checks=[x.strip() for x in os.environ.get('REQUIRED_CHECKS', '').split(',') if x.strip()],
+              comments=comments,
+              changed_files=tuple(item.get('filename', '') for item in files),
+              diff=open('.governance/r1/pr.diff', encoding='utf-8').read())
           json.dump(result, open('.governance/r1/result.json', 'w'), sort_keys=True)
           PY
           head="$(jq -r .head_sha .governance/r1/result.json)"

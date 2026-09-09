@@ -247,7 +247,7 @@ def main() -> int:
             comments=comments, pr_number=int(pr_number), issue_id=int(issue),
             base=(pr.get("base") or {}).get("ref", "dev"),
             head_sha=(pr.get("head") or {}).get("sha", ""),
-            pr_body=pr.get("body") or "")]
+            pr_body=pr.get("body") or "", require_current_binding=False)]
     except GovernanceError as error:
         return blocked(f"current trusted dispatch binding unavailable: {error}")
     dispatch_payload = {}

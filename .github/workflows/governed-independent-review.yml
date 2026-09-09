@@ -17,8 +17,43 @@ permissions:
   issues: write
   statuses: write
 jobs:
+  resolve-pr:
+    name: resolve exact open PR for workflow head
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       vars.GOVERNED_PILOT_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+    steps:
+      - name: Resolve one open dev PR by exact head
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          RUN_HEAD: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_PR" ]; then
+            pr="$(gh api "repos/${{ github.repository }}/pulls/$INPUT_PR")"
+            test "$(jq -r .state <<<"$pr")" = open
+            test "$(jq -r .base.ref <<<"$pr")" = dev
+            test -n "$(jq -r .head.sha <<<"$pr")"
+            jq -r .number <<<"$pr" > "$GITHUB_OUTPUT.tmp"
+          else
+            mapfile -t matches < <(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$RUN_HEAD/pulls" \
+              -H 'Accept: application/vnd.github+json' |
+              jq -r '.[] | select(.state == "open" and .base.ref == "dev") | .number')
+            test "${#matches[@]}" -eq 1
+            printf '%s\n' "${matches[0]}" > "$GITHUB_OUTPUT.tmp"
+          fi
+          printf 'pr_number=%s\n' "$(cat "$GITHUB_OUTPUT.tmp")" >> "$GITHUB_OUTPUT"
   classify-r1:
     name: classify-review-tier-before-model
+    needs: resolve-pr
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -35,7 +70,7 @@ jobs:
         id: classify
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
         run: |
           case "$PR_NUMBER" in (*[!0-9]*|'') echo "PR number must be numeric" >&2; exit 1;; esac
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > .governance-pr.json
@@ -54,8 +89,32 @@ jobs:
           issue = json.load(open('.governance-issue.json'))
           print("tier=" + required_review_tier_from_labels(issue.get("labels", [])))
           PY
+  terminal-classification-diagnostic:
+    name: publish terminal classification failure
+    needs: [resolve-pr, classify-r1]
+    if: >-
+      always() &&
+      (needs.resolve-pr.result == 'failure' || needs.classify-r1.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish exact-head governance error
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_HEAD: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t heads < <(gh api --paginate \
+           "repos/${{ github.repository }}/commits/$EVENT_HEAD/pulls" \
+           -H 'Accept: application/vnd.github+json' |
+           jq -r '.[] | select(.state == "open" and .base.ref == "dev") | .head.sha')
+          if [ "${#heads[@]}" -eq 1 ]; then
+           gh api --method POST "repos/${{ github.repository }}/statuses/${heads[0]}" \
+             -f state=error -f context=governance-gate \
+             -f description='Independent-review classification failed; inspect workflow diagnostics'
+          fi
+          exit 1
   produce-review-provenance:
-    needs: classify-r1
+    needs: [resolve-pr, classify-r1]
     if: >-
       needs.classify-r1.outputs.tier != 'R1' &&
       (github.event_name == 'workflow_dispatch' ||
@@ -65,7 +124,7 @@ jobs:
     name: produce-review-provenance
     runs-on: ubuntu-latest
     env:
-      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}
+      PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
     steps:
       # This job is the trusted independent-review producer execution. It is
       # a separate governed run from the workflow that dispatches or

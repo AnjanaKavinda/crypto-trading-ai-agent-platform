@@ -73,12 +73,23 @@ class IndependentReviewerTests(unittest.TestCase):
             derive_current_dispatch_key(
                 comments=comments, pr_number=238, issue_id=211, base="dev",
                 head_sha="old")
+
+    def test_dispatch_intent_without_current_pr_binding_is_rejected(self):
+        comments = [{
+            "user": {"login": "github-actions[bot]"},
+            "body": (
+                "<!-- governed-copilot-orchestrator:v1 -->\n"
+                "DISPATCH_INTENT {\"issue_id\":211,\"dispatch_key\":\"pilot-key\"}"),
+        }]
+        with self.assertRaisesRegex(Exception, "dispatch key"):
+            derive_current_dispatch_key(
+                comments=comments, pr_number=238, issue_id=211, base="dev",
+                head_sha="current")
     def test_workflow_reverification_declares_pr_number(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "governed-independent-review.yml").read_text()
-        self.assertIn(
-            "PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}",
-            workflow)
+        self.assertIn("Resolve one open dev PR by exact head", workflow)
+        self.assertNotIn("workflow_run.pull_requests[0]", workflow)
         self.assertIn('workflows: ["Governance CI"]', workflow)
         self.assertIn("vars.GOVERNED_PILOT_ENABLED == 'true'", workflow)
         self.assertIn("GOVERNED_PILOT_ISSUES", workflow)

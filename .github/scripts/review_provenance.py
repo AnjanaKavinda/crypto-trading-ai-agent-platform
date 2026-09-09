@@ -143,7 +143,8 @@ def extract_linked_issue(body: str) -> int:
 
 def derive_current_dispatch_key(*, comments: Iterable[Mapping[str, Any]],
                                 pr_number: int, issue_id: int, base: str,
-                                head_sha: str, pr_body: str = "") -> str:
+                                head_sha: str, pr_body: str = "",
+                                require_current_binding: bool = True) -> str:
     """Derive exactly one current dispatch key from trusted bot evidence.
 
     The PR body is only a consistency check.  It is not required to carry the
@@ -178,6 +179,10 @@ def derive_current_dispatch_key(*, comments: Iterable[Mapping[str, Any]],
                 stale_seen = True
                 continue
             candidates.add(key)
+            continue
+        if require_current_binding:
+            # Intent and assignment-completion comments establish lineage only.
+            # They are deliberately insufficient as a current PR binding.
             continue
         record_match = re.search(
             r"(?m)^(?:DISPATCH|DISPATCH_INTENT|ASSIGNMENT_COMPLETED)\s+(\{.*\})\s*$",
