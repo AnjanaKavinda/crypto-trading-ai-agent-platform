@@ -150,3 +150,31 @@ authorizes implementation of the supervised development-orchestration control
 model described here and in the linked orchestration contract. It does not
 authorize auto-merge, bypass human final merge authority, resolve OD-0024, or
 change any runtime trading/execution safety boundary.
+
+## Automation V1.2 migration and pilot recovery
+
+V1.2 routes low-risk documentation/test changes through deterministic validation
+and current-head human approval without invoking a paid model. R2 requires a
+governed independent review; R3 requires the strongest governed review. A new
+head invalidates prior approval or review evidence. No tier can approve or merge;
+`AnjanaKavinda` remains the only final merge authority.
+
+The repository currently requires Actions approval for Copilot-triggered workflow
+runs. Configure this at **Repository Settings → Actions → General → Fork pull
+request workflows → Require approval for all outside collaborators** (and keep
+the equivalent organization policy enabled where applicable). The recommended
+setting is to require approval: it adds a deliberate operator step and can delay
+trusted automation, but prevents an untrusted fork or bot event from consuming
+privileged permissions and secrets. Use only trusted-base checkout on privileged
+events, and re-run the workflow from the trusted `dev` revision after reviewing
+the event and changed paths. PR-controlled code must never execute under
+`pull_request_target`.
+
+To recover PR #238, verify its `dev` base, current head SHA, exact single linked
+issue #6, trusted `github-actions[bot]` dispatch evidence, allowed scope, secret
+scan, deterministic checks, and current-head human approval. Re-run the
+deterministic R1 path; it must not invoke a paid model. If the existing Run #40
+artifact is needed for historical evidence, preserve it as-is: its ephemeral
+handoff cannot be re-signed after the signing key/run context is gone. Do not
+fabricate replacement provenance. Recreate only the required current-head
+deterministic or governed review evidence, then request the human merge manually.

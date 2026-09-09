@@ -101,7 +101,10 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
                 for item in result.get("findings", []))})
         issue_id = extract_linked_issue(pr.get("body") or "")
         required = required_review_tier_from_labels(issue.get("labels", []))
-        if (parsed.repository != pr.get("repository") or parsed.pr_number != int(pr["number"]) or
+        base_value = pr.get("base") or {}
+        base_repo = base_value.get("repo") if isinstance(base_value, dict) else {}
+        pr_repository = pr.get("repository") or base_repo.get("full_name")
+        if (parsed.repository != pr_repository or parsed.pr_number != int(pr["number"]) or
                 parsed.head_sha != pr.get("head_sha") or parsed.required_review_tier != required):
             raise ReviewerExecutionError("review result is not bound to the current PR/issue")
         candidates = [
@@ -118,11 +121,13 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
         expected_model = mapping.get({
             "R1": "economical-fast", "R2": "strong-coding-reasoning",
             "R3": "premium-strongest-available"}[parsed.required_review_tier])
-        if parsed.provider_name != "openai" or parsed.model_name != expected_model:
+        if (parsed.provider_name != "openai" or parsed.model_name != expected_model):
             raise ReviewerExecutionError("review result provider/model is not governed")
-        if parsed.actual_review_tier != config["tier"] or (
+        if parsed.actual_review_tier != parsed.required_review_tier or (
                 reviewer_roles.get(login) and parsed.reviewer_role != reviewer_roles[login]):
-            raise ReviewerExecutionError("review result reviewer identity or tier is untrusted")
+            raise ReviewerExecutionError("review result reviewer identity or required tier is untrusted")
+        if {"R1": 0, "R2": 1, "R3": 2}[config["tier"]] < {"R1": 0, "R2": 1, "R3": 2}[required]:
+            raise ReviewerExecutionError("configured reviewer tier is below the required tier")
         original_request.validate()
         parsed.validate_against(original_request)
         verify_execution_handoff(

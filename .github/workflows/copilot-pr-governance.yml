@@ -5,7 +5,7 @@ concurrency:
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -70,38 +70,19 @@ jobs:
       - name: Human merge remains final authority
         run: echo "No workflow step can merge this PR; the human repository owner remains the final merge authority."
 
-  handle-unmerged-close:
-    if: github.event.action == 'closed' && github.event.pull_request.merged != true && github.event.pull_request.base.ref == 'dev'
+  terminal-governance-diagnostic:
+    if: >-
+      always() &&
+      needs.track-review.result == 'failure'
+    needs: [track-review]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: dev
-      - name: Escalate closed unmerged governed PR
+      - name: Publish terminal governance failure
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET_STATE: workflow:human-decision-required
-          GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
-          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
-        run: python .github/scripts/transition-pr.py
-
-  complete-after-human-merge:
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'dev'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: dev
-      - name: Mark bound issue complete after actual merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          TARGET_STATE: workflow:complete
-          GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
-          GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
-          GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
-        run: python .github/scripts/transition-pr.py
+        run: |
+          head="${{ github.event.pull_request.head.sha }}"
+          gh api --method POST \
+            "repos/${{ github.repository }}/statuses/$head" \
+            -f state=failure -f context=governance-gate \
+            -f description='Governance lifecycle failed; inspect job diagnostics and recover under ADR-0001'

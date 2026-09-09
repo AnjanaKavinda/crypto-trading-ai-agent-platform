@@ -13,7 +13,8 @@ from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from orchestrator import (CAPABILITY_TIERS, GovernanceError, REVIEW_TIERS,
-                          detect_high_confidence_secret_material)
+                          detect_high_confidence_secret_material,
+                          extract_bounded_path_section)
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
 SEVERITIES = ("info", "low", "medium", "high", "critical")
@@ -60,31 +61,12 @@ def validate_changed_path_scope(changed_files: tuple[str, ...],
 
 
 def extract_allowed_paths_from_issue(issue_body: str) -> tuple[str, ...]:
-    """Derive bounded review paths from the trusted linked-issue policy text."""
-    body = issue_body or ""
-    marker = re.search(r"(?im)^Expected paths(?:\s*\([^\n]*\))?:\s*$", body)
-    if not marker:
-        marker = re.search(r"(?im)^Allowed paths(?:\s*\([^\n]*\))?:\s*$", body)
-    if not marker:
-        raise ReviewerExecutionError("linked issue does not define governed review paths")
-    tail = body[marker.end():]
-    section = re.split(r"(?m)^##\s+", tail, maxsplit=1)[0]
-    paths = []
-    for line in section.splitlines():
-        match = re.match(r"^-\s+`([^`]+)`", line)
-        if not match:
-            continue
-        candidate = match.group(1).strip()
-        if candidate and candidate not in paths:
-            paths.append(_normalized_pattern(candidate))
-        if (candidate.endswith("/test_orchestrator.py") and
-                "narrowly scoped new tests" in line.lower()):
-            test_pattern = candidate.rsplit("/", 1)[0] + "/test_*.py"
-            if test_pattern not in paths:
-                paths.append(_normalized_pattern(test_pattern))
-    if not paths:
-        raise ReviewerExecutionError("linked issue governed review paths are empty")
-    return tuple(paths)
+    try:
+        return tuple(_normalized_pattern(path)
+                     for path in extract_bounded_path_section(issue_body))
+    except GovernanceError as error:
+        raise ReviewerExecutionError(
+            f"linked issue governed review paths are invalid: {error}") from error
 
 
 def assert_current_head(expected_head: str, actual_head: str) -> None:

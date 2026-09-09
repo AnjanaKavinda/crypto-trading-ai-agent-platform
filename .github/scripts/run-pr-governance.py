@@ -159,12 +159,15 @@ def main() -> int:
     pr["authorized_reviewers"] = [name for name in
                                   os.environ.get("GOVERNED_REVIEWERS", "").split(",") if name]
     try:
-        configured_reviewers, configured_sessions = validate_reviewer_configuration(
-            reviewer_configuration, pr["required_review_tier"])
+        if pr["required_review_tier"] == "R1":
+            configured_reviewers, configured_sessions = [], {}
+        else:
+            configured_reviewers, configured_sessions = validate_reviewer_configuration(
+                reviewer_configuration, pr["required_review_tier"])
     except GovernanceError as error:
         print(f"missing trusted reviewer-tier configuration; blocked: {error}", file=sys.stderr)
         return 1
-    if set(pr["authorized_reviewers"]) != set(configured_reviewers):
+    if pr["required_review_tier"] != "R1" and set(pr["authorized_reviewers"]) != set(configured_reviewers):
         print("reviewer allowlist and reviewer-tier configuration disagree; blocked",
               file=sys.stderr)
         return 1
@@ -177,7 +180,8 @@ def main() -> int:
     required_roles = [role for role in os.environ.get(
         "REQUIRED_REVIEWER_ROLES", "").split(",") if role]
     controller = os.environ.get("GOVERNED_CONTROLLER")
-    if not required or not pr["authorized_reviewers"] or not controller or (
+    if not required or not controller or (
+            pr["required_review_tier"] != "R1" and not pr["authorized_reviewers"]) or (
             pr["governed_high_risk"] and not required_roles):
         print("missing trusted reviewer/check configuration; blocked", file=sys.stderr)
         return 1
