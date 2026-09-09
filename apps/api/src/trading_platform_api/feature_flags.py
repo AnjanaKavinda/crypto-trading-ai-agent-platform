@@ -39,7 +39,7 @@ def _parse_strict_bool(*, variable_name: str, raw_value: str | None) -> bool:
         return True
     if raw_value == "false":
         return False
-    raise FeatureFlagsError(f"{variable_name} must be one of: true, false. Received: {raw_value!r}.")
+    raise FeatureFlagsError(f"{variable_name} must be one of: true, false.")
 
 
 def load_feature_flags(environment_mapping: Mapping[str, str] | None = None) -> FeatureFlags:

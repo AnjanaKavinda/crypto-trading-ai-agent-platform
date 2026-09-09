@@ -88,7 +88,7 @@ def test_invalid_value_error_identifies_variable_without_exposing_mapping() -> N
     with pytest.raises(FeatureFlagsError) as exc_info:
         load_feature_flags(
             {
-                "ENABLE_EXPERIMENTS": "unexpected",
+                "ENABLE_EXPERIMENTS": "top-secret-token",
                 "UNRELATED_SECRET": "top-secret-token",
             }
         )

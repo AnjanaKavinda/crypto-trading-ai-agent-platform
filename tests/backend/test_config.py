@@ -77,7 +77,9 @@ def test_unknown_operating_mode_value_fails_closed() -> None:
 
 def test_invalid_explicit_feature_flag_prevents_settings_construction() -> None:
     with pytest.raises(AppSettingsError) as exc_info:
-        load_app_settings({"ENABLE_AUTO_EXECUTION": "TRUE", "UNRELATED_SECRET": "top-secret-token"})
+        load_app_settings(
+            {"ENABLE_AUTO_EXECUTION": "top-secret-token", "UNRELATED_SECRET": "top-secret-token"}
+        )
 
     error_message = str(exc_info.value)
     assert "ENABLE_AUTO_EXECUTION" in error_message
