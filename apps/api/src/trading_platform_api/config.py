@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
+
+from trading_platform_api.feature_flags import FeatureFlags, FeatureFlagsError, load_feature_flags
 
 ENVIRONMENT_VARIABLE = "TRADING_PLATFORM_ENVIRONMENT"
 MODE_VARIABLE = "TRADING_PLATFORM_MODE"
@@ -33,6 +35,7 @@ class OperatingMode(str, Enum):
 class AppSettings:
     environment: DeploymentEnvironment
     mode: OperatingMode
+    feature_flags: FeatureFlags = field(default_factory=FeatureFlags)
 
 
 def _parse_enum_value(
@@ -78,4 +81,8 @@ def load_app_settings(environment_mapping: Mapping[str, str] | None = None) -> A
         default_value=OperatingMode.RESEARCH.value,
         enum_type=OperatingMode,
     )
-    return AppSettings(environment=environment, mode=mode)
+    try:
+        feature_flags = load_feature_flags(environment_mapping=mapping)
+    except FeatureFlagsError as exc:
+        raise AppSettingsError(str(exc)) from exc
+    return AppSettings(environment=environment, mode=mode, feature_flags=feature_flags)
