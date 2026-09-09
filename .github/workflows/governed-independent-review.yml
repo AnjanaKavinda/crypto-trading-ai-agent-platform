@@ -1,6 +1,6 @@
 name: Governed independent AI review producer
 concurrency:
-  group: governed-independent-review-${{ github.event.inputs.pr_number || github.event.workflow_run.id || github.run_id }}
+  group: governed-independent-review-${{ github.repository }}-${{ github.event.inputs.pr_number || github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: false
 on:
   workflow_run:
@@ -109,7 +109,7 @@ jobs:
            jq -r '.[] | select(.state == "open" and .base.ref == "dev") | .head.sha')
           if [ "${#heads[@]}" -eq 1 ]; then
            gh api --method POST "repos/${{ github.repository }}/statuses/${heads[0]}" \
-             -f state=error -f context=governance-gate \
+            -f state=error -f context=governance-review \
              -f description='Independent-review classification failed; inspect workflow diagnostics'
           fi
           exit 1
@@ -268,7 +268,7 @@ jobs:
         run: |
           head_sha="$(jq -r .head.sha /tmp/pr.json)"
           gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-            -f state=pending -f context=governance-gate \
+            -f state=pending -f context=governance-review \
             -f description='Independent governed review in progress'
       - name: Verify deterministic checks before AI review
         env:
@@ -296,8 +296,8 @@ jobs:
         run: |
           head_sha="$(jq -r .head.sha /tmp/pr.json)"
           gh api "repos/${{ github.repository }}/commits/$head_sha/status" > /tmp/pre-review-status.json
-          if jq -e '.statuses[]? | select(.context == "governance-gate" and (.state == "success" or .state == "failure" or .state == "error"))' /tmp/pre-review-status.json >/dev/null; then
-            echo "A final governance-gate status already exists for this exact head; automatic paid re-review is blocked. Use controlled workflow_dispatch only after human review." >&2
+          if jq -e '.statuses[]? | select(.context == "governance-review" and (.state == "success" or .state == "failure" or .state == "error"))' /tmp/pre-review-status.json >/dev/null; then
+            echo "A terminal governance-review status already exists for this exact head; automatic paid re-review is blocked. Use controlled workflow_dispatch only after human review." >&2
             exit 1
           fi
       - name: Re-verify exact current PR head immediately before AI review
@@ -417,13 +417,13 @@ jobs:
           disposition="$(jq -r .disposition /tmp/reviewer-result.json)"
           if [ "$governance_rc" -eq 0 ]; then
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-              -f state=success -f context=governance-gate \
+              -f state=success -f context=governance-review \
               -f description='Signed independent review approved'
             TARGET_STATE=workflow:ready-to-merge \
               python .github/scripts/transition-pr.py
           else
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-              -f state=failure -f context=governance-gate \
+              -f state=failure -f context=governance-review \
               -f description="Independent review disposition: $disposition"
             if [ "$disposition" = "changes-requested" ]; then
               TARGET_STATE=workflow:changes-requested \
@@ -455,6 +455,6 @@ jobs:
           if [ -f /tmp/pr.json ]; then
             head_sha="$(jq -r .head.sha /tmp/pr.json)"
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-              -f state=failure -f context=governance-gate \
+              -f state=error -f context=governance-review \
               -f description='Governed independent review did not finalize successfully'
           fi

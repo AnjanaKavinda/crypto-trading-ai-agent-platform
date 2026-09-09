@@ -34,6 +34,17 @@ def blocked(reason: str) -> int:
     return 1
 
 
+def _has_trusted_record(comments: list[dict], kind: str, dispatch_key: str) -> bool:
+    for item in comments:
+        body = item.get("body", "")
+        actor = (item.get("user") or {}).get("login")
+        if (actor != "github-actions[bot]" or MARKER not in body
+                or f"{kind} " not in body or f"dispatch_key:{dispatch_key}" not in body):
+            continue
+        return True
+    return False
+
+
 def api(*args: str) -> object:
     result = subprocess.run(["gh", "api", *args], check=True, text=True,
                             capture_output=True)
@@ -242,14 +253,33 @@ def main() -> int:
     ]
     dispatch_keys = [dispatch_comments[-1]["body"].split("dispatch_key:", 1)[1].split()[0]
                      ] if dispatch_comments else []
+    current_binding = True
     try:
         dispatch_keys = [derive_current_dispatch_key(
             comments=comments, pr_number=int(pr_number), issue_id=int(issue),
             base=(pr.get("base") or {}).get("ref", "dev"),
             head_sha=(pr.get("head") or {}).get("sha", ""),
-            pr_body=pr.get("body") or "", require_current_binding=False)]
+            pr_body=pr.get("body") or "", require_current_binding=True)]
     except GovernanceError as error:
-        return blocked(f"current trusted dispatch binding unavailable: {error}")
+        current_binding = False
+        try:
+            dispatch_keys = [derive_current_dispatch_key(
+                comments=comments, pr_number=int(pr_number), issue_id=int(issue),
+                base=(pr.get("base") or {}).get("ref", "dev"),
+                head_sha=(pr.get("head") or {}).get("sha", ""),
+                pr_body=pr.get("body") or "", require_current_binding=False)]
+        except GovernanceError:
+            return blocked(f"current trusted dispatch binding unavailable: {error}")
+        has_correction_handoff = any(
+            item.get("base_dispatch_key") == dispatch_keys[0]
+            for item in correction_records(
+                comments, {"github-actions[bot]"}, int(issue), int(pr_number))
+        )
+        if (not _has_trusted_record(comments, "DISPATCH_READY", dispatch_keys[0])
+                or not _has_trusted_record(comments, "ASSIGNMENT_COMPLETED", dispatch_keys[0])) and not has_correction_handoff:
+            print("dispatch binding pending: awaiting trusted assignment completion and PR binding",
+                  file=sys.stderr)
+            return 0
     dispatch_payload = {}
     if dispatch_comments:
         match = __import__("re").search(
@@ -264,7 +294,7 @@ def main() -> int:
         "GOVERNED_PR_AUTHORS", "").split(",") if item}
     controller = os.environ.get("GOVERNED_CONTROLLER", "")
     if target == "workflow:complete":
-        if not pr.get("merged") or issue_record.get("state") != "open":
+        if not pr.get("merged"):
             return blocked("required governance evidence or state validation failed")
     elif issue_record.get("state") != "open" or not linked_dispatch or not (
             issue_labels & {"workflow:agent-running", "workflow:review",
@@ -377,7 +407,7 @@ def main() -> int:
     if (not correction_completed and binding
             and f"PR_BINDING:{pr_number} head_sha:{head_sha}" not in binding[-1]["body"]):
         return blocked("required governance evidence or state validation failed")
-    if not binding:
+    if not binding and not current_binding:
         api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
             f"body={MARKER}\nPR_BINDING:{pr_number} head_sha:{pr['head']['sha']} "
             f"dispatch_key:{dispatch_keys[0]}")
@@ -489,7 +519,7 @@ def main() -> int:
         return blocked("required governance evidence or state validation failed")
     api("--method", "POST", f"{root}/issues/{issue}/comments", "-f",
         f"body={MARKER}\nSTATE_TRANSITION:{target} pr:{pr_number} head_sha:{pr['head']['sha']}")
-    if target == "workflow:complete":
+    if target == "workflow:complete" and issue_record.get("state") == "open":
         api("--method", "PATCH", f"{root}/issues/{issue}", "-f", "state=closed")
     return 0
 

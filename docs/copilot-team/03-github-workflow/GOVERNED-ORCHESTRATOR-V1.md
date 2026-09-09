@@ -27,6 +27,18 @@ governance validation requests a bounded correction only when the PR author and
 dispatch key match trusted durable issue evidence. The final merge remains a
 human action.
 
+Automation V1.3 separates component status ownership from final aggregation:
+`governance-dispatch` tracks trusted dispatch-to-PR binding, `governance-ci`
+tracks deterministic checks, `governance-review` tracks R1/R2/R3 review
+disposition, and only `final-governance-gate.yml` writes `governance-gate`.
+Expected human/security waits (for example pending assignment visibility or
+Actions `action_required`) remain `pending` rather than terminal failures.
+
+Issue assignment handling is split into preparation and confirmation. Non-Copilot
+`issues.assigned` events are successful no-ops. Copilot assignment confirmation
+requires trusted `DISPATCH_READY` + `ASSIGNMENT_COMPLETED` lineage before a PR
+binding can be created or reused.
+
 Repository variables `GOVERNED_DISPATCH_ACTORS`, `GOVERNED_REVIEWERS`,
 `GOVERNED_PR_AUTHORS`, `GOVERNED_REQUIRED_CHECKS`,
 `GOVERNED_REVIEWER_ROLES`, and `GOVERNED_REQUIRED_REVIEWER_ROLES` are required

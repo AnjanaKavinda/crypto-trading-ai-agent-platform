@@ -231,6 +231,17 @@ def main() -> int:
     issue = gh(f"{root}/issues/{issue_id}")
     comments = gh(f"{root}/issues/{issue_id}/comments")
     if event.get("action") == "assigned":
+        assignee = event.get("assignee") or {}
+        try:
+            is_copilot_assignment = (
+                assignee.get("login") == COPILOT_ASSIGNEE
+                and assignee.get("type") == "Bot"
+                and int(assignee.get("id", -1)) == COPILOT_ASSIGNEE_ID
+            )
+        except (TypeError, ValueError):
+            is_copilot_assignment = False
+        if not is_copilot_assignment:
+            return 0
         allowed_actors = {item for item in os.environ.get(
             "GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
         pilot_issues = {item.strip() for item in os.environ.get(
@@ -243,7 +254,7 @@ def main() -> int:
             implementer_session=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""))
         record = validate_assignment_handoff(
             issue, comments, os.environ.get("GITHUB_ACTOR", ""),
-            [event.get("assignee") or {}],
+            [assignee],
             kind="DISPATCH_READY")
         if record.get("_completed"):
             return 0
