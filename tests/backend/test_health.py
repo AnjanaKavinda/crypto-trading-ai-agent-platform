@@ -39,11 +39,24 @@ def _create_client(settings: AppSettings | None = None) -> TestClient:
 
 
 def _health_routes(app) -> list[APIRoute]:
-    return [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path in EXPECTED_ROUTE_PATHS
-    ]
+    routes: list[APIRoute] = []
+
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path in EXPECTED_ROUTE_PATHS:
+            routes.append(route)
+            continue
+
+        included_router = getattr(getattr(route, "include_context", None), "included_router", None)
+        if included_router is None:
+            continue
+
+        routes.extend(
+            nested_route
+            for nested_route in included_router.routes
+            if isinstance(nested_route, APIRoute) and nested_route.path in EXPECTED_ROUTE_PATHS
+        )
+
+    return routes
 
 
 def test_health_routes_are_registered_once_per_application_instance() -> None:
