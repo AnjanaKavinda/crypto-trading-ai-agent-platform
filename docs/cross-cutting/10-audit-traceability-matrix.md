@@ -26,11 +26,22 @@ Material audit records are append-only/immutable where practical.
 
 The minimum backward chain is:
 
-`Trade → Order/Fill → ExecutionIntent → ApprovalDecision → RiskProposal → ValidationResult → SignalCandidate → StrategyVersion → SignalEvidencePackage → AnalysisSnapshot → MarketSnapshot → Source Data`
+`Trade → Order/Fill → ExecutionIntent → SafetyDecision/TradingReadinessState → ApprovalDecision → RiskProposal → RiskAssessment/revalidation → AccountSnapshot + PortfolioSnapshot → ValidationResult → SignalCandidate → StrategyVersion → SignalEvidencePackage → AnalysisSnapshot → MarketSnapshot → Source Data`
+
+The `SafetyDecision` and `TradingReadinessState` link records the applicable
+fail-closed policy and current system readiness at the approval/execution
+boundary. The `RiskAssessment/revalidation` link must resolve the
+point-in-time `AccountSnapshot` and `PortfolioSnapshot` used to authorize the
+`RiskProposal`; these are provenance links, not inferred values.
 
 The minimum forward chain is:
 
-`TradeOutcome → Experience → LearningObservation → Hypothesis → Experiment → ExperimentResult → GovernanceDecision → New Version`
+`TradeOutcome → Experience → LearningObservation → Hypothesis → Experiment → ExperimentResult → StrategyChangeProposal → GovernanceDecision → ReleaseGate → New Version`
+
+`ReleaseGate` is a governance artifact for version promotion/readiness, not a
+live-trading authorization. Any resulting deployment or promotion remains
+subject to deterministic readiness and risk controls and explicit human
+approval where required.
 
 Missing or unverifiable links are an audit failure and must not be silently
 filled with inferred or fabricated data.
