@@ -74,10 +74,14 @@ jobs:
                       continue
                   checks[name] = (item.get('conclusion') or item.get('status') or 'pending').lower()
           statuses = {}
+          status_times = {}
           for item in status.get('statuses', []):
               context = item.get('context')
               if context:
-                  statuses[context] = (item.get('state') or 'pending').lower()
+                  timestamp = item.get('updated_at') or item.get('created_at') or ''
+                  if timestamp >= status_times.get(context, ''):
+                      statuses[context] = (item.get('state') or 'pending').lower()
+                      status_times[context] = timestamp
 
           dispatch = statuses.get('governance-dispatch', 'pending')
           review = statuses.get('governance-review', 'pending')

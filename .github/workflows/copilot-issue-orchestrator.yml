@@ -1,6 +1,6 @@
 name: Governed Copilot issue orchestrator
 concurrency:
-  group: governed-copilot-issue-${{ github.event.issue.number }}
+  group: governed-copilot-issue-${{ github.event.inputs.issue_number || github.event.issue.number }}
   cancel-in-progress: false
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: governed-dispatch-${{ github.event.issue.number }}-${{ github.run_id }}
-          path: /tmp/governed-audit-${{ github.event.issue.number }}.jsonl
+          name: governed-dispatch-${{ github.event.inputs.issue_number || github.event.issue.number }}-${{ github.run_id }}
+          path: /tmp/governed-audit-${{ github.event.inputs.issue_number || github.event.issue.number }}.jsonl
           if-no-files-found: ignore
           retention-days: 90
