@@ -13,7 +13,7 @@ envelope must carry, at minimum:
 |---|---|
 | `event_id` | Globally unique immutable event identity; reused unchanged during replay. |
 | `event_type` | Canonical event name/family classification; identifies semantic intent. |
-| `schema_version` | Version of this event envelope + payload schema contract. |
+| `schema_version` | Version of the event-envelope schema (metadata contract), independent of payload schema version. |
 | `occurred_at` | Business occurrence timestamp in producer context. |
 | `recorded_at` | Timestamp when producer durably recorded/published the event. |
 | `correlation_id` | End-to-end trace correlation identifier. |
@@ -24,7 +24,7 @@ envelope must carry, at minimum:
 | `mode` | Operating mode (`research`/`backtest`/`paper`/`shadow`/`testnet`/`live-supervised`). |
 | `aggregate_ref` | Aggregate/entity reference (`contract_id`, entity key, and version where applicable). |
 | `payload_contract_id` | Canonical contract ID (`C-###`) represented by payload when applicable. |
-| `payload_contract_version` | Version/revision tag for the canonical payload contract schema. |
+| `payload_contract_version` | Version/revision tag for the canonical payload contract schema, distinct from envelope `schema_version`. |
 | `audit_ref` | Link to immutable audit trail (`C-060 AuditEvent` or equivalent audit handle). |
 | `data_classification` | Classification label (public/internal/restricted/confidential). |
 | `idempotency_key` | Deterministic deduplication key for at-least-once-safe processing. |
@@ -79,18 +79,28 @@ envelope must carry, at minimum:
 
 | Event family | Representative events | Authoritative producer | Primary consumers |
 |---|---|---|---|
-| Market/Data ingestion | MarketDataReceived, MarketSnapshotCreated, DataQualityChanged, DataStale | Data services | Analysis, Safety, UX |
+| Market ingestion | MarketDataReceived, MarketSnapshotCreated | Data | Analysis, Safety, UX |
+| Data quality | DataQualityChanged, DataStale | Data Quality | Analysis, Safety, UX |
 | Regime | MarketRegimeChanged | Regime Engine | Strategy, Validation, Risk, Learning |
-| Agent/Analysis | AnalysisCompleted, ConflictDetected, AdversarialConcernRaised, AgentResultPublished | Analysis/Meta/Orchestrator | Strategy, Audit, UX, Learning |
+| Analysis | AnalysisCompleted | Analysis | Strategy, Audit, UX, Learning |
+| Meta analysis | ConflictDetected | Meta Analysis | Strategy, Safety, Audit, UX |
+| Critic analysis | AdversarialConcernRaised | Critic | Strategy, Meta Analysis, Audit, UX |
+| Agent runtime | AgentResultPublished | Agent Runtime | Orchestrator, Handoff, Audit |
 | Signal/NO_TRADE | SignalCandidateCreated, SignalQualified, SignalRejected, SignalExpired, NoTradeDecided | Signal Engine | Validation, Risk, UX, Learning |
 | Validation | ValidationStarted, ValidationPassed, ValidationFailed, ValidationExpired | Quant Validation | Risk, Governance, UX |
 | Risk | RiskProposalCreated, RiskRejected, RiskRevalidated, RiskLimitBreached, RiskDecisionRecorded | Risk | Approval, Safety, UX, Audit |
-| Approval | ApprovalRequested, ApprovalModified, ApprovalGranted, ApprovalRejected, ApprovalExpired, ApprovalInvalidated | Approval Gateway | Execution, Audit, UX |
+| Approval request lifecycle | ApprovalRequested, ApprovalModified | Approval Gateway | Human/UX, Audit |
+| Approval decision lifecycle | ApprovalGranted, ApprovalRejected, ApprovalExpired, ApprovalInvalidated | Human Gateway | Execution, Audit, UX |
 | Execution | ExecutionIntentCreated, OrderSubmissionStarted, OrderAccepted, OrderRejected, PartialFill, FillReceived, OrderCancelled, ExecutionUnknown | Execution | Reconciliation, Monitoring, Safety |
 | Reconciliation | ReconciliationStarted, ReconciliationDriftDetected, ReconciliationResolved, ReconciliationBlocked | Reconciliation | Execution, Portfolio, Risk, Safety, Audit |
-| Position/Trade/Outcome | PositionOpened, PositionUpdated, PositionClosed, TradeOpened, TradeClosed, TradeOutcomeRecorded | Portfolio/Execution/Trade Lifecycle | Risk, UX, Learning, Governance |
-| Safety/Security/Recovery | TradingBlocked, KillSwitchActivated, CircuitBreakerOpened, SafetyStateChanged, SecurityIncidentRaised, PermissionDenied, PromptInjectionDetected, FailureDetected, RecoveryActionStarted, RecoveryActionCompleted | Safety/Security/Recovery control planes | All critical services, Audit, Ops |
-| Learning | ExperienceRecorded, InsightCreated, HypothesisCreated, ExperimentCompleted | Learning/Research | Governance, Validation |
+| Position lifecycle | PositionOpened, PositionUpdated, PositionClosed | Portfolio | Risk, UX, Learning |
+| Trade/Outcome lifecycle | TradeOpened, TradeClosed, TradeOutcomeRecorded | Trade Lifecycle | Learning, Governance, Audit, UX |
+| Safety control | TradingBlocked, KillSwitchActivated, CircuitBreakerOpened, SafetyStateChanged | Safety Control Plane | All critical services, Audit, Ops |
+| Security | SecurityIncidentRaised, PermissionDenied, PromptInjectionDetected | Security | Safety, Audit, Ops, Governance |
+| Runtime failure | FailureDetected | Runtime Services | Safety, Recovery, Audit, Ops |
+| Recovery actions | RecoveryActionStarted, RecoveryActionCompleted | Recovery Control Plane | Runtime Services, Safety, Audit, Ops |
+| Learning records | ExperienceRecorded, InsightCreated | Learning | Governance, Validation |
+| Research experimentation | HypothesisCreated, ExperimentCompleted | Research | Governance, Validation, Learning |
 | Governance | ChallengerApprovedForShadow, CandidateApprovedForPaper, ProductionPromotionApproved, RollbackRequested | Governance | Deployment, Registry, Audit |
 
 ## Security, audit, and critical failure requirements
