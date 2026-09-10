@@ -16,10 +16,14 @@ from trading_platform_api.persistence import (
 )
 
 VALID_DATABASE_URL = (
-    "******example.internal:5432/trading_platform"
+    "postgresql+asyncpg://"
+    "db_user:db_password@"
+    "example.internal:5432/trading_platform"
 )
 SECRET_QUERY_DATABASE_URL = (
-    "******example.internal:5432/trading_platform"
+    "postgresql+asyncpg://"
+    "db_user:db_password@"
+    "example.internal:5432/trading_platform"
     "?sslmode=require&api_token=query_secret"
 )
 
@@ -81,7 +85,10 @@ def test_explicit_valid_async_postgresql_url_is_accepted() -> None:
 @pytest.mark.parametrize(
     ("environment_mapping", "expected_message"),
     [
-        ({}, "DATABASE_URL is required"),
+        (
+            {},
+            "DATABASE_URL is required and must use the postgresql+asyncpg:// SQLAlchemy async dialect.",
+        ),
         ({"DATABASE_URL": ""}, "DATABASE_URL must not be blank."),
         ({"DATABASE_URL": "   "}, "DATABASE_URL must not be whitespace-only."),
         (
@@ -89,7 +96,13 @@ def test_explicit_valid_async_postgresql_url_is_accepted() -> None:
             "DATABASE_URL must include a PostgreSQL host and database name.",
         ),
         (
-            {"DATABASE_URL": "******example.internal:5432/trading_platform"},
+            {
+                "DATABASE_URL": (
+                    "postgresql://"
+                    "db_user:db_password@"
+                    "example.internal:5432/trading_platform"
+                )
+            },
             "DATABASE_URL must use the postgresql+asyncpg:// SQLAlchemy async dialect.",
         ),
         (
@@ -97,7 +110,13 @@ def test_explicit_valid_async_postgresql_url_is_accepted() -> None:
             "DATABASE_URL must use PostgreSQL via the postgresql+asyncpg:// SQLAlchemy async dialect.",
         ),
         (
-            {"DATABASE_URL": "******example.internal:3306/trading_platform"},
+            {
+                "DATABASE_URL": (
+                    "mysql+aiomysql://"
+                    "db_user:db_password@"
+                    "example.internal:3306/trading_platform"
+                )
+            },
             "DATABASE_URL must be a valid postgresql+asyncpg:// SQLAlchemy URL.",
         ),
     ],
@@ -137,7 +156,10 @@ def test_database_settings_and_errors_redact_secret_bearing_url_details() -> Non
     rendered_error = str(exc_info.value)
     assert "db_user" not in rendered_error
     assert "db_password" not in rendered_error
-    assert "sqlite:///tmp/trading_platform.db?username=db_user&******" not in rendered_error
+    assert (
+        "sqlite:///tmp/trading_platform.db?username=db_user&******"
+        not in rendered_error
+    )
 
 
 def test_engine_and_session_factories_use_async_stack_without_connecting(

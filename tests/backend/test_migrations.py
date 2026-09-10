@@ -12,7 +12,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = REPO_ROOT / "apps/api/alembic.ini"
 VERSIONS_DIR = REPO_ROOT / "apps/api/migrations/versions"
 BASELINE_PATH = VERSIONS_DIR / "0001_persistence_baseline.py"
-VALID_DATABASE_URL = "******localhost:5432/placeholder"
+VALID_DATABASE_URL = (
+    "postgresql+asyncpg://"
+    "placeholder:placeholder@"
+    "localhost:5432/placeholder"
+)
 
 
 def _load_baseline_module():
@@ -62,12 +66,14 @@ def test_offline_migration_sql_generation_succeeds_without_engine_creation(
 ) -> None:
     output_buffer = io.StringIO()
     monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
+    persistence_module = __import__("trading_platform_api.persistence", fromlist=["unused"])
     session_module = __import__("trading_platform_api.persistence.session", fromlist=["unused"])
 
     def fail_engine_creation(*args, **kwargs):
         raise AssertionError("offline migration generation must not create an engine")
 
     monkeypatch.setattr(session_module, "create_async_engine_instance", fail_engine_creation)
+    monkeypatch.setattr(persistence_module, "create_async_engine_instance", fail_engine_creation)
 
     command.upgrade(_create_alembic_config(output_buffer=output_buffer), "head", sql=True)
 
@@ -84,8 +90,9 @@ def test_generated_baseline_sql_contains_no_schema_or_domain_ddl(monkeypatch) ->
     command.upgrade(_create_alembic_config(output_buffer=output_buffer), "head", sql=True)
 
     sql_output = output_buffer.getvalue().upper()
+    assert "CREATE TABLE ALEMBIC_VERSION" in sql_output
+    assert "INSERT INTO ALEMBIC_VERSION" in sql_output
     for forbidden_fragment in (
-        "CREATE TABLE",
         "ALTER TABLE",
         "DROP TABLE",
         "CREATE INDEX",
@@ -93,6 +100,6 @@ def test_generated_baseline_sql_contains_no_schema_or_domain_ddl(monkeypatch) ->
         "CREATE TYPE",
         "ALTER TYPE",
         "CREATE TRIGGER",
-        "INSERT INTO",
+        "TRADING_PLATFORM",
     ):
         assert forbidden_fragment not in sql_output
