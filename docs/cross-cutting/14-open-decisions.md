@@ -3,7 +3,10 @@
 This is the governed register of unresolved architecture decisions. Do not select
 an option during implementation. When a decision becomes necessary, create a
 linked ADR using the canonical [`../adr/ADR-TEMPLATE.md`](../adr/ADR-TEMPLATE.md)
-and obtain the required human approval. `Open` records have no approved ADR.
+and obtain the required human approval. An `Open` record has no approved ADR
+that resolves the entire decision, but it may link a bounded accepted ADR when
+that ADR explicitly approves only one sub-aspect and preserves the remaining
+decision scope as open.
 
 | ID | Decision | Status | Trigger / affected areas | Required approver | Linked ADR | Disposition date |
 |---|---|---|---|---|---|---|
@@ -14,7 +17,7 @@ and obtain the required human approval. `Open` records have no approved ADR.
 | OD-0005 | On-chain providers | Open | On-chain data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0006 | News/social providers and licensing | Open | Sentiment data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0007 | Event-streaming technology | Open | Event contracts and platform architecture; Chats 2, 4 | Human repository owner | — | — |
-| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | — | — |
+| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (Accepted relational foundation only; topology remains open) | — |
 | OD-0009 | Vector-memory technology and retention | Open | Learning and retention; Chats 10, 13 | Human repository owner | — | — |
 | OD-0010 | LLM provider/model routing policy | Resolved | AI governance and security; Chats 3, 10, 13 | Human repository owner | [ADR-0002](../adr/ADR-0002-vendor-neutral-llm-provider-model-routing.md) (Accepted) | 2026-09-06 |
 | OD-0011 | Backtesting engine implementation choice | Open | Quantitative validation; Chat 7 | Human repository owner | — | — |
@@ -51,3 +54,19 @@ When closing a record, retain its ID and decision text, set the final status,
 record the disposition date, and link the approving ADR. Do not delete the
 historical record. The source-precedence decision in OD-0024 remains unresolved;
 it must not be selected or made optional by an ADR foundation change.
+
+## OD-0008 bounded accepted sub-decision
+
+On 2026-09-09 the human repository owner accepted
+[`ADR-0003`](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) for
+the **initial relational persistence foundation only**:
+
+- PostgreSQL;
+- SQLAlchemy 2.x async;
+- `asyncpg`;
+- Alembic.
+
+OD-0008 remains `Open` because the broader storage decision is still unresolved,
+including time-series technology/extensions, production topology, replicas,
+sharding, pooling/tuning, retention, tenancy, domain-schema ownership, and
+vector storage. Implementation must not silently select those deferred areas.
