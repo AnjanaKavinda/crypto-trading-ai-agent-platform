@@ -1,0 +1,114 @@
+name: Final governance gate aggregator
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed]
+  pull_request_review:
+    types: [submitted, dismissed]
+  workflow_run:
+    workflows:
+      - Governance CI
+      - Governed Copilot PR governance
+      - Governed independent AI review producer
+      - Governed R1 human gate
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve governed dev PR
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            head="${{ github.event.workflow_run.head_sha }}"
+            mapfile -t numbers < <(gh api --paginate "repos/$REPOSITORY/commits/$head/pulls" \
+              -H 'Accept: application/vnd.github+json' |
+              jq -r '.[] | select(.base.ref == "dev") | .number')
+            if [ "${#numbers[@]}" -ne 1 ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            number="${numbers[0]}"
+          else
+            number="${{ github.event.pull_request.number }}"
+          fi
+          gh api "repos/$REPOSITORY/pulls/$number" > /tmp/pr.json
+          if [ "$(jq -r .base.ref /tmp/pr.json)" != "dev" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$number" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r .head.sha /tmp/pr.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Aggregate dispatch/ci/review states
+        if: steps.resolve.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPOSITORY/commits/$HEAD_SHA/status" > /tmp/status.json
+          gh api --paginate --slurp "repos/$REPOSITORY/commits/$HEAD_SHA/check-runs" > /tmp/checks.json
+          python - <<'PY'
+          import json, os, subprocess
+
+          status = json.load(open('/tmp/status.json'))
+          pages = json.load(open('/tmp/checks.json'))
+          checks = {}
+          for page in pages:
+              for item in page.get('check_runs', []):
+                  name = item.get('name')
+                  if not name:
+                      continue
+                  checks[name] = (item.get('conclusion') or item.get('status') or 'pending').lower()
+          statuses = {}
+          status_times = {}
+          for item in status.get('statuses', []):
+              context = item.get('context')
+              if context:
+                  timestamp = item.get('updated_at') or item.get('created_at') or ''
+                  if timestamp >= status_times.get(context, ''):
+                      statuses[context] = (item.get('state') or 'pending').lower()
+                      status_times[context] = timestamp
+
+          dispatch = statuses.get('governance-dispatch', 'pending')
+          review = statuses.get('governance-review', 'pending')
+          ci = statuses.get('governance-ci', checks.get('governance-ci', 'pending'))
+          if ci == 'action_required':
+              ci = 'pending'
+
+          states = {"governance-dispatch": dispatch, "governance-ci": ci, "governance-review": review}
+          if any(value == "error" for value in states.values()):
+              final_state = "error"
+              description = "Governance controller/infrastructure error; inspect component statuses"
+          elif any(value == "failure" for value in states.values()):
+              final_state = "failure"
+              description = "Governance policy/review failure; inspect component statuses"
+          elif all(value == "success" for value in states.values()):
+              final_state = "success"
+              description = "Dispatch, deterministic CI, and review requirements are satisfied"
+          else:
+              waiting = ", ".join(name for name, value in states.items() if value != "success")
+              final_state = "pending"
+              description = f"Expected governance wait: {waiting}"
+
+          subprocess.run([
+              "gh", "api", "--method", "POST",
+              f"repos/{os.environ['REPOSITORY']}/statuses/{os.environ['HEAD_SHA']}",
+              "-f", f"state={final_state}",
+              "-f", "context=governance-gate",
+              "-f", f"description={description}",
+          ], check=True)
+          PY

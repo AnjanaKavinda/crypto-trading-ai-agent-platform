@@ -192,7 +192,8 @@ def extract_bounded_path_section(body: str) -> tuple[str, ...]:
 
 
 def extract_routing_inputs(issue: Mapping[str, Any], *,
-                           catalog_titles: Mapping[int, str] | None = None) -> RoutingInputs:
+                           catalog_titles: Mapping[int, str] | None = None,
+                           strict_explicit: bool = False) -> RoutingInputs:
     """Extract V1.1 inputs from a GitHub issue, labels, and approved catalog."""
     source = issue.get("routing_inputs") if isinstance(issue.get("routing_inputs"), Mapping) else issue
     body = str(issue.get("body") or source.get("body") or "")
@@ -235,12 +236,13 @@ def extract_routing_inputs(issue: Mapping[str, Any], *,
                     source[key] = ()
             else:
                 source[key] = _section_values(body, heading)
-    if not source.get("affected_paths") and source.get("agent_role") in ROLE_PATHS:
-        source["affected_paths"] = ROLE_PATHS[source["agent_role"]]
-    if not source.get("allowed_paths") and source.get("agent_role") in ROLE_PATHS:
-        source["allowed_paths"] = ROLE_PATHS[source["agent_role"]]
-    if not source.get("forbidden_paths"):
-        source["forbidden_paths"] = ("secrets/**", ".env", "services/execution/**")
+    if not strict_explicit:
+        if not source.get("affected_paths") and source.get("agent_role") in ROLE_PATHS:
+            source["affected_paths"] = ROLE_PATHS[source["agent_role"]]
+        if not source.get("allowed_paths") and source.get("agent_role") in ROLE_PATHS:
+            source["allowed_paths"] = ROLE_PATHS[source["agent_role"]]
+        if not source.get("forbidden_paths"):
+            source["forbidden_paths"] = ("secrets/**", ".env", "services/execution/**")
     impact_labels = {label.split(":", 1)[1] for label in labels if label.startswith("impact:")}
     for key, marker in (("architecture_impact", "architecture"),
                         ("shared_contract_impact", "shared-contract"),
@@ -248,7 +250,13 @@ def extract_routing_inputs(issue: Mapping[str, Any], *,
                         ("trading_risk_statistical_impact", "trading-risk"),
                         ("approval_execution_ccxt_impact", "approval-execution-ccxt")):
         if key not in source:
+            if strict_explicit:
+                raise GovernanceError(f"{key} routing input must be explicit")
             source[key] = marker in impact_labels
+    if strict_explicit:
+        explicit_path_fields = ("affected_paths", "allowed_paths", "forbidden_paths")
+        if any(name not in source or not source.get(name) for name in explicit_path_fields):
+            raise GovernanceError("routing path metadata must be explicit")
     if not isinstance(source, Mapping):
         raise GovernanceError("routing inputs are unavailable")
     canonical = int(_required_value(source, "canonical_issue", "canonical_backlog"))
@@ -716,6 +724,27 @@ def append_governance_event(audit: AppendOnlyAudit, event: str,
     if payload["capability_tier"] not in CAPABILITY_TIERS or payload["review_tier"] not in REVIEW_TIERS:
         raise GovernanceError("audit envelope contains an invalid tier")
     return audit.write_jsonl(path, event, payload)
+
+
+def build_terminal_diagnostic(*, repository: str, failed_invariant: str,
+                              recovery_action: str, issue_id: int | str | None = None,
+                              pr_number: int | str | None = None, head_sha: str = "",
+                              current_state: str = "", attempted_transition: str = "",
+                              details: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Build an actionable structured terminal diagnostic payload."""
+    payload: dict[str, Any] = {
+        "repository": str(repository or ""),
+        "issue": (None if issue_id in (None, "") else int(issue_id)),
+        "pr": (None if pr_number in (None, "") else int(pr_number)),
+        "head": str(head_sha or ""),
+        "current_state": str(current_state or ""),
+        "attempted_transition": str(attempted_transition or ""),
+        "failed_invariant": str(failed_invariant or ""),
+        "recovery_action": str(recovery_action or ""),
+    }
+    if details:
+        payload["details"] = details
+    return payload
 
 
 def validate_issue(issue: Mapping[str, Any], *, catalog: Mapping[int, Any] | None = None,

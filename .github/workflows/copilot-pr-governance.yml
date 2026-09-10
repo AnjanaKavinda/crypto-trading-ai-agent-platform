@@ -48,6 +48,8 @@ jobs:
           }
 
       - name: Mark governed PR under review
+        id: mark_review
+        continue-on-error: true
         if: github.event.pull_request.base.ref == 'dev'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,15 +60,50 @@ jobs:
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_REVIEWERS: ${{ vars.GOVERNED_REVIEWERS }}
         run: python .github/scripts/transition-pr.py
-      - name: Publish pending final governance gate
+      - name: Publish dispatch component status
         if: github.event.pull_request.base.ref == 'dev'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh api --method POST \
-            "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
-            -f state=pending -f context=governance-gate \
-            -f description='Waiting for deterministic CI and independent review'
+          set -euo pipefail
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          if [ "${{ steps.mark_review.outcome }}" != "success" ]; then
+            gh api --method POST \
+              "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=failure -f context=governance-dispatch \
+              -f description='Dispatch/PR binding failed policy checks'
+            exit 1
+          fi
+          if python - <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts")
+          from review_provenance import derive_current_dispatch_key
+          repo = "${{ github.repository }}"
+          pr = json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/pulls/${{ github.event.pull_request.number }}"], text=True))
+          issue = int(__import__("re").search(
+              r"(?im)\\b(?:closes|fixes|resolves|related\\s+to)\\s+#(\\d+)",
+              pr.get("body") or "").group(1))
+          pages = json.loads(subprocess.check_output(
+              ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/issues/{issue}/comments"], text=True))
+          comments = [item for page in pages for item in page]
+          derive_current_dispatch_key(
+              comments=comments, pr_number=int(pr["number"]), issue_id=issue,
+              base=(pr.get("base") or {}).get("ref", ""), head_sha=(pr.get("head") or {}).get("sha", ""),
+              pr_body=pr.get("body") or "", require_current_binding=True)
+          PY
+          then
+            gh api --method POST \
+              "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=success -f context=governance-dispatch \
+              -f description='Trusted dispatch-to-PR binding is established'
+          else
+            gh api --method POST \
+              "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=pending -f context=governance-dispatch \
+              -f description='Waiting for trusted assignment completion/PR binding reconciliation'
+          fi
       - name: Human merge remains final authority
         run: echo "No workflow step can merge this PR; the human repository owner remains the final merge authority."
 
@@ -84,5 +121,5 @@ jobs:
           head="${{ github.event.pull_request.head.sha }}"
           gh api --method POST \
             "repos/${{ github.repository }}/statuses/$head" \
-            -f state=failure -f context=governance-gate \
-            -f description='Governance lifecycle failed; inspect job diagnostics and recover under ADR-0001'
+            -f state=error -f context=governance-dispatch \
+            -f description='Dispatch/PR-governance workflow failed; inspect diagnostics and recover under ADR-0001'
