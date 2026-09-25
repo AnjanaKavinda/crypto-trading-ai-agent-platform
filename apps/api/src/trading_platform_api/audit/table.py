@@ -38,10 +38,18 @@ class AuditEventRow(AuditBase):
             f"event_type IN ({_EVENT_TYPE_SQL})",
             name="ck_audit_events_event_type",
         ),
-        CheckConstraint("length(btrim(actor)) > 0", name="ck_audit_events_actor_nonblank"),
-        CheckConstraint("length(btrim(action)) > 0", name="ck_audit_events_action_nonblank"),
-        CheckConstraint("length(btrim(source)) > 0", name="ck_audit_events_source_nonblank"),
-        CheckConstraint("length(btrim(result)) > 0", name="ck_audit_events_result_nonblank"),
+        CheckConstraint(
+            "length(btrim(actor)) > 0", name="ck_audit_events_actor_nonblank"
+        ),
+        CheckConstraint(
+            "length(btrim(action)) > 0", name="ck_audit_events_action_nonblank"
+        ),
+        CheckConstraint(
+            "length(btrim(source)) > 0", name="ck_audit_events_source_nonblank"
+        ),
+        CheckConstraint(
+            "length(btrim(result)) > 0", name="ck_audit_events_result_nonblank"
+        ),
         CheckConstraint(
             "length(btrim(correlation_id)) > 0",
             name="ck_audit_events_correlation_id_nonblank",
@@ -77,11 +85,17 @@ class AuditEventRow(AuditBase):
         Index("ix_audit_events_subject", "subject_type", "subject_id"),
     )
 
-    audit_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True)
+    audit_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), primary_key=True
+    )
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     actor: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

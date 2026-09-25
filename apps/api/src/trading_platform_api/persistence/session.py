@@ -4,7 +4,12 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Protocol
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from trading_platform_api.persistence.config import DatabaseSettings
 
@@ -21,7 +26,9 @@ def create_async_engine_instance(database_settings: DatabaseSettings) -> AsyncEn
     return create_async_engine(database_settings.database_url)
 
 
-def create_async_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+def create_async_session_factory(
+    engine: AsyncEngine,
+) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 

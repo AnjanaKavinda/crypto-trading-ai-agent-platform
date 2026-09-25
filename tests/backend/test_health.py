@@ -6,8 +6,11 @@ from collections import Counter
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-
-from trading_platform_api.config import AppSettings, DeploymentEnvironment, OperatingMode
+from trading_platform_api.config import (
+    AppSettings,
+    DeploymentEnvironment,
+    OperatingMode,
+)
 from trading_platform_api.feature_flags import FeatureFlags
 from trading_platform_api.main import create_app
 
@@ -46,14 +49,17 @@ def _health_routes(app) -> list[APIRoute]:
             routes.append(route)
             continue
 
-        included_router = getattr(getattr(route, "include_context", None), "included_router", None)
+        included_router = getattr(
+            getattr(route, "include_context", None), "included_router", None
+        )
         if included_router is None:
             continue
 
         routes.extend(
             nested_route
             for nested_route in included_router.routes
-            if isinstance(nested_route, APIRoute) and nested_route.path in EXPECTED_ROUTE_PATHS
+            if isinstance(nested_route, APIRoute)
+            and nested_route.path in EXPECTED_ROUTE_PATHS
         )
 
     return routes
@@ -71,7 +77,9 @@ def test_health_routes_are_registered_once_per_application_instance() -> None:
     assert Counter(route.path for route in second_routes) == expected_route_counts
     assert all(route.methods == {"GET"} for route in first_routes)
     assert all(route.methods == {"GET"} for route in second_routes)
-    assert {id(route) for route in first_routes}.isdisjoint({id(route) for route in second_routes})
+    assert {id(route) for route in first_routes}.isdisjoint(
+        {id(route) for route in second_routes}
+    )
 
 
 @pytest.mark.parametrize("path", sorted(EXPECTED_ROUTE_PATHS))
@@ -118,7 +126,9 @@ def test_health_and_liveness_responses_do_not_include_ready_field(
     assert "ready" not in response.json()
 
 
-def test_trading_readiness_endpoint_returns_fail_closed_unknown_with_no_store_header() -> None:
+def test_trading_readiness_endpoint_returns_fail_closed_unknown_with_no_store_header() -> (
+    None
+):
     with _create_client() as client:
         response = client.get(TRADING_READINESS_PATH)
 
@@ -153,7 +163,9 @@ def test_trading_readiness_endpoint_returns_fail_closed_unknown_with_no_store_he
         AppSettings(
             environment=DeploymentEnvironment.PROD,
             mode=OperatingMode.LIVE_SUPERVISED,
-            feature_flags=FeatureFlags(enable_live_trading=True, enable_auto_execution=True),
+            feature_flags=FeatureFlags(
+                enable_live_trading=True, enable_auto_execution=True
+            ),
         ),
     ],
     ids=[
@@ -212,15 +224,15 @@ def test_health_openapi_documents_expected_status_codes_and_schemas() -> None:
     liveness_operation = schema["paths"][LIVENESS_PATH]["get"]
     readiness_operation = schema["paths"][TRADING_READINESS_PATH]["get"]
 
-    assert health_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/ServiceHealthResponse"
-    }
-    assert liveness_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/LivenessResponse"
-    }
-    assert readiness_operation["responses"]["503"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/TradingReadinessResponse"
-    }
+    assert health_operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/ServiceHealthResponse"}
+    assert liveness_operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/LivenessResponse"}
+    assert readiness_operation["responses"]["503"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/TradingReadinessResponse"}
     assert "200" not in readiness_operation["responses"]
     assert health_operation.get("parameters", []) == []
     assert liveness_operation.get("parameters", []) == []

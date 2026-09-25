@@ -77,11 +77,15 @@ class CorrelationContext:
 def create_correlation_context(
     *, correlation_id: str | None = None, trace_id: str | None = None
 ) -> CorrelationContext:
-    resolved_correlation_id = str(uuid4()) if correlation_id is None else _require_non_blank_string(
-        "correlation_id", correlation_id
+    resolved_correlation_id = (
+        str(uuid4())
+        if correlation_id is None
+        else _require_non_blank_string("correlation_id", correlation_id)
     )
-    resolved_trace_id = str(uuid4()) if trace_id is None else _require_non_blank_string(
-        "trace_id", trace_id
+    resolved_trace_id = (
+        str(uuid4())
+        if trace_id is None
+        else _require_non_blank_string("trace_id", trace_id)
     )
     return CorrelationContext(
         correlation_id=resolved_correlation_id,
@@ -136,7 +140,9 @@ def serialize_log_entry(entry: Mapping[str, Any]) -> str:
     normalized_entry = dict(entry)
     normalized_entry["level"] = _normalize_level(entry["level"])
     normalized_entry["severity"] = _normalize_level(entry["severity"])
-    validated_entry = _validate_supported_value(redact_sensitive_values(normalized_entry), "$")
+    validated_entry = _validate_supported_value(
+        redact_sensitive_values(normalized_entry), "$"
+    )
     return json.dumps(validated_entry, separators=(",", ":"), allow_nan=False)
 
 
@@ -176,7 +182,10 @@ def _is_sensitive_field_name(field_name: str) -> bool:
     return (
         normalized in _SENSITIVE_FIELD_NAMES
         or condensed in _SENSITIVE_FIELD_NAMES_CONDENSED
-        or any(normalized.endswith(f"_{sensitive_field}") for sensitive_field in _SENSITIVE_FIELD_NAMES)
+        or any(
+            normalized.endswith(f"_{sensitive_field}")
+            for sensitive_field in _SENSITIVE_FIELD_NAMES
+        )
         or any(
             normalized.startswith(f"{sensitive_field}_")
             for sensitive_field in _PREFIX_SENSITIVE_FIELD_NAMES
@@ -237,21 +246,31 @@ def _validate_supported_value(value: Any, path: str) -> Any:
         validated_mapping: dict[Any, Any] = {}
         for key, nested in value.items():
             if not isinstance(key, str):
-                raise StructuredLoggingError(f"Unsupported mapping key type in structured log entry at {path}.")
+                raise StructuredLoggingError(
+                    f"Unsupported mapping key type in structured log entry at {path}."
+                )
             child_path = f"{path}.{key}"
             validated_mapping[key] = _validate_supported_value(nested, child_path)
         return validated_mapping
 
     if isinstance(value, list):
-        return [_validate_supported_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
+        return [
+            _validate_supported_value(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
 
     if isinstance(value, tuple):
-        return [_validate_supported_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
+        return [
+            _validate_supported_value(item, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
 
     if isinstance(value, _SCALAR_TYPES):
         return value
 
-    raise StructuredLoggingError(f"Unsupported value type in structured log entry at {path}.")
+    raise StructuredLoggingError(
+        f"Unsupported value type in structured log entry at {path}."
+    )
 
 
 def _require_non_blank_string(identifier_name: str, value: str) -> str:
@@ -277,7 +296,9 @@ def _validate_required_fields(entry: Mapping[str, Any]) -> None:
     )
     if missing_fields:
         missing_fields_text = ", ".join(missing_fields)
-        raise StructuredLoggingError(f"Structured log entry is missing required field(s): {missing_fields_text}.")
+        raise StructuredLoggingError(
+            f"Structured log entry is missing required field(s): {missing_fields_text}."
+        )
 
 
 def _require_optional_non_blank_string(field_name: str, value: Any) -> None:

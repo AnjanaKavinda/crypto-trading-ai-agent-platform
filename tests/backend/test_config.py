@@ -1,5 +1,4 @@
 import pytest
-
 from trading_platform_api.config import (
     AppSettings,
     AppSettingsError,
@@ -78,7 +77,10 @@ def test_unknown_operating_mode_value_fails_closed() -> None:
 def test_invalid_explicit_feature_flag_prevents_settings_construction() -> None:
     with pytest.raises(AppSettingsError) as exc_info:
         load_app_settings(
-            {"ENABLE_AUTO_EXECUTION": "top-secret-token", "UNRELATED_SECRET": "top-secret-token"}
+            {
+                "ENABLE_AUTO_EXECUTION": "top-secret-token",
+                "UNRELATED_SECRET": "top-secret-token",
+            }
         )
 
     error_message = str(exc_info.value)
@@ -131,4 +133,6 @@ def test_enabling_flag_changes_only_typed_configuration_and_not_routes() -> None
 
     assert created_app.state.settings.feature_flags.enable_live_trading is True
     assert created_app.state.settings.mode is OperatingMode.RESEARCH
-    assert not any("trade" in route_path or "execute" in route_path for route_path in route_paths)
+    assert not any(
+        "trade" in route_path or "execute" in route_path for route_path in route_paths
+    )

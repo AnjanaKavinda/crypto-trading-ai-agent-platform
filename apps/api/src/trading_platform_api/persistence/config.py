@@ -21,7 +21,9 @@ class DatabaseSettings:
     drivername: str = field(default=APPROVED_DATABASE_DRIVER, init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "database_url", _validated_database_url(self.database_url))
+        object.__setattr__(
+            self, "database_url", _validated_database_url(self.database_url)
+        )
 
     def __repr__(self) -> str:
         return "DatabaseSettings(database_url='<redacted>', drivername='postgresql+asyncpg')"
@@ -37,7 +39,9 @@ def _validated_database_url(raw_value: str | None) -> str:
     if raw_value == "":
         raise DatabaseSettingsError(f"{DATABASE_URL_VARIABLE} must not be blank.")
     if raw_value.strip() == "":
-        raise DatabaseSettingsError(f"{DATABASE_URL_VARIABLE} must not be whitespace-only.")
+        raise DatabaseSettingsError(
+            f"{DATABASE_URL_VARIABLE} must not be whitespace-only."
+        )
     if raw_value != raw_value.strip():
         raise DatabaseSettingsError(
             f"{DATABASE_URL_VARIABLE} must match the canonical postgresql+asyncpg:// form with no surrounding whitespace."
@@ -71,6 +75,10 @@ def _validated_database_url(raw_value: str | None) -> str:
     return raw_value
 
 
-def load_database_settings(environment_mapping: Mapping[str, str] | None = None) -> DatabaseSettings:
+def load_database_settings(
+    environment_mapping: Mapping[str, str] | None = None,
+) -> DatabaseSettings:
     mapping = os.environ if environment_mapping is None else environment_mapping
-    return DatabaseSettings(database_url=_validated_database_url(mapping.get(DATABASE_URL_VARIABLE)))
+    return DatabaseSettings(
+        database_url=_validated_database_url(mapping.get(DATABASE_URL_VARIABLE))
+    )

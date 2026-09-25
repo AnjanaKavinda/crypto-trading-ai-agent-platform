@@ -4,7 +4,6 @@ from typing import Protocol, TypeVar, runtime_checkable
 
 from trading_platform_api.events.models import EventEnvelope
 
-
 PayloadT = TypeVar("PayloadT")
 
 

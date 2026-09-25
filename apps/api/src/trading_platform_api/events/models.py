@@ -29,11 +29,12 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _required_text(field_name: str, value: object) -> None:
+def _required_text(field_name: str, value: object) -> str:
     if not isinstance(value, str):
         raise EventValidationError(f"{field_name} must be a string.")
     if not value.strip():
         raise EventValidationError(f"{field_name} must not be blank.")
+    return value
 
 
 def _optional_text(field_name: str, value: object) -> None:
@@ -42,8 +43,8 @@ def _optional_text(field_name: str, value: object) -> None:
 
 
 def _contract_id(field_name: str, value: object) -> None:
-    _required_text(field_name, value)
-    if _CONTRACT_ID_PATTERN.fullmatch(value) is None:
+    contract_id = _required_text(field_name, value)
+    if _CONTRACT_ID_PATTERN.fullmatch(contract_id) is None:
         raise EventValidationError(f"{field_name} must match C-[0-9]{{3}} exactly.")
 
 
@@ -110,15 +111,11 @@ class EventEnvelope(Generic[PayloadT]):
         if not isinstance(self.audit_ref, UUID):
             raise EventValidationError("audit_ref must be a UUID.")
         if not isinstance(self.environment, DeploymentEnvironment):
-            raise EventValidationError(
-                "environment must be a DeploymentEnvironment."
-            )
+            raise EventValidationError("environment must be a DeploymentEnvironment.")
         if not isinstance(self.mode, OperatingMode):
             raise EventValidationError("mode must be an OperatingMode.")
         if not isinstance(self.aggregate_ref, AggregateReference):
-            raise EventValidationError(
-                "aggregate_ref must be an AggregateReference."
-            )
+            raise EventValidationError("aggregate_ref must be an AggregateReference.")
         if not isinstance(self.data_classification, DataClassification):
             raise EventValidationError(
                 "data_classification must be a DataClassification."

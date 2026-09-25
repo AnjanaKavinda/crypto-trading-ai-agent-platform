@@ -6,7 +6,6 @@ from typing import get_type_hints
 from uuid import uuid4
 
 import pytest
-
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.events import (
     AggregateReference,

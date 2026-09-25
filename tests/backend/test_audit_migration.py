@@ -8,14 +8,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-
 from trading_platform_api.audit.table import AuditEventRow
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = REPO_ROOT / "apps/api/alembic.ini"
 MIGRATION_PATH = (
-    REPO_ROOT
-    / "apps/api/migrations/versions/0002_audit_event_foundation.py"
+    REPO_ROOT / "apps/api/migrations/versions/0002_audit_event_foundation.py"
 )
 VALID_DATABASE_URL = (
     "postgresql+asyncpg://placeholder_user@localhost:5432/placeholder_db"
