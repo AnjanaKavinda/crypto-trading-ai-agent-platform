@@ -20,6 +20,9 @@ class DatabaseSettings:
     database_url: str = field(repr=False)
     drivername: str = field(default=APPROVED_DATABASE_DRIVER, init=False)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "database_url", _validated_database_url(self.database_url))
+
     def __repr__(self) -> str:
         return "DatabaseSettings(database_url='<redacted>', drivername='postgresql+asyncpg')"
 
