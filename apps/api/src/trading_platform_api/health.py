@@ -7,9 +7,11 @@ from fastapi import APIRouter, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-SERVICE_NAME = "trading-platform-api"
+SERVICE_NAME: Literal["trading-platform-api"] = "trading-platform-api"
 NO_STORE_CACHE_CONTROL = "no-store"
-READINESS_NOT_IMPLEMENTED_REASON = "READINESS_EVALUATOR_NOT_IMPLEMENTED"
+READINESS_NOT_IMPLEMENTED_REASON: Literal["READINESS_EVALUATOR_NOT_IMPLEMENTED"] = (
+    "READINESS_EVALUATOR_NOT_IMPLEMENTED"
+)
 
 
 class ServiceHealthStatus(str, Enum):
@@ -32,20 +34,20 @@ class TradingReadinessStatus(str, Enum):
 
 
 class ServiceHealthResponse(BaseModel):
-    service: Literal[SERVICE_NAME]
+    service: Literal["trading-platform-api"]
     status: ServiceHealthStatus
 
 
 class LivenessResponse(BaseModel):
-    service: Literal[SERVICE_NAME]
+    service: Literal["trading-platform-api"]
     status: LivenessStatus
 
 
 class TradingReadinessResponse(BaseModel):
-    service: Literal[SERVICE_NAME]
+    service: Literal["trading-platform-api"]
     status: TradingReadinessStatus
     ready: bool
-    reason_code: Literal[READINESS_NOT_IMPLEMENTED_REASON]
+    reason_code: Literal["READINESS_EVALUATOR_NOT_IMPLEMENTED"]
 
 
 def create_router() -> APIRouter:
@@ -54,7 +56,9 @@ def create_router() -> APIRouter:
     @router.get("/health", response_model=ServiceHealthResponse)
     def get_health(response: Response) -> ServiceHealthResponse:
         response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
-        return ServiceHealthResponse(service=SERVICE_NAME, status=ServiceHealthStatus.HEALTHY)
+        return ServiceHealthResponse(
+            service=SERVICE_NAME, status=ServiceHealthStatus.HEALTHY
+        )
 
     @router.get("/health/live", response_model=LivenessResponse)
     def get_liveness(response: Response) -> LivenessResponse:

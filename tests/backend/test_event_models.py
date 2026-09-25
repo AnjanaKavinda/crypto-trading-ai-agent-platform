@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.events import (
     EVENT_SCHEMA_VERSION,
@@ -187,7 +186,11 @@ def test_aggregate_reference_rejects_blank_supplied_text(field_name: str) -> Non
         ("audit_ref", "audit-1", "audit_ref must be a UUID"),
         ("environment", "test", "environment must be a DeploymentEnvironment"),
         ("mode", "research", "mode must be an OperatingMode"),
-        ("aggregate_ref", "C-002:entity-1", "aggregate_ref must be an AggregateReference"),
+        (
+            "aggregate_ref",
+            "C-002:entity-1",
+            "aggregate_ref must be an AggregateReference",
+        ),
         (
             "data_classification",
             "internal",

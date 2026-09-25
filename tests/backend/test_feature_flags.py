@@ -1,9 +1,16 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-
-from trading_platform_api.config import AppSettings, DeploymentEnvironment, OperatingMode
-from trading_platform_api.feature_flags import FeatureFlags, FeatureFlagsError, load_feature_flags
+from trading_platform_api.config import (
+    AppSettings,
+    DeploymentEnvironment,
+    OperatingMode,
+)
+from trading_platform_api.feature_flags import (
+    FeatureFlags,
+    FeatureFlagsError,
+    load_feature_flags,
+)
 
 
 def test_direct_feature_flags_construction_uses_all_false_defaults() -> None:
@@ -101,7 +108,9 @@ def test_invalid_value_error_identifies_variable_without_exposing_mapping() -> N
 
 def test_feature_flags_and_app_settings_are_immutable() -> None:
     flags = FeatureFlags()
-    settings = AppSettings(environment=DeploymentEnvironment.DEV, mode=OperatingMode.RESEARCH)
+    settings = AppSettings(
+        environment=DeploymentEnvironment.DEV, mode=OperatingMode.RESEARCH
+    )
 
     with pytest.raises(FrozenInstanceError):
         flags.enable_live_trading = True

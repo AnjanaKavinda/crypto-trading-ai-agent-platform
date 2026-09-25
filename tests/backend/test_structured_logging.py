@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
-
 from trading_platform_api.config import (
     DeploymentEnvironment,
     OperatingMode,
@@ -70,13 +69,19 @@ def test_independent_generated_contexts_use_distinct_identifiers() -> None:
 
 
 def test_supplied_identifiers_are_preserved_exactly() -> None:
-    context = create_correlation_context(correlation_id="corr-123", trace_id="trace-xyz")
+    context = create_correlation_context(
+        correlation_id="corr-123", trace_id="trace-xyz"
+    )
 
-    assert context == CorrelationContext(correlation_id="corr-123", trace_id="trace-xyz")
+    assert context == CorrelationContext(
+        correlation_id="corr-123", trace_id="trace-xyz"
+    )
 
 
 @pytest.mark.parametrize("identifier_value", ["", " ", "\t"])
-def test_create_context_rejects_blank_supplied_identifiers(identifier_value: str) -> None:
+def test_create_context_rejects_blank_supplied_identifiers(
+    identifier_value: str,
+) -> None:
     with pytest.raises(StructuredLoggingError):
         create_correlation_context(correlation_id=identifier_value)
 
@@ -84,7 +89,9 @@ def test_create_context_rejects_blank_supplied_identifiers(identifier_value: str
         create_correlation_context(trace_id=identifier_value)
 
 
-@pytest.mark.parametrize("correlation_id, trace_id", [("", "trace"), ("corr", " "), ("\n", "trace")])
+@pytest.mark.parametrize(
+    "correlation_id, trace_id", [("", "trace"), ("corr", " "), ("\n", "trace")]
+)
 def test_direct_correlation_context_construction_rejects_blank_identifiers(
     correlation_id: str, trace_id: str
 ) -> None:
@@ -122,7 +129,9 @@ def test_event_id_is_null_when_absent_and_preserved_when_supplied() -> None:
     assert supplied_event_id["event_id"] == "evt-123"
 
 
-def test_serialization_produces_single_valid_json_object_line_with_required_fields() -> None:
+def test_serialization_produces_single_valid_json_object_line_with_required_fields() -> (
+    None
+):
     entry = build_structured_log_entry(
         level=logging.INFO,
         service="api",
@@ -191,7 +200,9 @@ def test_unknown_string_level_is_rejected() -> None:
             service="api",
             component="structured-logging",
             event="log.test",
-            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+            context=create_correlation_context(
+                correlation_id="corr-1", trace_id="trace-1"
+            ),
         )
 
 
@@ -203,7 +214,9 @@ def test_optional_status_duration_and_error_code_are_serialized() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 status="failed",
                 duration_ms=123.5,
                 error_code="E-014",
@@ -231,7 +244,9 @@ def test_nested_sensitive_values_are_redacted() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details=details,
             )
         )
@@ -250,7 +265,9 @@ def test_authorization_cookie_and_private_key_variants_are_redacted() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details={
                     "http_authorization": SYNTHETIC_CANARY,
                     "set-cookie": SYNTHETIC_CANARY,
@@ -281,7 +298,9 @@ def test_camel_case_sensitive_variants_are_redacted() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details={
                     "accessToken": SYNTHETIC_CANARY,
                     "refreshToken": SYNTHETIC_CANARY,
@@ -309,7 +328,9 @@ def test_synthetic_canary_never_appears_in_output_or_errors() -> None:
             service="api",
             component="structured-logging",
             event="log.test",
-            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+            context=create_correlation_context(
+                correlation_id="corr-1", trace_id="trace-1"
+            ),
             details={"password": SYNTHETIC_CANARY},
         )
     )
@@ -324,7 +345,9 @@ def test_synthetic_canary_never_appears_in_output_or_errors() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details=unsafe_details,
             )
         )
@@ -340,7 +363,9 @@ def test_safe_fields_are_not_redacted() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details={
                     "token_usage": 42,
                     "password_policy_version": "v3",
@@ -373,7 +398,9 @@ def test_input_mapping_is_not_mutated_during_redaction_and_serialization() -> No
             service="api",
             component="structured-logging",
             event="log.test",
-            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+            context=create_correlation_context(
+                correlation_id="corr-1", trace_id="trace-1"
+            ),
             details=details,
         )
     )
@@ -389,7 +416,9 @@ def test_unsupported_values_fail_without_repr_fallback() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details={"unsafe": object()},
             )
         )
@@ -407,7 +436,9 @@ def test_unsupported_mapping_key_types_raise_structured_error() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details={object(): "value"},
             )
         )
@@ -423,7 +454,9 @@ def test_non_string_mapping_keys_are_rejected() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details={1: "value"},
             )
         )
@@ -442,7 +475,9 @@ def test_cyclic_structures_raise_structured_error() -> None:
                 service="api",
                 component="structured-logging",
                 event="log.test",
-                context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+                context=create_correlation_context(
+                    correlation_id="corr-1", trace_id="trace-1"
+                ),
                 details=cyclic_mapping,
             )
         )
@@ -468,7 +503,9 @@ def test_structured_formatter_outputs_structured_json_only() -> None:
             service="api",
             component="structured-logging",
             event="log.test",
-            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+            context=create_correlation_context(
+                correlation_id="corr-1", trace_id="trace-1"
+            ),
         ),
         args=(),
         exc_info=None,
@@ -496,7 +533,9 @@ def test_event_id_validation_rejects_invalid_values(event_id_value: object) -> N
             service="api",
             component="structured-logging",
             event="log.test",
-            context=create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+            context=create_correlation_context(
+                correlation_id="corr-1", trace_id="trace-1"
+            ),
             event_id=event_id_value,  # type: ignore[arg-type]
         )
 
@@ -519,21 +558,29 @@ def test_build_entry_rejects_non_string_values_for_string_fields(
         "service": "api",
         "component": "structured-logging",
         "event": "log.test",
-        "context": create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+        "context": create_correlation_context(
+            correlation_id="corr-1", trace_id="trace-1"
+        ),
     }
     kwargs[field_name] = field_value
     with pytest.raises(StructuredLoggingError):
         build_structured_log_entry(**kwargs)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("field_name, blank_value", [("service", ""), ("component", " "), ("event", "\n")])
-def test_build_entry_rejects_blank_required_string_fields(field_name: str, blank_value: str) -> None:
+@pytest.mark.parametrize(
+    "field_name, blank_value", [("service", ""), ("component", " "), ("event", "\n")]
+)
+def test_build_entry_rejects_blank_required_string_fields(
+    field_name: str, blank_value: str
+) -> None:
     kwargs: dict[str, object] = {
         "level": "info",
         "service": "api",
         "component": "structured-logging",
         "event": "log.test",
-        "context": create_correlation_context(correlation_id="corr-1", trace_id="trace-1"),
+        "context": create_correlation_context(
+            correlation_id="corr-1", trace_id="trace-1"
+        ),
     }
     kwargs[field_name] = blank_value
     with pytest.raises(StructuredLoggingError):
@@ -553,7 +600,9 @@ def test_manual_serialization_enforces_non_blank_context_identifiers() -> None:
 
 
 @pytest.mark.parametrize("event_id_value", [123, object(), "", " \t"])
-def test_manual_serialization_enforces_event_id_constraints(event_id_value: object) -> None:
+def test_manual_serialization_enforces_event_id_constraints(
+    event_id_value: object,
+) -> None:
     entry = _manual_valid_entry()
     entry["event_id"] = event_id_value
     with pytest.raises(StructuredLoggingError):
@@ -579,7 +628,9 @@ def test_manual_serialization_rejects_non_string_values_for_string_fields(
         serialize_log_entry(entry)
 
 
-@pytest.mark.parametrize("field_name, invalid_value", [("service", ""), ("component", " "), ("event", "\t")])
+@pytest.mark.parametrize(
+    "field_name, invalid_value", [("service", ""), ("component", " "), ("event", "\t")]
+)
 def test_manual_serialization_rejects_blank_required_string_fields(
     field_name: str, invalid_value: str
 ) -> None:
@@ -590,7 +641,9 @@ def test_manual_serialization_rejects_blank_required_string_fields(
 
 
 @pytest.mark.parametrize("level_value", ["info", "WaRnInG", "critical"])
-def test_manual_serialization_accepts_known_string_levels_case_insensitively(level_value: str) -> None:
+def test_manual_serialization_accepts_known_string_levels_case_insensitively(
+    level_value: str,
+) -> None:
     entry = _manual_valid_entry()
     entry["level"] = level_value
     entry["severity"] = level_value
@@ -634,7 +687,9 @@ def test_module_import_has_no_logging_output_or_root_reconfiguration(
     assert root_logger.level == root_level_before
 
 
-def test_structured_logging_introduction_does_not_change_configuration_baseline() -> None:
+def test_structured_logging_introduction_does_not_change_configuration_baseline() -> (
+    None
+):
     settings = load_app_settings({})
 
     assert settings.environment is DeploymentEnvironment.DEV

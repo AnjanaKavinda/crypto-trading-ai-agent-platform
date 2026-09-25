@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
-
-from trading_platform_api.config import AppSettings, DeploymentEnvironment, OperatingMode
+from trading_platform_api.config import (
+    AppSettings,
+    DeploymentEnvironment,
+    OperatingMode,
+)
 from trading_platform_api.main import app, create_app
 
 
@@ -54,7 +57,9 @@ def test_live_supervised_mode_is_context_only_and_adds_no_trading_routes() -> No
             route_paths.add(route.path)
             continue
 
-        included_router = getattr(getattr(route, "include_context", None), "included_router", None)
+        included_router = getattr(
+            getattr(route, "include_context", None), "included_router", None
+        )
         if included_router is None:
             continue
 
@@ -65,4 +70,6 @@ def test_live_supervised_mode_is_context_only_and_adds_no_trading_routes() -> No
         )
 
     assert created_app.state.settings.mode is OperatingMode.LIVE_SUPERVISED
-    assert not any("trade" in route_path or "execute" in route_path for route_path in route_paths)
+    assert not any(
+        "trade" in route_path or "execute" in route_path for route_path in route_paths
+    )

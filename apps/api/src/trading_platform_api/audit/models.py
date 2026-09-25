@@ -106,7 +106,9 @@ class AuditEvent:
         if self.supersedes_audit_id is not None and not isinstance(
             self.supersedes_audit_id, UUID
         ):
-            raise AuditValidationError("supersedes_audit_id must be a UUID when supplied.")
+            raise AuditValidationError(
+                "supersedes_audit_id must be a UUID when supplied."
+            )
 
         for field_name in (
             "actor",

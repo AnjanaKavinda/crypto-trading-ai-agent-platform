@@ -42,7 +42,9 @@ def _parse_strict_bool(*, variable_name: str, raw_value: str | None) -> bool:
     raise FeatureFlagsError(f"{variable_name} must be one of: true, false.")
 
 
-def load_feature_flags(environment_mapping: Mapping[str, str] | None = None) -> FeatureFlags:
+def load_feature_flags(
+    environment_mapping: Mapping[str, str] | None = None,
+) -> FeatureFlags:
     mapping = os.environ if environment_mapping is None else environment_mapping
     return FeatureFlags(
         enable_live_trading=_parse_strict_bool(

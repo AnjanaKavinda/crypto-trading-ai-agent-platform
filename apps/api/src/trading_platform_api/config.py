@@ -3,9 +3,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Mapping
+from typing import Mapping, TypeVar
 
-from trading_platform_api.feature_flags import FeatureFlags, FeatureFlagsError, load_feature_flags
+from trading_platform_api.feature_flags import (
+    FeatureFlags,
+    FeatureFlagsError,
+    load_feature_flags,
+)
 
 ENVIRONMENT_VARIABLE = "TRADING_PLATFORM_ENVIRONMENT"
 MODE_VARIABLE = "TRADING_PLATFORM_MODE"
@@ -31,6 +35,9 @@ class OperatingMode(str, Enum):
     LIVE_SUPERVISED = "live-supervised"
 
 
+StringEnumT = TypeVar("StringEnumT", bound=Enum)
+
+
 @dataclass(frozen=True, slots=True)
 class AppSettings:
     environment: DeploymentEnvironment
@@ -43,8 +50,8 @@ def _parse_enum_value(
     variable_name: str,
     raw_value: str | None,
     default_value: str,
-    enum_type: type[DeploymentEnvironment] | type[OperatingMode],
-) -> DeploymentEnvironment | OperatingMode:
+    enum_type: type[StringEnumT],
+) -> StringEnumT:
     if raw_value is None:
         value = default_value
     else:
@@ -61,13 +68,15 @@ def _parse_enum_value(
     try:
         return enum_type(value)
     except ValueError as exc:
-        allowed_values = ", ".join(member.value for member in enum_type)
+        allowed_values = ", ".join(str(member.value) for member in enum_type)
         raise AppSettingsError(
             f"{variable_name} must be one of: {allowed_values}. Received: {value!r}."
         ) from exc
 
 
-def load_app_settings(environment_mapping: Mapping[str, str] | None = None) -> AppSettings:
+def load_app_settings(
+    environment_mapping: Mapping[str, str] | None = None,
+) -> AppSettings:
     mapping = os.environ if environment_mapping is None else environment_mapping
     environment = _parse_enum_value(
         variable_name=ENVIRONMENT_VARIABLE,

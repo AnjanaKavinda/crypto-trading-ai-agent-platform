@@ -5,9 +5,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-
 from trading_platform_api.audit import AuditEvent, AuditEventType, AuditValidationError
-
 
 EXPECTED_EVENT_TYPES = {
     "USER_LOGIN",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from trading_platform_api.audit import (
     AuditEvent,
     AuditEventType,
