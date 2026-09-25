@@ -2,6 +2,12 @@
 
 The numeric order is the default dependency-aware execution order. Do not execute all issues at once. Architect may split/merge through reviewed ADR/traceability updates without losing requirements.
 
+This file is a roadmap order. The repaired dependency and readiness rules in
+[`ISSUE-REVALIDATION-REGISTER.md`](./ISSUE-REVALIDATION-REGISTER.md) and each
+current GitHub issue body take precedence for assignment. In particular,
+authentication, secrets and core safety controls must precede the approval or
+execution work that consumes them; open decisions remain blocking.
+
 ## 00 Governance
 
 - **#001** — Repository discovery and authoritative source validation — `Architect Agent` — dependencies: none
@@ -226,3 +232,17 @@ The numeric order is the default dependency-aware execution order. Do not execut
 - **#181** — Testnet readiness review — `QA/Security/Review Agent` — dependencies: 155-168
 - **#182** — Live-trading production readiness criteria — `QA/Security/Review Agent` — dependencies: 155-168
 - **#183** — Live-trading enablement ADR and human approval — `Architect Agent` — dependencies: 155-168
+
+## Cross-cutting non-loss additions
+
+- **#184 / GitHub #257** — Event-streaming technology ADR (OD-0007) — `Architect Agent`
+- **#185 / GitHub #258** — Transactional event outbox and durable publication — `Backend/Foundation Agent`
+- **#186 / GitHub #259** — Production event transport adapter and lifecycle — `Backend/Foundation Agent`
+- **#187 / GitHub #260** — Durable consumer inbox and general event idempotency — `Backend/Foundation Agent`
+- **#188 / GitHub #261** — Event retry, quarantine, dead-letter and replay recovery — `Backend/Foundation Agent`
+- **#189 / GitHub #262** — Event-platform integration, replay and failure tests — `QA/Security/Review Agent`
+- **#190 / GitHub #263** — Notification/WhatsApp architecture (OD-0015) — `Architect Agent`
+- **#191 / GitHub #264** — Regional/legal/licensing and operating controls (OD-0018) — `Architect Agent`
+
+These are dependency-placed by their current GitHub issue bodies rather than
+executed as one late sequential block.
