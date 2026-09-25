@@ -42,12 +42,13 @@ def test_alembic_configuration_contains_no_committed_url_or_credentials() -> Non
     assert "username" not in normalized
 
 
-def test_revision_graph_has_one_stable_head_and_empty_baseline_metadata() -> None:
+def test_revision_graph_preserves_stable_empty_baseline_metadata() -> None:
     script_directory = ScriptDirectory.from_config(_create_alembic_config())
     baseline_module = _load_baseline_module()
 
-    assert script_directory.get_heads() == ["0001_persistence_baseline"]
-    assert [path.name for path in VERSIONS_DIR.glob("*.py")] == ["0001_persistence_baseline.py"]
+    baseline_revision = script_directory.get_revision("0001_persistence_baseline")
+    assert baseline_revision is not None
+    assert baseline_revision.down_revision is None
     assert baseline_module.revision == "0001_persistence_baseline"
     assert baseline_module.down_revision is None
     assert baseline_module.branch_labels is None
@@ -87,7 +88,11 @@ def test_generated_baseline_sql_contains_no_schema_or_domain_ddl(monkeypatch) ->
     output_buffer = io.StringIO()
     monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
 
-    command.upgrade(_create_alembic_config(output_buffer=output_buffer), "head", sql=True)
+    command.upgrade(
+        _create_alembic_config(output_buffer=output_buffer),
+        "0001_persistence_baseline",
+        sql=True,
+    )
 
     sql_output = output_buffer.getvalue().upper()
     assert "CREATE TABLE ALEMBIC_VERSION" in sql_output

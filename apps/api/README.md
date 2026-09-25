@@ -15,6 +15,8 @@ This package provides the minimal FastAPI bootstrap entrypoint for the backend r
 - Adds a lazy PostgreSQL async persistence foundation in
   `trading_platform_api.persistence`.
 - Adds an app-local Alembic migration baseline under `apps/api/migrations`.
+- Adds the immutable C-060 audit-event model, PostgreSQL table, and
+  insert/flush-only store foundation in `trading_platform_api.audit`.
 
 ## Selected persistence foundation
 
@@ -72,8 +74,23 @@ alembic -c apps/api/alembic.ini upgrade head
 
 The baseline migration is intentionally schema-empty. It creates **no** production tables, extensions, enums, indexes, triggers, seed data, or other domain objects.
 
+The next revision creates only `audit_events` and its declared constraints and
+indexes. Audit records are append-only at the application-store boundary:
+the store exposes append only, joins the caller-owned transaction, and never
+commits, updates, deletes, upserts, or silently falls back to another store.
+Corrections create a new record with `supersedes_audit_id`; they never rewrite
+history.
+
+Downgrading the audit revision is intentionally blocked because dropping the
+table would destroy historical evidence. Hash chaining/tamper verification is
+not part of this foundation and remains owned by Canonical Issue 135.
+
 ## Deferred decisions and operating-mode impact
 
 This foundation does **not** resolve time-series technology, production topology, replicas, sharding, pooling/tuning, retention, tenancy, vector storage, or domain schema ownership. Those decisions remain governed and deferred.
+
+Production audit retention, database roles/grants, audit search/export,
+automatic instrumentation, and integration into safety/trading workflows are
+also deferred to their owning governed decisions and issues.
 
 Persistence availability does not imply trading readiness, execution authority, or live-trading enablement. Live trading remains disabled until later approved phases add the required risk, approval, execution, audit, and reconciliation controls.
