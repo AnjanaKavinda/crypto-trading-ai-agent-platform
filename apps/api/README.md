@@ -17,6 +17,8 @@ This package provides the minimal FastAPI bootstrap entrypoint for the backend r
 - Adds an app-local Alembic migration baseline under `apps/api/migrations`.
 - Adds the immutable C-060 audit-event model, PostgreSQL table, and
   insert/flush-only store foundation in `trading_platform_api.audit`.
+- Adds a broker-neutral immutable event envelope and narrow asynchronous
+  publisher/consumer protocols in `trading_platform_api.events`.
 
 ## Selected persistence foundation
 
@@ -92,5 +94,13 @@ This foundation does **not** resolve time-series technology, production topology
 Production audit retention, database roles/grants, audit search/export,
 automatic instrumentation, and integration into safety/trading workflows are
 also deferred to their owning governed decisions and issues.
+
+The event foundation defines metadata and interfaces only. It does not provide
+or claim broker delivery, an in-memory production bus, transactional outbox or
+inbox behavior, durable deduplication, acknowledgement, retry, dead-letter,
+quarantine, replay, routing, serialization, startup wiring, domain consumers,
+or trading integration. Those capabilities have explicit governed owners in
+canonical Issues 184-189. An event is evidence that something occurred; it is
+never risk approval, human approval, trading readiness, or execution authority.
 
 Persistence availability does not imply trading readiness, execution authority, or live-trading enablement. Live trading remains disabled until later approved phases add the required risk, approval, execution, audit, and reconciliation controls.
