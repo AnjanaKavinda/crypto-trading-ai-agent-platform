@@ -35,7 +35,7 @@ These components provide configuration parsing, engine/session factories, a narr
 - `ENABLE_LEARNING`: `true` or `false` (default: `false`)
 - `ENABLE_EXPERIMENTS`: `true` or `false` (default: `false`)
 - `DATABASE_URL`: required only when persistence or Alembic is explicitly invoked; must use the SQLAlchemy async PostgreSQL form:
-  `postgresql+asyncpg://app_user:<password>@db-host:5432/trading_platform`
+  `postgresql+asyncpg://placeholder_user@db-host:5432/placeholder_db` (placeholder only; supply secrets through the environment)
 
 Configuration values identify runtime context and eligibility only, and do not grant trading or execution authority.
 
@@ -53,7 +53,7 @@ The committed `apps/api/alembic.ini` file stores no URL or credentials. Online a
 Offline SQL generation:
 
 ```bash
-DATABASE_URL='******localhost:5432/placeholder' \
+DATABASE_URL='postgresql+asyncpg://placeholder_user@localhost:5432/placeholder_db' \
 alembic -c apps/api/alembic.ini upgrade head --sql
 ```
 
@@ -66,7 +66,7 @@ alembic -c apps/api/alembic.ini heads
 Online migration execution against an explicitly supplied environment:
 
 ```bash
-DATABASE_URL='postgresql+asyncpg://app_user:<password>@db-host:5432/trading_platform' \
+DATABASE_URL='postgresql+asyncpg://placeholder_user@db-host:5432/placeholder_db' \
 alembic -c apps/api/alembic.ini upgrade head
 ```
 
