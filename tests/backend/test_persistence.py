@@ -8,6 +8,7 @@ import pytest
 
 from trading_platform_api.persistence import (
     APPROVED_DATABASE_DRIVER,
+    DatabaseSettings,
     DatabaseSettingsError,
     create_async_engine_instance,
     create_async_session_factory,
@@ -80,6 +81,39 @@ def test_explicit_valid_async_postgresql_url_is_accepted() -> None:
 
     assert settings.database_url == VALID_DATABASE_URL
     assert settings.drivername == APPROVED_DATABASE_DRIVER
+
+
+def test_direct_database_settings_construction_enforces_validation() -> None:
+    settings = DatabaseSettings(database_url=VALID_DATABASE_URL)
+
+    assert settings.database_url == VALID_DATABASE_URL
+    assert settings.drivername == APPROVED_DATABASE_DRIVER
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "not-a-database-url",
+        "postgresql://db_user:db_password@example.internal:5432/trading_platform",
+        "sqlite:///tmp/trading_platform.db?api_token=query_secret",
+        "mysql+aiomysql://db_user:db_password@example.internal:3306/trading_platform",
+    ],
+)
+def test_direct_database_settings_construction_rejects_unapproved_urls_without_disclosure(
+    database_url: str,
+) -> None:
+    with pytest.raises(DatabaseSettingsError) as exc_info:
+        DatabaseSettings(database_url=database_url)
+
+    rendered_error = str(exc_info.value)
+    for secret_fragment in (
+        database_url,
+        "db_user",
+        "db_password",
+        "example.internal",
+        "query_secret",
+    ):
+        assert secret_fragment not in rendered_error
 
 
 @pytest.mark.parametrize(
@@ -228,6 +262,59 @@ def test_commit_failure_rolls_back_closes_and_propagates_original_failure() -> N
 
     assert exc_info.value is original_error
     assert session.events == ["body", "commit", "rollback", "close"]
+
+
+def test_body_failure_preserves_original_when_rollback_and_close_also_fail() -> None:
+    original_error = RuntimeError("transaction body failed")
+    session = FakeSession(
+        rollback_error=RuntimeError("rollback failed"),
+        close_error=RuntimeError("close failed"),
+    )
+
+    async def run_scope() -> None:
+        async with transactional_session(lambda: session):
+            session.events.append("body")
+            raise original_error
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(run_scope())
+
+    assert exc_info.value is original_error
+    assert session.events == ["body", "rollback", "close"]
+
+
+def test_commit_failure_preserves_original_when_rollback_and_close_also_fail() -> None:
+    original_error = RuntimeError("commit failed")
+    session = FakeSession(
+        commit_error=original_error,
+        rollback_error=RuntimeError("rollback failed"),
+        close_error=RuntimeError("close failed"),
+    )
+
+    async def run_scope() -> None:
+        async with transactional_session(lambda: session):
+            session.events.append("body")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(run_scope())
+
+    assert exc_info.value is original_error
+    assert session.events == ["body", "commit", "rollback", "close"]
+
+
+def test_close_failure_is_propagated_after_successful_commit() -> None:
+    close_error = RuntimeError("close failed")
+    session = FakeSession(close_error=close_error)
+
+    async def run_scope() -> None:
+        async with transactional_session(lambda: session):
+            session.events.append("body")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(run_scope())
+
+    assert exc_info.value is close_error
+    assert session.events == ["body", "commit", "close"]
 
 
 def test_persistence_package_introduces_foundation_only_and_no_repository_crud_exports() -> None:
