@@ -1,6 +1,14 @@
 # Complete GitHub Issue Catalog
 
-This backlog is intentionally created **before implementation**. The Architect Agent may split/merge individual issues only through documented review without losing requirements.
+This backlog is intentionally created **before implementation**. It is a roadmap
+index, not by itself an implementation-ready specification. The Architect Agent
+may split/merge individual issues only through documented review without losing
+requirements.
+
+The full playbook-to-backlog audit is recorded in
+[`ISSUE-REVALIDATION-REGISTER.md`](./ISSUE-REVALIDATION-REGISTER.md) and GitHub
+#256. Before assignment, the current GitHub issue body must contain a
+current-repository implementation contract and an executable readiness status.
 
 | # | Phase | Agent | Title | Playbook | Dependencies |
 |---:|---|---|---|---|---|
@@ -187,3 +195,11 @@ This backlog is intentionally created **before implementation**. The Architect A
 | 181 | 13 Testing/Ops | QA/Security/Review Agent | Testnet readiness review | Chat 12 / Chat 10 | 155-168 |
 | 182 | 13 Testing/Ops | QA/Security/Review Agent | Live-trading production readiness criteria | Chat 12 / Chat 10 | 155-168 |
 | 183 | 13 Testing/Ops | Architect Agent | Live-trading enablement ADR and human approval | Chat 12 / Chat 10 | 155-168 |
+| 184 | Cross-cutting | Architect Agent | Event-streaming technology ADR (OD-0007) | Chats 2,4,10,12 | 018,029 |
+| 185 | Cross-cutting | Backend/Foundation Agent | Transactional event outbox and durable publication | Chats 2,4,10,12 | 016-018,029,184 |
+| 186 | Cross-cutting | Backend/Foundation Agent | Production event transport adapter and lifecycle | Chats 2,4,10,12 | 018,029,184 |
+| 187 | Cross-cutting | Backend/Foundation Agent | Durable consumer inbox and general event idempotency | Chats 4,9,10,12 | 016,018,029,186 |
+| 188 | Cross-cutting | Backend/Foundation Agent | Event retry, quarantine, dead-letter and replay recovery | Chats 4,10,12 | 017,186-187 |
+| 189 | 13 Testing/Ops | QA/Security/Review Agent | Event-platform integration, replay and failure tests | Chats 4,10,12 | 184-188 |
+| 190 | Cross-cutting | Architect Agent | Notification/WhatsApp architecture (OD-0015) | Chats 9,10,11 | auth,secrets,events,audit,safety,deployment |
+| 191 | 13 Testing/Ops | Architect Agent | Regional/legal/licensing and operating controls (OD-0018) | Chats 1,4,9,10,12 | provider,deployment,retention,live decisions |
