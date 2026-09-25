@@ -29,7 +29,7 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
     def test_all_mandatory_fail_closed_commands_are_present(self) -> None:
         mandatory_commands = (
             "python -m pip check",
-            "python -m pip wheel --no-deps --no-build-isolation",
+            "python -m pip wheel --no-deps",
             "--wheel-dir /tmp/trading-platform-wheel .",
             "python -m compileall -q apps/api/src tests/backend",
             "python -m ruff check apps/api/src tests/backend",

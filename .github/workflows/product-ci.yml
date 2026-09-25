@@ -31,7 +31,7 @@ jobs:
 
       - name: Build distributable wheel
         run: >-
-          python -m pip wheel --no-deps --no-build-isolation
+          python -m pip wheel --no-deps
           --wheel-dir /tmp/trading-platform-wheel .
 
       - name: Compile backend source and tests
