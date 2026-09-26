@@ -230,6 +230,9 @@ def _class_metadata(contract_type: type[object], field_name: str) -> str:
     class_value = getattr(contract_type, field_name.upper(), None)
     if isinstance(class_value, str):
         return _text(field_name, class_value)
+    class_value = getattr(contract_type, field_name, None)
+    if isinstance(class_value, str):
+        return _text(field_name, class_value)
     for item in fields(cast(Any, contract_type)):
         if item.name == field_name and isinstance(item.default, str):
             return _text(field_name, item.default)
