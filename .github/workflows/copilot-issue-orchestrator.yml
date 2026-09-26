@@ -1,8 +1,13 @@
 name: Governed Copilot issue orchestrator
 concurrency:
-  group: governed-copilot-issue-${{ github.event.issue.number }}
+  group: governed-copilot-issue-${{ github.event.inputs.issue_number || github.event.issue.number }}
   cancel-in-progress: false
 on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to prepare under governed dispatch.
+        required: true
   issues:
     types: [assigned, labeled, reopened]
 permissions:
@@ -12,7 +17,7 @@ permissions:
   checks: read
 jobs:
   eligibility:
-    if: github.event.action == 'assigned' || contains(github.event.issue.labels.*.name, 'workflow:ready')
+    if: github.event_name == 'workflow_dispatch' || github.event.action == 'assigned' || contains(github.event.issue.labels.*.name, 'workflow:ready')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,16 +26,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
+          ISSUE_NUMBER: ${{ github.event.inputs.issue_number || github.event.issue.number }}
           GOVERNED_DISPATCH_ACTORS: ${{ vars.GOVERNED_DISPATCH_ACTORS }}
           GOVERNED_PILOT_ENABLED: ${{ vars.GOVERNED_PILOT_ENABLED }}
           GOVERNED_PILOT_ISSUES: ${{ vars.GOVERNED_PILOT_ISSUES }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
+          GOVERNED_ASSIGNMENT_RECONCILE_RETRIES: ${{ vars.GOVERNED_ASSIGNMENT_RECONCILE_RETRIES }}
         run: python .github/scripts/orchestrate-issue.py
       - name: Upload dispatch audit artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: governed-dispatch-${{ github.event.issue.number }}-${{ github.run_id }}
-          path: /tmp/governed-audit-${{ github.event.issue.number }}.jsonl
+          name: governed-dispatch-${{ github.event.inputs.issue_number || github.event.issue.number }}-${{ github.run_id }}
+          path: /tmp/governed-audit-${{ github.event.inputs.issue_number || github.event.issue.number }}.jsonl
           if-no-files-found: ignore
           retention-days: 90

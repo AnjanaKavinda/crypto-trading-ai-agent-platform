@@ -1,6 +1,6 @@
 name: Governed independent AI review producer
 concurrency:
-  group: governed-independent-review-${{ github.event.inputs.pr_number || github.event.workflow_run.id || github.run_id }}
+  group: governed-independent-review-${{ github.repository }}-${{ github.event.inputs.pr_number || github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: false
 on:
   workflow_run:
@@ -109,7 +109,7 @@ jobs:
            jq -r '.[] | select(.state == "open" and .base.ref == "dev") | .head.sha')
           if [ "${#heads[@]}" -eq 1 ]; then
            gh api --method POST "repos/${{ github.repository }}/statuses/${heads[0]}" \
-             -f state=error -f context=governance-gate \
+            -f state=error -f context=governance-review \
              -f description='Independent-review classification failed; inspect workflow diagnostics'
           fi
           exit 1
@@ -268,7 +268,7 @@ jobs:
         run: |
           head_sha="$(jq -r .head.sha /tmp/pr.json)"
           gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-            -f state=pending -f context=governance-gate \
+            -f state=pending -f context=governance-review \
             -f description='Independent governed review in progress'
       - name: Verify deterministic checks before AI review
         env:
@@ -289,18 +289,55 @@ jobs:
           if any(checks.get(name) != 'success' for name in required):
              raise SystemExit('required deterministic check is missing or failed')
           PY
-      - name: Block automatic duplicate paid review for the same head
+      - name: Acquire trusted pre-invocation claim for exact head
+        id: claim
         if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_sha="$(jq -r .head.sha /tmp/pr.json)"
+          claim_key="${{ github.repository }}:$PR_NUMBER:$head_sha"
+          gh api "repos/${{ github.repository }}/commits/$head_sha/status" > /tmp/claim-status.json
+          if python - <<'PY'
+          import json
+          statuses = json.load(open('/tmp/claim-status.json')).get('statuses', [])
+          latest = None
+          for item in statuses:
+              if item.get('context') != 'governance-review-claim':
+                  continue
+              stamp = item.get('updated_at') or item.get('created_at') or ''
+              if latest is None or stamp >= (latest.get('updated_at') or latest.get('created_at') or ''):
+                  latest = item
+          claim_key = "${{ github.repository }}:$PR_NUMBER:$head_sha"
+          if latest and claim_key in str(latest.get('description') or ''):
+              raise SystemExit(0)
+          raise SystemExit(1)
+          PY
+          then
+            echo "skip_provider=true" >> "$GITHUB_OUTPUT"
+            gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=pending -f context=governance-review \
+              -f description='Duplicate automatic review run detected for exact head; no-op'
+            exit 0
+          fi
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+            -f state=pending -f context=governance-review-claim \
+            -f description="claim_key:$claim_key run_id:${{ github.run_id }}"
+          echo "skip_provider=false" >> "$GITHUB_OUTPUT"
+      - name: Block automatic duplicate paid review for the same head
+        if: github.event_name != 'workflow_dispatch' && steps.claim.outputs.skip_provider != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           head_sha="$(jq -r .head.sha /tmp/pr.json)"
           gh api "repos/${{ github.repository }}/commits/$head_sha/status" > /tmp/pre-review-status.json
-          if jq -e '.statuses[]? | select(.context == "governance-gate" and (.state == "success" or .state == "failure" or .state == "error"))' /tmp/pre-review-status.json >/dev/null; then
-            echo "A final governance-gate status already exists for this exact head; automatic paid re-review is blocked. Use controlled workflow_dispatch only after human review." >&2
+          if jq -e '.statuses[]? | select(.context == "governance-review" and (.state == "success" or .state == "failure" or .state == "error"))' /tmp/pre-review-status.json >/dev/null; then
+            echo "A terminal governance-review status already exists for this exact head; automatic paid re-review is blocked. Use controlled workflow_dispatch only after human review." >&2
             exit 1
           fi
       - name: Re-verify exact current PR head immediately before AI review
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -314,6 +351,7 @@ jobs:
           assert_current_head(request['head_sha'], current.get('head', {}).get('sha'))
           PY
       - name: Create ephemeral reviewer handoff key
+        if: steps.claim.outputs.skip_provider != 'true'
         run: |
           python - <<'PY'
           import os, secrets
@@ -323,6 +361,7 @@ jobs:
           os.chmod(path, 0o600)
           PY
       - name: Execute bounded OpenAI independent reviewer
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
@@ -335,6 +374,7 @@ jobs:
           --attestation /tmp/reviewer-result-attestation.json
           --handoff-key-file /tmp/reviewer-handoff.key
       - name: Re-verify exact current PR head after AI review
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -342,6 +382,7 @@ jobs:
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/pr-after.json
           test "$(jq -r .head.sha /tmp/pr-after.json)" = "$(jq -r .head_sha /tmp/reviewer-request.json)"
       - name: Re-fetch current PR head immediately before provenance
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -356,6 +397,7 @@ jobs:
           PY
       - name: Produce signed independent-review provenance artifact
         id: produce
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           GOVERNANCE_PROVENANCE_SIGNING_KEY: ${{ secrets.GOVERNANCE_PROVENANCE_SIGNING_KEY }}
           GOVERNED_BASE: dev
@@ -372,6 +414,7 @@ jobs:
         run: |
           python .github/scripts/produce-review-provenance.py /tmp/pr-final.json /tmp/reviews.json /tmp/issue.json /tmp/reviewer-result.json /tmp/reviewer-request.json /tmp/reviewer-result-attestation.json > /tmp/review-artifact.json
       - name: Re-verify current head after artifact construction
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -386,6 +429,7 @@ jobs:
           PY
       - name: Consume signed provenance and publish governance gate
         id: governance
+        if: steps.claim.outputs.skip_provider != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GOVERNED_BASE: dev
@@ -417,13 +461,16 @@ jobs:
           disposition="$(jq -r .disposition /tmp/reviewer-result.json)"
           if [ "$governance_rc" -eq 0 ]; then
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-              -f state=success -f context=governance-gate \
+              -f state=success -f context=governance-review \
               -f description='Signed independent review approved'
             TARGET_STATE=workflow:ready-to-merge \
               python .github/scripts/transition-pr.py
+            gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+            -f state=success -f context=governance-review-claim \
+            -f description="claim_key:${{ github.repository }}:$PR_NUMBER:$head_sha completed_run:${{ github.run_id }}"
           else
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-              -f state=failure -f context=governance-gate \
+              -f state=failure -f context=governance-review \
               -f description="Independent review disposition: $disposition"
             if [ "$disposition" = "changes-requested" ]; then
               TARGET_STATE=workflow:changes-requested \
@@ -431,6 +478,9 @@ jobs:
             else
               TARGET_STATE=workflow:human-decision-required \
                 python .github/scripts/transition-pr.py
+            gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
+              -f state=failure -f context=governance-review-claim \
+              -f description="claim_key:${{ github.repository }}:$PR_NUMBER:$head_sha disposition:$disposition"
             fi
             exit "$governance_rc"
           fi
@@ -448,13 +498,13 @@ jobs:
             /tmp/governance-audit.jsonl
           retention-days: 90
       - name: Fail governance gate if review workflow did not finalize
-        if: always() && steps.governance.outcome != 'success'
+        if: always() && steps.claim.outputs.skip_provider != 'true' && steps.governance.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ -f /tmp/pr.json ]; then
             head_sha="$(jq -r .head.sha /tmp/pr.json)"
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
-              -f state=failure -f context=governance-gate \
+              -f state=error -f context=governance-review \
               -f description='Governed independent review did not finalize successfully'
           fi
