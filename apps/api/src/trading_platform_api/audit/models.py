@@ -96,6 +96,7 @@ class AuditEvent:
     subject_type: str | None = None
     subject_id: str | None = None
     supersedes_audit_id: UUID | None = None
+    contract_id: str = field(default="C-060", init=False)
     schema_version: str = field(default=AUDIT_SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
