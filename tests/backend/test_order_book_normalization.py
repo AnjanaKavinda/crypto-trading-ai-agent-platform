@@ -238,6 +238,50 @@ def test_explicit_snapshot_reinitializes_matching_invalid_state() -> None:
         )
 
 
+@pytest.mark.parametrize("sequence", [None, 5, 10, 11])
+def test_resync_rejects_unsequenced_or_nonforward_snapshot(
+    sequence: int | None,
+) -> None:
+    invalid = apply_book_delta(
+        initial().state,
+        delta(sequence_start=12, sequence_end=12),
+        policy(),
+        as_of=T0 + timedelta(seconds=7),
+        sequence_verifier=contiguous,
+    )
+    with pytest.raises(OrderBookError, match="Resync snapshot must advance"):
+        normalize_book_snapshot(
+            snapshot(
+                source=source("late-pre-gap-snapshot", T0 + timedelta(seconds=8)),
+                sequence=sequence,
+            ),
+            policy(),
+            as_of=T0 + timedelta(seconds=11),
+            resync_of=invalid.state,
+        )
+    assert invalid.state.status is BookStatus.INVALID
+
+
+def test_resync_rejects_older_event_time_even_with_forward_sequence() -> None:
+    invalid = apply_book_delta(
+        initial().state,
+        delta(sequence_start=12, sequence_end=12),
+        policy(),
+        as_of=T0 + timedelta(seconds=7),
+        sequence_verifier=contiguous,
+    )
+    with pytest.raises(OrderBookError, match="Resync snapshot must advance"):
+        normalize_book_snapshot(
+            snapshot(
+                source=source("late-old-snapshot", T0 + timedelta(seconds=2)),
+                sequence=30,
+            ),
+            policy(),
+            as_of=T0 + timedelta(seconds=7),
+            resync_of=invalid.state,
+        )
+
+
 def test_declared_checksum_needs_verifier_and_mismatch_invalidates_delta() -> None:
     with pytest.raises(OrderBookError, match="verifier"):
         normalize_book_snapshot(
