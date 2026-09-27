@@ -8,7 +8,7 @@
 | Date | 2026-09-27 |
 | Decision owner | Platform Architect |
 | Human approver | Pending: AnjanaKavinda |
-| GitHub issue / PR | [#281](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/281) / pending decision PR |
+| GitHub issue / PR | [#281](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/281) / [draft PR #287](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/287) |
 | Open decision ID | OD-0003 (market-data sub-scope), OD-0004 |
 | Related ADRs | ADR-0001 |
 | Supersedes / superseded by | — |
