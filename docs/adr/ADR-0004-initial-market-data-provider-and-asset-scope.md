@@ -128,6 +128,17 @@ analytics, AI and retention before any customer launch. If A fails its gates,
 reassess scope or budget rather than silently switching venues or substituting
 ATAS. No option is selected by merging this Proposed ADR.
 
+The owner's ATAS research-workbench choice is compatible with this route.
+The broader comparison proposing Binance + Bybit + CoinGlass should be treated
+as a later research roadmap, not as approval to ingest them together in #282:
+
+| Suggested expansion | Decision boundary for the first adapter |
+|---|---|
+| Bybit/OKX/Deribit | Each added venue requires its own symbol mapping, terms, continuity fixtures and data-quality evidence. No automatic fallback or silently pooled price. |
+| Open interest, funding and liquidation streams | These describe derivatives positions/markets, not the approved candidate spot feed. Decide the derivatives data scope separately before combining it with spot analysis. [Bybit's OI endpoint](https://bybit-exchange.github.io/docs/v5/market/open-interest) explicitly covers linear/inverse contracts. |
+| CoinGlass Hobbyist | Its [published $29/month tier](https://www.coinglass.com/pricing) is labeled **personal use**; commercial tiers start higher. Do not add it to the baseline budget or infer company/customer rights, endpoint history or suitability for low-latency decisions. |
+| Locally collected exchange history | We can preserve a valuable, reproducible research copy, but storing bytes does not transfer ownership or customer redistribution rights. Preserve the source terms and retention constraints with every dataset. |
+
 ## Proposed data flow and quality gates
 
 1. After applicable use terms and geography are verified, one registered
