@@ -104,3 +104,65 @@ canonical Issues 184-189. An event is evidence that something occurred; it is
 never risk approval, human approval, trading readiness, or execution authority.
 
 Persistence availability does not imply trading readiness, execution authority, or live-trading enablement. Live trading remains disabled until later approved phases add the required risk, approval, execution, audit, and reconciliation controls.
+
+## Binance Spot personal-research adapter (Issue #282)
+
+`trading_platform_api.market_data.binance_spot` provides a public, read-only
+Binance Spot provider for `BTC-USDT-SPOT` and `ETH-USDT-SPOT` at venue
+`BINANCE-SPOT`. It supports bounded UTC klines and recent raw trades over REST,
+bounded raw trade/kline WebSocket sessions, and checksum-verified daily kline
+and raw-trade archives. It uses the existing #35–#37 provider and normalizer
+contracts. It is not wired to the API application or any background job.
+
+Collection is **off by default**. Before creating an enabled settings object,
+record the applicable personal-use terms/retention review, Sri Lankan access
+review and opt-in integration evidence as non-secret references. The adapter
+checks live Spot symbol metadata before every collection session. It supports
+only fixed public Binance market-data hosts and never accepts an API key or
+calls private, account or order endpoints. These references are assertions by
+the operator; code cannot establish legal rights or geographic eligibility.
+
+```python
+from trading_platform_api.market_data.binance_spot import (
+    BinanceSpotArchive, BinanceSpotProvider, BinanceSpotSettings,
+)
+
+settings = BinanceSpotSettings()  # disabled; no import-time I/O
+# After the three reviews are recorded separately, construct an enabled
+# settings object with their non-secret record IDs and call fetch/stream/day.
+```
+
+The provider `MarketDataRequest` uses `BTC-USDT-SPOT` or `ETH-USDT-SPOT`,
+`BINANCE-SPOT`, and `OHLCV` or `TRADE`. Its timeframe comes from
+`BinanceSpotSettings` (default `1m`), because the existing provider request
+does not carry a timeframe. A REST call is limited to ten pages of at most
+1000 rows; a single historical window is at most 90 days, and the requested
+range must fit its record budget. Recent `/api/v3/trades` has no historical
+cursor, so time-ranged raw trades use the separate checksummed daily archive
+reader. Archive data is available only after the daily publication. Archive
+reader batches have 1000 or fewer rows and reject a day beyond its explicit
+record/byte budgets. Re-download and checksum comparison expose archive
+revisions; no persistent dataset revision registry is created here.
+
+WebSocket sessions subscribe to one approved raw stream and close after the
+explicit message budget. A disconnect before the first message gets at most
+two bounded retries. Disconnect, idle timeout or invalid data after emission
+invalidates that session; a caller must reconcile explicitly before starting
+another session. Each batch preserves source hashes and timestamps, but a
+successful batch is not a C-003 quality verdict, data persistence, continuous
+live coverage, trading readiness or permission for customer display.
+
+Deterministic fixtures run in normal CI:
+
+```bash
+python -m pytest -q tests/backend/test_binance_spot_adapter.py
+```
+
+No external-data test runs by default. A later opt-in integration session must
+record terms and regional eligibility, confirm live BTCUSDT/ETHUSDT metadata,
+exercise public REST and WebSocket endpoints, inspect archive checksum and
+microsecond timestamp behavior, and retain a non-secret evidence reference.
+Until then, do not enable collection. Historical gaps, archive revisions and
+stream disconnects require explicit reconciliation before analysis can claim
+continuous data. Order books, futures, credentials and execution remain outside
+this adapter.
