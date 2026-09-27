@@ -44,6 +44,17 @@ from trading_platform_api.market_data.providers import (
     RateLimitKnowledge,
     RateLimitPolicy,
 )
+from trading_platform_api.market_data.trades import (
+    NormalizedTradeTicks,
+    RawTradeTick,
+    ReportedSide,
+    SideSemantics,
+    TradeTickIdentity,
+    TradeTickNormalizationError,
+    TradeTickPolicy,
+    TradeTickQuality,
+    normalize_trade_ticks,
+)
 
 __all__ = [
     "CONTRACT_SCHEMA_VERSION",
@@ -86,4 +97,13 @@ __all__ = [
     "ProviderRegistry",
     "RateLimitKnowledge",
     "RateLimitPolicy",
+    "NormalizedTradeTicks",
+    "RawTradeTick",
+    "ReportedSide",
+    "SideSemantics",
+    "TradeTickIdentity",
+    "TradeTickNormalizationError",
+    "TradeTickPolicy",
+    "TradeTickQuality",
+    "normalize_trade_ticks",
 ]
