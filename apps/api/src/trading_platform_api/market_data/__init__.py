@@ -18,6 +18,14 @@ from trading_platform_api.market_data.contracts import (
     OnChainData,
     SentimentData,
 )
+from trading_platform_api.market_data.ohlcv import (
+    CandleNormalizationError,
+    CandlePolicy,
+    CandleQualityReport,
+    NormalizedCandles,
+    RawCandle,
+    normalize_ohlcv,
+)
 from trading_platform_api.market_data.providers import (
     AuthenticationRequirement,
     CapabilitySupport,
@@ -56,6 +64,12 @@ __all__ = [
     "MetricValue",
     "OnChainData",
     "SentimentData",
+    "CandleNormalizationError",
+    "CandlePolicy",
+    "CandleQualityReport",
+    "NormalizedCandles",
+    "RawCandle",
+    "normalize_ohlcv",
     "AuthenticationRequirement",
     "CapabilitySupport",
     "MarketDataProvider",
