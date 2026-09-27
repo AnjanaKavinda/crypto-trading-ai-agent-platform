@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-09-27 |
 | Decision owner | Platform Architect |
-| Human approver | Pending: AnjanaKavinda |
+| Human approver | AnjanaKavinda, by manual merge of PR #287 |
 | GitHub issue / PR | [#281](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/281) / [PR #287](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/287) |
 | Open decision ID | OD-0003 (market-data sub-scope), OD-0004 |
 | Related ADRs | ADR-0001 |
@@ -16,19 +16,20 @@
 ## Context and decision boundary
 
 The platform has a provider-neutral boundary (#35), OHLCV (#36), trade/tick
-(#37), and order-book (#38) normalization. No production market-data source,
-license, instrument universe, or live ingestion adapter is approved. #282 must
-not infer those choices from a public endpoint or this proposed record.
+(#37), and order-book (#38) normalization. This record selects a narrowly
+scoped personal-research data integration design. It does not claim a data
+license or authorize an always-on collector, customer display or trading.
 
 This decision concerns **market data only**. It cannot authorize an execution
 venue, order endpoint, exchange credentials, derivatives, on-chain/news data,
 strategy, signal, risk, or live trading. OD-0001, OD-0002, OD-0005/0006 and
-the wider OD-0003 asset universe remain open. The proposed narrow starting
-universe for human consideration is **BTC and ETH spot, one venue, one quote
-currency, two exact venue instrument IDs**. BTC/USDT and ETH/USDT are *candidate
-examples*, not approved identifiers or an assertion that a particular provider
-offers them under the necessary rights. No other assets, market types or
-automatic cross-provider substitution are in this draft scope.
+the wider OD-0003 asset universe remain open. The approved adapter design is
+**Binance Spot BTCUSDT and ETHUSDT**, both quoted in USDT, with historical
+and live OHLCV and trades only. The initial historical collection window is
+bounded to 90 days, subject to actual archive availability and measured storage.
+No order book, other assets, market types or automatic source substitution
+belongs to this first adapter. Verify the instruments' live exchange metadata
+and regional access during the adapter preflight before any network collection.
 
 The owner has clarified that the **current phase is personal research for one
 user**, with no customer access, redistribution or company-operated data
@@ -38,8 +39,8 @@ licensing and deployment decision. The personal research ceiling is
 must use actual, current, quality-checked observations, not synthetic or
 unlabelled delayed data. The first affordable feed can cover historical/live
 OHLCV and trades; a live book is a separately priced and verified data kind.
-If the owner requires all three in the first adapter, the selected paid tier
-must satisfy the order-book compatibility gate below.
+Book coverage needs its own compatible adapter and review after the identified
+#38 semantic mismatch is addressed.
 
 This first **spot market-data slice is not the product's trading-market
 decision**. The playbook explicitly includes futures and perpetuals. Their
@@ -108,9 +109,9 @@ before #282. Do not widen this documentation PR or silently weaken #38.
 
 ### A. Exchange-native spot feed after confirming applicable terms
 
-Preferred personal-research candidate under the $100 ceiling: Binance Spot
-public data on one venue, likely BTCUSDT and ETHUSDT if those exact instruments
-and Sri Lankan/deployment access are verified. Public REST/WebSocket trades,
+Selected personal-research design under the $100 ceiling: Binance Spot
+public data for BTCUSDT and ETHUSDT, subject to live symbol and Sri Lankan
+access checks before collection. Public REST/WebSocket trades,
 klines and depth have no separately published subscription fee; historical
 daily/monthly archives support repeatable research. Use only `NONE`/public
 market-data interfaces, never a trading key. The relevant regional/product
@@ -140,9 +141,9 @@ Continue deterministic foundations while obtaining a written permission or
 licensed quote and a feed-to-normalizer compatibility proof. This avoids an
 unlicensed or silently incorrect live book, but delays #282 and real data.
 
-**Recommendation: A, Binance public Spot as the first candidate for a
-one-user research feed under $100/month; D for network activation until the
-terms, region and compatibility gates close.** This revises the earlier
+**Decision: A, Binance public Spot for a bounded one-user research adapter
+design under $100/month; network collection remains disabled until the
+applicable terms and regional access checks close.** This revises the earlier
 CoinAPI preference in response to the owner's hard spending ceiling. Start
 with checksummed historical klines/trades plus public live trades/klines; add
 bounded book only after #38 continuity/depth compatibility is proven. Use
@@ -150,7 +151,7 @@ ATAS Start as an optional independent visual analysis tool, not an upstream
 agent data source. Request written rights for customer display, derived
 analytics, AI and retention before any customer launch. If A fails its gates,
 reassess scope or budget rather than silently switching venues or substituting
-ATAS. No option is selected by merging this Proposed ADR.
+ATAS. Manual merge selects this bounded design, not a data license.
 
 The owner's ATAS research-workbench choice is compatible with this route.
 The broader comparison proposing Binance + Bybit + CoinGlass should be treated
@@ -163,7 +164,7 @@ as a later research roadmap, not as approval to ingest them together in #282:
 | CoinGlass Hobbyist | Its [published $29/month tier](https://www.coinglass.com/pricing) is labeled **personal use**; commercial tiers start higher. Do not add it to the baseline budget or infer company/customer rights, endpoint history or suitability for low-latency decisions. |
 | Locally collected exchange history | We can preserve a valuable, reproducible research copy, but storing bytes does not transfer ownership or customer redistribution rights. Preserve the source terms and retention constraints with every dataset. |
 
-## Proposed data flow and quality gates
+## Bounded data flow and quality gates
 
 1. After applicable use terms and geography are verified, one registered
    **exchange venue and exact spot symbols** feed a bounded public WebSocket
@@ -257,33 +258,30 @@ Do not optimize on the test interval or infer future win probability from an
 unrepresentative historical sample. If evidence is insufficient, return
 `NO_TRADE`; no live execution is authorized.
 
-## Decision request and evidence needed for acceptance
+## Decision and adapter handoff
 
-The human owner must record in #281 and the ADR:
+The owner's instructions on 2026-09-27 establish personal, single-user
+research under $100/month, with Binance's official developer documentation as
+the technical starting point and ATAS as a separate supporting tool. Human
+merge of this PR approves only the Binance Spot BTCUSDT/ETHUSDT OHLCV-and-trade
+adapter design. This decision is effective only on that merge; it does not
+approve customer distribution, a futures contract, an account key or an order.
 
-1. Recorded use: one-person personal research now, with no external users or
-   redistribution; AI may consume quality-checked data in this private scope.
-   A later customer product must make a new decision about raw data, charts,
-   signals, derived outputs and APIs before external release.
-2. Exact spot provider/contracting entity, allowed location(s) including Sri
-   Lanka and deployment region, approved BTC/ETH venue symbols and quote asset,
-   supported data kinds and history horizon; no assumption that OD-0002
-   execution market scope follows.
-3. Applicable terms for personal API access in the user's region, permitted
-   private retention and analysis, attribution if required, and the approved
-   cost ceiling. Record unclear restrictions rather than claiming permission;
-   written commercial/redistribution rights belong to a future customer phase.
-4. Official current payload and continuity/checksum/depth semantics; a
-   provider-specific deterministic fixture proving #36–#38 compatibility or
-   an explicit follow-up correction before any incompatible data kind is used.
-5. Exact #282 acceptance scope. If OHLCV/trades are approved first and book is
-   deferred, human approval must amend #282 rather than treating its existing
-   all-kind acceptance criteria as satisfied.
+After the merge, #282 may implement the bounded REST, archive and WebSocket
+adapter against official schemas and deterministic fixtures. Revise #282's
+all-kind criteria to cover #36 OHLCV and #37 trades only; #38 order-book
+compatibility and its sequence/depth semantics are a separate follow-up. The
+first implementation must retain its network collector disabled until the
+operator records the applicable personal-use terms, permitted retention and
+analysis, attribution if required, live symbol metadata, regional reachability
+and a bounded opt-in integration result. Unknown or restrictive terms block
+collection rather than being interpreted as permission. A 90-day archive
+target is a collection cap, not a guarantee that every file exists or is
+correct. Source hashes, missing periods and revisions remain explicit.
 
-Until these are present, status remains Proposed; OD-0003/0004 remain Open.
-The owner may reject or request another alternative without authorizing live
-ingestion. This ADR must be updated to Accepted with the approved exact
-option, evidence and conditions before #282 starts network integration.
+OD-0003 and OD-0004 stay Open for the broader asset universe and production
+vendor/licensing decisions. A customer product requires a separate decision
+and rights before external display or API access.
 
 ## Consequences, traceability and safety
 
@@ -292,14 +290,15 @@ option, evidence and conditions before #282 starts network integration.
 | Playbook | Chat 4 §§5–16, 34–37, 43–45, 57–60, 92–98, 101–108: provider abstraction, asset/venue identity, point-in-time history, rate limits, source provenance and fail-closed quality. |
 | Cross-cutting | OD-0003/0004 linked as Open pending disposition. OD-0001/0002/0005/0006 and data retention/deployment decisions are not resolved. |
 | Contracts | C-001/C-002/C-003/C-091/C-092 unchanged. No event or schema version changed by this proposal. |
-| Implementation | #282 remains blocked pending accepted decision and compatible data-kind scope. A later bounded adapter owns protocol, cancellation, rate limiting, health and recovery. |
+| Implementation | After human merge, #282 may implement the bounded Spot OHLCV/trade adapter; collector activation needs the explicit terms, region and fixture checks above. The adapter owns protocol, cancellation, rate limiting, health and recovery. |
 | Migration/exit | Preserve venue, provider, raw-schema, adapter version, licensing reference and immutable dataset/source identity. Switching provider cannot rewrite old datasets or silently mix unlike feeds. |
 | Failure | Unknown rights, region, fee, endpoint behavior, sequence, checksum, stale/revised data or schema change blocks the affected ingestion and downstream quality/readiness. No private account or order endpoint, credential, broker, trading authority, fallback or live execution is introduced. |
 
 ## Approval record
 
-Pending. No provider, instrument, subscription, commercial use or network
-integration is approved by this Proposed record. The human owner must state
-the accepted option and exact conditions; update this section, register and
-open-decision entries in the approving PR. A manual merge of a Proposed ADR
-records research only and does not authorize #282.
+The owner selected one-person personal research using Binance documentation
+and the previously proposed affordable route in this conversation on
+2026-09-27. Final approval is the owner's manual merge of PR #287. Until
+merged, this record is a proposed change to `dev`. After merge it authorizes
+the bounded adapter design stated above, subject to separate network-use
+gates; it grants no license, customer access or trading authority.
