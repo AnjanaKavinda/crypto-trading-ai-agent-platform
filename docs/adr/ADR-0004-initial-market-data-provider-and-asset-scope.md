@@ -30,9 +30,11 @@ examples*, not approved identifiers or an assertion that a particular provider
 offers them under the necessary rights. No other assets, market types or
 automatic cross-provider substitution are in this draft scope.
 
-The owner has clarified that this is an **internal research product now and a
-customer-facing product later**, with one internal user initially and a hard
-**$100/month research ceiling**. Analysis
+The owner has clarified that the **current phase is personal research for one
+user**, with no customer access, redistribution or company-operated data
+service. A customer-facing product is a possible later phase requiring its own
+licensing and deployment decision. The personal research ceiling is
+**$100/month**. Analysis
 must use actual, current, quality-checked observations, not synthetic or
 unlabelled delayed data. The first affordable feed can cover historical/live
 OHLCV and trades; a live book is a separately priced and verified data kind.
@@ -74,15 +76,17 @@ regional eligibility, commercial quote, or contractual permission has been
 supplied for the intended future customer use. The absence of a visible
 prohibition is not approval.
 
-Binance's [Spot terms page](https://developers.binance.com/en/docs/products/spot/PROD-TERMS-OF-USE)
-was rechecked on 2026-09-27: it links to a general terms landing page without
-stating a market-data storage, internal AI-analysis or customer-display grant
-for this use. Public endpoint documentation establishes technical access only.
-The applicable regional terms or a written provider clarification for the
-one-person research scope must be recorded before actual data collection;
-customer display requires a separate express scope. This gap does not prevent
-reviewing this proposed design, but no external integration test or collector
-activation is authorized by it.
+Binance's [developer introduction](https://developers.binance.com/en/docs/introduction)
+explicitly describes market-data access, trading bots and analytics. Its
+[Spot REST reference](https://developers.binance.com/en/docs/products/spot/rest-api)
+identifies public `NONE` endpoints that do not require a trading key. The
+[Spot terms page](https://developers.binance.com/en/docs/products/spot/PROD-TERMS-OF-USE)
+was rechecked on 2026-09-27: it points to broader product terms rather than
+stating a data-retention or redistribution grant. For this personal phase,
+record the applicable terms and regional access before enabling collection;
+ask the provider only if those terms leave the intended personal use unclear.
+Do not require a customer redistribution license for private prototype
+development, and do not infer future customer rights from personal access.
 
 ## Normalizer and contract compatibility
 
@@ -104,7 +108,7 @@ before #282. Do not widen this documentation PR or silently weaken #38.
 
 ### A. Exchange-native spot feed after confirming applicable terms
 
-Preferred internal-research candidate under the $100 ceiling: Binance Spot
+Preferred personal-research candidate under the $100 ceiling: Binance Spot
 public data on one venue, likely BTCUSDT and ETHUSDT if those exact instruments
 and Sri Lankan/deployment access are verified. Public REST/WebSocket trades,
 klines and depth have no separately published subscription fee; historical
@@ -257,17 +261,18 @@ unrepresentative historical sample. If evidence is insufficient, return
 
 The human owner must record in #281 and the ADR:
 
-1. Recorded business model: one-person internal research now; customer-facing
-   data/derived analysis later; AI consumes the feed. Specify exactly what
-   customers may see and whether raw data, charts, signals or an API leave the
-   organization before negotiating rights.
+1. Recorded use: one-person personal research now, with no external users or
+   redistribution; AI may consume quality-checked data in this private scope.
+   A later customer product must make a new decision about raw data, charts,
+   signals, derived outputs and APIs before external release.
 2. Exact spot provider/contracting entity, allowed location(s) including Sri
    Lanka and deployment region, approved BTC/ETH venue symbols and quote asset,
    supported data kinds and history horizon; no assumption that OD-0002
    execution market scope follows.
-3. Written right or applicable subscription terms for commercial access,
-   retention, raw/derived use, model development/inference, attribution,
-   display/redistribution, and termination/migration; approved cost ceiling.
+3. Applicable terms for personal API access in the user's region, permitted
+   private retention and analysis, attribution if required, and the approved
+   cost ceiling. Record unclear restrictions rather than claiming permission;
+   written commercial/redistribution rights belong to a future customer phase.
 4. Official current payload and continuity/checksum/depth semantics; a
    provider-specific deterministic fixture proving #36–#38 compatibility or
    an explicit follow-up correction before any incompatible data kind is used.
