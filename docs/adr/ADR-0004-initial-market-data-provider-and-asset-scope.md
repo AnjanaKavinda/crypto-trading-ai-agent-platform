@@ -8,7 +8,7 @@
 | Date | 2026-09-27 |
 | Decision owner | Platform Architect |
 | Human approver | Pending: AnjanaKavinda |
-| GitHub issue / PR | [#281](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/281) / [draft PR #287](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/287) |
+| GitHub issue / PR | [#281](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/281) / [PR #287](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/287) |
 | Open decision ID | OD-0003 (market-data sub-scope), OD-0004 |
 | Related ADRs | ADR-0001 |
 | Supersedes / superseded by | — |
@@ -39,6 +39,16 @@ OHLCV and trades; a live book is a separately priced and verified data kind.
 If the owner requires all three in the first adapter, the selected paid tier
 must satisfy the order-book compatibility gate below.
 
+This first **spot market-data slice is not the product's trading-market
+decision**. The playbook explicitly includes futures and perpetuals. Their
+funding, open interest, liquidation and basis data belong to a separately
+approved derivatives feed (canonical issue 037 / GitHub #39), followed by
+derivatives analysis (canonical 059 / GitHub #61), cost and funding validation
+(canonical 091 / GitHub #93), leverage and liquidation risk (canonical
+107–108 / GitHub #109–#110), and paper/testnet execution (canonical 121–122 /
+GitHub #123–#124). No spot observation may be relabeled as a futures contract,
+and none of these later stages is approved for network access or trading here.
+
 ## Evidence method
 
 Official provider technical and licensing/terms pages were consulted on
@@ -63,6 +73,16 @@ No accepted terms analysis, provider-specific market availability, current
 regional eligibility, commercial quote, or contractual permission has been
 supplied for the intended future customer use. The absence of a visible
 prohibition is not approval.
+
+Binance's [Spot terms page](https://developers.binance.com/en/docs/products/spot/PROD-TERMS-OF-USE)
+was rechecked on 2026-09-27: it links to a general terms landing page without
+stating a market-data storage, internal AI-analysis or customer-display grant
+for this use. Public endpoint documentation establishes technical access only.
+The applicable regional terms or a written provider clarification for the
+one-person research scope must be recorded before actual data collection;
+customer display requires a separate express scope. This gap does not prevent
+reviewing this proposed design, but no external integration test or collector
+activation is authorized by it.
 
 ## Normalizer and contract compatibility
 
