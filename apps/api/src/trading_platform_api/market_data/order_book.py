@@ -220,6 +220,8 @@ class BookState:
     market_data_ids: tuple[UUID, ...]
     fingerprints: tuple[BookFingerprint, ...]
     failure: BookFailure | None = None
+    resync_sequence_floor: int | None = None
+    resync_event_time_floor: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,7 +398,13 @@ def _observation(
     )
 
 
-def _invalid(state: BookState, reason: BookFailure) -> BookTransition:
+def _invalid(
+    state: BookState,
+    reason: BookFailure,
+    *,
+    rejected_sequence_end: int | None = None,
+    rejected_event_time: datetime | None = None,
+) -> BookTransition:
     return BookTransition(
         state=BookState(
             status=BookStatus.INVALID,
@@ -412,6 +420,16 @@ def _invalid(state: BookState, reason: BookFailure) -> BookTransition:
             market_data_ids=state.market_data_ids,
             fingerprints=state.fingerprints,
             failure=reason,
+            resync_sequence_floor=(
+                rejected_sequence_end
+                if rejected_sequence_end is not None
+                else state.resync_sequence_floor
+            ),
+            resync_event_time_floor=(
+                rejected_event_time
+                if rejected_event_time is not None
+                else state.resync_event_time_floor
+            ),
         ),
         source_record=None,
         market_data=None,
@@ -451,6 +469,21 @@ def normalize_book_snapshot(
     sequence = (
         None if snapshot.sequence is None else _sequence("sequence", snapshot.sequence)
     )
+    if resync_of is not None and (
+        sequence is None
+        or resync_of.sequence is None
+        or sequence <= resync_of.sequence
+        or source.provider_event_time <= resync_of.event_time
+        or (
+            resync_of.resync_sequence_floor is not None
+            and sequence < resync_of.resync_sequence_floor
+        )
+        or (
+            resync_of.resync_event_time_floor is not None
+            and source.provider_event_time < resync_of.resync_event_time_floor
+        )
+    ):
+        raise OrderBookError("Resync snapshot must advance sequence and event time.")
     bids = _levels(snapshot.bids, policy, bid=True)
     asks = _levels(snapshot.asks, policy, bid=False)
     spread = _spread(bids, asks, policy)
@@ -561,13 +594,28 @@ def apply_book_delta(
         if source.provider_event_time < state.event_time:
             return _invalid(state, BookFailure.INVALID_INPUT)
         if state.sequence is None or sequence_verifier is None:
-            return _invalid(state, BookFailure.SEQUENCE)
+            return _invalid(
+                state,
+                BookFailure.SEQUENCE,
+                rejected_sequence_end=end,
+                rejected_event_time=source.provider_event_time,
+            )
         try:
             continuous = sequence_verifier(state.sequence, start, end)
         except Exception:
-            return _invalid(state, BookFailure.SEQUENCE)
+            return _invalid(
+                state,
+                BookFailure.SEQUENCE,
+                rejected_sequence_end=end,
+                rejected_event_time=source.provider_event_time,
+            )
         if continuous is not True or end <= state.sequence:
-            return _invalid(state, BookFailure.SEQUENCE)
+            return _invalid(
+                state,
+                BookFailure.SEQUENCE,
+                rejected_sequence_end=end,
+                rejected_event_time=source.provider_event_time,
+            )
         if len(state.source_lineage) >= policy.maximum_lineage:
             return _invalid(state, BookFailure.LINEAGE)
         bids = {level.price: level.quantity for level in state.bids}
