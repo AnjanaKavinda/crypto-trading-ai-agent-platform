@@ -12,7 +12,7 @@ contradict an approved contract or cross-cutting artifact.
 |---|---|---|---|---|---|---|---|---|
 | ADR-0001 | [Governed Copilot development orchestration](ADR-0001-governed-copilot-development-orchestration.md) | Accepted | 2026-09-02 | Platform Architect / AnjanaKavinda | — | None | — | — |
 | ADR-0002 | [Vendor-neutral LLM provider and model routing policy](ADR-0002-vendor-neutral-llm-provider-model-routing.md) | Accepted | 2026-09-06 | Platform Architect / AnjanaKavinda | OD-0010 | Independent AI reviewer execution contract V1 | — | — |
-| ADR-0004 | [Initial market-data provider and asset scope](ADR-0004-initial-market-data-provider-and-asset-scope.md) | Proposed | 2026-09-27 | Platform Architect / pending human approval | OD-0003, OD-0004 | C-001/C-002/C-003/C-091/C-092 (no change) | — | — |
+| ADR-0004 | [Initial market-data provider and asset scope](ADR-0004-initial-market-data-provider-and-asset-scope.md) | Accepted | 2026-09-27 | Platform Architect / AnjanaKavinda (manual merge) | OD-0003, OD-0004 (bounded personal data slice only) | C-001/C-002/C-003/C-091/C-092 (no change) | — | — |
 
 ## Creating an ADR
 
