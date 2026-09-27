@@ -17,6 +17,9 @@ from trading_platform_api.market_data.binance_spot import (
     BinanceSpotProvider,
     BinanceSpotSettings,
 )
+from trading_platform_api.market_data.binance_spot.smoke import (
+    _request as smoke_request,
+)
 from trading_platform_api.market_data.providers import (
     MarketDataProvider,
     MarketDataRequest,
@@ -29,6 +32,16 @@ from trading_platform_api.market_data.providers import (
 NOW = datetime(2026, 9, 27, 12, 5, tzinfo=UTC)
 OPEN = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
 MS = lambda moment: int(moment.timestamp() * 1000)  # noqa: E731
+
+
+def test_owner_smoke_bounds_closed_candles_and_recent_trades() -> None:
+    candles = smoke_request("BTC-USDT-SPOT", ProviderDataKind.OHLCV)
+    trades = smoke_request("BTC-USDT-SPOT", ProviderDataKind.TRADE)
+    assert candles.range_start is not None and candles.range_end is not None
+    assert candles.range_end - candles.range_start == timedelta(minutes=2)
+    assert candles.range_end <= candles.requested_at - timedelta(minutes=1)
+    assert candles.maximum_records == trades.maximum_records == 2
+    assert trades.range_start is None and trades.range_end is None
 
 
 def settings(**changes: object) -> BinanceSpotSettings:
