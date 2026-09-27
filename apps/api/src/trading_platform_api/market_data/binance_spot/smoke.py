@@ -116,7 +116,7 @@ def main() -> int:
             integration_evidence_reference=args.preflight_ref,
         )
         results = asyncio.run(asyncio.wait_for(_run(settings, args.archive), 120))
-    except (ProviderError, ValueError, TimeoutError, OSError) as exc:
+    except Exception as exc:
         code = exc.code.value if isinstance(exc, ProviderError) else type(exc).__name__
         print(json.dumps({"status": "failed", "error_code": code}))
         return 1
