@@ -59,7 +59,10 @@ async def _run(settings: BinanceSpotSettings, archive: bool) -> list[dict[str, o
     for instrument in ("BTC-USDT-SPOT", "ETH-USDT-SPOT"):
         for kind in (ProviderDataKind.OHLCV, ProviderDataKind.TRADE):
             batch = await provider.fetch(_request(instrument, kind))
-            if batch.status is not ProviderBatchStatus.COMPLETE or not batch.market_data:
+            if (
+                batch.status is not ProviderBatchStatus.COMPLETE
+                or not batch.market_data
+            ):
                 raise ValueError("REST batch incomplete")
             results.append(_summary("rest", instrument, batch))
 
