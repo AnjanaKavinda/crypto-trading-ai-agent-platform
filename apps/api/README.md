@@ -188,3 +188,27 @@ Record sanitized output, UTC run time, PR commit, connection region, and any
 error code in Issue #282. The preflight reference starts the check; it does
 not claim that integration already passed. No startup wiring, scheduled
 collection, trading, or default opt-in is introduced.
+
+## Provider-neutral derivatives foundation (Issue #39)
+
+`market_data.derivatives.normalize_derivatives` accepts bounded funding and
+open-interest observations for one explicit instrument, venue, market type
+and contract per call. Funding rates are signed fractions **per supplied
+interval**; open interest requires an explicit `contracts`, `base_asset` or
+`quote_asset` unit. The result carries C-091 source hashes, C-001 observations,
+C-002-compatible `DerivativesData`, and a separate contract/provider-event
+identity handoff. This transforms caller-supplied data; it is not a provider
+parser or a data-quality verdict. Exact duplicates are tracked within one
+batch only. Empty input is empty; gaps are never interpolated.
+
+The batch rejects mixed instruments/contracts, provider identities, unknown
+units, invalid time order, non-finite values and over-budget payloads. No
+network source, historical coverage, store, liquidation totals, basis
+reference, quality assessment, analysis, orders or execution is added. A
+read-only derivatives adapter requires its own approved market/product
+decision, concrete source semantics and owner-run integration evidence.
+Tests use synthetic fixtures:
+
+```bash
+python -m pytest -q tests/backend/test_derivatives_normalization.py
+```

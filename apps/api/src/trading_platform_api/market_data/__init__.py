@@ -18,6 +18,15 @@ from trading_platform_api.market_data.contracts import (
     OnChainData,
     SentimentData,
 )
+from trading_platform_api.market_data.derivatives import (
+    DerivativesIdentity,
+    DerivativesNormalizationError,
+    DerivativesPolicy,
+    NormalizedDerivatives,
+    OpenInterestUnit,
+    RawDerivativesObservation,
+    normalize_derivatives,
+)
 from trading_platform_api.market_data.ohlcv import (
     CandleNormalizationError,
     CandlePolicy,
@@ -75,6 +84,13 @@ from trading_platform_api.market_data.trades import (
 )
 
 __all__ = [
+    "DerivativesIdentity",
+    "DerivativesNormalizationError",
+    "DerivativesPolicy",
+    "NormalizedDerivatives",
+    "OpenInterestUnit",
+    "RawDerivativesObservation",
+    "normalize_derivatives",
     "CONTRACT_SCHEMA_VERSION",
     "DataQualityReport",
     "DataQualityStatus",
