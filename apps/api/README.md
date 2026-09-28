@@ -186,12 +186,32 @@ external finality because C-001 does not encode it. Embedded observations are
 checked against their source availability. This verifies supplied provenance
 claims and an independently supplied lineage pin, not raw-content hash preimages.
 
-Issue #45 remains open for approved revision-order and historical asset-universe
-evidence contracts. `survivorship_sensitive=True` fails closed until those
-exist; passing `False` permits fixed-universe research only and does not certify
-absence of survivorship bias. No implicit timestamp or revision inference is
-performed. #46 owns durable provenance storage; this function is a deterministic
-control for supplied evidence, not a storage service or a complete backtester.
+The original API retains its conservative `survivorship_sensitive=True` rejection;
+passing `False` permits fixed-universe research only. Use the additive
+`market_data.history_selection.reconstruct_history` API when approved C-101
+HistoricalUniverse and C-102 ObservationRevision evidence is available. Supply
+the exact universe and C-092 dataset, authentic complete revision/source
+history, cutoff, and independently trusted universe/lineage hashes. C-101
+describes a complete named universe at that time, not today's watchlist.
+
+The new API selects only revisions available at the cutoff, follows explicit
+supersession ancestry, and rejects ambiguous roots, forks, cycles, missing
+parents, backdated evidence and incomplete member coverage. A missing member's
+observations cannot be silently dropped. A genuinely empty, explicitly complete
+universe produces an empty selection. Universe intervals are half-open.
+Candle revisions require trusted finalized interval ends. Observation keys
+must retain one event time and encode provider event/interval identity.
+
+The result includes C-103 ReconstructionManifest with selected revision IDs,
+eligible ancestry/source hashes, universe hash, dataset reference and selection
+policy version. Input ordering cannot affect the result. Later unavailable
+revisions and later delisting cannot rewrite the earlier pinned reconstruction.
+This proves consistency of supplied evidence, not provider truth or completeness
+of a caller's omitted records. No authenticated ingestion of C-101/C-102 exists
+yet; fabricated completeness/finality declarations are never acceptable.
+Per-timeframe completeness and other quality checks still require C-003.
+Existing C-001–C-100 payloads and the exact-pin API are unchanged. #46 owns
+durable provenance storage; these controls do not implement a full backtester.
 
 ### Owner-authorized one-shot check
 
