@@ -71,6 +71,13 @@ from trading_platform_api.market_data.providers import (
     RateLimitKnowledge,
     RateLimitPolicy,
 )
+from trading_platform_api.market_data.quality import (
+    DataQualityAssessmentError,
+    DataQualityPolicy,
+    MetricBound,
+    assess_complete_binance_spot_batch,
+    assess_data_quality,
+)
 from trading_platform_api.market_data.trades import (
     NormalizedTradeTicks,
     RawTradeTick,
@@ -84,6 +91,11 @@ from trading_platform_api.market_data.trades import (
 )
 
 __all__ = [
+    "DataQualityAssessmentError",
+    "DataQualityPolicy",
+    "MetricBound",
+    "assess_complete_binance_spot_batch",
+    "assess_data_quality",
     "DerivativesIdentity",
     "DerivativesNormalizationError",
     "DerivativesPolicy",
