@@ -234,6 +234,34 @@ def test_inconsistent_price_units_and_foreign_finality_are_invalid() -> None:
     )
     report = assess((snapshot, observations, sources, finality + (uuid4(),)))
     assert report.status is DataQualityStatus.INVALID
+    second = replace(
+        observations[1],
+        metrics=tuple(
+            MetricValue(
+                m.metric_name, m.value, "ETH" if m.metric_name == "volume" else m.unit
+            )
+            for m in observations[1].metrics
+        ),
+    )
+    assert (
+        assess(
+            (snapshot, (observations[0], second, observations[2]), sources, finality)
+        ).status
+        is DataQualityStatus.INVALID
+    )
+
+
+def test_mixed_provider_cannot_claim_unmeasured_agreement() -> None:
+    snapshot, observations, sources, finality = evidence()
+    with pytest.raises(DataQualityAssessmentError, match="Mixed providers"):
+        assess(
+            (
+                snapshot,
+                observations,
+                (sources[0], replace(sources[1], provider_id="other"), sources[2]),
+                finality,
+            )
+        )
 
 
 def test_cutoff_empty_denominator_and_invalid_policy_fail_closed() -> None:

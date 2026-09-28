@@ -191,6 +191,10 @@ def assess_data_quality(
         raise DataQualityAssessmentError(
             "Independent comparable source evidence was not supplied."
         )
+    if len({(s.provider_id, s.provider_version) for s in sources}) != 1:
+        raise DataQualityAssessmentError(
+            "Mixed providers require independent comparison semantics."
+        )
     if snapshot.dataset_version is not None:
         if (
             type(dataset) is not DatasetVersion
@@ -224,6 +228,9 @@ def assess_data_quality(
     consistent_count = 0
     reliable_count = 0
     prior_time: datetime | None = None
+    reference_units = {
+        metric.metric_name: metric.unit for metric in observations[0].metrics
+    }
     final_set = set(finalized_market_data_ids)
     for item in observations:
         label = str(item.market_data_id)
@@ -271,6 +278,11 @@ def assess_data_quality(
         elif source is None:
             unavailable_ids.append(label)
         else:
+            invalid_ids.append(label)
+        if any(
+            name in metrics and metrics[name].unit != reference_units.get(name)
+            for name in policy.required_metrics
+        ):
             invalid_ids.append(label)
         price_units = {
             metrics[name].unit
