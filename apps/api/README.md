@@ -168,6 +168,31 @@ stream disconnects require explicit reconciliation before analysis can claim
 continuous data. Order books, futures, credentials and execution remain outside
 this adapter.
 
+### Point-in-time reconstruction (Issue #45)
+
+`market_data.point_in_time.reconstruct_pinned_snapshot` validates an exact
+C-002 snapshot against its C-001 observations, C-091 sources and C-092 dataset.
+The caller supplies a trusted lineage digest from the original experiment
+manifest and an explicit `survivorship_sensitive` policy. Snapshot membership,
+dataset version/cutoff, schema, venue and cross-record chronology must match.
+The function returns immutable evidence in snapshot order, or raises
+`PointInTimeError`; it never substitutes a newer version or partially succeeds.
+
+Source retrieval/availability and observation ingestion/availability must be
+no later than the historical cutoff. Newly downloaded old candles therefore
+cannot establish what this platform knew before download. OHLCV also requires
+trusted `(market_data_id, interval_end)` finality evidence, just as C-003 needs
+external finality because C-001 does not encode it. Embedded observations are
+checked against their source availability. This verifies supplied provenance
+claims and an independently supplied lineage pin, not raw-content hash preimages.
+
+Issue #45 remains open for approved revision-order and historical asset-universe
+evidence contracts. `survivorship_sensitive=True` fails closed until those
+exist; passing `False` permits fixed-universe research only and does not certify
+absence of survivorship bias. No implicit timestamp or revision inference is
+performed. #46 owns durable provenance storage; this function is a deterministic
+control for supplied evidence, not a storage service or a complete backtester.
+
 ### Owner-authorized one-shot check
 
 Issue #282 records the owner's personal-use assumption and public symbol
