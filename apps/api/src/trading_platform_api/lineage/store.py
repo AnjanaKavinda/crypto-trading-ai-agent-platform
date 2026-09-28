@@ -1,0 +1,261 @@
+"""Append-only PostgreSQL store with caller-owned transaction boundaries."""
+
+from dataclasses import dataclass
+from hashlib import sha256
+
+from sqlalchemy import and_, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.lineage.codec import (
+    LineageError,
+    LineageKey,
+    decode,
+    encode,
+    key_for,
+)
+from trading_platform_api.lineage.tables import links, records
+from trading_platform_api.market_data.contracts import (
+    DatasetVersion,
+    MarketData,
+    MarketSnapshot,
+)
+from trading_platform_api.market_data.history_contracts import (
+    HistoricalUniverse,
+    ObservationRevision,
+    ReconstructionManifest,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Reference:
+    key: LineageKey
+    evidence_sha256: str | None = None
+    lineage_sha256: str | None = None
+
+
+def references(record: object) -> tuple[Reference, ...]:
+    result: list[Reference] = []
+    if type(record) is MarketData:
+        result.append(Reference(LineageKey("C-091", str(record.source_record_id))))
+    if isinstance(record, (MarketSnapshot, DatasetVersion, HistoricalUniverse)):
+        result.extend(
+            Reference(LineageKey("C-091", str(item)))
+            for item in record.source_record_ids
+        )
+    if type(record) is MarketSnapshot:
+        result.extend(
+            Reference(LineageKey("C-001", str(item))) for item in record.market_data_ids
+        )
+        if record.dataset_version is not None:
+            result.append(
+                Reference(
+                    LineageKey(
+                        "C-092",
+                        record.dataset_version.dataset_id,
+                        record.dataset_version.version,
+                    )
+                )
+            )
+    if type(record) is ObservationRevision:
+        result.append(
+            Reference(key_for(record.observation), canonical_sha256(record.observation))
+        )
+        if record.supersedes_revision_id is not None:
+            result.append(
+                Reference(LineageKey("C-102", str(record.supersedes_revision_id)))
+            )
+    if type(record) is ReconstructionManifest:
+        result.extend(
+            Reference(LineageKey("C-102", str(pin.evidence_id)), pin.content_sha256)
+            for pin in record.revision_pins
+        )
+        result.extend(
+            Reference(LineageKey("C-091", str(pin.evidence_id)), pin.content_sha256)
+            for pin in record.source_pins
+        )
+        result.append(
+            Reference(
+                LineageKey("C-101", record.universe_id, record.universe_version),
+                record.universe_sha256,
+            )
+        )
+        result.append(
+            Reference(
+                LineageKey(
+                    "C-092",
+                    record.dataset_version.dataset_id,
+                    record.dataset_version.version,
+                ),
+                lineage_sha256=record.dataset_lineage_sha256,
+            )
+        )
+    if len(result) > 1000:
+        raise LineageError("Lineage references exceed the bounded read budget.")
+    return tuple(result)
+
+
+def _identity(key: LineageKey) -> dict[str, str]:
+    return dict(
+        contract_id=key.contract_id, record_id=key.record_id, version=key.version
+    )
+
+
+def _where(key: LineageKey, table=records):
+    return and_(*(table.c[name] == value for name, value in _identity(key).items()))
+
+
+class SqlAlchemyLineageStore:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def get(self, key: LineageKey) -> object:
+        row = (
+            (await self._session.execute(select(records).where(_where(key))))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise LineageError("Exact lineage record is missing.")
+        document = row["document"]
+        if sha256(document.encode("utf-8")).hexdigest() != row["document_sha256"]:
+            raise LineageError("Stored document digest mismatch.")
+        record = decode(document)
+        if key_for(record) != key or canonical_sha256(record) != row["evidence_sha256"]:
+            raise LineageError("Stored identity or evidence digest mismatch.")
+        actual = (
+            (
+                await self._session.execute(
+                    select(links).where(_where(key, links)).limit(1001)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if len(actual) > 1000:
+            raise LineageError("Stored lineage edges exceed the read budget.")
+        actual_keys = {
+            LineageKey(
+                row["target_contract_id"],
+                row["target_record_id"],
+                row["target_version"],
+            )
+            for row in actual
+        }
+        if actual_keys != {reference.key for reference in references(record)}:
+            raise LineageError("Stored lineage edges do not match the record.")
+        return record
+
+    async def _check_references(
+        self, record: object, resolved: dict[LineageKey, object] | None = None
+    ) -> tuple[Reference, ...]:
+        refs = references(record)
+        for ref in refs:
+            target = await self.get(ref.key) if resolved is None else resolved[ref.key]
+            if (
+                ref.evidence_sha256 is not None
+                and canonical_sha256(target) != ref.evidence_sha256
+            ):
+                raise LineageError("Referenced immutable content differs.")
+            if ref.lineage_sha256 is not None and (
+                type(target) is not DatasetVersion
+                or target.lineage_sha256 != ref.lineage_sha256
+            ):
+                raise LineageError("Referenced dataset lineage differs.")
+            if (
+                type(record) is ObservationRevision
+                and type(target) is ObservationRevision
+            ):
+                child, parent = record.observation, target.observation
+                if (
+                    (
+                        record.provider_id,
+                        record.observation_key,
+                        child.instrument_id,
+                        child.venue_id,
+                        child.observation_type,
+                        child.event_time,
+                    )
+                    != (
+                        target.provider_id,
+                        target.observation_key,
+                        parent.instrument_id,
+                        parent.venue_id,
+                        parent.observation_type,
+                        parent.event_time,
+                    )
+                    or target.availability_time > record.availability_time
+                    or target.publication_time > record.publication_time
+                    or target.ingestion_time > record.ingestion_time
+                ):
+                    raise LineageError("Incompatible revision ancestry.")
+        return refs
+
+    async def append(self, record: object) -> LineageKey:
+        """Insert or verify an identical retry; never commit the caller's session."""
+        key = key_for(record)
+        document = encode(record)
+        refs = await self._check_references(record)
+        async with self._session.begin_nested():
+            statement = (
+                insert(records)
+                .values(
+                    **_identity(key),
+                    document=document,
+                    document_sha256=sha256(document.encode("utf-8")).hexdigest(),
+                    evidence_sha256=canonical_sha256(record),
+                )
+                .on_conflict_do_nothing()
+                .returning(records.c.record_id)
+            )
+            inserted = (await self._session.execute(statement)).scalar_one_or_none()
+            if inserted is None:
+                if encode(await self.get(key)) != document:
+                    raise LineageError(
+                        "Immutable identity already has different content."
+                    )
+            else:
+                unique = {ref.key for ref in refs}
+                if unique:
+                    await self._session.execute(
+                        insert(links),
+                        [
+                            dict(
+                                **_identity(key),
+                                target_contract_id=target.contract_id,
+                                target_record_id=target.record_id,
+                                target_version=target.version,
+                            )
+                            for target in unique
+                        ],
+                    )
+        return key
+
+    async def resolve(
+        self, keys: tuple[LineageKey, ...], *, maximum_records: int = 1000
+    ) -> dict[LineageKey, object]:
+        """Resolve an exact bounded dependency graph and revalidate reference hashes."""
+        if type(keys) is not tuple or not all(type(key) is LineageKey for key in keys):
+            raise LineageError("Exact immutable keys are required.")
+        if (
+            type(maximum_records) is not int
+            or not 1 <= maximum_records <= 1000
+            or len(keys) > maximum_records
+        ):
+            raise LineageError("Invalid resolution budget.")
+        pending = list(keys)
+        result: dict[LineageKey, object] = {}
+        while pending:
+            key = pending.pop()
+            if key in result:
+                continue
+            if len(result) >= maximum_records:
+                raise LineageError("Lineage resolution budget exceeded.")
+            record = await self.get(key)
+            refs = references(record)
+            result[key] = record
+            pending.extend(ref.key for ref in refs if ref.key not in result)
+        for record in result.values():
+            await self._check_references(record, resolved=result)
+        return result

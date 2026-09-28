@@ -213,6 +213,54 @@ Per-timeframe completeness and other quality checks still require C-003.
 Existing C-001–C-100 payloads and the exact-pin API are unchanged. #46 owns
 durable provenance storage; these controls do not implement a full backtester.
 
+### Durable lineage evidence (Issue #46)
+
+`lineage.store.SqlAlchemyLineageStore` persists validated C-001/C-002,
+C-091/C-092 and C-101/C-102/C-103 records in PostgreSQL. Apply the reviewed
+`0003_lineage_store` migration with the existing Alembic configuration:
+
+    python -m alembic -c apps/api/alembic.ini upgrade head
+
+Supply `DATABASE_URL` through the existing configuration mechanism; do not
+commit or print credentials. Construct the store with an explicit async
+session inside the existing transaction context. Append sources first, then
+observations/datasets/universes, revisions in ancestry order, and finally
+snapshots/manifests. Every referenced record must already exist in the same
+transaction or be committed. No automatic commit, migration or connection
+occurs on import.
+
+`append(record)` returns its stable `LineageKey`; identical retries succeed
+without mutation, while conflicting content under one identity/version raises
+`LineageError`. `get(key)` returns the exact validated typed record, checking
+canonical document/content hashes and stored edges. `resolve((key, ...))`
+resolves and verifies exact dependencies with a hard maximum of 1,000 records;
+pass a lower `maximum_records` when appropriate. Returned objects can be fed
+directly into the existing #45 reconstruction APIs. Records use canonical
+`wire-1` payloads; unsupported versions and unknown types are rejected.
+
+The migration enforces referential integrity and blocks UPDATE, DELETE and
+TRUNCATE on records and edges. This is append-only application storage, not
+protection against a database administrator disabling triggers or replacing
+backups. Caller-owned transactions determine batch atomicity. Concurrent
+identical inserts use PostgreSQL conflict handling; conflicting content is
+rejected. Database transaction failures propagate without blind retries.
+
+The store retains normalized evidence, provider/adapter/schema and usage
+references, all contract timestamps, revision links and content digests.
+It does not store raw exchange archives or decide retention/deletion rights,
+deployment topology, continuous ingestion, or trading readiness. A migration
+downgrade destroys the new lineage tables and is appropriate only for a
+disposable test database or an explicitly approved restore plan.
+
+Product CI uses an isolated PostgreSQL 16 service to exercise migrations,
+readback/reconstruction, conflicting concurrent inserts, rollback and mutation
+rejection. Locally, integration tests require `LINEAGE_TEST_DATABASE_URL`
+pointing to a disposable loopback database named `lineage_test`; without it,
+those tests are explicitly skipped and must not be reported as database proof.
+The fixture upgrades and downgrades that database. Never point it at retained
+research data. The CI service's trust authentication is for that disposable
+runner only and is not a deployment configuration.
+
 ### Owner-authorized one-shot check
 
 Issue #282 records the owner's personal-use assumption and public symbol

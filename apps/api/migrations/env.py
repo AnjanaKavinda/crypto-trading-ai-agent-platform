@@ -4,8 +4,8 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import MetaData
-
+from trading_platform_api.audit.table import AuditBase
+from trading_platform_api.lineage.tables import metadata as lineage_metadata
 from trading_platform_api.persistence import (
     create_async_engine_instance,
     load_database_settings,
@@ -16,7 +16,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = MetaData()
+target_metadata = [AuditBase.metadata, lineage_metadata]
 
 
 def run_migrations_offline() -> None:
