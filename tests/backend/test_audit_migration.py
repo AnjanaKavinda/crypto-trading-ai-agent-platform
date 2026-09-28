@@ -88,14 +88,16 @@ def test_migration_lineage_and_single_head() -> None:
     scripts = ScriptDirectory.from_config(_config())
     assert migration.revision == "0002_audit_event_foundation"
     assert migration.down_revision == "0001_persistence_baseline"
-    assert scripts.get_heads() == ["0002_audit_event_foundation"]
+    assert scripts.get_heads() == ["0003_lineage_store"]
 
 
 def test_offline_upgrade_contains_only_audit_foundation_ddl(monkeypatch) -> None:
     output = io.StringIO()
     monkeypatch.setenv("DATABASE_URL", VALID_DATABASE_URL)
 
-    command.upgrade(_config(output_buffer=output), "head", sql=True)
+    command.upgrade(
+        _config(output_buffer=output), "0002_audit_event_foundation", sql=True
+    )
 
     sql = output.getvalue().upper()
     assert "CREATE TABLE AUDIT_EVENTS" in sql
