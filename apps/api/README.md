@@ -212,3 +212,40 @@ Tests use synthetic fixtures:
 ```bash
 python -m pytest -q tests/backend/test_derivatives_normalization.py
 ```
+
+## Deterministic Spot OHLCV quality (Issue #44)
+
+`market_data.quality.assess_data_quality` evaluates a supplied C-002 snapshot,
+its C-001 closed-candle observations and C-091 sources under an explicit
+versioned `DataQualityPolicy`. Its half-open UTC coverage window, candle
+interval, required OHLCV metrics and bounds, recent-slot freshness window and
+missing-interval allowance are caller-supplied. It emits C-003 only when all
+seven dimensions have measurable denominators. The caller must persist the
+policy version/parameters alongside the report for reproducibility; C-003 has
+no policy-version field. Nothing is fetched or made authoritative for risk.
+
+| C-003 dimension | Numerator / denominator |
+|---|---|
+| Completeness | supplied required metric cells / required cells in supplied observations |
+| Freshness | covered recent expected candle slots / expected recent slots |
+| Accuracy | supplied candles passing explicit bounds, OHLC relationships, positive price, nonnegative volume and common price unit / supplied candles |
+| Consistency | supplied candles matching identity, time order/alignment, closed-time retrieval and finality evidence / supplied candles |
+| Source reliability | supplied candles with matching C-091 source and snapshot provenance / supplied candles; measures **provenance presence**, not exchange honesty |
+| Coverage | observed valid slots / declared expected slots |
+| Continuity | adjacent pairs of observed slots / adjacent pairs of expected slots |
+
+One provider's own consistency is measurable; independent source agreement is
+**not** assessed. If the policy requires independent comparison or the caller
+cannot supply raw-candle finality evidence, assessment fails with no C-003
+verdict. C-001 does not preserve `is_final`, and the current Spot provider
+batch does not carry the normalizer's provisional-candle findings; callers
+must provide trusted finality identities from raw normalization before using
+the quality result. Empty observations or sources also fail without invented
+0/1 scores. Missing/incorrect identity and bounds produce invalid or
+unavailable status; absent recent slots produce stale; gaps exceeding the
+allowance produce incomplete; allowed gaps produce degraded. `VALID` does
+not authorize analysis, risk, approval or execution by itself.
+
+```bash
+python -m pytest -q tests/backend/test_data_quality.py
+```
