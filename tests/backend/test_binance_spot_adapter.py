@@ -44,6 +44,35 @@ def test_owner_smoke_bounds_closed_candles_and_recent_trades() -> None:
     assert trades.range_start is None and trades.range_end is None
 
 
+@pytest.mark.parametrize("base", ("BTC", "ETH", "BNB", "SOL", "XRP"))
+def test_research_watchlist_checks_exact_spot_metadata(base: str) -> None:
+    instrument = f"{base}-USDT-SPOT"
+    symbol = f"{base}USDT"
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.params["symbol"] == symbol
+        seen.append(req.url.path)
+        if req.url.path.endswith("exchangeInfo"):
+            info = metadata(symbol)
+            info["symbols"][0]["baseAsset"] = base  # type: ignore[index]
+            return httpx.Response(200, json=info)
+        assert req.url.path == "/api/v3/trades"
+        return httpx.Response(200, json=[trade()])
+
+    async def check() -> None:
+        async with client_for(handler) as client:
+            provider = BinanceSpotProvider(settings(), client=client, clock=lambda: NOW)
+            assert instrument in provider.descriptor.capabilities[0].instrument_ids
+            batch = await provider.fetch(
+                request(ProviderDataKind.TRADE, instrument_id=instrument)
+            )
+            assert batch.status is ProviderBatchStatus.COMPLETE
+
+    run(check())
+    assert seen == ["/api/v3/exchangeInfo", "/api/v3/trades"]
+
+
 def settings(**changes: object) -> BinanceSpotSettings:
     values = dict(
         enabled=True,
@@ -140,7 +169,7 @@ def test_disabled_and_scope_rejected_before_network() -> None:
             assert denied.value.code is ProviderFailureCode.LICENSING_RESTRICTED
             provider = BinanceSpotProvider(settings(), client=client, clock=lambda: NOW)
             for changes in (
-                dict(instrument_id="SOL-USDT-SPOT"),
+                dict(instrument_id="DOGE-USDT-SPOT"),
                 dict(venue_id="BINANCE-FUTURES"),
                 dict(data_kind=ProviderDataKind.ORDER_BOOK),
             ):
