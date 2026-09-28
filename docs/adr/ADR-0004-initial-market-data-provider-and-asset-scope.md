@@ -302,3 +302,22 @@ and the previously proposed affordable route in this conversation on
 merged, this record is a proposed change to `dev`. After merge it authorizes
 the bounded adapter design stated above, subject to separate network-use
 gates; it grants no license, customer access or trading authority.
+
+## Proposed watchlist amendment — 2026-09-28
+
+The owner requested a fixed five-symbol personal-research watchlist. Subject
+to human review and merge of the implementing PR, the earlier two-symbol
+restriction in this ADR is amended **only** for the Binance Spot OHLCV/trade
+adapter: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT and XRPUSDT. The first two retain
+their priority. BNB, SOL and XRP offer three distinct, established base assets
+for comparative research; this selection does not assert a timeless liquidity
+rank, improved trade quality, more trades or profitability. The list is fixed
+for reproducible experiments and must be versioned if changed again.
+
+Each symbol requires its own live `exchangeInfo` check for exact base/quote,
+`TRADING` status and Spot permission before collection. Missing or ineligible
+metadata fails that symbol closed. Network requests and data retention grow
+with symbol count; the existing bounded one-shot smoke covers all five, while
+the optional archive/stream check remains BTCUSDT only. The other scope,
+rights, regional, $100/month and no-execution conditions above continue to
+apply. This is still one exchange source, without independent corroboration.

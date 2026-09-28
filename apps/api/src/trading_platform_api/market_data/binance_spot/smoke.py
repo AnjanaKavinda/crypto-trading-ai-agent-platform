@@ -13,6 +13,7 @@ from trading_platform_api.market_data.binance_spot import (
     BinanceSpotProvider,
     BinanceSpotSettings,
 )
+from trading_platform_api.market_data.binance_spot.adapter import _SYMBOLS
 from trading_platform_api.market_data.providers import (
     MarketDataRequest,
     ProviderBatch,
@@ -56,7 +57,7 @@ def _summary(path: str, instrument: str, batch: ProviderBatch) -> dict[str, obje
 async def _run(settings: BinanceSpotSettings, archive: bool) -> list[dict[str, object]]:
     provider = BinanceSpotProvider(settings)
     results: list[dict[str, object]] = []
-    for instrument in ("BTC-USDT-SPOT", "ETH-USDT-SPOT"):
+    for instrument in _SYMBOLS:
         for kind in (ProviderDataKind.OHLCV, ProviderDataKind.TRADE):
             batch = await provider.fetch(_request(instrument, kind))
             if (
