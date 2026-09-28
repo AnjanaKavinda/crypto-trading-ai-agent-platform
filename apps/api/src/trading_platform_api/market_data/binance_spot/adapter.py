@@ -54,7 +54,13 @@ from trading_platform_api.structured_logging import (
     build_structured_log_entry,
 )
 
-_SYMBOLS = {"BTC-USDT-SPOT": ("BTCUSDT", "BTC"), "ETH-USDT-SPOT": ("ETHUSDT", "ETH")}
+_SYMBOLS = {
+    "BTC-USDT-SPOT": ("BTCUSDT", "BTC"),
+    "ETH-USDT-SPOT": ("ETHUSDT", "ETH"),
+    "BNB-USDT-SPOT": ("BNBUSDT", "BNB"),
+    "SOL-USDT-SPOT": ("SOLUSDT", "SOL"),
+    "XRP-USDT-SPOT": ("XRPUSDT", "XRP"),
+}
 _REST_ORIGIN = "https://data-api.binance.vision"
 _STREAM_ORIGIN = "wss://stream.binance.com:9443"
 _VENUE = "BINANCE-SPOT"
@@ -233,7 +239,7 @@ class BinanceSpotProvider:
             realtime_support=CapabilitySupport.SUPPORTED,
             rate_limit=RateLimitPolicy(RateLimitKnowledge.UNKNOWN),
             market_types=("spot",),
-            asset_ids=("BTC", "ETH"),
+            asset_ids=tuple(base for _, base in _SYMBOLS.values()),
             instrument_ids=tuple(_SYMBOLS),
             freshness_target_seconds=30,
         )
