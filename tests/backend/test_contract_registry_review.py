@@ -117,10 +117,10 @@ def test_registry_classifies_every_canonical_contract() -> None:
     registry = _registry_rows()
     owners = _canonical_owners()
 
-    assert set(registry) == {f"C-{number:03d}" for number in range(1, 101)}
-    assert len(set(registry.values())) == 100
+    assert set(registry) == {f"C-{number:03d}" for number in range(1, 104)}
+    assert len(set(registry.values())) == 103
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 92
+    assert len(owners) == 95
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
