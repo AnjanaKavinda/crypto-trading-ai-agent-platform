@@ -159,7 +159,8 @@ python -m pytest -q tests/backend/test_binance_spot_adapter.py
 ```
 
 No external-data test runs by default. A later opt-in integration session must
-record terms and regional eligibility, confirm live BTCUSDT/ETHUSDT metadata,
+record terms and regional eligibility, confirm live BTCUSDT, ETHUSDT,
+BNBUSDT, SOLUSDT and XRPUSDT metadata,
 exercise public REST and WebSocket endpoints, inspect archive checksum and
 microsecond timestamp behavior, and retain a non-secret evidence reference.
 Until then, do not enable collection. Historical gaps, archive revisions and
@@ -176,7 +177,7 @@ access, install the package with `python -m pip install -e .` and run:
     python -m trading_platform_api.market_data.binance_spot.smoke --terms-ref issue-282-terms-review-20260928 --region-ref issue-282-region-preflight-20260927 --preflight-ref issue-282-region-preflight-20260927 --archive
 
 This command creates an enabled provider for this invocation only. It checks
-two closed one-minute candles and two recent trades for each approved symbol,
+two closed one-minute candles and two recent trades for each of five approved symbols,
 consumes two BTCUSDT trade-stream messages, and optionally checks one
 published BTCUSDT daily kline archive (two UTC days old) with the adapter's
 checksum verification. It stops after bounded reads or a 120-second deadline.
