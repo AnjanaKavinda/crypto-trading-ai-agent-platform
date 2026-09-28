@@ -121,6 +121,19 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-098 | AgentPermissionPolicy | Security Governance | Orchestrator, Safety, Audit | Versioned least-privilege authority ceiling that runtime profiles cannot exceed. |
 | C-099 | SafetyIncidentReport | Security | Safety, Operations, Governance, Audit | Immutable incident scope/evidence/response status with no silent suppression. |
 | C-100 | ChampionChallengerRecord | Evaluation | Validation, Governance, Registry, Audit | Versioned champion/challenger comparison record; cannot authorize automatic production promotion. |
+| C-101 | HistoricalUniverse | Data | Research, Validation | Complete, source-bound, versioned membership with separate effective and knowledge intervals; retain delisted instruments historically. |
+| C-102 | ObservationRevision | Data | Research, Validation | Immutable observation identity and explicit supersession ancestry; later availability cannot leak into earlier cutoffs. |
+| C-103 | ReconstructionManifest | Data | Research, Validation, Audit | Pins universe, selected revisions, ancestry/source hashes, dataset version and deterministic selection policy. |
+
+Issue #45 additive extension: owner approval on 2026-09-28. C-101–C-103 start
+at schema `1`; C-001–C-100 retain their existing layouts and IDs.
+`HistoricalEvidencePin` is an embedded value object. `HistoricalReconstruction`
+is an internal result, not an additional canonical contract. Universe/source
+completeness must originate in trusted ingestion; these contracts cannot prove
+external provider truth or that a caller omitted no history. C-101 is pinned
+explicitly, never selected from today's watchlist. C-102 keys include provider,
+venue, instrument, kind, stable observation key and event time. The only initial
+ordering policy is `explicit-supersedes-v1`; no guessed numeric/lexical ordering.
 
 ## Canonical name / alias / supersession clarifications
 

@@ -27,6 +27,16 @@ from trading_platform_api.market_data.derivatives import (
     RawDerivativesObservation,
     normalize_derivatives,
 )
+from trading_platform_api.market_data.history_contracts import (
+    HistoricalEvidencePin,
+    HistoricalUniverse,
+    ObservationRevision,
+    ReconstructionManifest,
+)
+from trading_platform_api.market_data.history_selection import (
+    HistoricalReconstruction,
+    reconstruct_history,
+)
 from trading_platform_api.market_data.ohlcv import (
     CandleNormalizationError,
     CandlePolicy,
@@ -91,6 +101,12 @@ from trading_platform_api.market_data.trades import (
 )
 
 __all__ = [
+    "HistoricalEvidencePin",
+    "HistoricalUniverse",
+    "ObservationRevision",
+    "ReconstructionManifest",
+    "HistoricalReconstruction",
+    "reconstruct_history",
     "DataQualityAssessmentError",
     "DataQualityPolicy",
     "MetricBound",

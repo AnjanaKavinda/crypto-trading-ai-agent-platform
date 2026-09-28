@@ -63,3 +63,31 @@ and release must resolve the exact version IDs and hashes for the governed
 artifacts it depended on. Pointer changes such as activation, retirement, or
 rollback are new auditable records layered on top of immutable version records,
 never history rewrites.
+
+## Issue #45 historical evidence extension
+
+C-101 HistoricalUniverse, C-102 ObservationRevision and C-103
+ReconstructionManifest are additive schema-1 contracts approved by the owner
+on 2026-09-28. Existing contract/schema and payload versions are unchanged.
+They use the existing canonical JSON and SHA-256 machinery; no migration of
+stored legacy payloads is required. Older consumers must reject unknown
+contract IDs rather than interpret these as legacy dataset records.
+
+Universe effective intervals are half-open; publication/ingestion/availability
+times remain separate. A complete universe version is selected by a trusted
+pin, and older memberships remain immutable after delisting. Revision chains
+must have one root, explicit predecessors, no forks/cycles, and nondecreasing
+publication/ingestion/availability times. Equal timestamps are resolved only
+by explicit ancestry. Missing ancestry blocks reconstruction.
+
+`historical-selection-v1` filters by availability at the requested cutoff,
+then selects chain tips within the pinned universe. The manifest hashes the
+universe, all eligible revision ancestry, source records, selected revision
+IDs and C-092 reference/lineage. Later unavailable revisions do not enter an
+earlier manifest. Selection coverage requires an observation for every member;
+it does not certify continuous per-timeframe coverage (C-003 remains required).
+Trusted upstream provenance must establish completeness, authentic finality,
+and stable observation keys. C-092 source membership includes the universe
+and eligible ancestry used to make the selection; unrelated/future sources
+cannot silently enter that exact dataset. #46 owns persistence and immutable
+ID/content binding, not new selection semantics.
