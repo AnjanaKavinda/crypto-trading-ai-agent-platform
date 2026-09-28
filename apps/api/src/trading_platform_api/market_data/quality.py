@@ -19,7 +19,11 @@ from trading_platform_api.market_data.contracts import (
     MarketData,
     MarketSnapshot,
 )
-from trading_platform_api.market_data.providers import ProviderDataKind
+from trading_platform_api.market_data.providers import (
+    ProviderBatch,
+    ProviderBatchStatus,
+    ProviderDataKind,
+)
 
 
 class DataQualityAssessmentError(ValueError):
@@ -362,4 +366,43 @@ def assess_data_quality(
         invalid_record_ids=tuple(dict.fromkeys(invalid_ids)),
         duplicate_record_ids=tuple(dict.fromkeys(duplicate_ids)),
         anomalies=tuple(dict.fromkeys(anomalies)),
+    )
+
+
+def assess_complete_binance_spot_batch(
+    batch: ProviderBatch, policy: DataQualityPolicy, *, assessed_at: datetime
+) -> DataQualityReport:
+    """Bind one known adapter's COMPLETE candle guarantee to finality IDs.
+
+    BinanceSpotAdapter v1 emits PARTIAL plus a warning for provisional
+    candles; a future adapter version needs its own reviewed handoff. A
+    caller-supplied generic ProviderBatch never gains this privilege.
+    """
+    if (
+        type(batch) is not ProviderBatch
+        or batch.provider_id != "binance-spot-public"
+        or batch.provider_version != "spot-api-2026-09"
+        or batch.data_kind is not ProviderDataKind.OHLCV
+        or batch.status is not ProviderBatchStatus.COMPLETE
+        or batch.warnings
+        or len(batch.snapshots) != 1
+        or not batch.market_data
+        or any(
+            source.adapter_version != "binance-spot-adapter-v1"
+            or source.provider_id != batch.provider_id
+            for source in batch.source_records
+        )
+    ):
+        raise DataQualityAssessmentError(
+            "Complete trusted Spot candle batch is required."
+        )
+    return assess_data_quality(
+        batch.snapshots[0],
+        batch.market_data,
+        batch.source_records,
+        policy,
+        assessed_at=assessed_at,
+        finalized_market_data_ids=tuple(
+            item.market_data_id for item in batch.market_data
+        ),
     )

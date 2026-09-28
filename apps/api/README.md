@@ -235,12 +235,14 @@ no policy-version field. Nothing is fetched or made authoritative for risk.
 | Continuity | adjacent pairs of observed slots / adjacent pairs of expected slots |
 
 One provider's own consistency is measurable; independent source agreement is
-**not** assessed. If the policy requires independent comparison or the caller
-cannot supply raw-candle finality evidence, assessment fails with no C-003
-verdict. C-001 does not preserve `is_final`, and the current Spot provider
-batch does not carry the normalizer's provisional-candle findings; callers
-must provide trusted finality identities from raw normalization before using
-the quality result. Empty observations or sources also fail without invented
+**not** assessed. If the policy requires independent comparison or a generic
+caller cannot supply raw-candle finality evidence, assessment fails with no
+C-003 verdict. C-001 does not preserve `is_final`. For the pinned Binance
+Spot adapter v1 only, `assess_complete_binance_spot_batch` accepts a COMPLETE
+OHLCV batch because that adapter marks any provisional candle PARTIAL with a
+warning. PARTIAL, EMPTY, unknown adapter versions and warning-bearing batches
+fail closed; future versions need a reviewed equivalent. Empty observations
+or sources also fail without invented
 0/1 scores. Missing/incorrect identity and bounds produce invalid or
 unavailable status; absent recent slots produce stale; gaps exceeding the
 allowance produce incomplete; allowed gaps produce degraded. `VALID` does

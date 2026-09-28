@@ -17,7 +17,10 @@ from trading_platform_api.market_data import (
     MarketSnapshot,
     MetricBound,
     MetricValue,
+    ProviderBatch,
+    ProviderBatchStatus,
     ProviderDataKind,
+    assess_complete_binance_spot_batch,
     assess_data_quality,
 )
 
@@ -298,3 +301,55 @@ def test_dataset_identity_and_lineage_must_match_snapshot() -> None:
         dataset=bad_lineage,
     )
     assert result.status is DataQualityStatus.INVALID
+
+
+def test_known_complete_spot_batch_can_supply_finality_without_a_contract_change() -> (
+    None
+):
+    snapshot, observations, sources, _ = evidence()
+    known_sources = tuple(
+        replace(
+            s,
+            provider_id="binance-spot-public",
+            provider_version="spot-api-2026-09",
+            adapter_version="binance-spot-adapter-v1",
+        )
+        for s in sources
+    )
+    batch = ProviderBatch(
+        uuid4(),
+        "binance-spot-public",
+        "spot-api-2026-09",
+        ProviderDataKind.OHLCV,
+        ProviderBatchStatus.COMPLETE,
+        CUTOFF,
+        CUTOFF + timedelta(seconds=30),
+        known_sources,
+        observations,
+        (snapshot,),
+    )
+    assert (
+        assess_complete_binance_spot_batch(batch, policy(), assessed_at=CUTOFF).status
+        is DataQualityStatus.VALID
+    )
+    with pytest.raises(DataQualityAssessmentError, match="Complete trusted"):
+        assess_complete_binance_spot_batch(
+            replace(
+                batch,
+                status=ProviderBatchStatus.PARTIAL,
+                warnings=("Provisional candle present.",),
+            ),
+            policy(),
+            assessed_at=CUTOFF,
+        )
+    with pytest.raises(DataQualityAssessmentError, match="Complete trusted"):
+        assess_complete_binance_spot_batch(
+            replace(
+                batch,
+                source_records=tuple(
+                    replace(s, adapter_version="v2") for s in known_sources
+                ),
+            ),
+            policy(),
+            assessed_at=CUTOFF,
+        )
