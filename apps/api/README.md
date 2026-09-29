@@ -345,3 +345,17 @@ not authorize analysis, risk, approval or execution by itself.
 ```bash
 python -m pytest -q tests/backend/test_data_quality.py
 ```
+
+## Spot research indicator metadata (Issue #49)
+
+`analysis.indicator_registry.SPOT_RESEARCH_INDICATORS` is an immutable, exact-version
+metadata catalog for planned EMA 20/50 and ATR 14. It describes inputs, parameters,
+minimum warm-up, output shape, regimes, weaknesses and correlated evidence. All
+three entries are **planned and unavailable**: this registry computes no value,
+consumes no provider data and makes no analysis or trading claim. The minimum
+warm-up counts are catalog requirements; #50 and #52 must review exact formulas,
+initialization and gap handling before any result can be marked validated.
+
+```bash
+PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_indicator_registry.py
+```
