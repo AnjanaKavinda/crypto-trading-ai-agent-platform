@@ -12,7 +12,9 @@ contradict an approved contract or cross-cutting artifact.
 |---|---|---|---|---|---|---|---|---|
 | ADR-0001 | [Governed Copilot development orchestration](ADR-0001-governed-copilot-development-orchestration.md) | Accepted | 2026-09-02 | Platform Architect / AnjanaKavinda | — | None | — | — |
 | ADR-0002 | [Vendor-neutral LLM provider and model routing policy](ADR-0002-vendor-neutral-llm-provider-model-routing.md) | Accepted | 2026-09-06 | Platform Architect / AnjanaKavinda | OD-0010 | Independent AI reviewer execution contract V1 | — | — |
+| ADR-0003 | [PostgreSQL, SQLAlchemy async, and Alembic persistence foundation](ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) | Accepted | 2026-09-09 | Platform Architect / AnjanaKavinda | OD-0008 | Persistence foundation only | — | — |
 | ADR-0004 | [Initial market-data provider and asset scope](ADR-0004-initial-market-data-provider-and-asset-scope.md) | Accepted | 2026-09-27 | Platform Architect / AnjanaKavinda (manual merge) | OD-0003, OD-0004 (bounded personal data slice only) | C-001/C-002/C-003/C-091/C-092 (no change) | — | — |
+| ADR-0005 | [Personal Spot market-history storage and retention](ADR-0005-personal-spot-market-history-retention.md) | Accepted | 2026-09-29 | Platform Architect / AnjanaKavinda (explicit owner approval) | OD-0008, OD-0017 (bounded personal OHLCV scope) | C-001/C-002/C-003/C-091 (no semantics changed) | — | — |
 
 ## Creating an ADR
 

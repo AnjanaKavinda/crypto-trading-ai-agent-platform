@@ -14,9 +14,13 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from test_history_selection import history
+from test_lineage_quality import records_for_report
 from test_point_in_time import evidence
 from trading_platform_api.lineage.codec import LineageError, encode, key_for
-from trading_platform_api.lineage.store import SqlAlchemyLineageStore
+from trading_platform_api.lineage.store import (
+    SqlAlchemyLineageStore,
+    append_validated_market_snapshot,
+)
 from trading_platform_api.lineage.tables import links, records
 from trading_platform_api.market_data.contracts import DatasetVersionReference
 from trading_platform_api.market_data.history_selection import reconstruct_history
@@ -233,6 +237,35 @@ def test_postgresql_legacy_snapshot_roundtrip(database_url):
                 assert reconstruct_pinned_snapshot(
                     **replay
                 ) == reconstruct_pinned_snapshot(**args)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(check())
+
+
+def test_postgresql_valid_quality_report_is_linked_and_replayable(database_url):
+    async def check():
+        engine = create_async_engine(database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        sources, observations, snapshot, quality = records_for_report()
+        try:
+            async with sessions.begin() as session:
+                store = SqlAlchemyLineageStore(session)
+                await append_validated_market_snapshot(
+                    store,
+                    sources=sources,
+                    observations=observations,
+                    snapshot=snapshot,
+                    quality=quality,
+                )
+            async with sessions() as session:
+                store = SqlAlchemyLineageStore(session)
+                graph = await store.resolve((key_for(quality),))
+                assert graph[key_for(quality)] == quality
+                assert graph[key_for(snapshot)] == snapshot
+                assert all(graph[key_for(item)] == item for item in observations)
+                assert all(graph[key_for(item)] == item for item in sources)
+                assert len(graph) == len(sources) + len(observations) + 2
         finally:
             await engine.dispose()
 

@@ -215,19 +215,26 @@ durable provenance storage; these controls do not implement a full backtester.
 
 ### Durable lineage evidence (Issue #46)
 
-`lineage.store.SqlAlchemyLineageStore` persists validated C-001/C-002,
+`lineage.store.SqlAlchemyLineageStore` persists C-001/C-002/C-003,
 C-091/C-092 and C-101/C-102/C-103 records in PostgreSQL. Apply the reviewed
-`0003_lineage_store` migration with the existing Alembic configuration:
+`0004_lineage_quality_reports` migration with the existing Alembic configuration:
 
     python -m alembic -c apps/api/alembic.ini upgrade head
 
 Supply `DATABASE_URL` through the existing configuration mechanism; do not
 commit or print credentials. Construct the store with an explicit async
 session inside the existing transaction context. Append sources first, then
-observations/datasets/universes, revisions in ancestry order, and finally
-snapshots/manifests. Every referenced record must already exist in the same
+observations/datasets/universes, revisions in ancestry order, then
+snapshots/manifests and their C-003 quality reports. Every referenced record must already exist in the same
 transaction or be committed. No automatic commit, migration or connection
 occurs on import.
+
+`append_validated_market_snapshot(...)` appends source records, ordered
+observations, their C-002 snapshot and exact C-003 report in that order. It
+rejects any non-VALID report, identity/cutoff mismatch, source mismatch or
+observation order mismatch before writing. The caller must obtain C-003 from
+the reviewed quality assessor and own the surrounding transaction. This
+helper does not itself authenticate provider data or create a quality verdict.
 
 `append(record)` returns its stable `LineageKey`; identical retries succeed
 without mutation, while conflicting content under one identity/version raises
@@ -246,11 +253,13 @@ identical inserts use PostgreSQL conflict handling; conflicting content is
 rejected. Database transaction failures propagate without blind retries.
 
 The store retains normalized evidence, provider/adapter/schema and usage
-references, all contract timestamps, revision links and content digests.
-It does not store raw exchange archives or decide retention/deletion rights,
-deployment topology, continuous ingestion, or trading readiness. A migration
-downgrade destroys the new lineage tables and is appropriate only for a
-disposable test database or an explicitly approved restore plan.
+references, all contract timestamps, revision links and content digests. It
+does not store raw exchange archives or implement the 90-day hot / five-year
+cold archival and backup lifecycle approved in ADR-0005; that remains open in
+#47. Production topology, continuous ingestion and trading readiness also
+remain out of scope. A migration downgrade destroys the lineage tables and is
+appropriate only for a disposable test database or an explicitly approved
+restore plan.
 
 Product CI uses an isolated PostgreSQL 16 service to exercise migrations,
 readback/reconstruction, conflicting concurrent inserts, rollback and mutation
