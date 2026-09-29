@@ -5,6 +5,7 @@ import types
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any, get_args, get_origin, get_type_hints
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from trading_platform_api.contracts.serialization import (
     serialize_contract,
 )
 from trading_platform_api.market_data.contracts import (
+    DataQualityReport,
     DatasetVersion,
     DataSourceRecord,
     MarketData,
@@ -28,6 +30,7 @@ from trading_platform_api.market_data.history_contracts import (
 MODELS = {
     "C-001": MarketData,
     "C-002": MarketSnapshot,
+    "C-003": DataQualityReport,
     "C-091": DataSourceRecord,
     "C-092": DatasetVersion,
     "C-101": HistoricalUniverse,
@@ -64,6 +67,8 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-001", str(record.market_data_id))
     if type(record) is MarketSnapshot:
         return LineageKey("C-002", str(record.snapshot_id))
+    if type(record) is DataQualityReport:
+        return LineageKey("C-003", str(record.report_id))
     if type(record) is DataSourceRecord:
         return LineageKey("C-091", str(record.source_record_id))
     if type(record) is DatasetVersion:
@@ -107,6 +112,13 @@ def _decode(kind: Any, value: Any) -> Any:
         if type(value) is not str:
             raise LineageError("Expected canonical scalar string.")
         return datetime.fromisoformat(value) if kind is datetime else kind(value)
+    if isinstance(kind, type) and issubclass(kind, Enum):
+        if type(value) is not str:
+            raise LineageError("Expected canonical enum string.")
+        try:
+            return kind(value)
+        except ValueError as exc:
+            raise LineageError("Unknown canonical enum value.") from exc
     if isinstance(kind, type) and is_dataclass(kind):
         if type(value) is not dict or set(value) != {f.name for f in fields(kind)}:
             raise LineageError("Contract payload fields do not match.")

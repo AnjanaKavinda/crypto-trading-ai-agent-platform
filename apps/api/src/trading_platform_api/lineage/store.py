@@ -1,5 +1,7 @@
 """Append-only PostgreSQL store with caller-owned transaction boundaries."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from hashlib import sha256
 
@@ -17,7 +19,10 @@ from trading_platform_api.lineage.codec import (
 )
 from trading_platform_api.lineage.tables import links, records
 from trading_platform_api.market_data.contracts import (
+    DataQualityReport,
+    DataQualityStatus,
     DatasetVersion,
+    DataSourceRecord,
     MarketData,
     MarketSnapshot,
 )
@@ -37,6 +42,8 @@ class Reference:
 
 def references(record: object) -> tuple[Reference, ...]:
     result: list[Reference] = []
+    if type(record) is DataQualityReport:
+        result.append(Reference(LineageKey("C-002", str(record.snapshot_id))))
     if type(record) is MarketData:
         result.append(Reference(LineageKey("C-091", str(record.source_record_id))))
     if isinstance(record, (MarketSnapshot, DatasetVersion, HistoricalUniverse)):
@@ -94,6 +101,58 @@ def references(record: object) -> tuple[Reference, ...]:
     if len(result) > 1000:
         raise LineageError("Lineage references exceed the bounded read budget.")
     return tuple(result)
+
+
+async def append_validated_market_snapshot(
+    store: SqlAlchemyLineageStore,
+    *,
+    sources: tuple[DataSourceRecord, ...],
+    observations: tuple[MarketData, ...],
+    snapshot: MarketSnapshot,
+    quality: DataQualityReport,
+) -> tuple[LineageKey, ...]:
+    """Append a bounded VALID market snapshot and its exact quality report.
+
+    The caller owns the transaction. A VALID verdict, exact ordered snapshot
+    membership and exact source membership are required before any writes.
+    The quality assessor remains the authority for producing the report.
+    """
+    if (
+        not isinstance(store, SqlAlchemyLineageStore)
+        or type(sources) is not tuple
+        or not sources
+        or len(sources) > 100
+        or not all(type(item) is DataSourceRecord for item in sources)
+        or type(observations) is not tuple
+        or not observations
+        or len(observations) > 998
+        or not all(type(item) is MarketData for item in observations)
+        or type(snapshot) is not MarketSnapshot
+        or type(quality) is not DataQualityReport
+    ):
+        raise LineageError("Invalid bounded validated-market snapshot input.")
+    source_ids = tuple(item.source_record_id for item in sources)
+    if (
+        quality.status is not DataQualityStatus.VALID
+        or quality.snapshot_id != snapshot.snapshot_id
+        or quality.required_data_cutoff != snapshot.as_of
+        or tuple(item.market_data_id for item in observations)
+        != snapshot.market_data_ids
+        or source_ids != snapshot.source_record_ids
+        or not {item.source_record_id for item in observations}.issubset(
+            set(source_ids)
+        )
+        or any(
+            item.instrument_id != snapshot.instrument_id
+            or item.venue_id != snapshot.venue_id
+            for item in observations
+        )
+    ):
+        raise LineageError(
+            "Only an exact matching VALID quality snapshot can be persisted."
+        )
+    records_to_append = (*sources, *observations, snapshot, quality)
+    return tuple([await store.append(record) for record in records_to_append])
 
 
 def _identity(key: LineageKey) -> dict[str, str]:

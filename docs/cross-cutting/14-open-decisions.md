@@ -17,7 +17,7 @@ decision scope as open.
 | OD-0005 | On-chain providers | Open | On-chain data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0006 | News/social providers and licensing | Open | Sentiment data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0007 | Event-streaming technology | Open | Event contracts and platform architecture; Chats 2, 4 | Human repository owner | — | — |
-| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (Accepted relational foundation only; topology remains open) | — |
+| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (relational foundation only); [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot storage; production topology remains open) | — |
 | OD-0009 | Vector-memory technology and retention | Open | Learning and retention; Chats 10, 13 | Human repository owner | — | — |
 | OD-0010 | LLM provider/model routing policy | Resolved | AI governance and security; Chats 3, 10, 13 | Human repository owner | [ADR-0002](../adr/ADR-0002-vendor-neutral-llm-provider-model-routing.md) (Accepted) | 2026-09-06 |
 | OD-0011 | Backtesting engine implementation choice | Open | Quantitative validation; Chat 7 | Human repository owner | — | — |
@@ -26,7 +26,7 @@ decision scope as open.
 | OD-0014 | Secrets manager | Open | Secrets management and security; Chat 10 | Human repository owner | — | — |
 | OD-0015 | Notification providers including WhatsApp integration | Open | Human supervision and notifications; Chats 9, 11 | Human repository owner | — | — |
 | OD-0016 | Observability stack | Open | Auditability and observability; Chat 10 | Human repository owner | — | — |
-| OD-0017 | Production data-retention policy | Open | Data governance and auditability; Chats 4, 10, 13 | Human repository owner | — | — |
+| OD-0017 | Production data-retention policy | Open | Data governance and auditability; Chats 4, 10, 13 | Human repository owner | [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot OHLCV policy only; production policy remains open) | — |
 | OD-0018 | Regional/legal operating constraints | Open | Product and deployment governance; Chats 1, 10 | Human repository owner | — | — |
 | OD-0019 | Multi-exchange portfolio aggregation | Open | Portfolio and exchange architecture; Chats 8, 9 | Human repository owner | — | — |
 | OD-0020 | Cross-exchange arbitrage scope | Open | Strategy and execution scope; Chats 6, 9 | Human repository owner | — | — |
@@ -70,3 +70,24 @@ OD-0008 remains `Open` because the broader storage decision is still unresolved,
 including time-series technology/extensions, production topology, replicas,
 sharding, pooling/tuning, retention, tenancy, domain-schema ownership, and
 vector storage. Implementation must not silently select those deferred areas.
+
+On 2026-09-29 the human repository owner accepted
+[`ADR-0005`](../adr/ADR-0005-personal-spot-market-history-retention.md) for a
+bounded one-user Spot OHLCV storage slice: PostgreSQL hot history, immutable
+compressed cold archive, and encrypted versioned off-device backups. This does
+not resolve production topology, time-series extensions, tenancy, or other
+data-kind storage.
+
+## OD-0017 bounded accepted sub-decision
+
+On 2026-09-29 the human repository owner accepted
+[`ADR-0005`](../adr/ADR-0005-personal-spot-market-history-retention.md) for
+personal Spot OHLCV only: 90-day hot PostgreSQL retention, at least five years
+in immutable cold archive, and longer retention while an analysis, experiment
+or backtest references the inputs. Lineage references remain resolvable and
+must not be deleted by a cache TTL. Daily encrypted, versioned off-device
+backups are subject to the approved personal cost caps.
+
+OD-0017 remains `Open` for production retention, other market-data kinds,
+customer data, audit/security records, and any changed operating or legal
+requirements. Those scopes require their own reviewed disposition.

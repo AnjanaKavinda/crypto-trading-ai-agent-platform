@@ -21,7 +21,7 @@ records = Table(
     Column("document_sha256", String(64), nullable=False),
     Column("evidence_sha256", String(64), nullable=False),
     CheckConstraint(
-        "contract_id IN ('C-001','C-002','C-091','C-092','C-101','C-102','C-103')",
+        "contract_id IN ('C-001','C-002','C-003','C-091','C-092','C-101','C-102','C-103')",
         name="ck_lineage_contract",
     ),
     CheckConstraint(
