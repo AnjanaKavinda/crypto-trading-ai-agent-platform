@@ -348,13 +348,11 @@ python -m pytest -q tests/backend/test_data_quality.py
 
 ## Spot research indicator metadata (Issue #49)
 
-`analysis.indicator_registry.SPOT_RESEARCH_INDICATORS` is an immutable, exact-version
-metadata catalog for planned EMA 20/50 and ATR 14. It describes inputs, parameters,
-minimum warm-up, output shape, regimes, weaknesses and correlated evidence. All
-three entries are **planned and unavailable**: this registry computes no value,
-consumes no provider data and makes no analysis or trading claim. The minimum
-warm-up counts are catalog requirements; #50 and #52 must review exact formulas,
-initialization and gap handling before any result can be marked validated.
+`analysis.indicator_registry.SPOT_RESEARCH_INDICATORS` is an immutable,
+exact-version metadata catalog for EMA, ATR, Bollinger and realized-volatility
+methods. It describes inputs, parameters, warm-up, output shape, regimes,
+failure modes and correlated evidence. Metadata does not itself calculate an
+indicator or establish data authenticity.
 
 ```bash
 PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_indicator_registry.py
@@ -377,8 +375,35 @@ storage, C-012 evidence assembly, signal or trading endpoint is added here.
 
 The #49 EMA 20/50 metadata version 1 remains historically planned. Version 2
 declares the reviewed EMA formula; generic SMA/EMA/WMA metadata version 1
-defines parameter bounds. ATR 14 remains planned until #52.
+defines parameter bounds.
 
 ```bash
 PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_moving_averages.py
+```
+
+## Deterministic Spot volatility measures (Issue #52)
+
+`analysis.volatility` provides ATR-14 using 14 true ranges, seeded with their
+arithmetic mean and then Wilder's recurrence; the first true range uses the
+second candle's high/low and prior close. Bollinger bands use a trailing close
+mean, population standard deviation and fixed 2σ multiplier. Bandwidth is
+`(upper - lower) / middle`; expansion/compression/unchanged is an exact
+comparison with the prior bandwidth and is descriptive context only. Annualized
+realized volatility uses sample standard deviation of close-to-close log
+returns, multiplied by the square root of continuous-market periods per year
+(365 days). Its unit is an annualized fraction, not a percentage or implied
+volatility.
+
+All functions require ordered contiguous closed OHLCV from the exact C-002
+snapshot and a matching VALID C-003 report. They preserve source IDs, method
+version and as-of metadata, return `None` during warm-up, and fail closed for
+invalid quality, mismatched units, malformed candles, unavailable data or
+unsupported periods/timeframes. Decimal operations use precision 34 for these
+volatility formulas. The outputs do not classify high/low regimes, set
+thresholds, size positions, infer a strategy or authorize trades. Realized
+volatility is historical close-return dispersion; implied volatility and
+historical percentile/regime analysis remain out of scope.
+
+```bash
+PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_volatility.py
 ```

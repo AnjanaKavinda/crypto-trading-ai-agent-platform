@@ -20,6 +20,9 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         "ema-20",
         "ema-50",
         "atr-14",
+        "bollinger-bands",
+        "bollinger-bandwidth",
+        "realized-volatility",
     }
     for item in entries:
         assert item.output_nullable
@@ -33,6 +36,9 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     )
     assert SPOT_RESEARCH_INDICATORS.get("atr-14", "1").minimum_warmup_candles == 15
     assert SPOT_RESEARCH_INDICATORS.get("atr-14", "1").phase is IndicatorPhase.PLANNED
+    assert SPOT_RESEARCH_INDICATORS.get("atr-14", "2").phase is IndicatorPhase.VALIDATED
+    for name in ("bollinger-bands", "bollinger-bandwidth", "realized-volatility"):
+        assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.VALIDATED
     for name in ("ema-20", "ema-50"):
         assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.PLANNED
         assert SPOT_RESEARCH_INDICATORS.get(name, "2").phase is IndicatorPhase.VALIDATED

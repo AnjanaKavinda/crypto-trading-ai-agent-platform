@@ -17,6 +17,17 @@ from trading_platform_api.analysis.moving_averages import (
     MovingAverageSeries,
     calculate_moving_average,
 )
+from trading_platform_api.analysis.volatility import (
+    BandWidthDirection,
+    BollingerPoint,
+    BollingerSeries,
+    VolatilityError,
+    VolatilityPoint,
+    VolatilitySeries,
+    calculate_atr14,
+    calculate_bollinger_bands,
+    calculate_realized_volatility,
+)
 
 __all__ = [
     *_contract_exports,
@@ -33,4 +44,13 @@ __all__ = [
     "MovingAveragePoint",
     "MovingAverageSeries",
     "calculate_moving_average",
+    "BandWidthDirection",
+    "BollingerPoint",
+    "BollingerSeries",
+    "VolatilityError",
+    "VolatilityPoint",
+    "VolatilitySeries",
+    "calculate_atr14",
+    "calculate_bollinger_bands",
+    "calculate_realized_volatility",
 ]
