@@ -333,6 +333,10 @@ def assess_data_quality(
         ),
     )
     fresh_count = len(observed_slots & set(range(expected - recent_slots, expected)))
+    # An internally complete historical window is still stale for a later
+    # decision cutoff. Slot coverage alone cannot establish current freshness.
+    if cutoff - policy.coverage_end > timedelta(seconds=policy.freshness_seconds):
+        fresh_count = 0
 
     # Each dimension describes a measured fraction of supplied/expected facts.
     completeness = _ratio(valid_cells, len(observations) * len(policy.required_metrics))
