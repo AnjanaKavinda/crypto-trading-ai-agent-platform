@@ -1,0 +1,259 @@
+"""Versioned research indicator metadata; no indicator values or authority."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from enum import StrEnum
+from types import MappingProxyType
+from typing import Mapping
+
+
+class IndicatorMetadataError(ValueError):
+    """Invalid or ambiguous indicator metadata."""
+
+
+class IndicatorCategory(StrEnum):
+    TREND = "trend"
+    MOMENTUM = "momentum"
+    VOLATILITY_RISK = "volatility-risk"
+    VOLUME_STRUCTURE = "volume-structure"
+    MARKET_STRUCTURE = "market-structure"
+    VOLUME_CONFIRMATION = "volume-confirmation"
+
+
+class IndicatorPhase(StrEnum):
+    PLANNED = "planned"
+    VALIDATED = "validated"
+
+
+class IndicatorTiming(StrEnum):
+    LAGGING = "lagging"
+    CONFIRMATORY = "confirmatory"
+    EARLY_WARNING = "early-warning"
+
+
+_IDENTIFIER = re.compile(r"[a-z][a-z0-9-]{1,63}\Z")
+_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
+
+
+def _text(name: str, value: object) -> None:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise IndicatorMetadataError(f"{name} must be nonblank plain text.")
+    if len(value) > 512:
+        raise IndicatorMetadataError(f"{name} exceeds the metadata limit.")
+
+
+def _texts(name: str, values: object, *, allow_empty: bool = False) -> None:
+    if not isinstance(values, tuple) or (not values and not allow_empty):
+        raise IndicatorMetadataError(f"{name} must be a nonempty tuple.")
+    for value in values:
+        _text(name, value)
+    if len(set(values)) != len(values):
+        raise IndicatorMetadataError(f"{name} must not contain duplicates.")
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterMetadata:
+    name: str
+    unit: str
+    default: int
+    minimum: int
+    maximum: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _IDENTIFIER.fullmatch(self.name):
+            raise IndicatorMetadataError("Invalid parameter name.")
+        _text("parameter unit", self.unit)
+        if (
+            type(self.default) is not int
+            or type(self.minimum) is not int
+            or type(self.maximum) is not int
+            or not 1 <= self.minimum <= self.default <= self.maximum <= 10000
+        ):
+            raise IndicatorMetadataError("Invalid parameter bounds or default.")
+
+
+@dataclass(frozen=True, slots=True)
+class IndicatorMetadata:
+    indicator_id: str
+    metadata_version: str
+    calculation_version: str
+    display_name: str
+    category: IndicatorCategory
+    purpose: str
+    inputs: tuple[str, ...]
+    timeframes: tuple[str, ...]
+    parameters: tuple[ParameterMetadata, ...]
+    minimum_warmup_candles: int
+    output_unit: str
+    output_schema: str
+    output_nullable: bool
+    timing: IndicatorTiming
+    best_regimes: tuple[str, ...]
+    weak_regimes: tuple[str, ...]
+    failure_modes: tuple[str, ...]
+    evidence_independent: bool
+    evidence_dependencies: tuple[str, ...]
+    evidence_graph_role: str
+    phase: IndicatorPhase = IndicatorPhase.PLANNED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.indicator_id, str) or not _IDENTIFIER.fullmatch(
+            self.indicator_id
+        ):
+            raise IndicatorMetadataError("Invalid indicator ID.")
+        for name, version in (
+            ("metadata version", self.metadata_version),
+            ("calculation version", self.calculation_version),
+        ):
+            if not isinstance(version, str) or not _VERSION.fullmatch(version):
+                raise IndicatorMetadataError(f"Invalid {name}.")
+        for name in (
+            "display_name",
+            "purpose",
+            "output_unit",
+            "output_schema",
+            "evidence_graph_role",
+        ):
+            _text(name, getattr(self, name))
+        if not isinstance(self.category, IndicatorCategory):
+            raise IndicatorMetadataError("Invalid indicator category.")
+        if not isinstance(self.timing, IndicatorTiming):
+            raise IndicatorMetadataError("Invalid indicator timing.")
+        if not isinstance(self.phase, IndicatorPhase):
+            raise IndicatorMetadataError("Invalid indicator phase.")
+        for name in (
+            "inputs",
+            "timeframes",
+            "best_regimes",
+            "weak_regimes",
+            "failure_modes",
+            "evidence_dependencies",
+        ):
+            _texts(
+                name, getattr(self, name), allow_empty=name == "evidence_dependencies"
+            )
+        if set(self.timeframes) - _TIMEFRAMES:
+            raise IndicatorMetadataError("Unsupported timeframe in metadata.")
+        if (
+            not isinstance(self.parameters, tuple)
+            or not all(isinstance(item, ParameterMetadata) for item in self.parameters)
+            or len({item.name for item in self.parameters}) != len(self.parameters)
+        ):
+            raise IndicatorMetadataError("Invalid or duplicate parameter metadata.")
+        if (
+            type(self.minimum_warmup_candles) is not int
+            or self.minimum_warmup_candles < 2
+        ):
+            raise IndicatorMetadataError("Invalid minimum warm-up.")
+        if type(self.output_nullable) is not bool:
+            raise IndicatorMetadataError("output_nullable must be a boolean.")
+        if type(self.evidence_independent) is not bool:
+            raise IndicatorMetadataError("evidence_independent must be a boolean.")
+        if self.evidence_independent and self.evidence_dependencies:
+            raise IndicatorMetadataError(
+                "Independent evidence cannot declare dependencies."
+            )
+        if not self.evidence_independent and not self.evidence_dependencies:
+            raise IndicatorMetadataError(
+                "Dependent evidence must identify dependencies."
+            )
+        if self.phase is IndicatorPhase.VALIDATED:
+            raise IndicatorMetadataError(
+                "Validation requires a reviewed calculation and a separate registry revision."
+            )
+
+
+class IndicatorRegistry:
+    """Exact-version lookup; never substitutes latest metadata or values."""
+
+    def __init__(self, entries: tuple[IndicatorMetadata, ...]) -> None:
+        if not isinstance(entries, tuple) or not all(
+            isinstance(item, IndicatorMetadata) for item in entries
+        ):
+            raise IndicatorMetadataError("Entries must be indicator metadata.")
+        indexed: dict[tuple[str, str], IndicatorMetadata] = {}
+        for entry in entries:
+            key = (entry.indicator_id, entry.metadata_version)
+            if key in indexed:
+                raise IndicatorMetadataError("Duplicate indicator metadata version.")
+            indexed[key] = entry
+        self._entries: Mapping[tuple[str, str], IndicatorMetadata] = MappingProxyType(
+            indexed
+        )
+
+    def get(self, indicator_id: str, metadata_version: str) -> IndicatorMetadata:
+        try:
+            return self._entries[(indicator_id, metadata_version)]
+        except KeyError as exc:
+            raise IndicatorMetadataError(
+                "Unknown exact indicator metadata version."
+            ) from exc
+
+    def list_entries(self) -> tuple[IndicatorMetadata, ...]:
+        return tuple(self._entries[key] for key in sorted(self._entries))
+
+
+_SPOT_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
+
+
+def _ema(period: int) -> IndicatorMetadata:
+    return IndicatorMetadata(
+        indicator_id=f"ema-{period}",
+        metadata_version="1",
+        calculation_version="planned-ema-v1",
+        display_name=f"EMA {period}",
+        category=IndicatorCategory.TREND,
+        purpose="Describe a smoothed price trend for research context.",
+        inputs=("C-001:closed-spot-ohlcv.close", "C-003:quality"),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=(ParameterMetadata("period", "candles", period, 2, 500),),
+        minimum_warmup_candles=period,
+        output_unit="quote-currency-per-base-unit",
+        output_schema="nullable finite Decimal price; source snapshot and method version required",
+        output_nullable=True,
+        timing=IndicatorTiming.LAGGING,
+        best_regimes=("sustained-trend",),
+        weak_regimes=("sideways-whipsaw", "stale-or-gapped-market"),
+        failure_modes=("lag", "whipsaw", "insufficient-warmup", "missing-data"),
+        evidence_independent=False,
+        evidence_dependencies=("spot-close-price", "other-price-derived-indicators"),
+        evidence_graph_role="Technical trend context; correlated with price and other EMAs.",
+    )
+
+
+SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
+    (
+        _ema(20),
+        _ema(50),
+        IndicatorMetadata(
+            indicator_id="atr-14",
+            metadata_version="1",
+            calculation_version="planned-atr-v1",
+            display_name="ATR 14",
+            category=IndicatorCategory.VOLATILITY_RISK,
+            purpose="Describe recent true-range volatility, without sizing authority.",
+            inputs=(
+                "C-001:closed-spot-ohlcv.high",
+                "C-001:closed-spot-ohlcv.low",
+                "C-001:closed-spot-ohlcv.close",
+                "C-003:quality",
+            ),
+            timeframes=_SPOT_TIMEFRAMES,
+            parameters=(ParameterMetadata("period", "candles", 14, 2, 500),),
+            minimum_warmup_candles=15,
+            output_unit="quote-currency-per-base-unit",
+            output_schema="nullable finite Decimal true-range price; source snapshot and method version required",
+            output_nullable=True,
+            timing=IndicatorTiming.CONFIRMATORY,
+            best_regimes=("observable-volatility",),
+            weak_regimes=("stale-or-gapped-market",),
+            failure_modes=("lag", "insufficient-warmup", "missing-data"),
+            evidence_independent=False,
+            evidence_dependencies=("spot-high-low-close", "price-derived-indicators"),
+            evidence_graph_role="Technical volatility context; not independent trade support.",
+        ),
+    )
+)
