@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Mapping
@@ -160,9 +160,19 @@ class IndicatorMetadata:
             raise IndicatorMetadataError(
                 "Dependent evidence must identify dependencies."
             )
-        if self.phase is IndicatorPhase.VALIDATED:
+        if (
+            self.phase is IndicatorPhase.VALIDATED
+            and self.calculation_version.startswith("planned-")
+        ):
             raise IndicatorMetadataError(
-                "Validation requires a reviewed calculation and a separate registry revision."
+                "A planned calculation version cannot be marked validated."
+            )
+        if (
+            self.phase is IndicatorPhase.PLANNED
+            and not self.calculation_version.startswith("planned-")
+        ):
+            raise IndicatorMetadataError(
+                "A planned indicator needs a planned calculation version."
             )
 
 
@@ -228,6 +238,54 @@ SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
         _ema(20),
         _ema(50),
+        replace(
+            _ema(20),
+            metadata_version="2",
+            calculation_version="ema-sma-seed-v1",
+            phase=IndicatorPhase.VALIDATED,
+        ),
+        replace(
+            _ema(50),
+            metadata_version="2",
+            calculation_version="ema-sma-seed-v1",
+            phase=IndicatorPhase.VALIDATED,
+        ),
+        *(
+            IndicatorMetadata(
+                indicator_id=kind,
+                metadata_version="1",
+                calculation_version=(
+                    "ema-sma-seed-v1" if kind == "ema" else f"{kind}-close-v1"
+                ),
+                display_name=kind.upper(),
+                category=IndicatorCategory.TREND,
+                purpose="Describe a trailing price trend for research context.",
+                inputs=("C-001:closed-spot-ohlcv.close", "C-003:quality"),
+                timeframes=_SPOT_TIMEFRAMES,
+                parameters=(ParameterMetadata("period", "candles", 20, 2, 500),),
+                minimum_warmup_candles=2,
+                output_unit="quote-currency-per-base-unit",
+                output_schema="nullable finite Decimal price; source snapshot and method version required",
+                output_nullable=True,
+                timing=IndicatorTiming.LAGGING,
+                best_regimes=("sustained-trend",),
+                weak_regimes=("sideways-whipsaw", "stale-or-gapped-market"),
+                failure_modes=(
+                    "lag",
+                    "whipsaw",
+                    "insufficient-warmup",
+                    "missing-data",
+                ),
+                evidence_independent=False,
+                evidence_dependencies=(
+                    "spot-close-price",
+                    "other-price-derived-indicators",
+                ),
+                evidence_graph_role="Technical trend context; correlated with price.",
+                phase=IndicatorPhase.VALIDATED,
+            )
+            for kind in ("sma", "ema", "wma")
+        ),
         IndicatorMetadata(
             indicator_id="atr-14",
             metadata_version="1",

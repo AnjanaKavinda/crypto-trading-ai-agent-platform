@@ -359,3 +359,26 @@ initialization and gap handling before any result can be marked validated.
 ```bash
 PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_indicator_registry.py
 ```
+
+## Deterministic Spot moving averages (Issue #50)
+
+`analysis.moving_averages.calculate_moving_average` computes configurable SMA,
+EMA and linearly weighted WMA from supplied canonical C-001 closed OHLCV,
+an exact C-002 snapshot and a matching **VALID** C-003 quality report. EMA
+starts with the first period's SMA and uses `2/(period+1)` thereafter; WMA
+weights the oldest close by 1 and newest by period. Values before warm-up
+are `None`; arithmetic uses Decimal without display rounding. Input IDs,
+price units, candle continuity, source membership, availability and as-of
+cutoff must match. Any stale/degraded/gapped or mismatched evidence raises
+without producing a series. The caller is responsible for obtaining the C-003
+report from the reviewed quality assessor; a hand-constructed VALID report is
+not independent proof of authentic exchange data. No provider collection,
+storage, C-012 evidence assembly, signal or trading endpoint is added here.
+
+The #49 EMA 20/50 metadata version 1 remains historically planned. Version 2
+declares the reviewed EMA formula; generic SMA/EMA/WMA metadata version 1
+defines parameter bounds. ATR 14 remains planned until #52.
+
+```bash
+PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_moving_averages.py
+```
