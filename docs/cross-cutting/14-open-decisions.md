@@ -10,10 +10,10 @@ decision scope as open.
 
 | ID | Decision | Status | Trigger / affected areas | Required approver | Linked ADR | Disposition date |
 |---|---|---|---|---|---|---|
-| OD-0001 | Supported exchanges and initial exchange priority | Open | Exchange abstraction; Chat 9 | Human repository owner | — | — |
-| OD-0002 | Spot / perpetuals / futures / options scope | Open | Product and execution scope; Chats 1, 9 | Human repository owner | — | — |
-| OD-0003 | Supported asset universe | Open | Product and market-data scope; Chats 1, 4 | Human repository owner | [ADR-0004](../adr/ADR-0004-initial-market-data-provider-and-asset-scope.md) (bounded BTCUSDT/ETHUSDT personal Spot data design on human merge; wider universe open) | — |
-| OD-0004 | Production market-data vendors and licensing | Open | Market data and provenance; Chat 4 | Human repository owner | [ADR-0004](../adr/ADR-0004-initial-market-data-provider-and-asset-scope.md) (personal research design on human merge; network terms gate and production licensing open) | — |
+| OD-0001 | Supported exchanges and initial exchange priority | Open | Exchange abstraction; Chat 9 | Human repository owner | [ADR-0005](../adr/ADR-0005-personal-derivatives-market-data-scope.md) (proposed personal data sub-scope only; execution venue open) | — |
+| OD-0002 | Spot / perpetuals / futures / options scope | Open | Product and execution scope; Chats 1, 9 | Human repository owner | [ADR-0005](../adr/ADR-0005-personal-derivatives-market-data-scope.md) (proposed perpetual data sub-scope only; trading scope open) | — |
+| OD-0003 | Supported asset universe | Open | Product and market-data scope; Chats 1, 4 | Human repository owner | [ADR-0004](../adr/ADR-0004-initial-market-data-provider-and-asset-scope.md) (accepted personal Spot data slice); [ADR-0005](../adr/ADR-0005-personal-derivatives-market-data-scope.md) (proposed personal derivatives slice); wider universe open | — |
+| OD-0004 | Production market-data vendors and licensing | Open | Market data and provenance; Chat 4 | Human repository owner | [ADR-0004](../adr/ADR-0004-initial-market-data-provider-and-asset-scope.md) (accepted Spot research design); [ADR-0005](../adr/ADR-0005-personal-derivatives-market-data-scope.md) (proposed Futures research design); owner handles terms, production licensing open | — |
 | OD-0005 | On-chain providers | Open | On-chain data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0006 | News/social providers and licensing | Open | Sentiment data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0007 | Event-streaming technology | Open | Event contracts and platform architecture; Chats 2, 4 | Human repository owner | — | — |
