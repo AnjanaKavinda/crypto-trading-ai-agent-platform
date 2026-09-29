@@ -13,10 +13,15 @@ from trading_platform_api.analysis.indicator_registry import (
 
 def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     entries = SPOT_RESEARCH_INDICATORS.list_entries()
-    assert {item.indicator_id for item in entries} == {"ema-20", "ema-50", "atr-14"}
+    assert {item.indicator_id for item in entries} == {
+        "sma",
+        "ema",
+        "wma",
+        "ema-20",
+        "ema-50",
+        "atr-14",
+    }
     for item in entries:
-        assert item.phase is IndicatorPhase.PLANNED
-        assert item.calculation_version.startswith("planned-")
         assert item.output_nullable
         assert not item.evidence_independent
         assert item.evidence_dependencies
@@ -27,6 +32,12 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         IndicatorCategory.VOLATILITY_RISK
     )
     assert SPOT_RESEARCH_INDICATORS.get("atr-14", "1").minimum_warmup_candles == 15
+    assert SPOT_RESEARCH_INDICATORS.get("atr-14", "1").phase is IndicatorPhase.PLANNED
+    for name in ("ema-20", "ema-50"):
+        assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.PLANNED
+        assert SPOT_RESEARCH_INDICATORS.get(name, "2").phase is IndicatorPhase.VALIDATED
+    for name in ("sma", "ema", "wma"):
+        assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.VALIDATED
 
 
 def test_exact_version_lookup_does_not_silently_pick_a_newer_definition() -> None:
