@@ -10,6 +10,13 @@ from trading_platform_api.analysis.indicator_registry import (
     IndicatorTiming,
     ParameterMetadata,
 )
+from trading_platform_api.analysis.moving_averages import (
+    MovingAverageError,
+    MovingAverageKind,
+    MovingAveragePoint,
+    MovingAverageSeries,
+    calculate_moving_average,
+)
 
 __all__ = [
     *_contract_exports,
@@ -21,4 +28,9 @@ __all__ = [
     "IndicatorRegistry",
     "IndicatorTiming",
     "ParameterMetadata",
+    "MovingAverageError",
+    "MovingAverageKind",
+    "MovingAveragePoint",
+    "MovingAverageSeries",
+    "calculate_moving_average",
 ]
