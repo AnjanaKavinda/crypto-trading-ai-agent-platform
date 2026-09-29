@@ -77,8 +77,12 @@ Separate physical payload placement from semantic evidence identity:
 1. Keep lineage key, version, evidence SHA-256, and dependency links in
    append-only tables. Never delete or rewrite these anchors or links.
 2. Introduce a hot payload table keyed by the exact lineage identity. Inserts
-   are immutable; lifecycle deletion is permitted only after verified cold
-   publication. The storage lifecycle must be explicit and auditable.
+   are immutable. Model storage movement with an append-only location-event
+   ledger (for example `HOT_WRITTEN`, `COLD_VERIFIED`, `HOT_REMOVED`, and
+   `RESTORED`); do not update one mutable status field. A removal event is
+   permitted only after verified cold publication and a successful backup /
+   restore gate. The event ledger and evidence anchors are retained longer
+   than the payload lifecycle.
 3. Store cold data in immutable compressed objects partitioned by UTC date,
    venue, and instrument. Use a bounded manifest that maps exact lineage keys
    to object hashes and coverage. Object paths must not be derived from
@@ -88,10 +92,12 @@ Separate physical payload placement from semantic evidence identity:
    Missing, corrupt, or unavailable hot/cold payloads fail closed; callers do
    not receive an unverified or partially resolved snapshot.
 5. Transfer in stages: write object → read back and verify → persist immutable
-   manifest → verify the resolver against the original C-001 anchor and all
-   dependent C-002/C-003 records → remove only the eligible hot payload.
-   Failures before final verification leave the hot copy intact. Retries are
-   idempotent by object digest.
+   manifest and `COLD_VERIFIED` event → verify the resolver against the
+   original C-001 anchor and all dependent C-002/C-003 records → confirm a
+   recoverable off-device backup and tested restore point → append
+   `HOT_REMOVED` and remove only the eligible hot payload. Failures before
+   final verification leave the hot copy intact. Retries are idempotent by
+   object digest.
 6. Backfill existing inline C-001 rows in bounded batches. Read/write
    compatibility remains available throughout the migration. No legacy inline
    payload is removed before off-device backup and restore verification, and
@@ -107,7 +113,8 @@ customer tenancy remain out of scope.
 ## Impact and approval conditions
 
 - **Schema:** add hot payload and archive manifest/catalog tables; change C-001
-  persistence/read paths. Preserve lineage primary keys and dependency FKs.
+  persistence/read paths; add an append-only payload-location event ledger.
+  Preserve lineage primary keys and dependency FKs.
 - **Compatibility:** existing C-001 rows remain readable inline while a
   backfill copies and verifies them. A rollback must retain either a verified
   cold copy or an inline/hot copy for every anchor.
@@ -118,6 +125,11 @@ customer tenancy remain out of scope.
   fail closed.
 - **Operations:** measure PostgreSQL growth, archive size, B2 requests/egress,
   backup size, restore time, and total spend before enabling scheduled purge.
+- **Provider integration:** this ADR selects the payload boundary and lifecycle,
+  not a deployed B2 client or credential setup. Implement the object-store
+  adapter behind a narrow interface; enable it only after server-side
+  credentials, encryption configuration, cost caps, and restore evidence are
+  available. Do not store keys in the repository or browser.
 - **Testing:** corrupt/missing objects, partial transfer, duplicate retry,
   mismatch, outage, resolver fail-closed, reference preservation, migration
   restart, and restore must be covered before deleting any hot payload.
