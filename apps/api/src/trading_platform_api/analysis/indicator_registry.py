@@ -234,6 +234,36 @@ def _ema(period: int) -> IndicatorMetadata:
     )
 
 
+def _atr() -> IndicatorMetadata:
+    return IndicatorMetadata(
+        indicator_id="atr-14",
+        metadata_version="1",
+        calculation_version="planned-atr-v1",
+        display_name="ATR 14",
+        category=IndicatorCategory.VOLATILITY_RISK,
+        purpose="Describe recent true-range volatility, without sizing authority.",
+        inputs=(
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+            "C-003:quality",
+        ),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=(ParameterMetadata("period", "candles", 14, 2, 500),),
+        minimum_warmup_candles=15,
+        output_unit="quote-currency-per-base-unit",
+        output_schema="nullable finite Decimal true-range price; source snapshot and method version required",
+        output_nullable=True,
+        timing=IndicatorTiming.CONFIRMATORY,
+        best_regimes=("observable-volatility",),
+        weak_regimes=("stale-or-gapped-market",),
+        failure_modes=("lag", "insufficient-warmup", "missing-data"),
+        evidence_independent=False,
+        evidence_dependencies=("spot-high-low-close", "price-derived-indicators"),
+        evidence_graph_role="Technical volatility context; not independent trade support.",
+    )
+
+
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
         _ema(20),
@@ -286,32 +316,78 @@ SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
             )
             for kind in ("sma", "ema", "wma")
         ),
-        IndicatorMetadata(
-            indicator_id="atr-14",
-            metadata_version="1",
-            calculation_version="planned-atr-v1",
-            display_name="ATR 14",
-            category=IndicatorCategory.VOLATILITY_RISK,
-            purpose="Describe recent true-range volatility, without sizing authority.",
-            inputs=(
-                "C-001:closed-spot-ohlcv.high",
-                "C-001:closed-spot-ohlcv.low",
-                "C-001:closed-spot-ohlcv.close",
-                "C-003:quality",
-            ),
-            timeframes=_SPOT_TIMEFRAMES,
-            parameters=(ParameterMetadata("period", "candles", 14, 2, 500),),
-            minimum_warmup_candles=15,
-            output_unit="quote-currency-per-base-unit",
-            output_schema="nullable finite Decimal true-range price; source snapshot and method version required",
-            output_nullable=True,
-            timing=IndicatorTiming.CONFIRMATORY,
-            best_regimes=("observable-volatility",),
-            weak_regimes=("stale-or-gapped-market",),
-            failure_modes=("lag", "insufficient-warmup", "missing-data"),
-            evidence_independent=False,
-            evidence_dependencies=("spot-high-low-close", "price-derived-indicators"),
-            evidence_graph_role="Technical volatility context; not independent trade support.",
+        _atr(),
+        replace(
+            _atr(),
+            metadata_version="2",
+            calculation_version="atr-wilder-sma-seed-v1",
+            phase=IndicatorPhase.VALIDATED,
+        ),
+        *(
+            IndicatorMetadata(
+                indicator_id=indicator_id,
+                metadata_version="1",
+                calculation_version=calculation_version,
+                display_name=display_name,
+                category=IndicatorCategory.VOLATILITY_RISK,
+                purpose=purpose,
+                inputs=inputs,
+                timeframes=_SPOT_TIMEFRAMES,
+                parameters=(ParameterMetadata("period", "candles", 20, 2, 500),),
+                minimum_warmup_candles=warmup,
+                output_unit=unit,
+                output_schema=output_schema,
+                output_nullable=True,
+                timing=IndicatorTiming.CONFIRMATORY,
+                best_regimes=("observable-volatility",),
+                weak_regimes=("stale-or-gapped-market",),
+                failure_modes=("insufficient-warmup", "missing-data", "lag"),
+                evidence_independent=False,
+                evidence_dependencies=("spot-close-price", "price-derived-indicators"),
+                evidence_graph_role="Price-derived volatility context; not independent evidence.",
+                phase=IndicatorPhase.VALIDATED,
+            )
+            for (
+                indicator_id,
+                calculation_version,
+                display_name,
+                purpose,
+                inputs,
+                warmup,
+                unit,
+                output_schema,
+            ) in (
+                (
+                    "bollinger-bands",
+                    "bollinger-population-2sigma-v1",
+                    "Bollinger Bands",
+                    "Describe a trailing close range using population standard deviation.",
+                    ("C-001:closed-spot-ohlcv.close", "C-003:quality"),
+                    20,
+                    "quote-currency-per-base-unit",
+                    "nullable finite Decimal middle, upper and lower bands; fixed 2 sigma multiplier",
+                ),
+                (
+                    "bollinger-bandwidth",
+                    "bollinger-width-ratio-v1",
+                    "Bollinger Band Width",
+                    "Describe relative band width; direction is compared with the prior width.",
+                    ("C-001:closed-spot-ohlcv.close", "C-003:quality"),
+                    20,
+                    "dimensionless-ratio",
+                    "nullable finite Decimal (upper-lower)/middle ratio and prior-period direction",
+                ),
+                (
+                    "realized-volatility",
+                    "annualized-close-log-return-sample-stdev-v1",
+                    "Annualized Realized Volatility",
+                    "Describe annualized sample dispersion of close-to-close log returns.",
+                    ("C-001:closed-spot-ohlcv.close", "C-003:quality"),
+                    21,
+                    "annualized-fraction",
+                    "nullable finite Decimal fraction; 365-day continuous-market annualization",
+                ),
+            )
         ),
     )
 )
