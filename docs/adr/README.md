@@ -15,6 +15,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0003 | [PostgreSQL, SQLAlchemy async, and Alembic persistence foundation](ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) | Accepted | 2026-09-09 | Platform Architect / AnjanaKavinda | OD-0008 | Persistence foundation only | — | — |
 | ADR-0004 | [Initial market-data provider and asset scope](ADR-0004-initial-market-data-provider-and-asset-scope.md) | Accepted | 2026-09-27 | Platform Architect / AnjanaKavinda (manual merge) | OD-0003, OD-0004 (bounded personal data slice only) | C-001/C-002/C-003/C-091/C-092 (no change) | — | — |
 | ADR-0005 | [Personal Spot market-history storage and retention](ADR-0005-personal-spot-market-history-retention.md) | Accepted | 2026-09-29 | Platform Architect / AnjanaKavinda (explicit owner approval) | OD-0008, OD-0017 (bounded personal OHLCV scope) | C-001/C-002/C-003/C-091 (no semantics changed) | — | — |
+| ADR-0006 | [Separate immutable market evidence from hot payload storage](ADR-0006-market-payload-archive-boundary.md) | Proposed | 2026-09-29 | Platform Architect / owner approval pending | OD-0008, OD-0017 (physical payload-tier boundary) | C-001/C-002/C-003 (no semantic change proposed) | — | — |
 
 ## Creating an ADR
 
