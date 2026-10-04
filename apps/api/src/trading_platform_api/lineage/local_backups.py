@@ -41,10 +41,10 @@ async def collect_referenced_archive_objects(
 
     statement = (
         select(
-            archive_objects.object_key,
-            archive_objects.compressed_sha256,
-            archive_objects.manifest_key,
-            archive_objects.manifest_sha256,
+            archive_objects.c.object_key,
+            archive_objects.c.compressed_sha256,
+            archive_objects.c.manifest_key,
+            archive_objects.c.manifest_sha256,
         )
         .join(
             archive_members,
