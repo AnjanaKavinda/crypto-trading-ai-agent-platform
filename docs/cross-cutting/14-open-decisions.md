@@ -17,7 +17,7 @@ decision scope as open.
 | OD-0005 | On-chain providers | Open | On-chain data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0006 | News/social providers and licensing | Open | Sentiment data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0007 | Event-streaming technology | Open | Event contracts and platform architecture; Chats 2, 4 | Human repository owner | — | — |
-| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (relational foundation only); [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot storage; production topology remains open) | — |
+| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (relational foundation only); [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot tiers); [ADR-0006](../adr/ADR-0006-market-payload-archive-boundary.md) (accepted personal Spot payload boundary only) | — |
 | OD-0009 | Vector-memory technology and retention | Open | Learning and retention; Chats 10, 13 | Human repository owner | — | — |
 | OD-0010 | LLM provider/model routing policy | Resolved | AI governance and security; Chats 3, 10, 13 | Human repository owner | [ADR-0002](../adr/ADR-0002-vendor-neutral-llm-provider-model-routing.md) (Accepted) | 2026-09-06 |
 | OD-0011 | Backtesting engine implementation choice | Open | Quantitative validation; Chat 7 | Human repository owner | — | — |
@@ -70,6 +70,20 @@ OD-0008 remains `Open` because the broader storage decision is still unresolved,
 including time-series technology/extensions, production topology, replicas,
 sharding, pooling/tuning, retention, tenancy, domain-schema ownership, and
 vector storage. Implementation must not silently select those deferred areas.
+
+## OD-0008 / OD-0017 cold-payload implementation gate
+
+PR #304 added C-003 persistence, while retaining complete canonical C-001
+documents in the append-only `lineage_records` table. Its database triggers
+reject update, delete, and truncate, so physical movement of old OHLCV payloads
+to a cold tier cannot be implemented as a routine cache cleanup without
+changing the persistence boundary. [`ADR-0006`](../adr/ADR-0006-market-payload-archive-boundary.md)
+was accepted by the owner on 2026-10-04 for personal Spot OHLCV only. It
+separates immutable identity/hash/dependency anchors from tiered payload
+bytes. This does not resolve broader OD-0008 topology, production deployment,
+or other data types. Archive removal remains verify-first; automated purge is
+not authorized until the resolver, backup/restore, cost controls, and rollout
+are independently reviewed.
 
 On 2026-09-29 the human repository owner accepted
 [`ADR-0005`](../adr/ADR-0005-personal-spot-market-history-retention.md) for a

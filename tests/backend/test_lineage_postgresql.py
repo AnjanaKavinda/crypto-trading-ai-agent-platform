@@ -1,27 +1,37 @@
 """Real PostgreSQL integration on an explicitly disposable local database."""
 
 import asyncio
+import hashlib
 import os
 from dataclasses import replace
+from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import insert, text
+from sqlalchemy import delete, insert, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from test_history_selection import history
 from test_lineage_quality import records_for_report
 from test_point_in_time import evidence
+from trading_platform_api.lineage.archival import archive_market_data_batch
+from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
 from trading_platform_api.lineage.codec import LineageError, encode, key_for
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
 )
-from trading_platform_api.lineage.tables import links, records
+from trading_platform_api.lineage.tables import (
+    archive_members,
+    links,
+    market_payloads,
+    payload_events,
+    records,
+)
 from trading_platform_api.market_data.contracts import DatasetVersionReference
 from trading_platform_api.market_data.history_selection import reconstruct_history
 from trading_platform_api.market_data.point_in_time import reconstruct_pinned_snapshot
@@ -266,6 +276,99 @@ def test_postgresql_valid_quality_report_is_linked_and_replayable(database_url):
                 assert all(graph[key_for(item)] == item for item in observations)
                 assert all(graph[key_for(item)] == item for item in sources)
                 assert len(graph) == len(sources) + len(observations) + 2
+        finally:
+            await engine.dispose()
+
+    asyncio.run(check())
+
+
+def test_postgresql_verified_archive_resolves_cold_and_fails_closed_on_tamper(
+    database_url, tmp_path
+):
+    class RollbackArchiveFixture(Exception):
+        pass
+
+    async def check():
+        engine = create_async_engine(database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        sources, observations, snapshot, quality = records_for_report()
+        object_store = LocalFilesystemObjectStore(tmp_path / "archive")
+        keys = tuple(key_for(item) for item in observations)
+        try:
+            with pytest.raises(RollbackArchiveFixture):
+                async with sessions.begin() as session:
+                    store = SqlAlchemyLineageStore(session, archive_store=object_store)
+                    await append_validated_market_snapshot(
+                        store,
+                        sources=sources,
+                        observations=observations,
+                        snapshot=snapshot,
+                        quality=quality,
+                    )
+                    object_key = await archive_market_data_batch(
+                        session,
+                        object_store,
+                        keys,
+                        now=datetime(2026, 10, 4, tzinfo=UTC),
+                    )
+                    archive = (
+                        (
+                            await session.execute(
+                                select(archive_members).where(
+                                    archive_members.c.object_key == object_key
+                                )
+                            )
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    assert len(archive) == len(observations)
+
+                    # Exercise the database-gated lifecycle transition and
+                    # prove the normal resolver reads and verifies cold bytes.
+                    for item, key in zip(observations, keys, strict=True):
+                        document_sha = sha256(encode(item).encode("utf-8")).hexdigest()
+                        event_material = "|".join(
+                            (
+                                key.contract_id,
+                                key.record_id,
+                                key.version,
+                                "HOT_REMOVED",
+                                document_sha,
+                            )
+                        )
+                        await session.execute(
+                            insert(payload_events).values(
+                                event_id=hashlib.sha256(
+                                    event_material.encode("utf-8")
+                                ).hexdigest(),
+                                contract_id=key.contract_id,
+                                record_id=key.record_id,
+                                version=key.version,
+                                event_type="HOT_REMOVED",
+                                object_key=object_key,
+                                payload_sha256=document_sha,
+                                occurred_at=datetime(2026, 10, 4, tzinfo=UTC),
+                            )
+                        )
+                        deleted = await session.execute(
+                            delete(market_payloads).where(
+                                market_payloads.c.contract_id == key.contract_id,
+                                market_payloads.c.record_id == key.record_id,
+                                market_payloads.c.version == key.version,
+                            )
+                        )
+                        assert deleted.rowcount == 1
+                        assert await store.get(key) == item
+
+                    graph = await store.resolve((key_for(quality),))
+                    assert all(graph[key_for(item)] == item for item in observations)
+
+                    archive_file = tmp_path / "archive" / object_key
+                    archive_file.write_bytes(b"tampered")
+                    with pytest.raises(LineageError, match="digest"):
+                        await store.get(keys[0])
+                    raise RollbackArchiveFixture()
         finally:
             await engine.dispose()
 

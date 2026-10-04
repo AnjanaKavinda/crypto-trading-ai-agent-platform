@@ -213,11 +213,11 @@ Per-timeframe completeness and other quality checks still require C-003.
 Existing C-001–C-100 payloads and the exact-pin API are unchanged. #46 owns
 durable provenance storage; these controls do not implement a full backtester.
 
-### Durable lineage evidence (Issue #46)
+### Durable lineage and archive evidence (Issues #46–#47)
 
 `lineage.store.SqlAlchemyLineageStore` persists C-001/C-002/C-003,
 C-091/C-092 and C-101/C-102/C-103 records in PostgreSQL. Apply the reviewed
-`0004_lineage_quality_reports` migration with the existing Alembic configuration:
+`0005_market_payload_archive` migration with the existing Alembic configuration:
 
     python -m alembic -c apps/api/alembic.ini upgrade head
 
@@ -228,6 +228,15 @@ observations/datasets/universes, revisions in ancestry order, then
 snapshots/manifests and their C-003 quality reports. Every referenced record must already exist in the same
 transaction or be committed. No automatic commit, migration or connection
 occurs on import.
+
+New C-001 anchors keep identity and evidence digests in `lineage_records`;
+canonical C-001 bytes are stored in `lineage_market_payloads`. Migration 0005
+backfills this hot table only for legacy Binance Spot OHLCV rows in the five
+approved instruments, without removing those original documents. Other C-001
+types, venues and instruments remain inline. `get(key)` remains compatible with inline rows,
+then reads the hot payload, then an archive object when configured. Each path
+checks the document digest, decoded identity, evidence digest and lineage
+edges.
 
 `append_validated_market_snapshot(...)` appends source records, ordered
 observations, their C-002 snapshot and exact C-003 report in that order. It
@@ -245,21 +254,32 @@ pass a lower `maximum_records` when appropriate. Returned objects can be fed
 directly into the existing #45 reconstruction APIs. Records use canonical
 `wire-1` payloads; unsupported versions and unknown types are rejected.
 
-The migration enforces referential integrity and blocks UPDATE, DELETE and
-TRUNCATE on records and edges. This is append-only application storage, not
-protection against a database administrator disabling triggers or replacing
-backups. Caller-owned transactions determine batch atomicity. Concurrent
-identical inserts use PostgreSQL conflict handling; conflicting content is
-rejected. Database transaction failures propagate without blind retries.
+`archive_market_data_batch(...)` publishes at most 500 same-day, same-venue,
+same-instrument, 90-day-old C-001 records as deterministic gzip JSONL plus a
+content-checked manifest. It reads both objects back, verifies the complete
+bundle and member digests, and appends the database manifest and
+`COLD_VERIFIED` events in the caller's transaction. It never removes a hot
+payload. The filesystem object-store adapter is for local development and
+tests; a production B2 adapter, backup/restore proof, cost guard and scheduled
+retention job remain outstanding.
+
+The migration keeps lineage edges and identity/digest anchors append-only. A
+narrow C-001 document relocation is allowed only after cold membership and
+`COLD_VERIFIED`/`HOT_REMOVED` evidence exist. Hot payload deletes have the same
+database guard. No application purge routine is enabled. This is not protection
+against a database administrator disabling triggers or replacing backups.
+Caller-owned transactions determine batch atomicity. Concurrent identical
+inserts use PostgreSQL conflict handling; conflicting content is rejected.
+Database transaction failures propagate without blind retries.
 
 The store retains normalized evidence, provider/adapter/schema and usage
-references, all contract timestamps, revision links and content digests. It
-does not store raw exchange archives or implement the 90-day hot / five-year
-cold archival and backup lifecycle approved in ADR-0005; that remains open in
-#47. Production topology, continuous ingestion and trading readiness also
-remain out of scope. A migration downgrade destroys the lineage tables and is
-appropriate only for a disposable test database or an explicitly approved
-restore plan.
+references, all contract timestamps, revision links and content digests. Cold
+archive writes and fail-closed reads are implemented behind an immutable object
+store port; production B2 configuration, backup/restore and automated retention
+remain open in #47. Production topology, continuous ingestion and trading
+readiness also remain out of scope. Downgrading restores inline C-001 documents
+from hot payloads and fails if a cold-only restore is required; use only a
+disposable database or an explicitly approved restore plan.
 
 Product CI uses an isolated PostgreSQL 16 service to exercise migrations,
 readback/reconstruction, conflicting concurrent inserts, rollback and mutation
