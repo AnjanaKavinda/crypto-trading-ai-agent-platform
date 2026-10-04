@@ -1,41 +1,40 @@
-# Issue #47 backup bundle boundary
+# Issue #47 local backup boundary
 
-The lineage backup helpers package a caller-supplied PostgreSQL dump and the
-exact cold archive objects selected by the caller. `build_backup_bundle`
-creates a deterministic ZIP with a versioned manifest, byte counts, and
-SHA-256 digests for every member. `publish_backup_bundle` writes through an
-injected immutable object store and reads the complete bundle back before it
-reports success. `load_verified_backup` validates the complete manifest and
-all member digests before exposing either the database dump or archive bytes.
+Phase 1 uses a local deployment and local filesystems. A backup target must be
+on a separate directory from the archive root. It is not an off-device
+disaster-recovery copy; both directories share the machine's failure domain.
+Cloud storage, subscriptions, and the ADR-0005 cloud-spend limits are deferred
+by ADR-0007.
 
-The caller must publish to a separately configured, versioned, client-encrypted
-off-device bucket. The existing B2 adapter provides encryption, enabled
-versioning checks, immutable keys, and encrypted read-back for such a store.
-Backup keys must be unique per run so a later daily snapshot does not replace
-an earlier restore point.
+`lineage.backups` packages a caller-supplied PostgreSQL dump and exact archive
+object bytes into a deterministic ZIP. `lineage.local_backups` enumerates
+archive objects through `lineage_archive_members`, checks the compressed
+object and manifest digests against PostgreSQL metadata, and includes both
+objects in the bundle. Missing or corrupt referenced objects stop backup
+creation. Publication uses an immutable object-store port and verifies the
+entire local read-back before returning the bundle digest.
 
-`BackupLimits.max_bundle_bytes` is a hard per-bundle byte bound. The
-`backup_costs` module validates a timezone-aware, current-month operator spend
-report and projects storage plus planned egress against the approved US$5
-backup allowance and US$100 total research budget. Its forecast is
-conservative: it ignores provider free tiers and adds a full-month storage and
-egress estimate to month-to-date spend. Missing, stale, or over-budget evidence
-raises `BackupBudgetError`.
+`EncryptedObjectStore` encrypts the local backup target with AES-GCM before
+writing it to `LocalFilesystemObjectStore`. Configure
+`TRADING_PLATFORM_LOCAL_ENCRYPTION_ACTIVE_KEY_ID` and
+`TRADING_PLATFORM_LOCAL_ENCRYPTION_KEYS_JSON` through the deployment's secret
+environment. Do not put key material in the repository. Keep old key IDs in the
+keyring until all bundles encrypted with them have expired or been migrated.
 
-This is a cost-gate building block, not an integrated backup command: no caller
-currently supplies the spend report or inventory, and no cloud billing API or
-provider-side monetary cap is configured by this code. The operator must
-provide measured month-to-date spend and the complete post-backup object
-inventory before any future publisher integration can proceed.
+`restore_local_backup` validates the bundle and all member hashes before it
+republishes the archive objects and invokes the supplied database-restore
+callback. The callback must restore into a disposable local PostgreSQL
+database. The helper never chooses, drops, or connects to a database. The
+integration owner supplies the `pg_dump` capture and `pg_restore` callback;
+this library does not yet provide a scheduled command or timer.
 
-The backup helper does not invoke `pg_dump` or `pg_restore`, enumerate
-database-referenced archive objects, schedule daily runs, or restore into
-PostgreSQL. Tests prove deterministic packaging, member integrity checks,
-immutable publication, verified byte recovery with a fake store, and isolated
-cost forecast behavior. They do not constitute measured billing evidence. A
-disposable PostgreSQL restore and a credentialed B2 round trip remain required
-before this can count as operational backup/restore evidence.
+The current backup boundary does not remove hot payloads. C-001 lineage
+identities, evidence digests, dependency links, and archive membership remain
+intact. Automated removal remains disabled until local backup and disposable
+restore are exercised operationally, resolver and reference checks are
+recorded, and a separate rollout is reviewed.
 
-No retention scheduler or payload-removal path is enabled by this change.
-Keep source hot payloads until the complete backup, restore, reference, and
-cost-control gates have passed independent review.
+Tests cover immutable local storage, encryption at rest, complete referenced
+object collection, digest failure, bundle read-back, and rejection of corrupt
+bundles before a restore callback. These tests do not claim an end-to-end
+PostgreSQL dump/restore, a daily schedule, or off-machine recovery.
