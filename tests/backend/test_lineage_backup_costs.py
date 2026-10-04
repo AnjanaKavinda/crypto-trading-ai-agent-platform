@@ -9,7 +9,6 @@ from trading_platform_api.lineage.backup_costs import (
     forecast_backup_cost,
 )
 
-
 NOW = datetime(2026, 10, 4, 15, 0, tzinfo=UTC)
 
 
