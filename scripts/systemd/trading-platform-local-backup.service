@@ -1,6 +1,5 @@
 [Unit]
 Description=Create an encrypted local trading-platform lineage backup
-After=postgresql.service
 
 [Service]
 Type=oneshot

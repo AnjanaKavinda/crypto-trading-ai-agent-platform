@@ -84,6 +84,15 @@ def _validate_dump_service() -> str:
         raise LocalBackupError(
             "pg_dump service database must match DATABASE_URL's database."
         )
+    service_port = section.getint("port", fallback=5432)
+    if service_port != (database_url.port or 5432):
+        raise LocalBackupError(
+            "pg_dump service port must match DATABASE_URL's port."
+        )
+    if database_url.username and section.get("user") != database_url.username:
+        raise LocalBackupError(
+            "pg_dump service user must match DATABASE_URL's user."
+        )
     return service_name
 
 
@@ -96,6 +105,9 @@ def _validate_restore_service() -> str:
         raise LocalBackupError(
             "Restore is allowed only to a local disposable trading_restore_* database."
         )
+    source_database = make_url(load_database_settings().database_url).database
+    if section.get("dbname") == source_database:
+        raise LocalBackupError("Restore target must differ from the source database.")
     return service_name
 
 

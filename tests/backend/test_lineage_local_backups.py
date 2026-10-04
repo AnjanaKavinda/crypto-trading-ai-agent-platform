@@ -173,6 +173,7 @@ def test_restore_cli_allows_only_loopback_disposable_service(
     service_file.chmod(0o600)
     monkeypatch.setenv("TRADING_PLATFORM_PG_SERVICE_FILE", str(service_file))
     monkeypatch.setenv("TRADING_PLATFORM_PG_RESTORE_SERVICE", "trading_restore_test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://user@localhost/source")
 
     assert _validate_restore_service() == "trading_restore_test"
 
