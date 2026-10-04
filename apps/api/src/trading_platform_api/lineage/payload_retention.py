@@ -132,15 +132,11 @@ async def remove_archived_hot_payloads(
         )
     )
     edges_before = tuple(
-        tuple(row)
-        for row in (await session.execute(reference_statement)).all()
+        tuple(row) for row in (await session.execute(reference_statement)).all()
     )
     root_keys = tuple(
         sorted(
-            {
-                LineageKey(row[0], row[1], row[2])
-                for row in edges_before
-            },
+            {LineageKey(row[0], row[1], row[2]) for row in edges_before},
             key=lambda item: (item.contract_id, item.record_id, item.version),
         )
     )
@@ -148,31 +144,31 @@ async def remove_archived_hot_payloads(
         raise LineageError("Affected reference roots exceed the bounded read budget.")
 
     cold_events = (
-        await session.execute(
-            select(payload_events).where(
-                payload_events.c.object_key == object_key,
-                payload_events.c.event_type == "COLD_VERIFIED",
-                tuple_(
-                    payload_events.c.contract_id,
-                    payload_events.c.record_id,
-                    payload_events.c.version,
-                ).in_(key_values),
+        (
+            await session.execute(
+                select(payload_events).where(
+                    payload_events.c.object_key == object_key,
+                    payload_events.c.event_type == "COLD_VERIFIED",
+                    tuple_(
+                        payload_events.c.contract_id,
+                        payload_events.c.record_id,
+                        payload_events.c.version,
+                    ).in_(key_values),
+                )
             )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     cold_event_keys = {
-        (row["contract_id"], row["record_id"], row["version"]): row[
-            "payload_sha256"
-        ]
+        (row["contract_id"], row["record_id"], row["version"]): row["payload_sha256"]
         for row in cold_events
     }
 
     lineage = SqlAlchemyLineageStore(session, archive_store=archive_store)
     removed: list[LineageKey] = []
     for member in member_rows:
-        key = LineageKey(
-            member["contract_id"], member["record_id"], member["version"]
-        )
+        key = LineageKey(member["contract_id"], member["record_id"], member["version"])
         identity = _key_tuple(key)
         archived = archived_records[key]
         document = encode(archived)
@@ -315,8 +311,7 @@ async def remove_archived_hot_payloads(
                 raise LineageError("Cold resolver failed for an unreferenced key.")
 
     edges_after = tuple(
-        tuple(row)
-        for row in (await session.execute(reference_statement)).all()
+        tuple(row) for row in (await session.execute(reference_statement)).all()
     )
     if edges_after != edges_before:
         raise LineageError("Hot-payload removal changed retained dependency edges.")

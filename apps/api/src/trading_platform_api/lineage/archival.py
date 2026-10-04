@@ -590,7 +590,7 @@ async def read_archived_market_batch(
         ):
             raise LineageError("Cold archive member differs from its lineage anchor.")
         verified[key] = record
-    session.info.setdefault("_verified_archived_market_batches", {})[
-        object_key
-    ] = verified
+    session.info.setdefault("_verified_archived_market_batches", {})[object_key] = (
+        verified
+    )
     return verified
