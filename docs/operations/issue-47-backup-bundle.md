@@ -14,15 +14,27 @@ versioning checks, immutable keys, and encrypted read-back for such a store.
 Backup keys must be unique per run so a later daily snapshot does not replace
 an earlier restore point.
 
-`BackupLimits.max_bundle_bytes` is a hard per-bundle byte bound. It is not a
-monthly storage/egress cost monitor and does not enforce the approved US$5
-backup allowance or US$100 total research budget. This helper does not invoke
-`pg_dump` or `pg_restore`, enumerate database-referenced archive objects,
-schedule daily runs, or restore into PostgreSQL. The current test proves
-deterministic packaging, member integrity checks, immutable publication, and
-verified byte recovery with a fake store. A disposable PostgreSQL restore and a
-credentialed B2 round trip remain required before this can count as operational
-backup/restore evidence.
+`BackupLimits.max_bundle_bytes` is a hard per-bundle byte bound. The
+`backup_costs` module validates a timezone-aware, current-month operator spend
+report and projects storage plus planned egress against the approved US$5
+backup allowance and US$100 total research budget. Its forecast is
+conservative: it ignores provider free tiers and adds a full-month storage and
+egress estimate to month-to-date spend. Missing, stale, or over-budget evidence
+raises `BackupBudgetError`.
+
+This is a cost-gate building block, not an integrated backup command: no caller
+currently supplies the spend report or inventory, and no cloud billing API or
+provider-side monetary cap is configured by this code. The operator must
+provide measured month-to-date spend and the complete post-backup object
+inventory before any future publisher integration can proceed.
+
+The backup helper does not invoke `pg_dump` or `pg_restore`, enumerate
+database-referenced archive objects, schedule daily runs, or restore into
+PostgreSQL. Tests prove deterministic packaging, member integrity checks,
+immutable publication, verified byte recovery with a fake store, and isolated
+cost forecast behavior. They do not constitute measured billing evidence. A
+disposable PostgreSQL restore and a credentialed B2 round trip remain required
+before this can count as operational backup/restore evidence.
 
 No retention scheduler or payload-removal path is enabled by this change.
 Keep source hot payloads until the complete backup, restore, reference, and
