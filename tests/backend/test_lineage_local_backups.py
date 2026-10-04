@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 from trading_platform_api.lineage.backups import BackupBundleError, verify_backup_bundle
+from trading_platform_api.lineage.local_backup_cli import (
+    _validate_restore_service,
+)
 from trading_platform_api.lineage.local_backups import (
     LocalBackupError,
     collect_referenced_archive_objects,
     create_local_backup,
     restore_local_backup,
-)
-from trading_platform_api.lineage.local_backup_cli import (
-    _validate_restore_service,
 )
 
 
