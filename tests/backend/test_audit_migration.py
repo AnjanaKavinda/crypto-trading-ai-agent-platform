@@ -88,7 +88,7 @@ def test_migration_lineage_and_single_head() -> None:
     scripts = ScriptDirectory.from_config(_config())
     assert migration.revision == "0002_audit_event_foundation"
     assert migration.down_revision == "0001_persistence_baseline"
-    assert scripts.get_heads() == ["0004_lineage_quality_reports"]
+    assert scripts.get_heads() == ["0005_market_payload_archive_boundary"]
 
 
 def test_offline_upgrade_contains_only_audit_foundation_ddl(monkeypatch) -> None:

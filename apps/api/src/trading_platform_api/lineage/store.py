@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 
 from sqlalchemy import and_, select
@@ -10,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
 from trading_platform_api.lineage.codec import (
     LineageError,
     LineageKey,
@@ -17,7 +19,13 @@ from trading_platform_api.lineage.codec import (
     encode,
     key_for,
 )
-from trading_platform_api.lineage.tables import links, records
+from trading_platform_api.lineage.policy import is_personal_spot_ohlcv
+from trading_platform_api.lineage.tables import (
+    links,
+    market_payloads,
+    payload_events,
+    records,
+)
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
     DataQualityStatus,
@@ -166,8 +174,14 @@ def _where(key: LineageKey, table=records):
 
 
 class SqlAlchemyLineageStore:
-    def __init__(self, session: AsyncSession):
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        archive_store: ImmutableObjectStore | None = None,
+    ):
         self._session = session
+        self._archive_store = archive_store
 
     async def get(self, key: LineageKey) -> object:
         row = (
@@ -178,6 +192,41 @@ class SqlAlchemyLineageStore:
         if row is None:
             raise LineageError("Exact lineage record is missing.")
         document = row["document"]
+        if document is None and key.contract_id == "C-001":
+            payload = (
+                (
+                    await self._session.execute(
+                        select(market_payloads).where(_where(key, market_payloads))
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if payload is not None:
+                document = payload["document"]
+                if (
+                    payload["document_sha256"] != row["document_sha256"]
+                    or payload["evidence_sha256"] != row["evidence_sha256"]
+                ):
+                    raise LineageError("Hot payload differs from its lineage anchor.")
+            elif self._archive_store is not None:
+                from trading_platform_api.lineage.archival import (
+                    read_archived_market_document,
+                )
+
+                document = await read_archived_market_document(
+                    self._session,
+                    key,
+                    self._archive_store,
+                    document_sha256=row["document_sha256"],
+                    evidence_sha256=row["evidence_sha256"],
+                )
+            else:
+                raise LineageError(
+                    "Market payload is not available in configured storage."
+                )
+        if document is None:
+            raise LineageError("Lineage payload is missing.")
         if sha256(document.encode("utf-8")).hexdigest() != row["document_sha256"]:
             raise LineageError("Stored document digest mismatch.")
         record = decode(document)
@@ -257,13 +306,16 @@ class SqlAlchemyLineageStore:
         document = encode(record)
         refs = await self._check_references(record)
         async with self._session.begin_nested():
+            document_sha256 = sha256(document.encode("utf-8")).hexdigest()
+            evidence_sha256 = canonical_sha256(record)
+            is_market_payload = is_personal_spot_ohlcv(record)
             statement = (
                 insert(records)
                 .values(
                     **_identity(key),
-                    document=document,
-                    document_sha256=sha256(document.encode("utf-8")).hexdigest(),
-                    evidence_sha256=canonical_sha256(record),
+                    document=None if is_market_payload else document,
+                    document_sha256=document_sha256,
+                    evidence_sha256=evidence_sha256,
                 )
                 .on_conflict_do_nothing()
                 .returning(records.c.record_id)
@@ -275,6 +327,34 @@ class SqlAlchemyLineageStore:
                         "Immutable identity already has different content."
                     )
             else:
+                if is_market_payload:
+                    await self._session.execute(
+                        insert(market_payloads).values(
+                            **_identity(key),
+                            document=document,
+                            document_sha256=document_sha256,
+                            evidence_sha256=evidence_sha256,
+                        )
+                    )
+                    event_material = "|".join(
+                        (
+                            key.contract_id,
+                            key.record_id,
+                            key.version,
+                            "HOT_WRITTEN",
+                            document_sha256,
+                        )
+                    )
+                    await self._session.execute(
+                        insert(payload_events).values(
+                            event_id=sha256(event_material.encode("utf-8")).hexdigest(),
+                            **_identity(key),
+                            event_type="HOT_WRITTEN",
+                            object_key=None,
+                            payload_sha256=document_sha256,
+                            occurred_at=datetime.now(UTC),
+                        )
+                    )
                 unique = {ref.key for ref in refs}
                 if unique:
                     await self._session.execute(
