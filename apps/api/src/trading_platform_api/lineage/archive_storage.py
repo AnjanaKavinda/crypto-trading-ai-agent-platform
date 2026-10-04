@@ -66,13 +66,16 @@ class ClientSideEncryption:
 
     @classmethod
     def from_environment(
-        cls, environ: Mapping[str, str] | None = None
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        prefix: str = "TRADING_PLATFORM_B2",
     ) -> ClientSideEncryption:
         source = os.environ if environ is None else environ
-        active_key_id = source.get("TRADING_PLATFORM_B2_ENCRYPTION_ACTIVE_KEY_ID")
-        keyring_json = source.get("TRADING_PLATFORM_B2_ENCRYPTION_KEYS_JSON")
+        active_key_id = source.get(f"{prefix}_ENCRYPTION_ACTIVE_KEY_ID")
+        keyring_json = source.get(f"{prefix}_ENCRYPTION_KEYS_JSON")
         if not active_key_id or not keyring_json:
-            raise ArchiveStorageError("B2 client-side encryption is not configured.")
+            raise ArchiveStorageError("Client-side encryption is not configured.")
         try:
             parsed: Any = json.loads(keyring_json)
             if type(parsed) is not dict:
@@ -86,7 +89,9 @@ class ClientSideEncryption:
                 raise ValueError
             return cls(active_key_id=active_key_id, keys=keys)
         except (ValueError, TypeError, binascii.Error) as exc:
-            raise ArchiveStorageError("B2 encryption keyring is invalid.") from exc
+            raise ArchiveStorageError(
+                "Client-side encryption keyring is invalid."
+            ) from exc
 
     def encrypt(self, object_key: str, plaintext: bytes) -> bytes:
         key_id = self.active_key_id.encode("ascii")
@@ -358,6 +363,65 @@ class LocalFilesystemObjectStore:
             return target.read_bytes()
         except FileNotFoundError as exc:
             raise ArchiveObjectMissing("Archive object is missing.") from exc
+
+
+class EncryptedObjectStore:
+    """Encrypt immutable objects before writing them to a local filesystem."""
+
+    def __init__(
+        self, store: ImmutableObjectStore, encryption: ClientSideEncryption
+    ) -> None:
+        self._store = store
+        self._encryption = encryption
+
+    @classmethod
+    def from_environment(
+        cls,
+        root: Path,
+        environ: Mapping[str, str] | None = None,
+    ) -> EncryptedObjectStore:
+        return cls(
+            LocalFilesystemObjectStore(root),
+            ClientSideEncryption.from_environment(
+                environ, prefix="TRADING_PLATFORM_LOCAL"
+            ),
+        )
+
+    async def put_if_absent(self, key: str, value: bytes) -> None:
+        _validate_object_key(key)
+        if type(value) is not bytes or not value:
+            raise ArchiveStorageError("Archive object must be nonempty bytes.")
+        try:
+            existing = await self._store.get(key)
+        except ArchiveObjectMissing:
+            existing = None
+        if existing is not None:
+            if self._encryption.decrypt(key, existing) != value:
+                raise ArchiveStorageError(
+                    "Immutable archive key already contains different bytes."
+                )
+            return
+        encrypted = self._encryption.encrypt(key, value)
+        try:
+            await self._store.put_if_absent(key, encrypted)
+        except ArchiveStorageError:
+            # Another writer may have won the immutable create race. Accept it
+            # only when the stored ciphertext authenticates to the same bytes.
+            try:
+                existing = await self._store.get(key)
+            except ArchiveStorageError:
+                raise
+            if self._encryption.decrypt(key, existing) != value:
+                raise ArchiveStorageError(
+                    "Immutable archive key already contains different bytes."
+                )
+        if await self.get(key) != value:
+            raise ArchiveStorageError("Local encrypted object failed read-back check.")
+
+    async def get(self, key: str) -> bytes:
+        _validate_object_key(key)
+        encrypted = await self._store.get(key)
+        return self._encryption.decrypt(key, encrypted)
 
 
 def _validate_object_key(key: str) -> None:

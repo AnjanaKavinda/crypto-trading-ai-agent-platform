@@ -1,0 +1,8 @@
+[Unit]
+Description=Create an encrypted local trading-platform lineage backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/trading-platform
+EnvironmentFile=%h/.config/trading-platform/backup.env
+ExecStart=%h/trading-platform/.venv/bin/python -m trading_platform_api.lineage.local_backup_cli backup

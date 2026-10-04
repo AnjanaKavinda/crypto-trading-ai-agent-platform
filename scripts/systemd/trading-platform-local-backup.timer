@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the local trading-platform backup daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=trading-platform-local-backup.service
+
+[Install]
+WantedBy=timers.target
