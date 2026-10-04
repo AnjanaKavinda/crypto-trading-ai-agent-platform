@@ -3,7 +3,7 @@
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0005_market_payload_archive_boundary"
+revision = "0005_market_payload_archive"
 down_revision = "0004_lineage_quality_reports"
 branch_labels = None
 depends_on = None
