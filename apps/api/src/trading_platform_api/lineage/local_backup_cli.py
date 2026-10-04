@@ -59,7 +59,7 @@ def _service_config(service_name: str) -> configparser.SectionProxy:
     service_file = Path(service_file_value).expanduser()
     if service_file.is_symlink() or not service_file.is_file():
         raise LocalBackupError("PostgreSQL service file is unavailable.")
-    if service_file.stat().st_mode & 0o077:
+    if service_file.stat().st_mode & 0o777 != 0o600:
         raise LocalBackupError("PostgreSQL service file permissions must be 0600.")
     parser = configparser.ConfigParser(interpolation=None)
     try:
