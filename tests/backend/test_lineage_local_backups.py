@@ -171,6 +171,7 @@ def test_restore_cli_allows_only_loopback_disposable_service(
     service_file = tmp_path / "pg_service.conf"
     service_file.write_text(
         "[trading_restore_test]\nhost=127.0.0.1\ndbname=trading_restore_test\n"
+        "user=user\n"
     )
     service_file.chmod(0o600)
     monkeypatch.setenv("TRADING_PLATFORM_PG_SERVICE_FILE", str(service_file))

@@ -327,7 +327,9 @@ async def _prune_hot(object_key: str) -> tuple[str, str, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create or restore a local encrypted lineage backup."
+        description=(
+            "Manage local encrypted backups and one-time verified hot-payload removal."
+        )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("backup", help="capture PostgreSQL and referenced archives")
