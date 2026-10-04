@@ -1,8 +1,11 @@
 """Real PostgreSQL integration on an explicitly disposable local database."""
 
 import asyncio
+import base64
 import hashlib
+import json
 import os
+import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -21,6 +24,7 @@ from test_point_in_time import evidence
 from trading_platform_api.lineage.archival import archive_market_data_batch
 from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
 from trading_platform_api.lineage.codec import LineageError, encode, key_for
+from trading_platform_api.lineage.local_backup_cli import _backup, _restore
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
@@ -371,5 +375,176 @@ def test_postgresql_verified_archive_resolves_cold_and_fails_closed_on_tamper(
                     raise RollbackArchiveFixture()
         finally:
             await engine.dispose()
+
+    asyncio.run(check())
+
+
+def test_postgresql_local_backup_restore_preserves_cold_c001_references(
+    database_url, tmp_path, monkeypatch
+):
+    source_url = make_url(database_url).set(database="trading_backup_source_ci")
+    monkeypatch.setenv("DATABASE_URL", source_url.render_as_string(hide_password=False))
+    command.upgrade(Config("apps/api/alembic.ini"), "head")
+
+    async def check():
+        restore_database = "trading_restore_ci"
+        service_file = tmp_path / "pg_service.conf"
+        service_file.write_text(
+            "\n".join(
+                (
+                    "[trading_dump]",
+                    "host=127.0.0.1",
+                    f"port={source_url.port or 5432}",
+                    f"dbname={source_url.database}",
+                    f"user={source_url.username or 'postgres'}",
+                    "",
+                    "[trading_restore_ci]",
+                    "host=127.0.0.1",
+                    f"port={source_url.port or 5432}",
+                    f"dbname={restore_database}",
+                    f"user={source_url.username or 'postgres'}",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        service_file.chmod(0o600)
+        archive_root = tmp_path / "archive"
+        backup_root = tmp_path / "backup"
+        monkeypatch.setenv("TRADING_PLATFORM_PG_SERVICE_FILE", str(service_file))
+        monkeypatch.setenv("TRADING_PLATFORM_PG_DUMP_SERVICE", "trading_dump")
+        monkeypatch.setenv("TRADING_PLATFORM_PG_RESTORE_SERVICE", restore_database)
+        monkeypatch.setenv("TRADING_PLATFORM_LOCAL_ARCHIVE_ROOT", str(archive_root))
+        monkeypatch.setenv("TRADING_PLATFORM_LOCAL_BACKUP_ROOT", str(backup_root))
+        monkeypatch.setenv("TRADING_PLATFORM_LOCAL_ENCRYPTION_ACTIVE_KEY_ID", "ci")
+        monkeypatch.setenv(
+            "TRADING_PLATFORM_LOCAL_ENCRYPTION_KEYS_JSON",
+            json.dumps({"ci": base64.b64encode(b"\x19" * 32).decode("ascii")}),
+        )
+
+        sources, observations, snapshot, quality = records_for_report()
+        keys = tuple(key_for(item) for item in observations)
+        archive_store = LocalFilesystemObjectStore(archive_root)
+
+        async def remove_hot_payloads(session):
+            for item, key in zip(observations, keys, strict=True):
+                document_sha = sha256(encode(item).encode("utf-8")).hexdigest()
+                event_material = "|".join(
+                    (
+                        key.contract_id,
+                        key.record_id,
+                        key.version,
+                        "HOT_REMOVED",
+                        document_sha,
+                    )
+                )
+                await session.execute(
+                    insert(payload_events).values(
+                        event_id=hashlib.sha256(
+                            event_material.encode("utf-8")
+                        ).hexdigest(),
+                        contract_id=key.contract_id,
+                        record_id=key.record_id,
+                        version=key.version,
+                        event_type="HOT_REMOVED",
+                        object_key=object_key,
+                        payload_sha256=document_sha,
+                        occurred_at=datetime.now(UTC),
+                    )
+                )
+                deleted = await session.execute(
+                    delete(market_payloads).where(
+                        market_payloads.c.contract_id == key.contract_id,
+                        market_payloads.c.record_id == key.record_id,
+                        market_payloads.c.version == key.version,
+                    )
+                )
+                assert deleted.rowcount == 1
+
+        source_engine = create_async_engine(source_url)
+        source_sessions = async_sessionmaker(source_engine, expire_on_commit=False)
+        try:
+            async with source_sessions.begin() as session:
+                store = SqlAlchemyLineageStore(session, archive_store=archive_store)
+                await append_validated_market_snapshot(
+                    store,
+                    sources=sources,
+                    observations=observations,
+                    snapshot=snapshot,
+                    quality=quality,
+                )
+                object_key = await archive_market_data_batch(
+                    session,
+                    archive_store,
+                    keys,
+                    now=datetime.now(UTC),
+                )
+        finally:
+            await source_engine.dispose()
+
+        backup_key, backup_sha256 = await _backup()
+        shutil.rmtree(archive_root)
+        restored_sha256 = await _restore(backup_key)
+        assert restored_sha256 == backup_sha256
+
+        restore_url = source_url.set(database=restore_database).render_as_string(
+            hide_password=False
+        )
+        restore_engine = create_async_engine(restore_url)
+        restore_sessions = async_sessionmaker(restore_engine)
+        restored_store = LocalFilesystemObjectStore(archive_root)
+        try:
+            async with restore_sessions.begin() as session:
+                await remove_hot_payloads(session)
+            async with restore_sessions() as session:
+                lineage = SqlAlchemyLineageStore(session, archive_store=restored_store)
+                graph = await lineage.resolve((key_for(quality),))
+                assert graph[key_for(quality)] == quality
+                assert graph[key_for(snapshot)] == snapshot
+                assert all(graph[key_for(item)] == item for item in sources)
+                assert all(graph[key_for(item)] == item for item in observations)
+
+                hot_rows = (
+                    await session.execute(
+                        select(market_payloads).where(
+                            market_payloads.c.contract_id == "C-001",
+                            market_payloads.c.record_id.in_(
+                                [key.record_id for key in keys]
+                            ),
+                        )
+                    )
+                ).all()
+                assert hot_rows == []
+                retained_members = (
+                    await session.execute(
+                        select(archive_members).where(
+                            archive_members.c.object_key == object_key
+                        )
+                    )
+                ).all()
+                assert len(retained_members) == len(observations)
+                retained_events = (
+                    await session.execute(
+                        select(payload_events).where(
+                            payload_events.c.object_key == object_key,
+                            payload_events.c.event_type == "HOT_REMOVED",
+                        )
+                    )
+                ).all()
+                assert len(retained_events) == len(observations)
+        finally:
+            await restore_engine.dispose()
+
+        source_engine = create_async_engine(source_url)
+        source_sessions = async_sessionmaker(source_engine)
+        try:
+            async with source_sessions.begin() as session:
+                await remove_hot_payloads(session)
+            async with source_sessions() as session:
+                lineage = SqlAlchemyLineageStore(session, archive_store=restored_store)
+                graph = await lineage.resolve((key_for(quality),))
+                assert all(graph[key_for(item)] == item for item in observations)
+        finally:
+            await source_engine.dispose()
 
     asyncio.run(check())

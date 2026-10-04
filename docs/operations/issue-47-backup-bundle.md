@@ -72,6 +72,14 @@ the required disposable `trading_restore_*` target. After restoration, run the
 lineage resolver against restored C-001 keys and verify referenced analysis
 inputs resolve before treating the restore as proven.
 
+Product CI runs this flow against separate disposable local PostgreSQL source
+and restore databases. It uses the actual encrypted backup and restore
+commands, verifies restored C-001 archive resolution and retained lineage
+references, and removes hot payloads only after the restore-side checks pass.
+A passing Product CI run is reproducible drill evidence for this workflow;
+operators should still perform a restore against their own local archive and
+backup directories before enabling any separate retention operation.
+
 The backup command and object-integrity unit tests do not replace a completed
 restore drill. Hot-payload removal remains disabled until a disposable restore
 and resolver/reference checks have been recorded and separately reviewed.
