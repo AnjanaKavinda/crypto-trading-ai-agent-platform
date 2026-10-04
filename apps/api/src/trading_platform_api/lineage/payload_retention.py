@@ -285,8 +285,9 @@ async def remove_archived_hot_payloads(
             )
             .on_conflict_do_nothing(index_elements=[payload_events.c.event_id])
         )
-        deleted = await session.execute(
-            delete(market_payloads).where(
+        deleted_record_id = await session.scalar(
+            delete(market_payloads)
+            .where(
                 tuple_(
                     market_payloads.c.contract_id,
                     market_payloads.c.record_id,
@@ -294,8 +295,9 @@ async def remove_archived_hot_payloads(
                 )
                 == identity
             )
+            .returning(market_payloads.c.record_id)
         )
-        if deleted.rowcount != 1:
+        if deleted_record_id != key.record_id:
             raise LineageError("Hot-payload removal did not affect one exact record.")
         removed.append(key)
         if await lineage.get(key) != archived:
