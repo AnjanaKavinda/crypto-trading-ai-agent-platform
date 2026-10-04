@@ -461,7 +461,7 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
                 )
                 assert deleted.rowcount == 1
 
-        source_engine = create_async_engine(database_url)
+        source_engine = create_async_engine(source_url)
         source_sessions = async_sessionmaker(source_engine, expire_on_commit=False)
         try:
             async with source_sessions.begin() as session:
@@ -535,7 +535,7 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
         finally:
             await restore_engine.dispose()
 
-        source_engine = create_async_engine(database_url)
+        source_engine = create_async_engine(source_url)
         source_sessions = async_sessionmaker(source_engine)
         try:
             async with source_sessions.begin() as session:
