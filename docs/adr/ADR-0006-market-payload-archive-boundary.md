@@ -8,7 +8,7 @@
 | Date | 2026-10-04 |
 | Decision owner | Platform Architect |
 | Human approver | AnjanaKavinda |
-| GitHub issue / PR | [#47](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/47) / [#305](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/305) |
+| GitHub issue / PR | [#47](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/47) / [#306](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/306) |
 | Open decision ID | OD-0008, OD-0017 (bounded personal Spot OHLCV scope) |
 | Related ADRs | ADR-0003, ADR-0005 |
 | Supersedes / superseded by | — |
