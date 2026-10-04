@@ -45,7 +45,7 @@ def test_cost_forecast_uses_decimal_costs_and_passes_below_limits() -> None:
 def test_cost_forecast_rejects_projection_over_backup_limit() -> None:
     with pytest.raises(BackupBudgetError, match="backup spend"):
         forecast_backup_cost(
-            report(backup=Decimal("4.99")),
+            report(backup=Decimal("4.999")),
             stored_bytes_after_backup=1024**3,
             planned_monthly_egress_bytes=0,
             now=NOW,
@@ -56,7 +56,7 @@ def test_cost_forecast_rejects_projection_over_total_research_limit() -> None:
     limits = BackupCostLimits(max_backup_spend_usd=Decimal("10"))
     with pytest.raises(BackupBudgetError, match="total research spend"):
         forecast_backup_cost(
-            report(total=Decimal("99.99")),
+            report(total=Decimal("99.999")),
             stored_bytes_after_backup=1024**3,
             planned_monthly_egress_bytes=0,
             now=NOW,
