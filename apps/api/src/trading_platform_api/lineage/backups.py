@@ -288,13 +288,15 @@ def _validate_manifest(manifest: object, names: list[str]) -> None:
 def _read_verified_member(
     bundle: zipfile.ZipFile, record: Mapping[str, object]
 ) -> bytes:
+    name = record.get("name")
+    size = record.get("size")
+    digest = record.get("sha256")
+    if type(name) is not str or type(size) is not int or type(digest) is not str:
+        raise BackupBundleError("Backup member metadata is invalid.")
     try:
-        payload = bundle.read(record["name"])
+        payload = bundle.read(name)
     except (KeyError, OSError, zipfile.BadZipFile) as exc:
         raise BackupBundleError("Backup member could not be read.") from exc
-    if (
-        len(payload) != record["size"]
-        or hashlib.sha256(payload).hexdigest() != record["sha256"]
-    ):
+    if len(payload) != size or hashlib.sha256(payload).hexdigest() != digest:
         raise BackupBundleError("Backup member failed size or digest verification.")
     return payload
