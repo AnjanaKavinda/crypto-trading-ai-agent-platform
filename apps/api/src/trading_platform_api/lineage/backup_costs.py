@@ -119,7 +119,9 @@ def forecast_backup_cost(
 
     tib = Decimal(1024**4)
     gib = Decimal(1024**3)
-    storage = Decimal(stored_bytes_after_backup) * limits.storage_usd_per_tib_month / tib
+    storage = (
+        Decimal(stored_bytes_after_backup) * limits.storage_usd_per_tib_month / tib
+    )
     egress = Decimal(planned_monthly_egress_bytes) * limits.egress_usd_per_gib / gib
     estimate = storage + egress
     backup_forecast = report.backup_spend_usd + estimate
