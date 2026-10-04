@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import io
 from collections.abc import Mapping
 from typing import Any
@@ -50,6 +51,13 @@ class FakeB2Client:
 
 def encryption(key_id: str = "key-v1") -> ClientSideEncryption:
     return ClientSideEncryption(active_key_id=key_id, keys={key_id: b"k" * 32})
+
+
+def archive_object_key() -> str:
+    digest = hashlib.sha256(b"fixture archive object").hexdigest()
+    venue = hashlib.sha256(b"venue fixture").hexdigest()[:16]
+    instrument = hashlib.sha256(b"instrument fixture").hexdigest()[:16]
+    return f"spot-ohlcv/v1/date=2026-01-01/venue={venue}/instrument={instrument}/{digest}.jsonl.gz"
 
 
 @pytest.fixture(autouse=True)
@@ -130,11 +138,7 @@ def test_b2_settings_require_https_and_region_matched_b2_endpoint() -> None:
 def test_b2_storage_encrypts_uploads_and_verifies_idempotent_readback() -> None:
     client = FakeB2Client()
     store = BackblazeB2ObjectStore(client, "test-archive", encryption())
-    key = (
-        "spot-ohlcv/v1/date=2026-01-01/venue=0123456789abcdef/instrument=fedcba9876543210/"
-        + "a" * 64
-        + ".jsonl.gz"
-    )
+    key = archive_object_key()
     value = b"compressed archive bytes"
 
     async def check() -> None:
@@ -150,11 +154,7 @@ def test_b2_storage_encrypts_uploads_and_verifies_idempotent_readback() -> None:
 def test_b2_storage_fails_on_existing_conflict_without_overwriting() -> None:
     client = FakeB2Client()
     store = BackblazeB2ObjectStore(client, "test-archive", encryption())
-    key = (
-        "spot-ohlcv/v1/date=2026-01-01/venue=0123456789abcdef/instrument=fedcba9876543210/"
-        + "a" * 64
-        + ".jsonl.gz"
-    )
+    key = archive_object_key()
 
     async def check() -> None:
         await store.put_if_absent(key, b"first content")
@@ -168,11 +168,7 @@ def test_b2_storage_fails_on_existing_conflict_without_overwriting() -> None:
 def test_b2_storage_refuses_writes_without_enabled_bucket_versioning() -> None:
     client = FakeB2Client(versioning="Suspended")
     store = BackblazeB2ObjectStore(client, "test-archive", encryption())
-    key = (
-        "spot-ohlcv/v1/date=2026-01-01/venue=0123456789abcdef/instrument=fedcba9876543210/"
-        + "a" * 64
-        + ".jsonl.gz"
-    )
+    key = archive_object_key()
 
     async def check() -> None:
         with pytest.raises(ArchiveStorageError, match="versioning must be enabled"):
@@ -185,11 +181,7 @@ def test_b2_storage_refuses_writes_without_enabled_bucket_versioning() -> None:
 def test_b2_storage_distinguishes_missing_from_access_denied() -> None:
     client = FakeB2Client()
     store = BackblazeB2ObjectStore(client, "test-archive", encryption())
-    key = (
-        "spot-ohlcv/v1/date=2026-01-01/venue=0123456789abcdef/instrument=fedcba9876543210/"
-        + "a" * 64
-        + ".jsonl.gz"
-    )
+    key = archive_object_key()
 
     async def check() -> None:
         with pytest.raises(ArchiveStorageError, match="missing"):
