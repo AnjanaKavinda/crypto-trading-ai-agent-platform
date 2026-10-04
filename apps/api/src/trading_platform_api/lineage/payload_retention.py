@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, tuple_
@@ -26,6 +27,12 @@ _HOT_RETENTION = timedelta(days=90)
 _MAX_REFERENCE_ROOTS = 1000
 
 
+@dataclass(frozen=True, slots=True)
+class HotPayloadRemovalResult:
+    members: tuple[LineageKey, ...]
+    removed: tuple[LineageKey, ...]
+
+
 def _key_tuple(key: LineageKey) -> tuple[str, str, str]:
     return key.contract_id, key.record_id, key.version
 
@@ -37,7 +44,8 @@ async def remove_archived_hot_payloads(
     *,
     now: datetime | None = None,
     expected_record_ids: tuple[str, ...] | None = None,
-) -> tuple[LineageKey, ...]:
+    expected_removed_record_ids: tuple[str, ...] | None = None,
+) -> HotPayloadRemovalResult:
     """Remove one verified old archive batch's hot copies in the caller's txn.
 
     This function never deletes lineage anchors, archive members, or dependency
@@ -77,6 +85,17 @@ async def remove_archived_hot_payloads(
     }:
         raise LineageError(
             "Source cold membership differs from the validated disposable restore."
+        )
+    expected_removed = (
+        None
+        if expected_removed_record_ids is None
+        else set(expected_removed_record_ids)
+    )
+    if expected_removed is not None and not expected_removed.issubset(
+        {key.record_id for key in keys}
+    ):
+        raise LineageError(
+            "Validated restore removal set differs from its cold membership."
         )
     archived_records = await read_archived_market_batch(
         session, archive_store, object_key
@@ -149,6 +168,7 @@ async def remove_archived_hot_payloads(
     }
 
     lineage = SqlAlchemyLineageStore(session, archive_store=archive_store)
+    removed: list[LineageKey] = []
     for member in member_rows:
         key = LineageKey(
             member["contract_id"], member["record_id"], member["version"]
@@ -228,7 +248,15 @@ async def remove_archived_hot_payloads(
         if hot is None:
             if removed_event is None:
                 raise LineageError("Hot payload is missing without removal evidence.")
+            if expected_removed is not None and key.record_id in expected_removed:
+                raise LineageError(
+                    "Source hot state differs from the validated disposable restore."
+                )
             continue
+        if expected_removed is not None and key.record_id not in expected_removed:
+            raise LineageError(
+                "Source hot state differs from the validated disposable restore."
+            )
         if removed_event is not None:
             raise LineageError("Hot payload conflicts with prior removal evidence.")
         if (
@@ -273,6 +301,7 @@ async def remove_archived_hot_payloads(
         )
         if deleted.rowcount != 1:
             raise LineageError("Hot-payload removal did not affect one exact record.")
+        removed.append(key)
         if await lineage.get(key) != archived:
             raise LineageError("Cold resolver failed after hot-payload removal.")
 
@@ -308,4 +337,4 @@ async def remove_archived_hot_payloads(
     if {tuple(row) for row in anchors_after} != set(key_values):
         raise LineageError("Hot-payload removal changed lineage anchors.")
 
-    return keys
+    return HotPayloadRemovalResult(keys, tuple(removed))

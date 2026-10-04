@@ -268,7 +268,8 @@ async def _remove_hot_payloads_from_database(
     database_url: str | None = None,
     *,
     expected_record_ids: tuple[str, ...] | None = None,
-) -> tuple[str, ...]:
+    expected_removed_record_ids: tuple[str, ...] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     archive_root, _ = _local_roots()
     settings = load_database_settings()
     if database_url is not None:
@@ -282,8 +283,12 @@ async def _remove_hot_payloads_from_database(
                 LocalFilesystemObjectStore(archive_root),
                 object_key,
                 expected_record_ids=expected_record_ids,
+                expected_removed_record_ids=expected_removed_record_ids,
             )
-        return tuple(key.record_id for key in removed)
+        return (
+            tuple(key.record_id for key in removed.members),
+            tuple(key.record_id for key in removed.removed),
+        )
     finally:
         await engine.dispose()
 
@@ -307,13 +312,17 @@ async def _prune_hot(object_key: str) -> tuple[str, str, int]:
     restore_url = make_url(load_database_settings().database_url).set(
         database=restore_database
     )
-    restored_ids = await _remove_hot_payloads_from_database(
+    restored_members, restored_removed = await _remove_hot_payloads_from_database(
         object_key, restore_url.render_as_string(hide_password=False)
     )
-    source_ids = await _remove_hot_payloads_from_database(
-        object_key, expected_record_ids=restored_ids
+    source_members, source_removed = await _remove_hot_payloads_from_database(
+        object_key,
+        expected_record_ids=restored_members,
+        expected_removed_record_ids=restored_removed,
     )
-    return backup_key, backup_digest, len(source_ids)
+    if source_members != restored_members or source_removed != restored_removed:
+        raise LocalBackupError("Source removal differs from the validated restore.")
+    return backup_key, backup_digest, len(source_removed)
 
 
 def main() -> None:
