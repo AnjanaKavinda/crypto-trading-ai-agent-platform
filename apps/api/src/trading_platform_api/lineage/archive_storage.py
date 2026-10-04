@@ -89,7 +89,9 @@ class ClientSideEncryption:
                 raise ValueError
             return cls(active_key_id=active_key_id, keys=keys)
         except (ValueError, TypeError, binascii.Error) as exc:
-            raise ArchiveStorageError("Client-side encryption keyring is invalid.") from exc
+            raise ArchiveStorageError(
+                "Client-side encryption keyring is invalid."
+            ) from exc
 
     def encrypt(self, object_key: str, plaintext: bytes) -> bytes:
         key_id = self.active_key_id.encode("ascii")

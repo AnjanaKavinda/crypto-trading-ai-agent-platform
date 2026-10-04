@@ -90,10 +90,9 @@ def _validate_dump_service() -> str:
 def _validate_restore_service() -> str:
     service_name = os.environ.get("TRADING_PLATFORM_PG_RESTORE_SERVICE", "")
     section = _service_config(service_name)
-    if (
-        not service_name.startswith(_RESTORE_PREFIX)
-        or not section.get("dbname", "").startswith(_RESTORE_PREFIX)
-    ):
+    if not service_name.startswith(_RESTORE_PREFIX) or not section.get(
+        "dbname", ""
+    ).startswith(_RESTORE_PREFIX):
         raise LocalBackupError(
             "Restore is allowed only to a local disposable trading_restore_* database."
         )
