@@ -5,7 +5,6 @@ import hashlib
 from datetime import UTC, datetime
 
 import pytest
-
 from trading_platform_api.lineage.backups import BackupBundleError, verify_backup_bundle
 from trading_platform_api.lineage.local_backups import (
     LocalBackupError,
