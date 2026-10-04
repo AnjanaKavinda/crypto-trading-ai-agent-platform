@@ -86,13 +86,9 @@ def _validate_dump_service() -> str:
         )
     service_port = section.getint("port", fallback=5432)
     if service_port != (database_url.port or 5432):
-        raise LocalBackupError(
-            "pg_dump service port must match DATABASE_URL's port."
-        )
+        raise LocalBackupError("pg_dump service port must match DATABASE_URL's port.")
     if database_url.username and section.get("user") != database_url.username:
-        raise LocalBackupError(
-            "pg_dump service user must match DATABASE_URL's user."
-        )
+        raise LocalBackupError("pg_dump service user must match DATABASE_URL's user.")
     return service_name
 
 
