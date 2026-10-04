@@ -494,9 +494,7 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
             async with restore_sessions.begin() as session:
                 await remove_hot_payloads(session)
             async with restore_sessions() as session:
-                lineage = SqlAlchemyLineageStore(
-                    session, archive_store=restored_store
-                )
+                lineage = SqlAlchemyLineageStore(session, archive_store=restored_store)
                 graph = await lineage.resolve((key_for(quality),))
                 assert graph[key_for(quality)] == quality
                 assert graph[key_for(snapshot)] == snapshot
