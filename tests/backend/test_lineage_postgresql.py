@@ -21,10 +21,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from test_history_selection import history
 from test_lineage_quality import records_for_report
 from test_point_in_time import evidence
+from trading_platform_api.lineage import local_backup_cli
 from trading_platform_api.lineage.archival import archive_market_data_batch
 from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
 from trading_platform_api.lineage.codec import LineageError, encode, key_for
-from trading_platform_api.lineage.local_backup_cli import _backup, _restore
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
@@ -426,41 +426,6 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
         keys = tuple(key_for(item) for item in observations)
         archive_store = LocalFilesystemObjectStore(archive_root)
 
-        async def remove_hot_payloads(session):
-            for item, key in zip(observations, keys, strict=True):
-                document_sha = sha256(encode(item).encode("utf-8")).hexdigest()
-                event_material = "|".join(
-                    (
-                        key.contract_id,
-                        key.record_id,
-                        key.version,
-                        "HOT_REMOVED",
-                        document_sha,
-                    )
-                )
-                await session.execute(
-                    insert(payload_events).values(
-                        event_id=hashlib.sha256(
-                            event_material.encode("utf-8")
-                        ).hexdigest(),
-                        contract_id=key.contract_id,
-                        record_id=key.record_id,
-                        version=key.version,
-                        event_type="HOT_REMOVED",
-                        object_key=object_key,
-                        payload_sha256=document_sha,
-                        occurred_at=datetime.now(UTC),
-                    )
-                )
-                deleted = await session.execute(
-                    delete(market_payloads).where(
-                        market_payloads.c.contract_id == key.contract_id,
-                        market_payloads.c.record_id == key.record_id,
-                        market_payloads.c.version == key.version,
-                    )
-                )
-                assert deleted.rowcount == 1
-
         source_engine = create_async_engine(source_url)
         source_sessions = async_sessionmaker(source_engine, expire_on_commit=False)
         try:
@@ -482,10 +447,22 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
         finally:
             await source_engine.dispose()
 
-        backup_key, backup_sha256 = await _backup()
-        shutil.rmtree(archive_root)
-        restored_sha256 = await _restore(backup_key)
-        assert restored_sha256 == backup_sha256
+        real_backup = local_backup_cli._backup
+
+        async def backup_then_remove_archive_copy():
+            backup = await real_backup()
+            shutil.rmtree(archive_root)
+            return backup
+
+        monkeypatch.setattr(
+            local_backup_cli, "_backup", backup_then_remove_archive_copy
+        )
+        backup_key, backup_sha256, removed_count = await local_backup_cli._prune_hot(
+            object_key
+        )
+        assert backup_key.endswith(".zip")
+        assert len(backup_sha256) == 64
+        assert removed_count == len(observations)
 
         restore_url = source_url.set(database=restore_database).render_as_string(
             hide_password=False
@@ -494,8 +471,6 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
         restore_sessions = async_sessionmaker(restore_engine)
         restored_store = LocalFilesystemObjectStore(archive_root)
         try:
-            async with restore_sessions.begin() as session:
-                await remove_hot_payloads(session)
             async with restore_sessions() as session:
                 lineage = SqlAlchemyLineageStore(session, archive_store=restored_store)
                 graph = await lineage.resolve((key_for(quality),))
@@ -538,12 +513,21 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
         source_engine = create_async_engine(source_url)
         source_sessions = async_sessionmaker(source_engine)
         try:
-            async with source_sessions.begin() as session:
-                await remove_hot_payloads(session)
             async with source_sessions() as session:
                 lineage = SqlAlchemyLineageStore(session, archive_store=restored_store)
                 graph = await lineage.resolve((key_for(quality),))
                 assert all(graph[key_for(item)] == item for item in observations)
+                hot_rows = (
+                    await session.execute(
+                        select(market_payloads).where(
+                            market_payloads.c.contract_id == "C-001",
+                            market_payloads.c.record_id.in_(
+                                [key.record_id for key in keys]
+                            ),
+                        )
+                    )
+                ).all()
+                assert hot_rows == []
         finally:
             await source_engine.dispose()
 

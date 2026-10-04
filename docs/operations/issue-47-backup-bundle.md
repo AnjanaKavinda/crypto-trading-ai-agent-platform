@@ -68,9 +68,11 @@ python -m trading_platform_api.lineage.local_backup_cli restore daily/YYYY/MM/DD
 
 The command verifies the complete bundle before restoring archive objects and
 calling `pg_restore`. It never creates, drops, or selects a database outside
-the required disposable `trading_restore_*` target. After restoration, run the
-lineage resolver against restored C-001 keys and verify referenced analysis
-inputs resolve before treating the restore as proven.
+the required disposable `trading_restore_*` target. The target must be empty;
+the command checks this before running `pg_restore` and refuses to overwrite
+user relations. After restoration, run the lineage resolver against restored
+C-001 keys and verify referenced analysis inputs resolve before treating the
+restore as proven.
 
 Product CI runs this flow against separate disposable local PostgreSQL source
 and restore databases. It uses the actual encrypted backup and restore
@@ -78,8 +80,40 @@ commands, verifies restored C-001 archive resolution and retained lineage
 references, and removes hot payloads only after the restore-side checks pass.
 A passing Product CI run is reproducible drill evidence for this workflow;
 operators should still perform a restore against their own local archive and
-backup directories before enabling any separate retention operation.
+backup directories before using the manual source removal command.
 
 The backup command and object-integrity unit tests do not replace a completed
-restore drill. Hot-payload removal remains disabled until a disposable restore
-and resolver/reference checks have been recorded and separately reviewed.
+restore drill. Automated hot-payload removal remains disabled. The manual
+command below reruns the required backup, disposable restore, and
+resolver/reference checks before each explicit source removal.
+
+## Manually remove one eligible hot batch
+
+Hot-payload removal is a one-time operator action. It is never run by the
+daily backup timer. Configure both the local source settings and a separate,
+empty `trading_restore_*` database/service as described above, then name the
+exact immutable archive object key:
+
+```sh
+python -m trading_platform_api.lineage.local_backup_cli prune-hot \
+  'spot-ohlcv/v1/date=YYYY-MM-DD/venue=.../instrument=.../<digest>.jsonl.gz' \
+  --confirm
+```
+
+The command creates and verifies a fresh encrypted local backup, restores it
+to the empty disposable target, and checks archive membership, the 90-day hot
+window, cold digests, resolver results, and retained reference roots there.
+Only after that transaction succeeds does it validate the same object and
+membership against the source and remove the source hot rows in one database
+transaction. If any check fails, that database transaction rolls back. The
+source operation also requires the same member IDs as the validated restore.
+The immutable lineage anchors, dependency edges, archive membership, and
+append-only location events remain in place; `HOT_REMOVED` is recorded for
+each removed payload. The disposable restore target is not created, dropped,
+or automatically cleaned up by the command.
+
+The command does not bypass the retained-analysis rule: if affected reference
+roots cannot resolve exactly from the verified cold object, removal fails.
+Keep the backup encryption key outside the repository. Local backup and
+archive directories remain on one machine and do not protect against loss of
+that machine.

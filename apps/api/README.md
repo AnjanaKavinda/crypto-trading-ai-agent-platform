@@ -269,14 +269,19 @@ dependency extra; it requires `TRADING_PLATFORM_B2_ENDPOINT_URL`,
 endpoint for the configured region, bucket versioning must be enabled, and the
 keyring contains base64-encoded 32-byte AES keys keyed by key ID. Keep all
 credentials and encryption keys in a secret manager; no B2 credentials or
-automatic production selection are configured by this adapter. Backup/restore
-proof, cost guard and scheduled retention job remain outstanding.
+automatic production selection are configured by this adapter. Phase 1 uses
+the local filesystem and encrypted local backup adapter. Cloud configuration
+and cloud cost controls are deferred by ADR-0007.
 
 The migration keeps lineage edges and identity/digest anchors append-only. A
 narrow C-001 document relocation is allowed only after cold membership and
 `COLD_VERIFIED`/`HOT_REMOVED` evidence exist. Hot payload deletes have the same
-database guard. No application purge routine is enabled. This is not protection
-against a database administrator disabling triggers or replacing backups.
+database guard. A one-shot local `prune-hot` command requires explicit operator
+confirmation, a fresh verified backup, a successful disposable restore, and
+cold resolver/reference checks before source removal; it is never scheduled
+or run automatically. See `docs/operations/issue-47-backup-bundle.md`. This is
+not protection against a database administrator disabling triggers or
+replacing backups.
 Caller-owned transactions determine batch atomicity. Concurrent identical
 inserts use PostgreSQL conflict handling; conflicting content is rejected.
 Database transaction failures propagate without blind retries.
@@ -284,9 +289,9 @@ Database transaction failures propagate without blind retries.
 The store retains normalized evidence, provider/adapter/schema and usage
 references, all contract timestamps, revision links and content digests. Cold
 archive writes and fail-closed reads are implemented behind an immutable object
-store port; production B2 configuration, backup/restore and automated retention
-remain open in #47. Production topology, continuous ingestion and trading
-readiness also remain out of scope. Downgrading restores inline C-001 documents
+store port; cloud B2 configuration and automated retention remain deferred.
+Production topology, continuous ingestion and trading readiness also remain
+out of scope. Downgrading restores inline C-001 documents
 from hot payloads and fails if a cold-only restore is required; use only a
 disposable database or an explicitly approved restore plan.
 

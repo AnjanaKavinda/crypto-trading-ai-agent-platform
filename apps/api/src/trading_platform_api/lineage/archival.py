@@ -18,7 +18,13 @@ from trading_platform_api.lineage.archive_storage import (
     ArchiveStorageError,
     ImmutableObjectStore,
 )
-from trading_platform_api.lineage.codec import LineageError, LineageKey, encode, key_for
+from trading_platform_api.lineage.codec import (
+    LineageError,
+    LineageKey,
+    decode,
+    encode,
+    key_for,
+)
 from trading_platform_api.lineage.policy import is_personal_spot_ohlcv
 from trading_platform_api.lineage.tables import (
     archive_members,
@@ -373,6 +379,19 @@ async def read_archived_market_document(
     )
     if object_row is None:
         raise LineageError("Cold archive manifest is missing.")
+    cached_batches = session.info.get("_verified_archived_market_batches", {})
+    cached_records = cached_batches.get(member["object_key"])
+    if cached_records is not None:
+        record = cached_records.get(key)
+        if record is None:
+            raise LineageError("Cold archive member is absent from its verified batch.")
+        document = encode(record)
+        if (
+            _digest(document.encode("utf-8")) != document_sha256
+            or canonical_sha256(record) != evidence_sha256
+        ):
+            raise LineageError("Cold archive cache differs from its lineage anchor.")
+        return document
     try:
         compressed = await object_store.get(object_row["object_key"])
         manifest = await object_store.get(object_row["manifest_key"])
@@ -460,3 +479,118 @@ async def read_archived_market_document(
                 )
             return document
     raise LineageError("Cold archive manifest does not contain the requested key.")
+
+
+async def read_archived_market_batch(
+    session: AsyncSession,
+    object_store: ImmutableObjectStore,
+    object_key: str,
+) -> dict[LineageKey, MarketData]:
+    """Read and verify every member in one cold object with a single pass."""
+
+    object_row = (
+        (
+            await session.execute(
+                select(archive_objects).where(
+                    archive_objects.c.object_key == object_key
+                )
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if object_row is None:
+        raise LineageError("Cold archive manifest is missing.")
+    try:
+        compressed = await object_store.get(object_row["object_key"])
+        manifest = await object_store.get(object_row["manifest_key"])
+    except ArchiveStorageError as exc:
+        raise LineageError("Cold archive payload is unavailable.") from exc
+    if (
+        _digest(compressed) != object_row["compressed_sha256"]
+        or _digest(manifest) != object_row["manifest_sha256"]
+    ):
+        raise LineageError("Cold archive object or manifest digest mismatch.")
+    try:
+        if len(compressed) > _MAX_BUNDLE_BYTES:
+            raise LineageError("Cold archive object exceeds its compressed-size limit.")
+        manifest_data = json.loads(manifest)
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
+            bundle = stream.read(_MAX_BUNDLE_BYTES + 1)
+    except (ValueError, OSError, EOFError, zlib.error) as exc:
+        raise LineageError("Cold archive object is corrupt.") from exc
+    if (
+        type(manifest_data) is not dict
+        or manifest_data.get("format") != "lineage-market-archive-v1"
+        or manifest_data.get("object_key") != object_key
+        or manifest_data.get("compressed_sha256") != object_row["compressed_sha256"]
+        or manifest_data.get("bundle_sha256") != object_row["bundle_sha256"]
+        or manifest_data.get("record_count") != object_row["record_count"]
+        or len(bundle) > _MAX_BUNDLE_BYTES
+        or _digest(bundle) != object_row["bundle_sha256"]
+    ):
+        raise LineageError("Cold archive manifest does not match its database record.")
+
+    member_rows = (
+        (
+            await session.execute(
+                select(archive_members)
+                .where(archive_members.c.object_key == object_key)
+                .order_by(archive_members.c.event_time, archive_members.c.record_id)
+                .limit(_MAX_RECORDS_PER_OBJECT + 1)
+            )
+        )
+        .mappings()
+        .all()
+    )
+    if (
+        not member_rows
+        or len(member_rows) != object_row["record_count"]
+        or len(member_rows) > _MAX_RECORDS_PER_OBJECT
+    ):
+        raise LineageError("Cold archive member count is inconsistent.")
+
+    manifest_members = [
+        {
+            "contract_id": row["contract_id"],
+            "record_id": row["record_id"],
+            "version": row["version"],
+            "document_sha256": row["document_sha256"],
+            "evidence_sha256": row["evidence_sha256"],
+            "event_time": row["event_time"].isoformat(),
+        }
+        for row in member_rows
+    ]
+    if manifest_data.get("members") != manifest_members:
+        raise LineageError("Cold archive manifest membership is inconsistent.")
+
+    lines = bundle.splitlines()
+    if len(lines) != len(member_rows):
+        raise LineageError("Cold archive bundle record count mismatch.")
+    verified: dict[LineageKey, MarketData] = {}
+    for line, member in zip(lines, member_rows, strict=True):
+        try:
+            document = line.decode("utf-8")
+            record = decode(document)
+        except (UnicodeDecodeError, LineageError) as exc:
+            raise LineageError(
+                "Cold archive contains an invalid canonical record."
+            ) from exc
+        key = key_for(record)
+        if (
+            type(record) is not MarketData
+            or key.contract_id != member["contract_id"]
+            or key.record_id != member["record_id"]
+            or key.version != member["version"]
+            or record.event_time != member["event_time"]
+            or _digest(document.encode("utf-8")) != member["document_sha256"]
+            or canonical_sha256(record) != member["evidence_sha256"]
+            or not is_personal_spot_ohlcv(record)
+            or key in verified
+        ):
+            raise LineageError("Cold archive member differs from its lineage anchor.")
+        verified[key] = record
+    session.info.setdefault("_verified_archived_market_batches", {})[
+        object_key
+    ] = verified
+    return verified
