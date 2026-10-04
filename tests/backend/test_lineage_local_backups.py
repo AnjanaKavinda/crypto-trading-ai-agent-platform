@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from trading_platform_api.lineage.backups import BackupBundleError, verify_backup_bundle
@@ -11,6 +12,9 @@ from trading_platform_api.lineage.local_backups import (
     collect_referenced_archive_objects,
     create_local_backup,
     restore_local_backup,
+)
+from trading_platform_api.lineage.local_backup_cli import (
+    _validate_restore_service,
 )
 
 
@@ -157,3 +161,30 @@ def test_local_backup_restore_rejects_corrupt_bundle_before_database_callback() 
         assert not called
 
     asyncio.run(check())
+
+
+def test_restore_cli_allows_only_loopback_disposable_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service_file = tmp_path / "pg_service.conf"
+    service_file.write_text(
+        "[trading_restore_test]\nhost=127.0.0.1\ndbname=trading_restore_test\n"
+    )
+    service_file.chmod(0o600)
+    monkeypatch.setenv("TRADING_PLATFORM_PG_SERVICE_FILE", str(service_file))
+    monkeypatch.setenv("TRADING_PLATFORM_PG_RESTORE_SERVICE", "trading_restore_test")
+
+    assert _validate_restore_service() == "trading_restore_test"
+
+
+def test_restore_cli_rejects_non_disposable_or_remote_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service_file = tmp_path / "pg_service.conf"
+    service_file.write_text("[production]\nhost=example.com\ndbname=production\n")
+    service_file.chmod(0o600)
+    monkeypatch.setenv("TRADING_PLATFORM_PG_SERVICE_FILE", str(service_file))
+    monkeypatch.setenv("TRADING_PLATFORM_PG_RESTORE_SERVICE", "production")
+
+    with pytest.raises(LocalBackupError, match="local loopback"):
+        _validate_restore_service()
