@@ -260,8 +260,17 @@ content-checked manifest. It reads both objects back, verifies the complete
 bundle and member digests, and appends the database manifest and
 `COLD_VERIFIED` events in the caller's transaction. It never removes a hot
 payload. The filesystem object-store adapter is for local development and
-tests; a production B2 adapter, backup/restore proof, cost guard and scheduled
-retention job remain outstanding.
+tests. The optional Backblaze B2 adapter is available with the `archive`
+dependency extra; it requires `TRADING_PLATFORM_B2_ENDPOINT_URL`,
+`TRADING_PLATFORM_B2_REGION`, `TRADING_PLATFORM_B2_BUCKET`,
+`TRADING_PLATFORM_B2_APPLICATION_KEY_ID`, `TRADING_PLATFORM_B2_APPLICATION_KEY`,
+`TRADING_PLATFORM_B2_ENCRYPTION_ACTIVE_KEY_ID`, and
+`TRADING_PLATFORM_B2_ENCRYPTION_KEYS_JSON`. The endpoint must be the HTTPS S3
+endpoint for the configured region, bucket versioning must be enabled, and the
+keyring contains base64-encoded 32-byte AES keys keyed by key ID. Keep all
+credentials and encryption keys in a secret manager; no B2 credentials or
+automatic production selection are configured by this adapter. Backup/restore
+proof, cost guard and scheduled retention job remain outstanding.
 
 The migration keeps lineage edges and identity/digest anchors append-only. A
 narrow C-001 document relocation is allowed only after cold membership and
