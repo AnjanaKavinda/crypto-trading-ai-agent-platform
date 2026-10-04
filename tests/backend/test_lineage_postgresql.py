@@ -383,7 +383,11 @@ def test_postgresql_local_backup_restore_preserves_cold_c001_references(
     database_url, tmp_path, monkeypatch
 ):
     async def check():
-        source_url = make_url(database_url)
+        source_url = make_url(database_url).set(database="trading_backup_source_ci")
+        monkeypatch.setenv(
+            "DATABASE_URL", source_url.render_as_string(hide_password=False)
+        )
+        command.upgrade(Config("apps/api/alembic.ini"), "head")
         restore_database = "trading_restore_ci"
         service_file = tmp_path / "pg_service.conf"
         service_file.write_text(

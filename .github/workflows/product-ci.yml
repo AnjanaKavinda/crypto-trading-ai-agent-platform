@@ -42,10 +42,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes postgresql-client-16
 
-      - name: Provision disposable PostgreSQL restore database
-        run: >-
-          createdb --host=127.0.0.1 --port=5432 --username=postgres
-          trading_restore_ci
+      - name: Provision disposable PostgreSQL backup databases
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+        run: |
+          createdb trading_backup_source_ci
+          createdb trading_restore_ci
 
       - name: Verify installed dependency compatibility
         run: python -m pip check
