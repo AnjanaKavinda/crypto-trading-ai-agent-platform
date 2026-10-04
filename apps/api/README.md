@@ -217,7 +217,7 @@ durable provenance storage; these controls do not implement a full backtester.
 
 `lineage.store.SqlAlchemyLineageStore` persists C-001/C-002/C-003,
 C-091/C-092 and C-101/C-102/C-103 records in PostgreSQL. Apply the reviewed
-`0005_market_payload_archive_boundary` migration with the existing Alembic configuration:
+`0005_market_payload_archive` migration with the existing Alembic configuration:
 
     python -m alembic -c apps/api/alembic.ini upgrade head
 
