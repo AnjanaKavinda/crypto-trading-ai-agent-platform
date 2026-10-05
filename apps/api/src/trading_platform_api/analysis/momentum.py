@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 from trading_platform_api.analysis.indicator_registry import (
@@ -48,6 +49,8 @@ class MomentumValue:
     reason: MomentumReason | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.status, MomentumStatus):
+            raise MomentumError("An indicator value needs a recognized status.")
         if self.status is MomentumStatus.READY:
             if (
                 not isinstance(self.value, Decimal)
@@ -55,15 +58,7 @@ class MomentumValue:
                 or self.reason is not None
             ):
                 raise MomentumError("A ready indicator value must be finite.")
-        elif (
-            self.value is not None
-            or self.reason
-            is not (
-                MomentumReason.WARMUP
-                if self.status is MomentumStatus.WARMUP
-                else self.reason
-            )
-        ):
+        elif self.value is not None or not isinstance(self.reason, MomentumReason):
             raise MomentumError("An unavailable indicator value needs a reason.")
         if self.status is MomentumStatus.WARMUP and self.reason is not MomentumReason.WARMUP:
             raise MomentumError("Warm-up values must use the WARMUP reason.")
@@ -212,7 +207,7 @@ def _series_fields(
     snapshot: MarketSnapshot,
     quality: DataQualityReport,
     price_unit: str,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     return {
         "indicator_id": metadata.indicator_id,
         "metadata_version": metadata.metadata_version,
@@ -382,9 +377,9 @@ def calculate_macd(
                 )
             )
     parameters = (
-        ("fast_period", fast_period),
-        ("slow_period", slow_period),
-        ("signal_period", signal_period),
+        ("fast-period", fast_period),
+        ("slow-period", slow_period),
+        ("signal-period", signal_period),
     )
     return MACDSeries(
         **_series_fields(
@@ -455,7 +450,7 @@ def calculate_stochastic(
                         / Decimal(d_period)
                     )
             points.append(StochasticPoint(candle_end, k, d))
-    parameters = (("k_period", k_period), ("d_period", d_period))
+    parameters = (("k-period", k_period), ("d-period", d_period))
     return StochasticSeries(
         **_series_fields(
             metadata=metadata,

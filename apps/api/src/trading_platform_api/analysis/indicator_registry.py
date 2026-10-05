@@ -325,9 +325,9 @@ _MOMENTUM_METADATA = (
         purpose="Describe the difference between fast and slow SMA-seeded EMAs.",
         inputs=("C-001:closed-spot-ohlcv.close",),
         parameters=(
-            ParameterMetadata("fast_period", "candles", 12, 2, 499),
-            ParameterMetadata("slow_period", "candles", 26, 3, 500),
-            ParameterMetadata("signal_period", "candles", 9, 2, 500),
+            ParameterMetadata("fast-period", "candles", 12, 2, 499),
+            ParameterMetadata("slow-period", "candles", 26, 3, 500),
+            ParameterMetadata("signal-period", "candles", 9, 2, 500),
         ),
         warmup=34,
         unit="quote-currency-per-base-unit",
@@ -348,8 +348,8 @@ _MOMENTUM_METADATA = (
             "C-001:closed-spot-ohlcv.close",
         ),
         parameters=(
-            ParameterMetadata("k_period", "candles", 14, 2, 500),
-            ParameterMetadata("d_period", "candles", 3, 2, 500),
+            ParameterMetadata("k-period", "candles", 14, 2, 500),
+            ParameterMetadata("d-period", "candles", 3, 2, 500),
         ),
         warmup=16,
         unit="percent",
