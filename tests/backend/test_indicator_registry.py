@@ -55,6 +55,10 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     volume_confirmation = SPOT_RESEARCH_INDICATORS.get("volume-confirmation", "1")
     assert volume_confirmation.phase is IndicatorPhase.VALIDATED
     assert volume_confirmation.category is IndicatorCategory.VOLUME_CONFIRMATION
+    assert (
+        volume_confirmation.calculation_version
+        == "trailing-prior-volume-mean-explicit-pivot-comparison-v1"
+    )
     assert not volume_confirmation.evidence_independent
     assert [
         (item.default, item.minimum, item.maximum)

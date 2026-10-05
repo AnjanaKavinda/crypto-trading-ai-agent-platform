@@ -380,12 +380,15 @@ _VOLUME_STRUCTURE_METADATA = (
     IndicatorMetadata(
         indicator_id="volume-confirmation",
         metadata_version="1",
-        calculation_version="trailing-prior-volume-mean-relative-v1",
+        calculation_version=(
+            "trailing-prior-volume-mean-explicit-pivot-comparison-v1"
+        ),
         display_name="Trailing Relative Volume Confirmation",
         category=IndicatorCategory.VOLUME_CONFIRMATION,
         purpose=(
             "Describe raw and trailing-relative Spot candle volume; assess only an "
-            "explicit candidate event under its caller-supplied confirmation policy."
+            "explicit candidate event under its caller-supplied confirmation policy "
+            "or caller-specified pivot comparison under explicit thresholds."
         ),
         inputs=(
             "C-001:closed-spot-ohlcv.high",
@@ -402,7 +405,8 @@ _VOLUME_STRUCTURE_METADATA = (
         output_schema=(
             "per-candle Decimal raw volume, exact prior-volume sum, trailing mean "
             "excluding current candle, and nullable relative volume with explicit "
-            "unavailable reason"
+            "unavailable reason; optional comparison of two caller-specified bounded "
+            "pivot candles with caller-supplied thresholds"
         ),
         output_nullable=True,
         timing=IndicatorTiming.CONFIRMATORY,
@@ -411,6 +415,7 @@ _VOLUME_STRUCTURE_METADATA = (
         failure_modes=(
             "insufficient-prior-volume",
             "zero-prior-volume-baseline",
+            "invalid-explicit-comparison-context",
             "missing-or-invalid-volume",
             "calculation-precision-limit",
             "calculation-exponent-limit",

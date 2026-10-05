@@ -7,12 +7,16 @@ from test_moving_averages import evidence
 from trading_platform_api.analysis import (
     CandidateBreakoutDirection,
     CandidateBreakoutEvent,
+    PriceVolumeComparisonContext,
+    PriceVolumeComparisonReason,
+    PriceVolumeComparisonStatus,
     VolumeAnalysisError,
     VolumeConfirmationPointReason,
     VolumeConfirmationPointStatus,
     VolumeConfirmationPolicy,
     VolumeEventAssessmentReason,
     VolumeEventAssessmentStatus,
+    VolumePivotPriceField,
     calculate_volume_confirmation,
 )
 from trading_platform_api.market_data.contracts import (
@@ -310,6 +314,82 @@ def test_zero_baseline_candidate_is_not_confirmed_or_neutral() -> None:
     )
 
 
+def test_pivot_comparison_requires_explicit_ordered_bounded_context() -> None:
+    snapshot, observations, quality = evidence(("10", "11", "12"))
+    observations = with_volumes(observations, ("1", "1", "0"))
+    context = PriceVolumeComparisonContext(
+        context_id="caller-pivots-1",
+        version="v1",
+        first_pivot_market_data_id=observations[0].market_data_id,
+        second_pivot_market_data_id=observations[2].market_data_id,
+        price_field=VolumePivotPriceField.HIGH,
+        maximum_candle_distance=2,
+        minimum_price_change=Decimal(2),
+        minimum_volume_change=Decimal(1),
+    )
+
+    result = calculate(
+        snapshot,
+        observations,
+        quality,
+        comparison_context=context,
+    )
+    comparison = result.price_volume_comparison
+    assert comparison.status is PriceVolumeComparisonStatus.DIVERGENT
+    assert comparison.reason is None
+    assert comparison.context_id == "caller-pivots-1"
+    assert comparison.context_version == "v1"
+    assert comparison.first_price == Decimal(11)
+    assert comparison.second_price == Decimal(13)
+    assert comparison.first_volume == Decimal(1)
+    assert comparison.second_volume == Decimal(0)
+    assert comparison.minimum_price_change == Decimal(2)
+    assert comparison.minimum_volume_change == Decimal(1)
+    assert comparison.method_version == "explicit-pivot-opposing-deltas-v1"
+
+    absent = calculate(snapshot, observations, quality).price_volume_comparison
+    assert absent.status is PriceVolumeComparisonStatus.INDETERMINATE
+    assert absent.reason is PriceVolumeComparisonReason.MISSING_COMPARISON_CONTEXT
+
+    too_far = replace(context, maximum_candle_distance=1)
+    distance = calculate(
+        snapshot,
+        observations,
+        quality,
+        comparison_context=too_far,
+    ).price_volume_comparison
+    assert distance.status is PriceVolumeComparisonStatus.INDETERMINATE
+    assert distance.reason is PriceVolumeComparisonReason.PIVOT_DISTANCE_EXCEEDED
+
+    below_thresholds = replace(context, minimum_price_change=Decimal(3))
+    below = calculate(
+        snapshot,
+        observations,
+        quality,
+        comparison_context=below_thresholds,
+    ).price_volume_comparison
+    assert below.status is PriceVolumeComparisonStatus.INDETERMINATE
+    assert below.reason is PriceVolumeComparisonReason.BELOW_CALLER_THRESHOLDS
+
+    reversed_pivots = replace(
+        context,
+        first_pivot_market_data_id=observations[2].market_data_id,
+        second_pivot_market_data_id=observations[0].market_data_id,
+    )
+    reversed_result = calculate(
+        snapshot,
+        observations,
+        quality,
+        comparison_context=reversed_pivots,
+    ).price_volume_comparison
+    assert reversed_result.status is PriceVolumeComparisonStatus.INDETERMINATE
+    assert (
+        reversed_result.reason
+        is PriceVolumeComparisonReason.PIVOTS_NOT_IN_CHRONOLOGICAL_ORDER
+    )
+    assert "No exhaustion observation" in result.limitations[3]
+
+
 def test_metadata_repeatability_and_correlation_limits_are_preserved() -> None:
     snapshot, observations, quality = evidence(("10", "11", "12"))
     observations = with_volumes(observations, ("0", "2", "4"))
@@ -317,14 +397,17 @@ def test_metadata_repeatability_and_correlation_limits_are_preserved() -> None:
     assert result == calculate(snapshot, observations, quality)
     assert result.indicator_id == "volume-confirmation"
     assert result.metadata_version == "1"
-    assert result.calculation_version == "trailing-prior-volume-mean-relative-v1"
+    assert (
+        result.calculation_version
+        == "trailing-prior-volume-mean-explicit-pivot-comparison-v1"
+    )
     assert result.lookback == 2
     assert result.timeframe == "1m"
     assert result.quality_report_id == quality.report_id
     assert result.source_record_ids == snapshot.source_record_ids
     assert "correlated" in result.limitations[1]
-    assert "comparison/pivot" in result.limitations[2]
-    assert "order-flow" in result.limitations[3]
+    assert "caller-named high/low pivot" in result.limitations[2]
+    assert "order-flow" in result.limitations[4]
 
 
 def test_invalid_quality_order_units_and_volume_fail_closed() -> None:
