@@ -23,6 +23,8 @@ from trading_platform_api.market_data.contracts import (
 )
 
 _DECIMAL_PRECISION = 34
+_MAX_DECIMAL_PRECISION = 4096
+_MAX_DECIMAL_EXPONENT = 4096
 _MAX_CANDLES = 10000
 _INTERVALS = {
     "1m": 60,
@@ -265,19 +267,16 @@ def calculate_vwap(
         timeframe=timeframe,
     )
     with localcontext() as context:
-        context.prec = _DECIMAL_PRECISION
-        typical_prices = _typical_prices(candles)
+        context.prec = _calculation_precision(candles, volumes, 1)
         cumulative_volume = Decimal(0)
         cumulative_price_volume = Decimal(0)
         points: list[VWAPPoint] = []
-        for item, typical_price, volume in zip(
-            observations, typical_prices, volumes, strict=True
-        ):
+        for item, candle, volume in zip(observations, candles, volumes, strict=True):
             cumulative_volume += volume
-            cumulative_price_volume += typical_price * volume
+            cumulative_price_volume += sum(candle, Decimal(0)) * volume
             value = (
                 VWAPValue(
-                    cumulative_price_volume / cumulative_volume,
+                    cumulative_price_volume / (Decimal(3) * cumulative_volume),
                     VWAPStatus.READY,
                 )
                 if cumulative_volume > 0
@@ -324,18 +323,33 @@ def _profile_edges(
     )
 
 
-def _profile_precision(
-    candles: tuple[tuple[Decimal, Decimal, Decimal], ...], bin_count: int
+def _calculation_precision(
+    candles: tuple[tuple[Decimal, Decimal, Decimal], ...],
+    volumes: tuple[Decimal, ...],
+    bin_count: int,
 ) -> int:
-    prices = tuple(price for candle in candles for price in candle)
-    maximum_adjusted = max(price.adjusted() for price in prices)
-    minimum_exponent = min(price.as_tuple().exponent for price in prices)
+    values = tuple(value for candle in candles for value in candle) + volumes
+    significant_values = tuple(value for value in values if value != 0)
+    exponents: list[int] = []
+    for value in significant_values:
+        exponent = value.as_tuple().exponent
+        if not isinstance(exponent, int):
+            raise VolumeAnalysisError("Finite Decimal input values are required.")
+        if (
+            abs(exponent) > _MAX_DECIMAL_EXPONENT
+            or abs(value.adjusted()) > _MAX_DECIMAL_EXPONENT
+        ):
+            raise VolumeAnalysisError("Input exponent exceeds the calculation bound.")
+        exponents.append(exponent)
+    input_span = (
+        max(value.adjusted() for value in significant_values) - min(exponents) + 1
+    )
     precision = max(
         _DECIMAL_PRECISION,
-        maximum_adjusted - minimum_exponent + len(str(bin_count)) + 8,
+        2 * input_span + len(str(len(volumes))) + len(str(bin_count)) + 8,
     )
-    if precision > 4096:
-        raise VolumeAnalysisError("Price precision exceeds the calculation bound.")
+    if precision > _MAX_DECIMAL_PRECISION:
+        raise VolumeAnalysisError("Input precision exceeds the calculation bound.")
     return precision
 
 
@@ -400,7 +414,7 @@ def calculate_volume_profile(
     )
 
     with localcontext() as context:
-        context.prec = _profile_precision(candles, bin_count)
+        context.prec = _calculation_precision(candles, volumes, bin_count)
         typical_prices = _typical_prices(candles)
         minimum = min(typical_prices)
         maximum = max(typical_prices)

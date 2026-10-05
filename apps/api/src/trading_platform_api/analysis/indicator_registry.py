@@ -404,7 +404,12 @@ _VOLUME_STRUCTURE_METADATA = (
         timing=IndicatorTiming.CONFIRMATORY,
         best_regimes=("observable-volume",),
         weak_regimes=("stale-or-gapped-market",),
-        failure_modes=("zero-cumulative-volume", "missing-or-invalid-volume"),
+        failure_modes=(
+            "zero-cumulative-volume",
+            "missing-or-invalid-volume",
+            "calculation-precision-limit",
+            "calculation-exponent-limit",
+        ),
         evidence_independent=False,
         evidence_dependencies=("spot-price-volume", "ohlcv-derived-indicators"),
         evidence_graph_role=(
@@ -446,7 +451,12 @@ _VOLUME_STRUCTURE_METADATA = (
         timing=IndicatorTiming.CONFIRMATORY,
         best_regimes=("observable-volume",),
         weak_regimes=("stale-or-gapped-market",),
-        failure_modes=("zero-total-volume", "missing-or-invalid-volume"),
+        failure_modes=(
+            "zero-total-volume",
+            "missing-or-invalid-volume",
+            "calculation-precision-limit",
+            "calculation-exponent-limit",
+        ),
         evidence_independent=False,
         evidence_dependencies=("spot-price-volume", "ohlcv-derived-indicators"),
         evidence_graph_role=(

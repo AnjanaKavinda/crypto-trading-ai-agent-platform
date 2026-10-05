@@ -87,6 +87,67 @@ def test_vwap_zero_cumulative_volume_is_explicit_then_recovers() -> None:
     assert result.points[-1].value.status is VWAPStatus.READY
 
 
+def test_calculations_preserve_high_precision_volume_and_profile_poc() -> None:
+    snapshot, observations, quality = evidence(("10", "20"))
+    high_precision_volume = "1." + "0" * 39 + "1"
+    observations = with_volumes(observations, ("1", high_precision_volume))
+
+    vwap = calculate_vwap(
+        snapshot=snapshot,
+        observations=observations,
+        quality=quality,
+    )
+    profile = calculate_volume_profile(
+        snapshot=snapshot,
+        observations=observations,
+        quality=quality,
+        bin_count=2,
+    )
+
+    assert vwap.points[-1].value.value is not None
+    assert vwap.points[-1].value.value > Decimal(15)
+    assert profile.bins[1].assigned_volume > profile.bins[0].assigned_volume
+    assert profile.poc_bin_index == 1
+
+
+def test_zero_volume_exponent_does_not_inflate_precision_requirement() -> None:
+    snapshot, observations, quality = evidence(("10", "20"))
+    observations = with_volumes(
+        observations,
+        ("0E-1000000000", "0E-1000000000"),
+    )
+
+    vwap = calculate_vwap(
+        snapshot=snapshot,
+        observations=observations,
+        quality=quality,
+    )
+    profile = calculate_volume_profile(
+        snapshot=snapshot,
+        observations=observations,
+        quality=quality,
+    )
+
+    assert all(point.value.status is VWAPStatus.UNDEFINED for point in vwap.points)
+    assert profile.status is VolumeProfileStatus.UNDEFINED
+    assert profile.reason is VolumeProfileReason.ZERO_TOTAL_VOLUME
+
+
+def test_nonzero_extreme_volume_exponents_fail_closed() -> None:
+    snapshot, observations, quality = evidence(("10", "20"))
+    for values in (
+        ("1E-5000", "1"),
+        ("1E+5000", "1"),
+    ):
+        supplied = with_volumes(observations, values)
+        with pytest.raises(VolumeAnalysisError, match="exponent"):
+            calculate_vwap(
+                snapshot=snapshot,
+                observations=supplied,
+                quality=quality,
+            )
+
+
 def test_single_candle_is_a_valid_calculation_window() -> None:
     snapshot, observations, quality = evidence(("10",))
 
