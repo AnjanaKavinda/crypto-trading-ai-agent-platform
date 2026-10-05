@@ -432,6 +432,20 @@ def _decimal_exceeds_bounds(value: Decimal) -> bool:
     )
 
 
+def _relative_volume_meets_threshold(
+    volume: Decimal,
+    baseline: Decimal,
+    threshold: Decimal,
+) -> bool:
+    volume_numerator, volume_denominator = volume.as_integer_ratio()
+    baseline_numerator, baseline_denominator = baseline.as_integer_ratio()
+    threshold_numerator, threshold_denominator = threshold.as_integer_ratio()
+    return (
+        volume_numerator * baseline_denominator * threshold_denominator
+        >= threshold_numerator * volume_denominator * baseline_numerator
+    )
+
+
 def _typical_prices(
     candles: tuple[tuple[Decimal, Decimal, Decimal], ...],
 ) -> tuple[Decimal, ...]:
@@ -497,13 +511,19 @@ def _assess_candidate_event(
                 reason = VolumeEventAssessmentReason.PRICE_EVENT_NOT_OBSERVED
             else:
                 event_point = points[index]
-                if event_point.relative_volume is None:
+                if (
+                    event_point.relative_volume is None
+                    or event_point.trailing_average is None
+                ):
                     reason = VolumeEventAssessmentReason.INSUFFICIENT_PRIOR_CANDLES
                 else:
                     status = (
                         VolumeEventAssessmentStatus.SUPPORTING
-                        if event_point.relative_volume
-                        >= policy.minimum_relative_volume
+                        if _relative_volume_meets_threshold(
+                            event_point.raw_volume,
+                            event_point.trailing_average,
+                            policy.minimum_relative_volume,
+                        )
                         else VolumeEventAssessmentStatus.NOT_CONFIRMING
                     )
 

@@ -199,6 +199,23 @@ def test_low_volume_fails_confirmation_and_unobserved_price_event_is_indetermina
     )
 
 
+def test_threshold_assessment_uses_exact_ratio_not_rounded_display_value() -> None:
+    snapshot, observations, quality = evidence(("10", "11", "12"))
+    observations = with_volumes(observations, ("3", "3", "2"))
+    rounded_two_thirds = Decimal("0.6666666666666666666666666666666667")
+
+    result = calculate(
+        snapshot,
+        observations,
+        quality,
+        candidate_event=event(observations),
+        policy=policy(str(rounded_two_thirds)),
+    )
+
+    assert result.points[2].relative_volume == rounded_two_thirds
+    assert result.assessment.status is VolumeEventAssessmentStatus.NOT_CONFIRMING
+
+
 def test_missing_policy_event_and_insufficient_context_are_indeterminate() -> None:
     snapshot, observations, quality = evidence(("10", "11", "12"))
     observations = with_volumes(observations, ("0", "2", "4"))
