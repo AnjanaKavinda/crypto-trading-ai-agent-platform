@@ -1,10 +1,10 @@
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal, localcontext
 from uuid import uuid4
 
 import pytest
-from test_moving_averages import START, STEP, evidence
+from test_moving_averages import STEP, evidence
 from trading_platform_api.analysis.indicator_registry import (
     SPOT_RESEARCH_INDICATORS,
     IndicatorMetadataError,
@@ -78,16 +78,18 @@ def test_macd_uses_sma_seeded_emas_and_component_warmups() -> None:
         slow_period=3,
         signal_period=2,
     )
-    assert all(point.line.status is MomentumStatus.WARMUP for point in result.points[:2])
+    assert all(
+        point.line.status is MomentumStatus.WARMUP for point in result.points[:2]
+    )
     assert result.points[2].line.value == Decimal("0.5")
     assert result.points[2].signal.reason is MomentumReason.WARMUP
     assert result.points[3].signal.value == Decimal("0.5")
     assert result.points[3].histogram.value == Decimal(0)
     with localcontext() as context:
         context.prec = 34
-        assert abs(result.points[4].histogram.value - Decimal(1) / Decimal(18)) < Decimal(
-            "2e-33"
-        )
+        assert abs(
+            result.points[4].histogram.value - Decimal(1) / Decimal(18)
+        ) < Decimal("2e-33")
 
 
 def test_stochastic_warmup_zero_range_and_trailing_d() -> None:
@@ -274,17 +276,13 @@ def test_invalid_quality_snapshot_order_candles_and_provenance_fail_closed() -> 
         ),
         (
             observations[:2]
-            + (
-                replace(observations[2], instrument_id="ETH-USDT-SPOT"),
-            )
+            + (replace(observations[2], instrument_id="ETH-USDT-SPOT"),)
             + observations[3:],
             quality,
         ),
         (
             observations[:2]
-            + (
-                replace(observations[2], source_record_id=uuid4()),
-            )
+            + (replace(observations[2], source_record_id=uuid4()),)
             + observations[3:],
             quality,
         ),

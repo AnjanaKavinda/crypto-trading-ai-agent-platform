@@ -60,7 +60,10 @@ class MomentumValue:
                 raise MomentumError("A ready indicator value must be finite.")
         elif self.value is not None or not isinstance(self.reason, MomentumReason):
             raise MomentumError("An unavailable indicator value needs a reason.")
-        if self.status is MomentumStatus.WARMUP and self.reason is not MomentumReason.WARMUP:
+        if (
+            self.status is MomentumStatus.WARMUP
+            and self.reason is not MomentumReason.WARMUP
+        ):
             raise MomentumError("Warm-up values must use the WARMUP reason.")
         if self.status is MomentumStatus.UNDEFINED and self.reason not in {
             MomentumReason.ZERO_RANGE,
@@ -180,11 +183,13 @@ def _inputs(
 
     volume_unit: str | None = None
     for item in observations:
-        volume = next(metric for metric in item.metrics if metric.metric_name == "volume")
-        if volume.value < 0 or (
-            volume_unit is not None and volume.unit != volume_unit
-        ):
-            raise MomentumError("Volume metrics must be nonnegative and unit-consistent.")
+        volume = next(
+            metric for metric in item.metrics if metric.metric_name == "volume"
+        )
+        if volume.value < 0 or (volume_unit is not None and volume.unit != volume_unit):
+            raise MomentumError(
+                "Volume metrics must be nonnegative and unit-consistent."
+            )
         volume_unit = volume.unit
     return candles, price_unit
 
@@ -269,7 +274,9 @@ def calculate_rsi(
     values: list[Decimal | None] = [None] * len(closes)
     with localcontext() as context:
         context.prec = _DECIMAL_PRECISION
-        changes = tuple(closes[index] - closes[index - 1] for index in range(1, len(closes)))
+        changes = tuple(
+            closes[index] - closes[index - 1] for index in range(1, len(closes))
+        )
         gains = tuple(max(change, Decimal(0)) for change in changes)
         losses = tuple(max(-change, Decimal(0)) for change in changes)
         if len(changes) >= period:
@@ -354,10 +361,14 @@ def calculate_macd(
             else None
             for fast_value, slow_value in zip(fast, slow, strict=True)
         ]
-        first_line = next((i for i, value in enumerate(lines) if value is not None), None)
+        first_line = next(
+            (i for i, value in enumerate(lines) if value is not None), None
+        )
         signal_values: list[Decimal | None] = [None] * len(lines)
         if first_line is not None:
-            valid_lines = tuple(value for value in lines[first_line:] if value is not None)
+            valid_lines = tuple(
+                value for value in lines[first_line:] if value is not None
+            )
             valid_signal = _ema(valid_lines, signal_period)
             for index, value in enumerate(valid_signal, start=first_line):
                 signal_values[index] = value
@@ -373,7 +384,11 @@ def calculate_macd(
                     candle_end,
                     _value(line),
                     _value(signal),
-                    _value(line - signal if line is not None and signal is not None else None),
+                    _value(
+                        line - signal
+                        if line is not None and signal is not None
+                        else None
+                    ),
                 )
             )
     parameters = (
@@ -431,10 +446,11 @@ def calculate_stochastic(
                 )
         points: list[StochasticPoint] = []
         for index, candle_end in enumerate(_candle_ends(observations, timeframe)):
+            k_reason = k_reasons[index]
             if raw[index] is not None:
                 k = _value(raw[index])
-            elif k_reasons[index] is not None:
-                k = _undefined(k_reasons[index])
+            elif k_reason is not None:
+                k = _undefined(k_reason)
             else:
                 k = _value(None)
             d_start = index - d_period + 1
@@ -446,7 +462,9 @@ def calculate_stochastic(
                     d = _undefined(MomentumReason.ZERO_RANGE)
                 else:
                     d = _value(
-                        sum((value for value in window if value is not None), Decimal(0))
+                        sum(
+                            (value for value in window if value is not None), Decimal(0)
+                        )
                         / Decimal(d_period)
                     )
             points.append(StochasticPoint(candle_end, k, d))
@@ -483,15 +501,17 @@ def calculate_cci(
     )
     with localcontext() as context:
         context.prec = _DECIMAL_PRECISION
-        typical = tuple((high + low + close) / Decimal(3) for high, low, close in candles)
+        typical = tuple(
+            (high + low + close) / Decimal(3) for high, low, close in candles
+        )
         values: list[Decimal | None] = [None] * len(candles)
         undefined: set[int] = set()
         for end in range(period, len(candles) + 1):
             window = typical[end - period : end]
             mean = sum(window, Decimal(0)) / Decimal(period)
-            deviation = sum((abs(value - mean) for value in window), Decimal(0)) / Decimal(
-                period
-            )
+            deviation = sum(
+                (abs(value - mean) for value in window), Decimal(0)
+            ) / Decimal(period)
             if deviation == 0:
                 undefined.add(end - 1)
             else:

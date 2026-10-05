@@ -10,13 +10,6 @@ from trading_platform_api.analysis.indicator_registry import (
     IndicatorTiming,
     ParameterMetadata,
 )
-from trading_platform_api.analysis.moving_averages import (
-    MovingAverageError,
-    MovingAverageKind,
-    MovingAveragePoint,
-    MovingAverageSeries,
-    calculate_moving_average,
-)
 from trading_platform_api.analysis.momentum import (
     CCIPoint,
     CCISeries,
@@ -35,6 +28,13 @@ from trading_platform_api.analysis.momentum import (
     calculate_macd,
     calculate_rsi,
     calculate_stochastic,
+)
+from trading_platform_api.analysis.moving_averages import (
+    MovingAverageError,
+    MovingAverageKind,
+    MovingAveragePoint,
+    MovingAverageSeries,
+    calculate_moving_average,
 )
 from trading_platform_api.analysis.volatility import (
     BandWidthDirection,
