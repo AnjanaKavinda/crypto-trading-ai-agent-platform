@@ -380,9 +380,7 @@ _VOLUME_STRUCTURE_METADATA = (
     IndicatorMetadata(
         indicator_id="volume-confirmation",
         metadata_version="1",
-        calculation_version=(
-            "trailing-prior-volume-mean-explicit-pivot-comparison-v1"
-        ),
+        calculation_version=("trailing-prior-volume-mean-explicit-pivot-comparison-v1"),
         display_name="Trailing Relative Volume Confirmation",
         category=IndicatorCategory.VOLUME_CONFIRMATION,
         purpose=(

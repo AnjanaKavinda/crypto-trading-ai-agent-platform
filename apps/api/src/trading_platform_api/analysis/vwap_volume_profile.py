@@ -213,9 +213,8 @@ class PriceVolumeComparisonContext:
                 or len(text_value) > 128
             ):
                 raise VolumeAnalysisError(f"{name} must be bounded nonblank text.")
-        if (
-            not isinstance(self.first_pivot_market_data_id, UUID)
-            or not isinstance(self.second_pivot_market_data_id, UUID)
+        if not isinstance(self.first_pivot_market_data_id, UUID) or not isinstance(
+            self.second_pivot_market_data_id, UUID
         ):
             raise VolumeAnalysisError("Comparison pivots need canonical candle IDs.")
         if not isinstance(self.price_field, VolumePivotPriceField):
@@ -253,7 +252,10 @@ class VolumeConfirmationPoint:
     reason: VolumeConfirmationPointReason | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.candle_end, datetime) or self.candle_end.utcoffset() is None:
+        if (
+            not isinstance(self.candle_end, datetime)
+            or self.candle_end.utcoffset() is None
+        ):
             raise VolumeAnalysisError("Volume point candle end must be timezone-aware.")
         if (
             type(self.raw_volume) is not Decimal
@@ -586,10 +588,7 @@ def _absolute_change_meets_threshold(
     second_numerator, second_denominator = second.as_integer_ratio()
     threshold_numerator, threshold_denominator = threshold.as_integer_ratio()
     return (
-        abs(
-            second_numerator * first_denominator
-            - first_numerator * second_denominator
-        )
+        abs(second_numerator * first_denominator - first_numerator * second_denominator)
         * threshold_denominator
         >= threshold_numerator * first_denominator * second_denominator
     )
@@ -860,9 +859,7 @@ def calculate_volume_confirmation(
     with localcontext() as context:
         context.prec = precision
         points: list[VolumeConfirmationPoint] = []
-        for index, (item, volume) in enumerate(
-            zip(observations, volumes, strict=True)
-        ):
+        for index, (item, volume) in enumerate(zip(observations, volumes, strict=True)):
             end = item.event_time + interval
             if index < lookback:
                 points.append(
@@ -877,9 +874,7 @@ def calculate_volume_confirmation(
                     )
                 )
                 continue
-            prior_volume_sum = sum(
-                volumes[index - lookback : index], Decimal(0)
-            )
+            prior_volume_sum = sum(volumes[index - lookback : index], Decimal(0))
             if prior_volume_sum == 0:
                 points.append(
                     VolumeConfirmationPoint(
@@ -900,9 +895,7 @@ def calculate_volume_confirmation(
                     raw_volume=volume,
                     prior_volume_sum=prior_volume_sum,
                     trailing_average=baseline,
-                    relative_volume=(
-                        volume * Decimal(lookback) / prior_volume_sum
-                    ),
+                    relative_volume=(volume * Decimal(lookback) / prior_volume_sum),
                     status=VolumeConfirmationPointStatus.READY,
                 )
             )

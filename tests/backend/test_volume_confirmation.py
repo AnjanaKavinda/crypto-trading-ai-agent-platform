@@ -112,9 +112,10 @@ def test_hand_calculated_volume_mean_relative_volume_and_current_exclusion() -> 
         Decimal(4),
         Decimal(2),
     )
-    assert tuple(item.reason for item in result.points[:2]) == (
-        VolumeConfirmationPointReason.INSUFFICIENT_PRIOR_CANDLES,
-    ) * 2
+    assert (
+        tuple(item.reason for item in result.points[:2])
+        == (VolumeConfirmationPointReason.INSUFFICIENT_PRIOR_CANDLES,) * 2
+    )
     assert all(
         item.status is VolumeConfirmationPointStatus.READY for item in result.points[2:]
     )
@@ -187,7 +188,9 @@ def test_versioned_policy_supports_breakout_and_breakdown_at_threshold() -> None
     assert breakdown.assessment.status is VolumeEventAssessmentStatus.SUPPORTING
 
 
-def test_low_volume_fails_confirmation_and_unobserved_price_event_is_indeterminate() -> None:
+def test_low_volume_fails_confirmation_and_unobserved_price_event_is_indeterminate() -> (
+    None
+):
     snapshot, observations, quality = evidence(("10", "11", "12"))
     observations = with_volumes(observations, ("0", "2", "4"))
     low_volume = calculate(
@@ -270,7 +273,9 @@ def test_missing_policy_event_and_insufficient_context_are_indeterminate() -> No
         is VolumeEventAssessmentReason.MISSING_CONFIRMATION_POLICY
     )
 
-    short_event = replace(event(observations), market_data_id=observations[1].market_data_id)
+    short_event = replace(
+        event(observations), market_data_id=observations[1].market_data_id
+    )
     insufficient = calculate(
         snapshot,
         observations,
@@ -390,8 +395,7 @@ def test_pivot_comparison_requires_explicit_ordered_bounded_context() -> None:
         is PriceVolumeComparisonReason.PIVOTS_NOT_IN_CHRONOLOGICAL_ORDER
     )
     assert (
-        result.exhaustion_assessment.status
-        is VolumeExhaustionStatus.DATA_UNAVAILABLE
+        result.exhaustion_assessment.status is VolumeExhaustionStatus.DATA_UNAVAILABLE
     )
     assert (
         result.exhaustion_assessment.reason
@@ -432,7 +436,9 @@ def test_invalid_quality_order_units_and_volume_fail_closed() -> None:
             replace(quality, status=DataQualityStatus.DEGRADED),
         )
     with pytest.raises(VolumeAnalysisError, match="VALID"):
-        calculate(snapshot, observations, replace(quality, status=DataQualityStatus.STALE))
+        calculate(
+            snapshot, observations, replace(quality, status=DataQualityStatus.STALE)
+        )
     with pytest.raises(VolumeAnalysisError, match="order and identity"):
         calculate(snapshot, tuple(reversed(observations)), quality)
 
@@ -445,7 +451,8 @@ def test_invalid_quality_order_units_and_volume_fail_closed() -> None:
         observations[1],
         event_time=gap_time,
         provider_time=gap_time,
-        ingestion_time=gap_time + (observations[1].ingestion_time - observations[1].event_time),
+        ingestion_time=gap_time
+        + (observations[1].ingestion_time - observations[1].event_time),
         availability_time=gap_time
         + (observations[1].availability_time - observations[1].event_time),
     )
@@ -474,9 +481,7 @@ def test_invalid_quality_order_units_and_volume_fail_closed() -> None:
     mismatched_price_unit = replace(
         observations[2],
         metrics=tuple(
-            replace(metric, unit="BTC")
-            if metric.metric_name == "close"
-            else metric
+            replace(metric, unit="BTC") if metric.metric_name == "close" else metric
             for metric in observations[2].metrics
         ),
     )
@@ -503,7 +508,9 @@ def test_invalid_quality_order_units_and_volume_fail_closed() -> None:
     missing_volume = replace(
         observations[0],
         metrics=tuple(
-            metric for metric in observations[0].metrics if metric.metric_name != "volume"
+            metric
+            for metric in observations[0].metrics
+            if metric.metric_name != "volume"
         ),
     )
     with pytest.raises(VolumeAnalysisError, match="Required unique"):
