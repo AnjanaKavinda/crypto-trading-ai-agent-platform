@@ -579,12 +579,75 @@ _PRICE_ACTION_METADATA = (
     ),
 )
 
+_MARKET_STRUCTURE_METADATA = IndicatorMetadata(
+    indicator_id="spot-market-structure",
+    metadata_version="1",
+    calculation_version="spot-market-structure-v1",
+    display_name="Spot Market Structure",
+    category=IndicatorCategory.MARKET_STRUCTURE,
+    purpose=(
+        "Classify confirmed same-timeframe Spot pivots and describe policy-defined "
+        "close-based structural breaks without trading authority."
+    ),
+    inputs=(
+        "C-001:closed-spot-ohlcv.open",
+        "C-001:closed-spot-ohlcv.high",
+        "C-001:closed-spot-ohlcv.low",
+        "C-001:closed-spot-ohlcv.close",
+        "C-002:snapshot",
+        "C-003:quality",
+        "price-action-support-resistance:internal-confirmed-pivots",
+        "price-action-support-resistance:external-confirmed-pivots",
+    ),
+    timeframes=_SPOT_TIMEFRAMES,
+    parameters=(
+        ParameterMetadata("internal-left-window", "candles", 2, 1, 500),
+        ParameterMetadata("internal-right-window", "candles", 2, 1, 500),
+        ParameterMetadata("external-left-window", "candles", 3, 1, 500),
+        ParameterMetadata("external-right-window", "candles", 3, 1, 500),
+        ParameterMetadata("consecutive-close-count", "candles", 2, 1, 500),
+    ),
+    minimum_warmup_candles=3,
+    output_unit="input-price-unit",
+    output_schema=(
+        "Nullable versioned per-scale confirmed swing classes, current state and "
+        "strict close-only BOS/CHoCH/MSS or unclassified breaks. Caller explicitly "
+        "assigns internal/external #55 policies; external windows must each be at "
+        "least internal and one larger. Break buffer is finite positive Decimal "
+        "(maximum 64 digits; absolute exponent/adjusted exponent <=128); close count "
+        "is 1..500. Exact matching C-001/C-002/C-003 and #55 lineage required. "
+        "C-008 structured evidence and C-012 market-structure observations."
+    ),
+    output_nullable=True,
+    timing=IndicatorTiming.CONFIRMATORY,
+    best_regimes=("confirmed-spot-structure",),
+    weak_regimes=("insufficient-pivot-history", "stale-or-gapped-market"),
+    failure_modes=(
+        "invalid-quality-or-provenance",
+        "stale-or-gapped-market",
+        "non-spot-input",
+        "mismatched-pivot-lineage-or-policy",
+        "unsupported-or-unregistered-method-version",
+        "invalid-break-policy",
+        "insufficient-pivot-history",
+        "bounded-evidence-output-exceeded",
+    ),
+    evidence_independent=False,
+    evidence_dependencies=("spot-ohlcv-price", "confirmed-price-action-pivots"),
+    evidence_graph_role=(
+        "Descriptive market-structure evidence derived from the same Spot OHLCV "
+        "and confirmed pivots; correlated with source candles and price indicators."
+    ),
+    phase=IndicatorPhase.VALIDATED,
+)
+
 
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
         *_MOMENTUM_METADATA,
         *_VOLUME_STRUCTURE_METADATA,
         *_PRICE_ACTION_METADATA,
+        _MARKET_STRUCTURE_METADATA,
         _ema(20),
         _ema(50),
         replace(

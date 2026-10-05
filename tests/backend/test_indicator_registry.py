@@ -31,6 +31,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         "volume-profile",
         "volume-confirmation",
         "price-action-support-resistance",
+        "spot-market-structure",
     }
     for item in entries:
         assert item.output_nullable
@@ -72,6 +73,17 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         (24, 1, 500),
         (70, 50, 100),
     ]
+    market_structure = SPOT_RESEARCH_INDICATORS.get("spot-market-structure", "1")
+    assert market_structure.phase is IndicatorPhase.VALIDATED
+    assert market_structure.category is IndicatorCategory.MARKET_STRUCTURE
+    assert market_structure.calculation_version == "spot-market-structure-v1"
+    assert market_structure.output_nullable
+    assert not market_structure.evidence_independent
+    assert market_structure.evidence_dependencies
+    assert "C-003:quality" in market_structure.inputs
+    assert market_structure.failure_modes
+    with pytest.raises(IndicatorMetadataError, match="exact"):
+        SPOT_RESEARCH_INDICATORS.get("spot-market-structure", "2")
     for name in ("ema-20", "ema-50"):
         assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.PLANNED
         assert SPOT_RESEARCH_INDICATORS.get(name, "2").phase is IndicatorPhase.VALIDATED
