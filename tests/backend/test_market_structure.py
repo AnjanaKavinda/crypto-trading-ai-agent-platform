@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from trading_platform_api.analysis import (
     MarketStructureError,
     MarketStructurePolicy,
     MarketStructureScale,
+    PivotKind,
     StructureDirection,
     StructureEventType,
     SupportResistancePolicy,
@@ -416,6 +418,100 @@ def test_lineage_quality_policy_and_exact_version_fail_closed():
     oversized = candles * 501
     with pytest.raises(MarketStructureError, match="bounded"):
         calculate_spot_market_structure(**{**args, "observations": oversized})
+
+
+@pytest.mark.parametrize("tamper", ("source-price", "source-kind"))
+def test_forged_pivot_source_ohlc_mismatch_is_rejected(tamper):
+    snapshot, candles, quality, internal, external, int_pa, ext_pa, _ = _analyze()
+    pivot = int_pa.pivots[0]
+    if tamper == "source-price":
+        forged_pivot = replace(pivot, price=pivot.price + Decimal("0.1"))
+    else:
+        forged_pivot = replace(
+            pivot,
+            kind=PivotKind.LOW if pivot.kind is PivotKind.HIGH else PivotKind.HIGH,
+        )
+    forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
+
+    with pytest.raises(MarketStructureError, match="Pivot"):
+        calculate_spot_market_structure(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            timeframe="1m",
+            internal_price_action=forged_analysis,
+            external_price_action=ext_pa,
+            internal_pivot_policy=internal,
+            external_pivot_policy=external,
+            break_policy=MarketStructurePolicy("test", "1", Decimal("0.1"), 1),
+        )
+
+
+def test_forged_pivot_confirmation_id_and_time_must_match_declared_window():
+    snapshot, candles, quality, internal, external, int_pa, ext_pa, _ = _analyze()
+    pivot = int_pa.pivots[0]
+    source_index = next(
+        index
+        for index, candle in enumerate(candles)
+        if candle.market_data_id == pivot.source_market_data_id
+    )
+    wrong_confirmation = candles[source_index + pivot.right_window + 1]
+    forged_pivot = replace(
+        pivot,
+        confirmation_market_data_id=wrong_confirmation.market_data_id,
+        confirmation_time=wrong_confirmation.event_time + timedelta(minutes=1),
+    )
+    forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
+
+    with pytest.raises(MarketStructureError, match="confirmation index"):
+        calculate_spot_market_structure(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            timeframe="1m",
+            internal_price_action=forged_analysis,
+            external_price_action=ext_pa,
+            internal_pivot_policy=internal,
+            external_pivot_policy=external,
+            break_policy=MarketStructurePolicy("test", "1", Decimal("0.1"), 1),
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("left_window", "policy_version", "tie_rule", "source_time", "confirmation_time"),
+)
+def test_forged_pivot_policy_and_times_are_rejected(field):
+    snapshot, candles, quality, internal, external, int_pa, ext_pa, _ = _analyze()
+    pivot = int_pa.pivots[0]
+    if field == "left_window":
+        forged_pivot = replace(pivot, left_window=pivot.left_window + 1)
+    elif field == "policy_version":
+        forged_pivot = replace(pivot, policy_version="stale")
+    elif field == "tie_rule":
+        forged_pivot = replace(pivot, tie_rule="unregistered")
+    elif field == "source_time":
+        forged_pivot = replace(
+            pivot, source_time=pivot.source_time + timedelta(seconds=1)
+        )
+    else:
+        forged_pivot = replace(
+            pivot, confirmation_time=pivot.confirmation_time + timedelta(seconds=1)
+        )
+    forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
+
+    with pytest.raises(MarketStructureError, match="Pivot"):
+        calculate_spot_market_structure(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            timeframe="1m",
+            internal_price_action=forged_analysis,
+            external_price_action=ext_pa,
+            internal_pivot_policy=internal,
+            external_pivot_policy=external,
+            break_policy=MarketStructurePolicy("test", "1", Decimal("0.1"), 1),
+        )
 
 
 def test_calculation_is_repeatable_and_source_bound():

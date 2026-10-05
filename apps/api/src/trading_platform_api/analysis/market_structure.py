@@ -55,6 +55,10 @@ MARKET_STRUCTURE_EVIDENCE_VERSION = "spot-market-structure-evidence-v1"
 _MAX_CANDLES = 10_000
 _MAX_BREAK_CLOSES = 500
 _IDENTITY_NAMESPACE = UUID("6718c1d3-277b-5779-9d69-87b06a13eea4")
+_PIVOT_TIE_RULE = (
+    "earliest equal extreme wins: strictly more extreme than all left candles "
+    "and at least as extreme as all right candles"
+)
 
 
 class MarketStructureError(ValueError):
@@ -296,35 +300,70 @@ def _validate_price_action(
         or timeframe not in metadata.timeframes
     ):
         raise MarketStructureError("The exact #55 method is not validated here.")
-    candles_by_id = {item.market_data_id: item for item in observations}
+    candle_indices = {
+        item.market_data_id: index for index, item in enumerate(observations)
+    }
     interval = timedelta(seconds=_INTERVALS[timeframe])
     if (
         type(analysis.pivots) is not tuple
         or not all(type(pivot) is PivotObservation for pivot in analysis.pivots)
+        or not all(type(pivot.pivot_id) is UUID for pivot in analysis.pivots)
         or len({pivot.pivot_id for pivot in analysis.pivots}) != len(analysis.pivots)
     ):
         raise MarketStructureError("Pivot output must be an immutable unique tuple.")
     for pivot in analysis.pivots:
         if type(pivot) is not PivotObservation:
             raise MarketStructureError("Pivot output contains an invalid record.")
-        source = candles_by_id.get(pivot.source_market_data_id)
-        confirmation = candles_by_id.get(pivot.confirmation_market_data_id)
         if (
-            source is None
-            or confirmation is None
+            type(pivot.source_market_data_id) is not UUID
+            or type(pivot.confirmation_market_data_id) is not UUID
+        ):
+            raise MarketStructureError("Pivot candle lineage IDs are invalid.")
+        source_index = candle_indices.get(pivot.source_market_data_id)
+        if (
+            source_index is None
+            or type(pivot.left_window) is not int
+            or pivot.left_window != pivot_policy.left_window
+            or type(pivot.right_window) is not int
+            or pivot.right_window != pivot_policy.right_window
+            or source_index < pivot.left_window
+        ):
+            raise MarketStructureError("Pivot policy or source index is invalid.")
+        confirmation_index = source_index + pivot.right_window
+        if (
+            confirmation_index >= len(observations)
+            or observations[confirmation_index].market_data_id
+            != pivot.confirmation_market_data_id
+        ):
+            raise MarketStructureError("Pivot confirmation index is invalid.")
+        source = observations[source_index]
+        confirmation = observations[confirmation_index]
+        source_metrics = {metric.metric_name: metric for metric in source.metrics}
+        if type(pivot.kind) is not PivotKind:
+            raise MarketStructureError("Pivot kind is invalid.")
+        try:
+            _bounded_decimal("pivot.price", pivot.price)
+        except ValueError as exc:
+            raise MarketStructureError("Pivot price is invalid.") from exc
+        source_price = source_metrics[
+            "high" if pivot.kind is PivotKind.HIGH else "low"
+        ].value
+        if (
+            pivot.price != source_price
+            or type(pivot.source_time) is not datetime
             or pivot.source_time != source.event_time
+            or type(pivot.confirmation_time) is not datetime
             or pivot.confirmation_time != confirmation.event_time + interval
             or pivot.confirmation_time > snapshot.as_of
             or pivot.source_time >= confirmation.event_time
-            or pivot.left_window != pivot_policy.left_window
-            or pivot.right_window != pivot_policy.right_window
             or pivot.policy_id != pivot_policy.policy_id
             or pivot.policy_version != pivot_policy.version
+            or pivot.tie_rule != _PIVOT_TIE_RULE
             or pivot.method_version != PRICE_ACTION_METHOD_VERSION
             or pivot.price <= 0
         ):
             raise MarketStructureError(
-                "Pivot confirmation or source lineage is invalid."
+                "Pivot kind, source OHLC, policy, or confirmation lineage is invalid."
             )
 
 
