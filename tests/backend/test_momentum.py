@@ -407,3 +407,83 @@ def test_large_observation_sequences_are_rejected() -> None:
             quality=quality,
             period=2,
         )
+
+
+def test_duplicate_observation_is_rejected_by_each_indicator() -> None:
+    snapshot, observations, quality = evidence(("10", "11", "12", "13", "14"))
+    duplicated = observations[:2] + (observations[1],) + observations[3:]
+    calculations = (
+        (
+            calculate_rsi,
+            {
+                "snapshot": snapshot,
+                "observations": duplicated,
+                "quality": quality,
+                "period": 2,
+            },
+        ),
+        (
+            calculate_macd,
+            {
+                "snapshot": snapshot,
+                "observations": duplicated,
+                "quality": quality,
+                "fast_period": 2,
+                "slow_period": 3,
+                "signal_period": 2,
+            },
+        ),
+        (
+            calculate_stochastic,
+            {
+                "snapshot": snapshot,
+                "observations": duplicated,
+                "quality": quality,
+                "k_period": 2,
+                "d_period": 2,
+            },
+        ),
+        (
+            calculate_cci,
+            {
+                "snapshot": snapshot,
+                "observations": duplicated,
+                "quality": quality,
+                "period": 2,
+            },
+        ),
+    )
+    for calculate, arguments in calculations:
+        with pytest.raises(MomentumError, match="order and identity"):
+            calculate(**arguments)
+
+
+def test_default_parameters_produce_ready_values_for_all_indicators() -> None:
+    snapshot, observations, quality = evidence(
+        tuple(str(100 + index) for index in range(34))
+    )
+
+    rsi = calculate_rsi(snapshot=snapshot, observations=observations, quality=quality)
+    assert rsi.parameters == (("period", 14),)
+    assert rsi.points[-1].value.status is MomentumStatus.READY
+
+    macd = calculate_macd(snapshot=snapshot, observations=observations, quality=quality)
+    assert macd.parameters == (
+        ("fast-period", 12),
+        ("slow-period", 26),
+        ("signal-period", 9),
+    )
+    assert macd.points[-1].line.status is MomentumStatus.READY
+    assert macd.points[-1].signal.status is MomentumStatus.READY
+    assert macd.points[-1].histogram.status is MomentumStatus.READY
+
+    stochastic = calculate_stochastic(
+        snapshot=snapshot, observations=observations, quality=quality
+    )
+    assert stochastic.parameters == (("k-period", 14), ("d-period", 3))
+    assert stochastic.points[-1].k.status is MomentumStatus.READY
+    assert stochastic.points[-1].d.status is MomentumStatus.READY
+
+    cci = calculate_cci(snapshot=snapshot, observations=observations, quality=quality)
+    assert cci.parameters == (("period", 20),)
+    assert cci.points[-1].value.status is MomentumStatus.READY
