@@ -29,6 +29,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         "realized-volatility",
         "vwap",
         "volume-profile",
+        "volume-confirmation",
     }
     for item in entries:
         assert item.output_nullable
@@ -51,6 +52,14 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         assert metadata.category is IndicatorCategory.VOLUME_STRUCTURE
         assert not metadata.evidence_independent
         assert metadata.evidence_dependencies
+    volume_confirmation = SPOT_RESEARCH_INDICATORS.get("volume-confirmation", "1")
+    assert volume_confirmation.phase is IndicatorPhase.VALIDATED
+    assert volume_confirmation.category is IndicatorCategory.VOLUME_CONFIRMATION
+    assert not volume_confirmation.evidence_independent
+    assert [
+        (item.default, item.minimum, item.maximum)
+        for item in volume_confirmation.parameters
+    ] == [(20, 2, 500)]
     profile = SPOT_RESEARCH_INDICATORS.get("volume-profile", "1")
     assert [
         (item.default, item.minimum, item.maximum) for item in profile.parameters
