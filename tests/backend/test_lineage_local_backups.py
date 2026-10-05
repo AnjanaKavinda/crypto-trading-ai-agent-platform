@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 from trading_platform_api.lineage.backups import BackupBundleError, verify_backup_bundle
 from trading_platform_api.lineage.local_backup_cli import (
     _validate_restore_service,
+    main,
 )
 from trading_platform_api.lineage.local_backups import (
     LocalBackupError,
@@ -169,6 +171,7 @@ def test_restore_cli_allows_only_loopback_disposable_service(
     service_file = tmp_path / "pg_service.conf"
     service_file.write_text(
         "[trading_restore_test]\nhost=127.0.0.1\ndbname=trading_restore_test\n"
+        "user=user\n"
     )
     service_file.chmod(0o600)
     monkeypatch.setenv("TRADING_PLATFORM_PG_SERVICE_FILE", str(service_file))
@@ -189,3 +192,12 @@ def test_restore_cli_rejects_non_disposable_or_remote_service(
 
     with pytest.raises(LocalBackupError, match="local loopback"):
         _validate_restore_service()
+
+
+def test_prune_hot_cli_requires_explicit_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["local_backup_cli", "prune-hot", "cold.gz"])
+    with pytest.raises(SystemExit) as result:
+        main()
+    assert result.value.code == 2
