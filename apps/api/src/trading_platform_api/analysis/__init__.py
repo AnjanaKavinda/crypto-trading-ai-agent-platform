@@ -47,6 +47,22 @@ from trading_platform_api.analysis.volatility import (
     calculate_bollinger_bands,
     calculate_realized_volatility,
 )
+from trading_platform_api.analysis.vwap_volume_profile import (
+    VOLUME_PROFILE_METHOD,
+    VWAP_METHOD,
+    VolumeAnalysisError,
+    VolumeProfileBin,
+    VolumeProfileReason,
+    VolumeProfileSeries,
+    VolumeProfileStatus,
+    VWAPPoint,
+    VWAPReason,
+    VWAPSeries,
+    VWAPStatus,
+    VWAPValue,
+    calculate_volume_profile,
+    calculate_vwap,
+)
 
 __all__ = [
     *_contract_exports,
@@ -89,4 +105,18 @@ __all__ = [
     "calculate_atr14",
     "calculate_bollinger_bands",
     "calculate_realized_volatility",
+    "VOLUME_PROFILE_METHOD",
+    "VWAP_METHOD",
+    "VolumeAnalysisError",
+    "VolumeProfileBin",
+    "VolumeProfileReason",
+    "VolumeProfileSeries",
+    "VolumeProfileStatus",
+    "VWAPPoint",
+    "VWAPReason",
+    "VWAPSeries",
+    "VWAPStatus",
+    "VWAPValue",
+    "calculate_volume_profile",
+    "calculate_vwap",
 ]
