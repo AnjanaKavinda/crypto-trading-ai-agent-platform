@@ -145,7 +145,7 @@ class IndicatorMetadata:
             raise IndicatorMetadataError("Invalid or duplicate parameter metadata.")
         if (
             type(self.minimum_warmup_candles) is not int
-            or self.minimum_warmup_candles < 2
+            or self.minimum_warmup_candles < 1
         ):
             raise IndicatorMetadataError("Invalid minimum warm-up.")
         if type(self.output_nullable) is not bool:
@@ -376,10 +376,92 @@ _MOMENTUM_METADATA = (
     ),
 )
 
+_VOLUME_STRUCTURE_METADATA = (
+    IndicatorMetadata(
+        indicator_id="vwap",
+        metadata_version="1",
+        calculation_version="bar-typical-price-cumulative-v1",
+        display_name="Bar-based Typical-price VWAP",
+        category=IndicatorCategory.VOLUME_STRUCTURE,
+        purpose=(
+            "Describe cumulative typical-price VWAP from the first supplied candle; "
+            "this OHLCV approximation is not trade-by-trade VWAP."
+        ),
+        inputs=(
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+            "C-001:closed-spot-ohlcv.volume",
+            "C-002:snapshot",
+            "C-003:quality",
+        ),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=(),
+        minimum_warmup_candles=1,
+        output_unit="input-price-unit",
+        output_schema="per-candle nullable Decimal with explicit undefined reason",
+        output_nullable=True,
+        timing=IndicatorTiming.CONFIRMATORY,
+        best_regimes=("observable-volume",),
+        weak_regimes=("stale-or-gapped-market",),
+        failure_modes=("zero-cumulative-volume", "missing-or-invalid-volume"),
+        evidence_independent=False,
+        evidence_dependencies=("spot-price-volume", "ohlcv-derived-indicators"),
+        evidence_graph_role=(
+            "Descriptive bar-based price-volume context; correlated with its Spot "
+            "OHLCV inputs and not independent evidence."
+        ),
+        phase=IndicatorPhase.VALIDATED,
+    ),
+    IndicatorMetadata(
+        indicator_id="volume-profile",
+        metadata_version="1",
+        calculation_version="candle-assigned-volume-profile-proxy-v1",
+        display_name="Candle-assigned Volume Profile Proxy",
+        category=IndicatorCategory.VOLUME_STRUCTURE,
+        purpose=(
+            "Describe candle-assigned volume across typical-price bins; this OHLCV "
+            "proxy is not trade-level volume-at-price or exact VPVR."
+        ),
+        inputs=(
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+            "C-001:closed-spot-ohlcv.volume",
+            "C-002:snapshot",
+            "C-003:quality",
+        ),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=(
+            ParameterMetadata("bin-count", "bins", 24, 1, 500),
+            ParameterMetadata("value-area-percent", "percent", 70, 50, 100),
+        ),
+        minimum_warmup_candles=1,
+        output_unit="input-volume-unit-per-price-bin",
+        output_schema=(
+            "nullable Decimal bin distribution with optional POC/value-area/nodes "
+            "and explicit undefined reason"
+        ),
+        output_nullable=True,
+        timing=IndicatorTiming.CONFIRMATORY,
+        best_regimes=("observable-volume",),
+        weak_regimes=("stale-or-gapped-market",),
+        failure_modes=("zero-total-volume", "missing-or-invalid-volume"),
+        evidence_independent=False,
+        evidence_dependencies=("spot-price-volume", "ohlcv-derived-indicators"),
+        evidence_graph_role=(
+            "Descriptive candle-assigned price-volume proxy; correlated with its Spot "
+            "OHLCV inputs and not independent evidence."
+        ),
+        phase=IndicatorPhase.VALIDATED,
+    ),
+)
+
 
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
         *_MOMENTUM_METADATA,
+        *_VOLUME_STRUCTURE_METADATA,
         _ema(20),
         _ema(50),
         replace(
