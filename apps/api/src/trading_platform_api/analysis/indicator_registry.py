@@ -264,8 +264,122 @@ def _atr() -> IndicatorMetadata:
     )
 
 
+def _momentum(
+    *,
+    indicator_id: str,
+    display_name: str,
+    calculation_version: str,
+    purpose: str,
+    inputs: tuple[str, ...],
+    parameters: tuple[ParameterMetadata, ...],
+    warmup: int,
+    unit: str,
+    output_schema: str,
+    failure_modes: tuple[str, ...],
+) -> IndicatorMetadata:
+    return IndicatorMetadata(
+        indicator_id=indicator_id,
+        metadata_version="1",
+        calculation_version=calculation_version,
+        display_name=display_name,
+        category=IndicatorCategory.MOMENTUM,
+        purpose=purpose,
+        inputs=inputs + ("C-003:quality",),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=parameters,
+        minimum_warmup_candles=warmup,
+        output_unit=unit,
+        output_schema=output_schema,
+        output_nullable=True,
+        timing=IndicatorTiming.CONFIRMATORY,
+        best_regimes=("observable-momentum",),
+        weak_regimes=("stale-or-gapped-market",),
+        failure_modes=failure_modes + ("insufficient-warmup", "missing-data"),
+        evidence_independent=False,
+        evidence_dependencies=("spot-close-price", "price-derived-momentum-indicators"),
+        evidence_graph_role=(
+            "Descriptive momentum context; correlated with shared Spot price inputs "
+            "and other momentum indicators, not independent evidence."
+        ),
+        phase=IndicatorPhase.VALIDATED,
+    )
+
+
+_MOMENTUM_METADATA = (
+    _momentum(
+        indicator_id="rsi",
+        display_name="Relative Strength Index",
+        calculation_version="rsi-wilder-sma-seed-v1",
+        purpose="Describe Wilder-smoothed close-to-close momentum.",
+        inputs=("C-001:closed-spot-ohlcv.close",),
+        parameters=(ParameterMetadata("period", "candles", 14, 2, 500),),
+        warmup=15,
+        unit="percent",
+        output_schema="nullable Decimal from 0 to 100 with explicit warm-up status",
+        failure_modes=("flat-price-boundary",),
+    ),
+    _momentum(
+        indicator_id="macd",
+        display_name="Moving Average Convergence Divergence",
+        calculation_version="macd-sma-seed-ema-v1",
+        purpose="Describe the difference between fast and slow SMA-seeded EMAs.",
+        inputs=("C-001:closed-spot-ohlcv.close",),
+        parameters=(
+            ParameterMetadata("fast-period", "candles", 12, 2, 499),
+            ParameterMetadata("slow-period", "candles", 26, 3, 500),
+            ParameterMetadata("signal-period", "candles", 9, 2, 500),
+        ),
+        warmup=34,
+        unit="quote-currency-per-base-unit",
+        output_schema=(
+            "nullable Decimal MACD line, signal line, and histogram with per-component "
+            "warm-up status"
+        ),
+        failure_modes=("invalid-period-relationship",),
+    ),
+    _momentum(
+        indicator_id="stochastic",
+        display_name="Stochastic Oscillator",
+        calculation_version="stochastic-trailing-sma-v1",
+        purpose="Describe close location within a trailing Spot high-low range.",
+        inputs=(
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+        ),
+        parameters=(
+            ParameterMetadata("k-period", "candles", 14, 2, 500),
+            ParameterMetadata("d-period", "candles", 3, 2, 500),
+        ),
+        warmup=16,
+        unit="percent",
+        output_schema=(
+            "nullable Decimal %K and %D with explicit warm-up and zero-range reasons"
+        ),
+        failure_modes=("zero-high-low-range",),
+    ),
+    _momentum(
+        indicator_id="cci",
+        display_name="Commodity Channel Index",
+        calculation_version="cci-typical-price-mean-deviation-v1",
+        purpose="Describe typical-price displacement from its trailing mean.",
+        inputs=(
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+        ),
+        parameters=(ParameterMetadata("period", "candles", 20, 2, 500),),
+        warmup=20,
+        unit="dimensionless-index",
+        output_schema="nullable Decimal CCI with explicit warm-up and zero-deviation reasons",
+        failure_modes=("zero-mean-deviation",),
+    ),
+)
+
+
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
+        *_MOMENTUM_METADATA,
         _ema(20),
         _ema(50),
         replace(
