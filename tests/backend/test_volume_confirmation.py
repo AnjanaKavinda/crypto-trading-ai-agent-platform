@@ -16,6 +16,8 @@ from trading_platform_api.analysis import (
     VolumeConfirmationPolicy,
     VolumeEventAssessmentReason,
     VolumeEventAssessmentStatus,
+    VolumeExhaustionReason,
+    VolumeExhaustionStatus,
     VolumePivotPriceField,
     calculate_volume_confirmation,
 )
@@ -387,7 +389,18 @@ def test_pivot_comparison_requires_explicit_ordered_bounded_context() -> None:
         reversed_result.reason
         is PriceVolumeComparisonReason.PIVOTS_NOT_IN_CHRONOLOGICAL_ORDER
     )
-    assert "No exhaustion observation" in result.limitations[3]
+    assert (
+        result.exhaustion_assessment.status
+        is VolumeExhaustionStatus.DATA_UNAVAILABLE
+    )
+    assert (
+        result.exhaustion_assessment.reason
+        is VolumeExhaustionReason.RELIABLE_ORDER_FLOW_NOT_SUPPLIED
+    )
+    assert result.exhaustion_assessment.method_version == (
+        "reliable-order-flow-input-required-v1"
+    )
+    assert "DATA_UNAVAILABLE" in result.limitations[3]
 
 
 def test_metadata_repeatability_and_correlation_limits_are_preserved() -> None:

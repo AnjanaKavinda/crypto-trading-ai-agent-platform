@@ -406,7 +406,8 @@ _VOLUME_STRUCTURE_METADATA = (
             "per-candle Decimal raw volume, exact prior-volume sum, trailing mean "
             "excluding current candle, and nullable relative volume with explicit "
             "unavailable reason; optional comparison of two caller-specified bounded "
-            "pivot candles with caller-supplied thresholds"
+            "pivot candles with caller-supplied thresholds; exhaustion is explicitly "
+            "DATA_UNAVAILABLE without reliable order-flow input"
         ),
         output_nullable=True,
         timing=IndicatorTiming.CONFIRMATORY,

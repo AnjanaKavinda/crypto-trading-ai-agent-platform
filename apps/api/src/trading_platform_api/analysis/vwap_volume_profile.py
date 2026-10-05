@@ -116,6 +116,14 @@ class VolumeEventAssessmentReason(StrEnum):
     PRICE_EVENT_NOT_OBSERVED = "PRICE_EVENT_NOT_OBSERVED"
 
 
+class VolumeExhaustionStatus(StrEnum):
+    DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+
+
+class VolumeExhaustionReason(StrEnum):
+    RELIABLE_ORDER_FLOW_NOT_SUPPLIED = "RELIABLE_ORDER_FLOW_NOT_SUPPLIED"
+
+
 @dataclass(frozen=True, slots=True)
 class VolumeConfirmationPolicy:
     policy_id: str
@@ -336,6 +344,13 @@ class PriceVolumeComparison:
 
 
 @dataclass(frozen=True, slots=True)
+class VolumeExhaustionAssessment:
+    status: VolumeExhaustionStatus
+    reason: VolumeExhaustionReason
+    method_version: str
+
+
+@dataclass(frozen=True, slots=True)
 class VolumeConfirmationSeries:
     indicator_id: str
     metadata_version: str
@@ -359,6 +374,7 @@ class VolumeConfirmationSeries:
     points: tuple[VolumeConfirmationPoint, ...]
     assessment: VolumeEventAssessment
     price_volume_comparison: PriceVolumeComparison
+    exhaustion_assessment: VolumeExhaustionAssessment
     limitations: tuple[str, ...]
 
 
@@ -817,7 +833,8 @@ def calculate_volume_confirmation(
     calculation does not discover price levels or pivots. Its optional pivot
     comparison uses explicitly selected high/low fields, raw candle volumes,
     and caller-supplied minimum changes; it labels only opposite changes meeting
-    both thresholds and makes no exhaustion or trade-level order-flow finding.
+    both thresholds. Because this accepts OHLCV only, any exhaustion/order-flow
+    assessment remains DATA_UNAVAILABLE rather than inferred from candle data.
     """
     metadata = _metadata(
         "volume-confirmation", metadata_version, timeframe, (lookback,)
@@ -906,6 +923,11 @@ def calculate_volume_confirmation(
         price_unit=price_unit,
         volume_unit=volume_unit,
     )
+    exhaustion = VolumeExhaustionAssessment(
+        status=VolumeExhaustionStatus.DATA_UNAVAILABLE,
+        reason=VolumeExhaustionReason.RELIABLE_ORDER_FLOW_NOT_SUPPLIED,
+        method_version="reliable-order-flow-input-required-v1",
+    )
     return VolumeConfirmationSeries(
         indicator_id=metadata.indicator_id,
         metadata_version=metadata.metadata_version,
@@ -929,6 +951,7 @@ def calculate_volume_confirmation(
         points=typed_points,
         assessment=assessment,
         price_volume_comparison=comparison,
+        exhaustion_assessment=exhaustion,
         limitations=(
             "Analysis-only descriptive evidence; it is not a signal, strategy "
             "decision, validation result, risk decision, or execution permission.",
@@ -937,9 +960,9 @@ def calculate_volume_confirmation(
             "Price-volume comparison is descriptive only: it compares caller-named "
             "high/low pivot candles and labels opposing raw price/volume changes as "
             "divergent; it does not infer hidden pivots or validate pivot quality.",
-            "No exhaustion observation or trade-level order-flow claim is produced; "
-            "OHLCV alone cannot establish trade-level absorption or aggressive "
-            "buying/selling.",
+            "Exhaustion/order-flow evidence is DATA_UNAVAILABLE because reliable "
+            "order-flow inputs are not supplied; OHLCV alone cannot establish "
+            "trade-level absorption or aggressive buying/selling.",
             "No support/resistance discovery or order-flow claim is produced; OHLCV "
             "alone cannot establish trade-level absorption or aggressive "
             "buying/selling.",
@@ -1245,6 +1268,9 @@ __all__ = [
     "VolumeEventAssessment",
     "VolumeEventAssessmentReason",
     "VolumeEventAssessmentStatus",
+    "VolumeExhaustionAssessment",
+    "VolumeExhaustionReason",
+    "VolumeExhaustionStatus",
     "VolumeConfirmationPolicy",
     "VolumeProfileBin",
     "VolumeProfileReason",
