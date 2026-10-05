@@ -30,6 +30,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         "vwap",
         "volume-profile",
         "volume-confirmation",
+        "price-action-support-resistance",
     }
     for item in entries:
         assert item.output_nullable
