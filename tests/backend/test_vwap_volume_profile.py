@@ -40,6 +40,25 @@ def with_volumes(
     )
 
 
+def with_price_ranges(
+    observations: tuple[MarketData, ...],
+    ranges: tuple[tuple[Decimal, Decimal], ...],
+) -> tuple[MarketData, ...]:
+    assert len(observations) == len(ranges)
+    return tuple(
+        replace(
+            candle,
+            metrics=tuple(
+                replace(metric, value=high if metric.metric_name == "high" else low)
+                if metric.metric_name in {"high", "low"}
+                else metric
+                for metric in candle.metrics
+            ),
+        )
+        for candle, (high, low) in zip(observations, ranges, strict=True)
+    )
+
+
 def test_vwap_is_cumulative_bar_based_and_preserves_first_candle_anchor() -> None:
     snapshot, observations, quality = evidence(("10", "20", "30"))
     observations = with_volumes(observations, ("1", "2", "1"))
@@ -170,7 +189,7 @@ def test_single_candle_is_a_valid_calculation_window() -> None:
     assert profile.poc_bin_index == 0
 
 
-def test_profile_edges_half_open_assignment_and_final_upper_edge() -> None:
+def test_profile_edges_span_candle_wicks_and_assign_typical_prices() -> None:
     snapshot, observations, quality = evidence(("10", "20", "30", "40", "50"))
 
     result = calculate_volume_profile(
@@ -181,16 +200,16 @@ def test_profile_edges_half_open_assignment_and_final_upper_edge() -> None:
     )
 
     assert tuple((item.lower_bound, item.upper_bound) for item in result.bins) == (
-        (Decimal(10), Decimal(20)),
-        (Decimal(20), Decimal(30)),
-        (Decimal(30), Decimal(40)),
-        (Decimal(40), Decimal(50)),
+        (Decimal(9), Decimal("19.5")),
+        (Decimal("19.5"), Decimal(30)),
+        (Decimal(30), Decimal("40.5")),
+        (Decimal("40.5"), Decimal(51)),
     )
     assert tuple(item.assigned_volume for item in result.bins) == (
         Decimal(1),
         Decimal(1),
-        Decimal(1),
         Decimal(2),
+        Decimal(1),
     )
     assert tuple(item.includes_upper_bound for item in result.bins) == (
         False,
@@ -199,12 +218,48 @@ def test_profile_edges_half_open_assignment_and_final_upper_edge() -> None:
         True,
     )
     assert result.method_label == "candle-assigned volume-profile proxy"
-    assert result.poc_bin_index == 3
+    assert result.poc_bin_index == 2
+
+
+def test_coincident_typical_prices_share_bin_despite_different_wicks() -> None:
+    snapshot, observations, quality = evidence(("10", "10"))
+    observations = with_price_ranges(
+        observations,
+        ((Decimal(12), Decimal(8)), (Decimal(11), Decimal(9))),
+    )
+    observations = with_volumes(observations, ("2", "5"))
+
+    result = calculate_volume_profile(
+        snapshot=snapshot,
+        observations=observations,
+        quality=quality,
+        bin_count=4,
+    )
+
+    assert result.bins[0].lower_bound == Decimal(8)
+    assert result.bins[-1].upper_bound == Decimal(12)
+    assert tuple(item.assigned_volume for item in result.bins) == (
+        Decimal(0),
+        Decimal(0),
+        Decimal(7),
+        Decimal(0),
+    )
+    assert result.poc_bin_index == 2
 
 
 def test_profile_preserves_distinct_bins_for_a_narrow_decimal_range() -> None:
     snapshot, observations, quality = evidence(
         ("10", "10.000000000000000000000000000000001")
+    )
+    observations = with_price_ranges(
+        observations,
+        (
+            (Decimal(10), Decimal(10)),
+            (
+                Decimal("10.000000000000000000000000000000001"),
+                Decimal("10.000000000000000000000000000000001"),
+            ),
+        ),
     )
 
     result = calculate_volume_profile(
@@ -227,14 +282,14 @@ def test_profile_preserves_distinct_bins_for_a_narrow_decimal_range() -> None:
 def test_profile_poc_ties_choose_lower_bin_and_value_area_ties_expand_lower_first() -> (
     None
 ):
-    snapshot, observations, quality = evidence(("10", "20", "30", "40", "50"))
-    observations = with_volumes(observations, ("2", "3", "10", "1", "2"))
+    snapshot, observations, quality = evidence(("10", "20", "30", "40", "50", "60"))
+    observations = with_volumes(observations, ("2", "3", "5", "5", "3", "2"))
 
     result = calculate_volume_profile(
         snapshot=snapshot,
         observations=observations,
         quality=quality,
-        bin_count=4,
+        bin_count=5,
     )
     tied_snapshot, tied_observations, tied_quality = evidence(("10", "50"))
     tied_observations = with_volumes(tied_observations, ("5", "5"))
@@ -246,18 +301,30 @@ def test_profile_poc_ties_choose_lower_bin_and_value_area_ties_expand_lower_firs
     )
 
     assert result.poc_bin_index == 2
-    assert result.value_area_bin_indices == (1, 2)
-    assert result.value_area_low == Decimal(20)
-    assert result.value_area_high == Decimal(40)
-    assert result.value_area_volume == Decimal(13)
+    assert result.value_area_bin_indices == (1, 2, 3)
+    assert result.value_area_low == Decimal("19.4")
+    assert result.value_area_high == Decimal("50.6")
+    assert result.value_area_volume == Decimal(16)
     with localcontext() as context:
         context.prec = 34
-        assert result.value_area_share == Decimal(13) / Decimal(18)
+        assert result.value_area_share == Decimal("0.8")
     assert tied.poc_bin_index == 0
 
 
 def test_profile_zero_width_and_zero_total_volume_are_distinct() -> None:
     snapshot, observations, quality = evidence(("10", "10", "10"))
+    observations = tuple(
+        replace(
+            candle,
+            metrics=tuple(
+                replace(metric, value=Decimal(10))
+                if metric.metric_name in {"open", "high", "low", "close"}
+                else metric
+                for metric in candle.metrics
+            ),
+        )
+        for candle in observations
+    )
     same_price = calculate_volume_profile(
         snapshot=snapshot,
         observations=observations,
@@ -300,11 +367,11 @@ def test_profile_nodes_are_strict_interior_extrema_only() -> None:
         Decimal(1),
         Decimal(3),
         Decimal(1),
-        Decimal(0),
-        Decimal(4),
+        Decimal(2),
+        Decimal(2),
     )
     assert result.high_volume_node_bin_indices == (1,)
-    assert result.low_volume_node_bin_indices == (3,)
+    assert result.low_volume_node_bin_indices == (2,)
 
     plateau_snapshot, plateau_observations, plateau_quality = evidence(
         ("10", "20", "30", "40")

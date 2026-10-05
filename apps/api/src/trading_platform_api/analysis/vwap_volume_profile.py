@@ -416,8 +416,8 @@ def calculate_volume_profile(
     with localcontext() as context:
         context.prec = _calculation_precision(candles, volumes, bin_count)
         typical_prices = _typical_prices(candles)
-        minimum = min(typical_prices)
-        maximum = max(typical_prices)
+        minimum = min(low for _, low, _ in candles)
+        maximum = max(high for high, _, _ in candles)
         edges = _profile_edges(minimum, maximum, bin_count)
         if minimum != maximum and any(
             upper <= lower for lower, upper in zip(edges[:-1], edges[1:], strict=True)
