@@ -381,6 +381,7 @@ class _EvidencePayload:
     snapshot_id: UUID
     quality_report_id: UUID
     as_of: datetime
+    evidence_expires_at: datetime
     source_record_ids: tuple[UUID, ...]
     input_market_data_ids: tuple[UUID, ...]
     range_baseline_policy: RangeBaselinePolicy | None
@@ -421,6 +422,15 @@ class PriceActionAnalysis:
 
 def _candle_end(candle: MarketData, timeframe: str) -> datetime:
     return candle.event_time + timedelta(seconds=_INTERVALS[timeframe])
+
+
+def _evidence_expiry(quality: DataQualityReport, timeframe: str) -> datetime:
+    try:
+        return quality.assessed_at + timedelta(seconds=_INTERVALS[timeframe])
+    except OverflowError as exc:
+        raise PriceActionError(
+            "Evidence expiry exceeds the supported timestamp range."
+        ) from exc
 
 
 def _decimals(observations: tuple[MarketData, ...]) -> tuple[tuple[Decimal, ...], ...]:
@@ -987,7 +997,7 @@ def _make_contract_evidence(
         relation=EvidenceRelation.NEUTRAL,
         observed_at=payload.geometry[0].candle_time,
         available_at=quality.assessed_at,
-        expires_at=quality.assessed_at,
+        expires_at=payload.evidence_expires_at,
         method=evidence_method,
         value=encoded,
         unit=payload.price_unit,
@@ -1045,7 +1055,7 @@ def _make_contract_evidence(
         timeframe=timeframe,
         as_of=snapshot.as_of,
         available_at=quality.assessed_at,
-        expires_at=quality.assessed_at,
+        expires_at=payload.evidence_expires_at,
         status=AssessmentStatus.AVAILABLE,
         analytical_confidence=Decimal(1),
         findings=findings,
@@ -1188,6 +1198,8 @@ def calculate_spot_price_action(
         "volume confirmation or breakout/reclaim strategy logic.",
         "Pattern rules are descriptive, policy-versioned observations and do not "
         "imply future direction or profitability.",
+        "Evidence expires one source timeframe after C-003 assessment; a new "
+        "snapshot and quality report are required to extend validity.",
         "The C-012 analytical confidence value reflects deterministic rule "
         "application to validated inputs only; it is not probability or trade "
         "confidence.",
@@ -1207,6 +1219,7 @@ def calculate_spot_price_action(
         snapshot_id=snapshot.snapshot_id,
         quality_report_id=quality.report_id,
         as_of=snapshot.as_of,
+        evidence_expires_at=_evidence_expiry(quality, timeframe),
         source_record_ids=snapshot.source_record_ids,
         input_market_data_ids=snapshot.market_data_ids,
         range_baseline_policy=range_baseline_policy,

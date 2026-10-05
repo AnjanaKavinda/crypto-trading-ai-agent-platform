@@ -543,15 +543,18 @@ _PRICE_ACTION_METADATA = (
             ParameterMetadata("left-window", "candles", 2, 1, 500),
             ParameterMetadata("right-window", "candles", 2, 1, 500),
             ParameterMetadata("baseline-period", "candles", 20, 1, 500),
+            ParameterMetadata("minimum-interactions", "candles", 2, 1, 10000),
+            ParameterMetadata("break-close-count", "candles", 2, 1, 500),
         ),
         minimum_warmup_candles=3,
         output_unit="input-price-unit",
         output_schema=(
-            "Nullable exact Decimal OHLC geometry; caller-versioned optional patterns, "
-            "confirmed pivots and fixed-anchor zones. Caller tolerance/buffer use the "
-            "C-001 close unit; finite Decimals have <=64 digits and exponent/adjusted "
-            "exponent <=128; tolerance >0, buffer >=0. Pattern fractions are [0,1], "
-            "wick/body ratios [1,1000]. Canonical C-008 JSON, C-012 findings."
+            "Nullable Decimal OHLC geometry, optional caller-policy patterns, pivots "
+            "and zones. Tolerance/buffer use C-001 close units; Decimal bounds: 64 "
+            "digits, absolute exponent/adjusted exponent <=128; tolerance >0, buffer "
+            ">=0. Baseline threshold [0,1); pattern fractions [0,1], wick/body "
+            "ratios [1,1000]. Registry defaults never apply; policies are required. "
+            "Evidence expires one timeframe after C-003. C-008 JSON/C-012 findings."
         ),
         output_nullable=True,
         timing=IndicatorTiming.CONFIRMATORY,

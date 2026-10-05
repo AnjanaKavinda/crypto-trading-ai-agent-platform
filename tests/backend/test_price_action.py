@@ -668,6 +668,14 @@ def test_canonical_evidence_and_c012_findings_preserve_lineage_without_observati
     assert result.evidence.source_record_ids == snapshot.source_record_ids
     assert result.evidence.data_quality_report_id == quality.report_id
     assert result.evidence.method.version == result.method_version
+    assert result.evidence.available_at == quality.assessed_at
+    assert result.evidence.expires_at == quality.assessed_at + STEP
+    assert result.assessment.expires_at == quality.assessed_at + STEP
+    assert encoded["evidence_expires_at"] == (
+        (quality.assessed_at + STEP)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
     assert repeated == result
     assert policy_result.evidence.evidence_id != result.evidence.evidence_id
     assert (
@@ -868,5 +876,15 @@ def test_registry_metadata_marks_method_validated_correlated_and_exact_versioned
     assert metadata.evidence_dependencies
     assert metadata.output_nullable
     assert metadata.failure_modes
+    assert {
+        (parameter.name, parameter.minimum, parameter.maximum)
+        for parameter in metadata.parameters
+    } == {
+        ("left-window", 1, 500),
+        ("right-window", 1, 500),
+        ("baseline-period", 1, 500),
+        ("minimum-interactions", 1, 10_000),
+        ("break-close-count", 1, 500),
+    }
     with pytest.raises(IndicatorMetadataError, match="exact"):
         SPOT_RESEARCH_INDICATORS.get("price-action-support-resistance", "latest")
