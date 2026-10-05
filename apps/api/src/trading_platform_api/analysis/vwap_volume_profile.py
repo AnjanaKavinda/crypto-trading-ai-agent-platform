@@ -162,6 +162,7 @@ class CandidateBreakoutEvent:
 class VolumeConfirmationPoint:
     candle_end: datetime
     raw_volume: Decimal
+    prior_volume_sum: Decimal | None
     trailing_average: Decimal | None
     relative_volume: Decimal | None
     status: VolumeConfirmationPointStatus
@@ -170,13 +171,20 @@ class VolumeConfirmationPoint:
     def __post_init__(self) -> None:
         if not isinstance(self.candle_end, datetime) or self.candle_end.utcoffset() is None:
             raise VolumeAnalysisError("Volume point candle end must be timezone-aware.")
-        if type(self.raw_volume) is not Decimal or not self.raw_volume.is_finite():
+        if (
+            type(self.raw_volume) is not Decimal
+            or not self.raw_volume.is_finite()
+            or self.raw_volume < 0
+        ):
             raise VolumeAnalysisError("Raw candle volume must be a finite Decimal.")
         if not isinstance(self.status, VolumeConfirmationPointStatus):
             raise VolumeAnalysisError("Volume point status is invalid.")
         if self.status is VolumeConfirmationPointStatus.READY:
             if (
-                type(self.trailing_average) is not Decimal
+                type(self.prior_volume_sum) is not Decimal
+                or not self.prior_volume_sum.is_finite()
+                or self.prior_volume_sum <= 0
+                or type(self.trailing_average) is not Decimal
                 or not self.trailing_average.is_finite()
                 or self.trailing_average <= 0
                 or type(self.relative_volume) is not Decimal
@@ -185,13 +193,19 @@ class VolumeConfirmationPoint:
             ):
                 raise VolumeAnalysisError("A ready volume point needs valid values.")
         elif self.reason is VolumeConfirmationPointReason.INSUFFICIENT_PRIOR_CANDLES:
-            if self.trailing_average is not None or self.relative_volume is not None:
+            if (
+                self.prior_volume_sum is not None
+                or self.trailing_average is not None
+                or self.relative_volume is not None
+            ):
                 raise VolumeAnalysisError(
                     "A warm-up volume point cannot expose a baseline."
                 )
         elif self.reason is VolumeConfirmationPointReason.ZERO_PRIOR_VOLUME_BASELINE:
             if (
-                type(self.trailing_average) is not Decimal
+                type(self.prior_volume_sum) is not Decimal
+                or self.prior_volume_sum != 0
+                or type(self.trailing_average) is not Decimal
                 or self.trailing_average != 0
                 or self.relative_volume is not None
             ):
@@ -215,6 +229,7 @@ class VolumeEventAssessment:
     reference_unit: str | None
     event_close: Decimal | None
     raw_volume: Decimal | None
+    prior_volume_sum: Decimal | None
     trailing_average: Decimal | None
     relative_volume: Decimal | None
     policy_id: str | None
@@ -434,15 +449,16 @@ def _decimal_exceeds_bounds(value: Decimal) -> bool:
 
 def _relative_volume_meets_threshold(
     volume: Decimal,
-    baseline: Decimal,
+    prior_volume_sum: Decimal,
+    lookback: int,
     threshold: Decimal,
 ) -> bool:
     volume_numerator, volume_denominator = volume.as_integer_ratio()
-    baseline_numerator, baseline_denominator = baseline.as_integer_ratio()
+    sum_numerator, sum_denominator = prior_volume_sum.as_integer_ratio()
     threshold_numerator, threshold_denominator = threshold.as_integer_ratio()
     return (
-        volume_numerator * baseline_denominator * threshold_denominator
-        >= threshold_numerator * volume_denominator * baseline_numerator
+        volume_numerator * lookback * threshold_denominator * sum_denominator
+        >= threshold_numerator * sum_numerator * volume_denominator
     )
 
 
@@ -513,6 +529,7 @@ def _assess_candidate_event(
                 event_point = points[index]
                 if (
                     event_point.relative_volume is None
+                    or event_point.prior_volume_sum is None
                     or event_point.trailing_average is None
                 ):
                     reason = VolumeEventAssessmentReason.INSUFFICIENT_PRIOR_CANDLES
@@ -521,7 +538,8 @@ def _assess_candidate_event(
                         VolumeEventAssessmentStatus.SUPPORTING
                         if _relative_volume_meets_threshold(
                             event_point.raw_volume,
-                            event_point.trailing_average,
+                            event_point.prior_volume_sum,
+                            lookback,
                             policy.minimum_relative_volume,
                         )
                         else VolumeEventAssessmentStatus.NOT_CONFIRMING
@@ -547,6 +565,9 @@ def _assess_candidate_event(
         reference_unit=event.reference_unit if event is not None else None,
         event_close=event_close,
         raw_volume=selected_point.raw_volume if selected_point is not None else None,
+        prior_volume_sum=(
+            selected_point.prior_volume_sum if selected_point is not None else None
+        ),
         trailing_average=(
             selected_point.trailing_average if selected_point is not None else None
         ),
@@ -609,6 +630,7 @@ def calculate_volume_confirmation(
                     VolumeConfirmationPoint(
                         candle_end=end,
                         raw_volume=volume,
+                        prior_volume_sum=None,
                         trailing_average=None,
                         relative_volume=None,
                         status=VolumeConfirmationPointStatus.UNAVAILABLE,
@@ -616,27 +638,32 @@ def calculate_volume_confirmation(
                     )
                 )
                 continue
-            baseline = sum(volumes[index - lookback : index], Decimal(0)) / Decimal(
-                lookback
+            prior_volume_sum = sum(
+                volumes[index - lookback : index], Decimal(0)
             )
-            if baseline == 0:
+            if prior_volume_sum == 0:
                 points.append(
                     VolumeConfirmationPoint(
                         candle_end=end,
                         raw_volume=volume,
-                        trailing_average=baseline,
+                        prior_volume_sum=prior_volume_sum,
+                        trailing_average=Decimal(0),
                         relative_volume=None,
                         status=VolumeConfirmationPointStatus.UNAVAILABLE,
                         reason=VolumeConfirmationPointReason.ZERO_PRIOR_VOLUME_BASELINE,
                     )
                 )
                 continue
+            baseline = prior_volume_sum / Decimal(lookback)
             points.append(
                 VolumeConfirmationPoint(
                     candle_end=end,
                     raw_volume=volume,
+                    prior_volume_sum=prior_volume_sum,
                     trailing_average=baseline,
-                    relative_volume=volume / baseline,
+                    relative_volume=(
+                        volume * Decimal(lookback) / prior_volume_sum
+                    ),
                     status=VolumeConfirmationPointStatus.READY,
                 )
             )

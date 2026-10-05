@@ -400,8 +400,9 @@ _VOLUME_STRUCTURE_METADATA = (
         minimum_warmup_candles=3,
         output_unit="input-volume-unit-and-dimensionless-ratio",
         output_schema=(
-            "per-candle Decimal raw volume, trailing mean excluding current candle, "
-            "and nullable relative volume with explicit unavailable reason"
+            "per-candle Decimal raw volume, exact prior-volume sum, trailing mean "
+            "excluding current candle, and nullable relative volume with explicit "
+            "unavailable reason"
         ),
         output_nullable=True,
         timing=IndicatorTiming.CONFIRMATORY,

@@ -49,11 +49,12 @@ def policy(threshold: str = "4") -> VolumeConfirmationPolicy:
 def event(
     observations: tuple[MarketData, ...],
     *,
+    index: int = 2,
     direction: CandidateBreakoutDirection = CandidateBreakoutDirection.UP,
     level: str = "11",
 ) -> CandidateBreakoutEvent:
     return CandidateBreakoutEvent(
-        market_data_id=observations[2].market_data_id,
+        market_data_id=observations[index].market_data_id,
         direction=direction,
         reference_context_id="caller-defined-level-1",
         reference_level=Decimal(level),
@@ -65,13 +66,14 @@ def calculate(
     snapshot,
     observations: tuple[MarketData, ...],
     quality,
+    lookback: int = 2,
     **kwargs,
 ):
     return calculate_volume_confirmation(
         snapshot=snapshot,
         observations=observations,
         quality=quality,
-        lookback=2,
+        lookback=lookback,
         timeframe="1m",
         **kwargs,
     )
@@ -91,6 +93,12 @@ def test_hand_calculated_volume_mean_relative_volume_and_current_exclusion() -> 
         None,
         Decimal(1),
         Decimal(3),
+    )
+    assert tuple(item.prior_volume_sum for item in result.points) == (
+        None,
+        None,
+        Decimal(2),
+        Decimal(6),
     )
     assert tuple(item.relative_volume for item in result.points) == (
         None,
@@ -214,6 +222,27 @@ def test_threshold_assessment_uses_exact_ratio_not_rounded_display_value() -> No
 
     assert result.points[2].relative_volume == rounded_two_thirds
     assert result.assessment.status is VolumeEventAssessmentStatus.NOT_CONFIRMING
+
+
+def test_threshold_assessment_uses_exact_sum_when_average_repeats() -> None:
+    snapshot, observations, quality = evidence(("10", "11", "12", "13"))
+    observations = with_volumes(observations, ("1", "1", "0", "2"))
+
+    result = calculate(
+        snapshot,
+        observations,
+        quality,
+        lookback=3,
+        candidate_event=event(observations, index=3, level="12"),
+        policy=policy("3"),
+    )
+
+    assert result.points[3].prior_volume_sum == Decimal(2)
+    assert result.points[3].trailing_average == Decimal(
+        "0.6666666666666666666666666666666667"
+    )
+    assert result.points[3].relative_volume == Decimal(3)
+    assert result.assessment.status is VolumeEventAssessmentStatus.SUPPORTING
 
 
 def test_missing_policy_event_and_insufficient_context_are_indeterminate() -> None:
