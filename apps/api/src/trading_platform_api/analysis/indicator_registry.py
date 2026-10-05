@@ -19,6 +19,7 @@ class IndicatorCategory(StrEnum):
     VOLATILITY_RISK = "volatility-risk"
     VOLUME_STRUCTURE = "volume-structure"
     MARKET_STRUCTURE = "market-structure"
+    PRICE_ACTION = "price-action"
     VOLUME_CONFIRMATION = "volume-confirmation"
 
 
@@ -517,11 +518,73 @@ _VOLUME_STRUCTURE_METADATA = (
     ),
 )
 
+_PRICE_ACTION_METADATA = (
+    IndicatorMetadata(
+        indicator_id="price-action-support-resistance",
+        metadata_version="1",
+        calculation_version="spot-price-action-geometry-patterns-pivots-zones-v1",
+        display_name="Spot Price Action and Support/Resistance",
+        category=IndicatorCategory.PRICE_ACTION,
+        purpose=(
+            "Describe deterministic Spot candle geometry, caller-policy patterns, "
+            "confirmed local pivots, and fixed-anchor support/resistance zones; "
+            "never produce a signal or trading authority."
+        ),
+        inputs=(
+            "C-001:closed-spot-ohlcv.open",
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+            "C-002:snapshot",
+            "C-003:quality",
+        ),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=(
+            ParameterMetadata("left-window", "candles", 2, 1, 500),
+            ParameterMetadata("right-window", "candles", 2, 1, 500),
+            ParameterMetadata("baseline-period", "candles", 20, 1, 500),
+            ParameterMetadata("minimum-interactions", "candles", 2, 1, 10000),
+            ParameterMetadata("break-close-count", "candles", 2, 1, 500),
+        ),
+        minimum_warmup_candles=3,
+        output_unit="input-price-unit",
+        output_schema=(
+            "Nullable Decimal OHLC geometry, optional caller-policy patterns, pivots "
+            "and zones. Tolerance/buffer use C-001 close units; Decimal bounds: 64 "
+            "digits, absolute exponent/adjusted exponent <=128; tolerance >0, buffer "
+            ">=0. Baseline threshold [0,1); pattern fractions [0,1], wick/body "
+            "ratios [1,1000]. Registry defaults never apply; policies are required. "
+            "Evidence expires one timeframe after C-003. C-008 JSON/C-012 findings."
+        ),
+        output_nullable=True,
+        timing=IndicatorTiming.CONFIRMATORY,
+        best_regimes=("observable-spot-price-action",),
+        weak_regimes=("stale-or-gapped-market", "insufficient-pivot-confirmation"),
+        failure_modes=(
+            "invalid-quality-or-provenance",
+            "stale-or-gapped-market",
+            "non-spot-input",
+            "invalid-decimal-precision-or-exponent",
+            "invalid-policy",
+            "insufficient-pivot-confirmation",
+            "bounded-evidence-output-exceeded",
+        ),
+        evidence_independent=False,
+        evidence_dependencies=("spot-ohlcv-price", "ohlcv-derived-indicators"),
+        evidence_graph_role=(
+            "Descriptive OHLCV-derived price-action evidence, correlated with source "
+            "candles and all other OHLCV-derived indicators."
+        ),
+        phase=IndicatorPhase.VALIDATED,
+    ),
+)
+
 
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
         *_MOMENTUM_METADATA,
         *_VOLUME_STRUCTURE_METADATA,
+        *_PRICE_ACTION_METADATA,
         _ema(20),
         _ema(50),
         replace(
