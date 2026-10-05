@@ -378,6 +378,56 @@ _MOMENTUM_METADATA = (
 
 _VOLUME_STRUCTURE_METADATA = (
     IndicatorMetadata(
+        indicator_id="volume-confirmation",
+        metadata_version="1",
+        calculation_version=("trailing-prior-volume-mean-explicit-pivot-comparison-v1"),
+        display_name="Trailing Relative Volume Confirmation",
+        category=IndicatorCategory.VOLUME_CONFIRMATION,
+        purpose=(
+            "Describe raw and trailing-relative Spot candle volume; assess only an "
+            "explicit candidate event under its caller-supplied confirmation policy "
+            "or caller-specified pivot comparison under explicit thresholds."
+        ),
+        inputs=(
+            "C-001:closed-spot-ohlcv.high",
+            "C-001:closed-spot-ohlcv.low",
+            "C-001:closed-spot-ohlcv.close",
+            "C-001:closed-spot-ohlcv.volume",
+            "C-002:snapshot",
+            "C-003:quality",
+        ),
+        timeframes=_SPOT_TIMEFRAMES,
+        parameters=(ParameterMetadata("lookback", "candles", 20, 2, 500),),
+        minimum_warmup_candles=3,
+        output_unit="input-volume-unit-and-dimensionless-ratio",
+        output_schema=(
+            "per-candle Decimal raw volume, exact prior-volume sum, trailing mean "
+            "excluding current candle, and nullable relative volume with explicit "
+            "unavailable reason; optional comparison of two caller-specified bounded "
+            "pivot candles with caller-supplied thresholds; exhaustion is explicitly "
+            "DATA_UNAVAILABLE without reliable order-flow input"
+        ),
+        output_nullable=True,
+        timing=IndicatorTiming.CONFIRMATORY,
+        best_regimes=("observable-volume",),
+        weak_regimes=("stale-or-gapped-market",),
+        failure_modes=(
+            "insufficient-prior-volume",
+            "zero-prior-volume-baseline",
+            "invalid-explicit-comparison-context",
+            "missing-or-invalid-volume",
+            "calculation-precision-limit",
+            "calculation-exponent-limit",
+        ),
+        evidence_independent=False,
+        evidence_dependencies=("spot-price-volume", "ohlcv-derived-indicators"),
+        evidence_graph_role=(
+            "Descriptive Spot OHLCV volume evidence; correlated with its source "
+            "candles, VWAP, volume profile, and other OHLCV-derived features."
+        ),
+        phase=IndicatorPhase.VALIDATED,
+    ),
+    IndicatorMetadata(
         indicator_id="vwap",
         metadata_version="1",
         calculation_version="bar-typical-price-cumulative-v1",

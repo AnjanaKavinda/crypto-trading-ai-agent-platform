@@ -1,4 +1,4 @@
-"""Deterministic, provenance-bound Spot VWAP and volume-profile calculations."""
+"""Deterministic, provenance-bound Spot volume and price-volume calculations."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from trading_platform_api.analysis.indicator_registry import (
 from trading_platform_api.analysis.volatility import VolatilityError, _ohlc
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityStatus,
     MarketData,
     MarketSnapshot,
 )
@@ -37,6 +38,10 @@ _INTERVALS = {
 
 VWAP_METHOD = "bar-based typical-price VWAP"
 VOLUME_PROFILE_METHOD = "candle-assigned volume-profile proxy"
+PIVOT_COMPARISON_METHOD = (
+    "caller-specified pivot price and raw-volume direction comparison"
+)
+PIVOT_COMPARISON_VERSION = "explicit-pivot-opposing-deltas-v1"
 
 
 class VolumeAnalysisError(ValueError):
@@ -59,6 +64,320 @@ class VolumeProfileStatus(StrEnum):
 
 class VolumeProfileReason(StrEnum):
     ZERO_TOTAL_VOLUME = "ZERO_TOTAL_VOLUME"
+
+
+class VolumeConfirmationPointStatus(StrEnum):
+    READY = "READY"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class VolumeConfirmationPointReason(StrEnum):
+    INSUFFICIENT_PRIOR_CANDLES = "INSUFFICIENT_PRIOR_CANDLES"
+    ZERO_PRIOR_VOLUME_BASELINE = "ZERO_PRIOR_VOLUME_BASELINE"
+
+
+class CandidateBreakoutDirection(StrEnum):
+    UP = "UP"
+    DOWN = "DOWN"
+
+
+class VolumePivotPriceField(StrEnum):
+    HIGH = "high"
+    LOW = "low"
+
+
+class PriceVolumeComparisonStatus(StrEnum):
+    DIVERGENT = "DIVERGENT"
+    ALIGNED = "ALIGNED"
+    NON_DIRECTIONAL = "NON_DIRECTIONAL"
+    INDETERMINATE = "INDETERMINATE"
+
+
+class PriceVolumeComparisonReason(StrEnum):
+    MISSING_COMPARISON_CONTEXT = "MISSING_COMPARISON_CONTEXT"
+    PIVOT_CANDLE_NOT_IN_SERIES = "PIVOT_CANDLE_NOT_IN_SERIES"
+    PIVOTS_NOT_IN_CHRONOLOGICAL_ORDER = "PIVOTS_NOT_IN_CHRONOLOGICAL_ORDER"
+    PIVOT_DISTANCE_EXCEEDED = "PIVOT_DISTANCE_EXCEEDED"
+    BELOW_CALLER_THRESHOLDS = "BELOW_CALLER_THRESHOLDS"
+
+
+class VolumeEventAssessmentStatus(StrEnum):
+    SUPPORTING = "SUPPORTING"
+    NOT_CONFIRMING = "NOT_CONFIRMING"
+    INDETERMINATE = "INDETERMINATE"
+
+
+class VolumeEventAssessmentReason(StrEnum):
+    MISSING_EVENT_CONTEXT = "MISSING_EVENT_CONTEXT"
+    MISSING_CONFIRMATION_POLICY = "MISSING_CONFIRMATION_POLICY"
+    CANDIDATE_CANDLE_NOT_IN_SERIES = "CANDIDATE_CANDLE_NOT_IN_SERIES"
+    INSUFFICIENT_PRIOR_CANDLES = "INSUFFICIENT_PRIOR_CANDLES"
+    ZERO_PRIOR_VOLUME_BASELINE = "ZERO_PRIOR_VOLUME_BASELINE"
+    PRICE_EVENT_NOT_OBSERVED = "PRICE_EVENT_NOT_OBSERVED"
+
+
+class VolumeExhaustionStatus(StrEnum):
+    DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+
+
+class VolumeExhaustionReason(StrEnum):
+    RELIABLE_ORDER_FLOW_NOT_SUPPLIED = "RELIABLE_ORDER_FLOW_NOT_SUPPLIED"
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeConfirmationPolicy:
+    policy_id: str
+    version: str
+    minimum_relative_volume: Decimal
+
+    def __post_init__(self) -> None:
+        for name, value in (("policy_id", self.policy_id), ("version", self.version)):
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or len(value) > 128
+            ):
+                raise VolumeAnalysisError(f"{name} must be bounded nonblank text.")
+        if (
+            type(self.minimum_relative_volume) is not Decimal
+            or not self.minimum_relative_volume.is_finite()
+            or self.minimum_relative_volume < 0
+            or _decimal_exceeds_bounds(self.minimum_relative_volume)
+        ):
+            raise VolumeAnalysisError(
+                "minimum_relative_volume must be a bounded nonnegative Decimal."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateBreakoutEvent:
+    market_data_id: UUID
+    direction: CandidateBreakoutDirection
+    reference_context_id: str
+    reference_level: Decimal
+    reference_unit: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.market_data_id, UUID):
+            raise VolumeAnalysisError("Candidate event needs a canonical candle ID.")
+        if not isinstance(self.direction, CandidateBreakoutDirection):
+            raise VolumeAnalysisError("Candidate event direction is invalid.")
+        if (
+            not isinstance(self.reference_context_id, str)
+            or not self.reference_context_id
+            or self.reference_context_id != self.reference_context_id.strip()
+            or len(self.reference_context_id) > 128
+        ):
+            raise VolumeAnalysisError(
+                "Candidate event needs explicit bounded reference context."
+            )
+        if (
+            type(self.reference_level) is not Decimal
+            or not self.reference_level.is_finite()
+            or self.reference_level <= 0
+            or _decimal_exceeds_bounds(self.reference_level)
+        ):
+            raise VolumeAnalysisError(
+                "Candidate event reference level must be a bounded positive Decimal."
+            )
+        if (
+            not isinstance(self.reference_unit, str)
+            or not self.reference_unit
+            or self.reference_unit != self.reference_unit.strip()
+            or len(self.reference_unit) > 128
+        ):
+            raise VolumeAnalysisError("Candidate event reference unit is invalid.")
+
+
+@dataclass(frozen=True, slots=True)
+class PriceVolumeComparisonContext:
+    context_id: str
+    version: str
+    first_pivot_market_data_id: UUID
+    second_pivot_market_data_id: UUID
+    price_field: VolumePivotPriceField
+    maximum_candle_distance: int
+    minimum_price_change: Decimal
+    minimum_volume_change: Decimal
+
+    def __post_init__(self) -> None:
+        for name, text_value in (
+            ("context_id", self.context_id),
+            ("version", self.version),
+        ):
+            if (
+                not isinstance(text_value, str)
+                or not text_value
+                or text_value != text_value.strip()
+                or len(text_value) > 128
+            ):
+                raise VolumeAnalysisError(f"{name} must be bounded nonblank text.")
+        if not isinstance(self.first_pivot_market_data_id, UUID) or not isinstance(
+            self.second_pivot_market_data_id, UUID
+        ):
+            raise VolumeAnalysisError("Comparison pivots need canonical candle IDs.")
+        if not isinstance(self.price_field, VolumePivotPriceField):
+            raise VolumeAnalysisError("Comparison price field must be high or low.")
+        if (
+            type(self.maximum_candle_distance) is not int
+            or not 1 <= self.maximum_candle_distance <= 500
+        ):
+            raise VolumeAnalysisError(
+                "Maximum comparison distance must be an integer in [1, 500]."
+            )
+        for name, threshold_value in (
+            ("minimum_price_change", self.minimum_price_change),
+            ("minimum_volume_change", self.minimum_volume_change),
+        ):
+            if (
+                type(threshold_value) is not Decimal
+                or not threshold_value.is_finite()
+                or threshold_value < 0
+                or _decimal_exceeds_bounds(threshold_value)
+            ):
+                raise VolumeAnalysisError(
+                    f"{name} must be a bounded nonnegative Decimal."
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeConfirmationPoint:
+    candle_end: datetime
+    raw_volume: Decimal
+    prior_volume_sum: Decimal | None
+    trailing_average: Decimal | None
+    relative_volume: Decimal | None
+    status: VolumeConfirmationPointStatus
+    reason: VolumeConfirmationPointReason | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.candle_end, datetime)
+            or self.candle_end.utcoffset() is None
+        ):
+            raise VolumeAnalysisError("Volume point candle end must be timezone-aware.")
+        if (
+            type(self.raw_volume) is not Decimal
+            or not self.raw_volume.is_finite()
+            or self.raw_volume < 0
+        ):
+            raise VolumeAnalysisError("Raw candle volume must be a finite Decimal.")
+        if not isinstance(self.status, VolumeConfirmationPointStatus):
+            raise VolumeAnalysisError("Volume point status is invalid.")
+        if self.status is VolumeConfirmationPointStatus.READY:
+            if (
+                type(self.prior_volume_sum) is not Decimal
+                or not self.prior_volume_sum.is_finite()
+                or self.prior_volume_sum <= 0
+                or type(self.trailing_average) is not Decimal
+                or not self.trailing_average.is_finite()
+                or self.trailing_average <= 0
+                or type(self.relative_volume) is not Decimal
+                or not self.relative_volume.is_finite()
+                or self.reason is not None
+            ):
+                raise VolumeAnalysisError("A ready volume point needs valid values.")
+        elif self.reason is VolumeConfirmationPointReason.INSUFFICIENT_PRIOR_CANDLES:
+            if (
+                self.prior_volume_sum is not None
+                or self.trailing_average is not None
+                or self.relative_volume is not None
+            ):
+                raise VolumeAnalysisError(
+                    "A warm-up volume point cannot expose a baseline."
+                )
+        elif self.reason is VolumeConfirmationPointReason.ZERO_PRIOR_VOLUME_BASELINE:
+            if (
+                type(self.prior_volume_sum) is not Decimal
+                or self.prior_volume_sum != 0
+                or type(self.trailing_average) is not Decimal
+                or self.trailing_average != 0
+                or self.relative_volume is not None
+            ):
+                raise VolumeAnalysisError(
+                    "A zero-baseline volume point must preserve its zero baseline."
+                )
+        else:
+            raise VolumeAnalysisError(
+                "An unavailable volume point needs a stable reason."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeEventAssessment:
+    status: VolumeEventAssessmentStatus
+    reason: VolumeEventAssessmentReason | None
+    event_market_data_id: UUID | None
+    direction: CandidateBreakoutDirection | None
+    reference_context_id: str | None
+    reference_level: Decimal | None
+    reference_unit: str | None
+    event_close: Decimal | None
+    raw_volume: Decimal | None
+    prior_volume_sum: Decimal | None
+    trailing_average: Decimal | None
+    relative_volume: Decimal | None
+    policy_id: str | None
+    policy_version: str | None
+    minimum_relative_volume: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class PriceVolumeComparison:
+    status: PriceVolumeComparisonStatus
+    reason: PriceVolumeComparisonReason | None
+    context_id: str | None
+    context_version: str | None
+    first_pivot_market_data_id: UUID | None
+    second_pivot_market_data_id: UUID | None
+    price_field: VolumePivotPriceField | None
+    maximum_candle_distance: int | None
+    first_price: Decimal | None
+    second_price: Decimal | None
+    first_volume: Decimal | None
+    second_volume: Decimal | None
+    minimum_price_change: Decimal | None
+    minimum_volume_change: Decimal | None
+    price_unit: str | None
+    volume_unit: str | None
+    method: str
+    method_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeExhaustionAssessment:
+    status: VolumeExhaustionStatus
+    reason: VolumeExhaustionReason
+    method_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeConfirmationSeries:
+    indicator_id: str
+    metadata_version: str
+    calculation_version: str
+    method_label: str
+    timeframe: str
+    instrument_id: str
+    venue_id: str
+    snapshot_id: UUID
+    quality_report_id: UUID
+    quality_status: DataQualityStatus
+    as_of: datetime
+    source_record_ids: tuple[UUID, ...]
+    volume_unit: str
+    price_unit: str
+    lookback: int
+    calculation_precision: int
+    window_start: datetime
+    window_end: datetime
+    input_market_data_ids: tuple[UUID, ...]
+    points: tuple[VolumeConfirmationPoint, ...]
+    assessment: VolumeEventAssessment
+    price_volume_comparison: PriceVolumeComparison
+    exhaustion_assessment: VolumeExhaustionAssessment
+    limitations: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,10 +555,412 @@ def _inputs(
     return candles, tuple(volumes), price_unit, volume_unit
 
 
+def _decimal_exceeds_bounds(value: Decimal) -> bool:
+    exponent = value.as_tuple().exponent
+    return (
+        not isinstance(exponent, int)
+        or abs(exponent) > _MAX_DECIMAL_EXPONENT
+        or abs(value.adjusted()) > _MAX_DECIMAL_EXPONENT
+    )
+
+
+def _relative_volume_meets_threshold(
+    volume: Decimal,
+    prior_volume_sum: Decimal,
+    lookback: int,
+    threshold: Decimal,
+) -> bool:
+    volume_numerator, volume_denominator = volume.as_integer_ratio()
+    sum_numerator, sum_denominator = prior_volume_sum.as_integer_ratio()
+    threshold_numerator, threshold_denominator = threshold.as_integer_ratio()
+    return (
+        volume_numerator * lookback * threshold_denominator * sum_denominator
+        >= threshold_numerator * sum_numerator * volume_denominator
+    )
+
+
+def _absolute_change_meets_threshold(
+    first: Decimal,
+    second: Decimal,
+    threshold: Decimal,
+) -> bool:
+    first_numerator, first_denominator = first.as_integer_ratio()
+    second_numerator, second_denominator = second.as_integer_ratio()
+    threshold_numerator, threshold_denominator = threshold.as_integer_ratio()
+    return (
+        abs(second_numerator * first_denominator - first_numerator * second_denominator)
+        * threshold_denominator
+        >= threshold_numerator * first_denominator * second_denominator
+    )
+
+
+def _price_volume_comparison(
+    *,
+    context: PriceVolumeComparisonContext | None,
+    observations: tuple[MarketData, ...],
+    points: tuple[VolumeConfirmationPoint, ...],
+    price_unit: str,
+    volume_unit: str,
+) -> PriceVolumeComparison:
+    status = PriceVolumeComparisonStatus.INDETERMINATE
+    reason: PriceVolumeComparisonReason | None = None
+    first_index: int | None = None
+    second_index: int | None = None
+    first_price: Decimal | None = None
+    second_price: Decimal | None = None
+    first_volume: Decimal | None = None
+    second_volume: Decimal | None = None
+
+    if context is None:
+        reason = PriceVolumeComparisonReason.MISSING_COMPARISON_CONTEXT
+    else:
+        index_by_id = {
+            item.market_data_id: index for index, item in enumerate(observations)
+        }
+        first_index = index_by_id.get(context.first_pivot_market_data_id)
+        second_index = index_by_id.get(context.second_pivot_market_data_id)
+        if first_index is None or second_index is None:
+            reason = PriceVolumeComparisonReason.PIVOT_CANDLE_NOT_IN_SERIES
+        elif first_index >= second_index:
+            reason = PriceVolumeComparisonReason.PIVOTS_NOT_IN_CHRONOLOGICAL_ORDER
+        elif second_index - first_index > context.maximum_candle_distance:
+            reason = PriceVolumeComparisonReason.PIVOT_DISTANCE_EXCEEDED
+        else:
+            first_price = next(
+                metric.value
+                for metric in observations[first_index].metrics
+                if metric.metric_name == context.price_field.value
+            )
+            second_price = next(
+                metric.value
+                for metric in observations[second_index].metrics
+                if metric.metric_name == context.price_field.value
+            )
+            first_volume = points[first_index].raw_volume
+            second_volume = points[second_index].raw_volume
+            price_increased = second_price > first_price
+            price_decreased = second_price < first_price
+            volume_increased = second_volume > first_volume
+            volume_decreased = second_volume < first_volume
+            if not (
+                _absolute_change_meets_threshold(
+                    first_price, second_price, context.minimum_price_change
+                )
+                and _absolute_change_meets_threshold(
+                    first_volume, second_volume, context.minimum_volume_change
+                )
+            ):
+                reason = PriceVolumeComparisonReason.BELOW_CALLER_THRESHOLDS
+            elif not (price_increased or price_decreased) or not (
+                volume_increased or volume_decreased
+            ):
+                status = PriceVolumeComparisonStatus.NON_DIRECTIONAL
+            elif price_increased != volume_increased:
+                status = PriceVolumeComparisonStatus.DIVERGENT
+            else:
+                status = PriceVolumeComparisonStatus.ALIGNED
+
+    return PriceVolumeComparison(
+        status=status,
+        reason=reason,
+        context_id=context.context_id if context is not None else None,
+        context_version=context.version if context is not None else None,
+        first_pivot_market_data_id=(
+            context.first_pivot_market_data_id if context is not None else None
+        ),
+        second_pivot_market_data_id=(
+            context.second_pivot_market_data_id if context is not None else None
+        ),
+        price_field=context.price_field if context is not None else None,
+        maximum_candle_distance=(
+            context.maximum_candle_distance if context is not None else None
+        ),
+        first_price=first_price,
+        second_price=second_price,
+        first_volume=first_volume,
+        second_volume=second_volume,
+        minimum_price_change=(
+            context.minimum_price_change if context is not None else None
+        ),
+        minimum_volume_change=(
+            context.minimum_volume_change if context is not None else None
+        ),
+        price_unit=price_unit if context is not None else None,
+        volume_unit=volume_unit if context is not None else None,
+        method=PIVOT_COMPARISON_METHOD,
+        method_version=PIVOT_COMPARISON_VERSION,
+    )
+
+
 def _typical_prices(
     candles: tuple[tuple[Decimal, Decimal, Decimal], ...],
 ) -> tuple[Decimal, ...]:
     return tuple((high + low + close) / Decimal(3) for high, low, close in candles)
+
+
+def _assess_candidate_event(
+    *,
+    event: CandidateBreakoutEvent | None,
+    policy: VolumeConfirmationPolicy | None,
+    observations: tuple[MarketData, ...],
+    price_unit: str,
+    points: tuple[VolumeConfirmationPoint, ...],
+    lookback: int,
+) -> VolumeEventAssessment:
+    status = VolumeEventAssessmentStatus.INDETERMINATE
+    reason: VolumeEventAssessmentReason | None = None
+    index: int | None = None
+
+    if event is None:
+        reason = VolumeEventAssessmentReason.MISSING_EVENT_CONTEXT
+    elif event.reference_unit != price_unit:
+        raise VolumeAnalysisError(
+            "Candidate reference level unit must match the Spot price unit."
+        )
+    else:
+        index = next(
+            (
+                position
+                for position, item in enumerate(observations)
+                if item.market_data_id == event.market_data_id
+            ),
+            None,
+        )
+        if index is None:
+            reason = VolumeEventAssessmentReason.CANDIDATE_CANDLE_NOT_IN_SERIES
+        elif policy is None:
+            reason = VolumeEventAssessmentReason.MISSING_CONFIRMATION_POLICY
+        elif index < lookback:
+            reason = VolumeEventAssessmentReason.INSUFFICIENT_PRIOR_CANDLES
+        elif (
+            points[index].reason
+            is VolumeConfirmationPointReason.ZERO_PRIOR_VOLUME_BASELINE
+        ):
+            reason = VolumeEventAssessmentReason.ZERO_PRIOR_VOLUME_BASELINE
+        else:
+            previous_close = next(
+                metric.value
+                for metric in observations[index - 1].metrics
+                if metric.metric_name == "close"
+            )
+            close = next(
+                metric.value
+                for metric in observations[index].metrics
+                if metric.metric_name == "close"
+            )
+            event_crossed = (
+                previous_close <= event.reference_level < close
+                if event.direction is CandidateBreakoutDirection.UP
+                else previous_close >= event.reference_level > close
+            )
+            if not event_crossed:
+                reason = VolumeEventAssessmentReason.PRICE_EVENT_NOT_OBSERVED
+            else:
+                event_point = points[index]
+                if (
+                    event_point.relative_volume is None
+                    or event_point.prior_volume_sum is None
+                    or event_point.trailing_average is None
+                ):
+                    reason = VolumeEventAssessmentReason.INSUFFICIENT_PRIOR_CANDLES
+                else:
+                    status = (
+                        VolumeEventAssessmentStatus.SUPPORTING
+                        if _relative_volume_meets_threshold(
+                            event_point.raw_volume,
+                            event_point.prior_volume_sum,
+                            lookback,
+                            policy.minimum_relative_volume,
+                        )
+                        else VolumeEventAssessmentStatus.NOT_CONFIRMING
+                    )
+
+    event_close = None
+    selected_point: VolumeConfirmationPoint | None = None
+    if index is not None:
+        event_close = next(
+            metric.value
+            for metric in observations[index].metrics
+            if metric.metric_name == "close"
+        )
+        selected_point = points[index]
+
+    return VolumeEventAssessment(
+        status=status,
+        reason=reason,
+        event_market_data_id=event.market_data_id if event is not None else None,
+        direction=event.direction if event is not None else None,
+        reference_context_id=event.reference_context_id if event is not None else None,
+        reference_level=event.reference_level if event is not None else None,
+        reference_unit=event.reference_unit if event is not None else None,
+        event_close=event_close,
+        raw_volume=selected_point.raw_volume if selected_point is not None else None,
+        prior_volume_sum=(
+            selected_point.prior_volume_sum if selected_point is not None else None
+        ),
+        trailing_average=(
+            selected_point.trailing_average if selected_point is not None else None
+        ),
+        relative_volume=(
+            selected_point.relative_volume if selected_point is not None else None
+        ),
+        policy_id=policy.policy_id if policy is not None else None,
+        policy_version=policy.version if policy is not None else None,
+        minimum_relative_volume=(
+            policy.minimum_relative_volume if policy is not None else None
+        ),
+    )
+
+
+def calculate_volume_confirmation(
+    *,
+    snapshot: MarketSnapshot,
+    observations: tuple[MarketData, ...],
+    quality: DataQualityReport,
+    lookback: int = 20,
+    timeframe: str = "1m",
+    metadata_version: str = "1",
+    candidate_event: CandidateBreakoutEvent | None = None,
+    policy: VolumeConfirmationPolicy | None = None,
+    comparison_context: PriceVolumeComparisonContext | None = None,
+) -> VolumeConfirmationSeries:
+    """Calculate descriptive trailing relative volume and an optional event assessment.
+
+    Each candle's baseline uses exactly the preceding ``lookback`` completed
+    candles, excluding the candle being measured. A classification is produced
+    only for a supplied candidate event and explicit versioned policy. This
+    calculation does not discover price levels or pivots. Its optional pivot
+    comparison uses explicitly selected high/low fields, raw candle volumes,
+    and caller-supplied minimum changes; it labels only opposite changes meeting
+    both thresholds. Because this accepts OHLCV only, any exhaustion/order-flow
+    assessment remains DATA_UNAVAILABLE rather than inferred from candle data.
+    """
+    metadata = _metadata(
+        "volume-confirmation", metadata_version, timeframe, (lookback,)
+    )
+    if candidate_event is not None and not isinstance(
+        candidate_event, CandidateBreakoutEvent
+    ):
+        raise VolumeAnalysisError("candidate_event must be explicit event context.")
+    if policy is not None and not isinstance(policy, VolumeConfirmationPolicy):
+        raise VolumeAnalysisError("policy must be an explicit confirmation policy.")
+    if comparison_context is not None and not isinstance(
+        comparison_context, PriceVolumeComparisonContext
+    ):
+        raise VolumeAnalysisError("comparison_context must explicitly identify pivots.")
+    candles, volumes, price_unit, volume_unit = _inputs(
+        snapshot=snapshot,
+        observations=observations,
+        quality=quality,
+        timeframe=timeframe,
+    )
+    precision = _calculation_precision(candles, volumes, 1)
+    interval = timedelta(seconds=_INTERVALS[timeframe])
+    with localcontext() as context:
+        context.prec = precision
+        points: list[VolumeConfirmationPoint] = []
+        for index, (item, volume) in enumerate(zip(observations, volumes, strict=True)):
+            end = item.event_time + interval
+            if index < lookback:
+                points.append(
+                    VolumeConfirmationPoint(
+                        candle_end=end,
+                        raw_volume=volume,
+                        prior_volume_sum=None,
+                        trailing_average=None,
+                        relative_volume=None,
+                        status=VolumeConfirmationPointStatus.UNAVAILABLE,
+                        reason=VolumeConfirmationPointReason.INSUFFICIENT_PRIOR_CANDLES,
+                    )
+                )
+                continue
+            prior_volume_sum = sum(volumes[index - lookback : index], Decimal(0))
+            if prior_volume_sum == 0:
+                points.append(
+                    VolumeConfirmationPoint(
+                        candle_end=end,
+                        raw_volume=volume,
+                        prior_volume_sum=prior_volume_sum,
+                        trailing_average=Decimal(0),
+                        relative_volume=None,
+                        status=VolumeConfirmationPointStatus.UNAVAILABLE,
+                        reason=VolumeConfirmationPointReason.ZERO_PRIOR_VOLUME_BASELINE,
+                    )
+                )
+                continue
+            baseline = prior_volume_sum / Decimal(lookback)
+            points.append(
+                VolumeConfirmationPoint(
+                    candle_end=end,
+                    raw_volume=volume,
+                    prior_volume_sum=prior_volume_sum,
+                    trailing_average=baseline,
+                    relative_volume=(volume * Decimal(lookback) / prior_volume_sum),
+                    status=VolumeConfirmationPointStatus.READY,
+                )
+            )
+
+    typed_points = tuple(points)
+    assessment = _assess_candidate_event(
+        event=candidate_event,
+        policy=policy,
+        observations=observations,
+        price_unit=price_unit,
+        points=typed_points,
+        lookback=lookback,
+    )
+    comparison = _price_volume_comparison(
+        context=comparison_context,
+        observations=observations,
+        points=typed_points,
+        price_unit=price_unit,
+        volume_unit=volume_unit,
+    )
+    exhaustion = VolumeExhaustionAssessment(
+        status=VolumeExhaustionStatus.DATA_UNAVAILABLE,
+        reason=VolumeExhaustionReason.RELIABLE_ORDER_FLOW_NOT_SUPPLIED,
+        method_version="reliable-order-flow-input-required-v1",
+    )
+    return VolumeConfirmationSeries(
+        indicator_id=metadata.indicator_id,
+        metadata_version=metadata.metadata_version,
+        calculation_version=metadata.calculation_version,
+        method_label="trailing mean of prior completed candle volumes",
+        timeframe=timeframe,
+        instrument_id=snapshot.instrument_id,
+        venue_id=snapshot.venue_id,
+        snapshot_id=snapshot.snapshot_id,
+        quality_report_id=quality.report_id,
+        quality_status=quality.status,
+        as_of=snapshot.as_of,
+        source_record_ids=snapshot.source_record_ids,
+        volume_unit=volume_unit,
+        price_unit=price_unit,
+        lookback=lookback,
+        calculation_precision=precision,
+        window_start=observations[0].event_time,
+        window_end=_window_end(observations, timeframe),
+        input_market_data_ids=snapshot.market_data_ids,
+        points=typed_points,
+        assessment=assessment,
+        price_volume_comparison=comparison,
+        exhaustion_assessment=exhaustion,
+        limitations=(
+            "Analysis-only descriptive evidence; it is not a signal, strategy "
+            "decision, validation result, risk decision, or execution permission.",
+            "Volume measurements are correlated with the supplied OHLCV, VWAP, "
+            "volume profile, and other OHLCV-derived features.",
+            "Price-volume comparison is descriptive only: it compares caller-named "
+            "high/low pivot candles and labels opposing raw price/volume changes as "
+            "divergent; it does not infer hidden pivots or validate pivot quality.",
+            "Exhaustion/order-flow evidence is DATA_UNAVAILABLE because reliable "
+            "order-flow inputs are not supplied; OHLCV alone cannot establish "
+            "trade-level absorption or aggressive buying/selling.",
+            "No support/resistance discovery or order-flow claim is produced; OHLCV "
+            "alone cannot establish trade-level absorption or aggressive "
+            "buying/selling.",
+        ),
+    )
 
 
 def _candle_end(candle: MarketData, timeframe: str) -> datetime:
@@ -521,9 +1242,29 @@ def calculate_volume_profile(
 
 
 __all__ = [
+    "CandidateBreakoutDirection",
+    "CandidateBreakoutEvent",
+    "PIVOT_COMPARISON_METHOD",
+    "PIVOT_COMPARISON_VERSION",
+    "PriceVolumeComparison",
+    "PriceVolumeComparisonContext",
+    "PriceVolumeComparisonReason",
+    "PriceVolumeComparisonStatus",
     "VOLUME_PROFILE_METHOD",
     "VWAP_METHOD",
+    "VolumePivotPriceField",
     "VolumeAnalysisError",
+    "VolumeConfirmationPoint",
+    "VolumeConfirmationPointReason",
+    "VolumeConfirmationPointStatus",
+    "VolumeConfirmationSeries",
+    "VolumeEventAssessment",
+    "VolumeEventAssessmentReason",
+    "VolumeEventAssessmentStatus",
+    "VolumeExhaustionAssessment",
+    "VolumeExhaustionReason",
+    "VolumeExhaustionStatus",
+    "VolumeConfirmationPolicy",
     "VolumeProfileBin",
     "VolumeProfileReason",
     "VolumeProfileSeries",
