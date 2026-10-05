@@ -77,6 +77,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     assert market_structure.phase is IndicatorPhase.VALIDATED
     assert market_structure.category is IndicatorCategory.MARKET_STRUCTURE
     assert market_structure.calculation_version == "spot-market-structure-v1"
+    assert market_structure.minimum_warmup_candles == 7
     assert market_structure.output_nullable
     assert not market_structure.evidence_independent
     assert market_structure.evidence_dependencies

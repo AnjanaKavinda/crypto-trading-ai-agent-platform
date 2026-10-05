@@ -607,16 +607,16 @@ _MARKET_STRUCTURE_METADATA = IndicatorMetadata(
         ParameterMetadata("external-right-window", "candles", 3, 1, 500),
         ParameterMetadata("consecutive-close-count", "candles", 2, 1, 500),
     ),
-    minimum_warmup_candles=3,
+    minimum_warmup_candles=7,
     output_unit="input-price-unit",
     output_schema=(
-        "Nullable versioned per-scale confirmed swing classes, current state and "
-        "strict close-only BOS/CHoCH/MSS or unclassified breaks. Caller explicitly "
-        "assigns internal/external #55 policies; external windows must each be at "
-        "least internal and one larger. Break buffer is finite positive Decimal "
-        "(maximum 64 digits; absolute exponent/adjusted exponent <=128); close count "
-        "is 1..500. Exact matching C-001/C-002/C-003 and #55 lineage required. "
-        "C-008 structured evidence and C-012 market-structure observations."
+        "Nullable per-scale swing classes/state and close-only BOS/CHoCH/MSS or "
+        "unclassified breaks. Caller designates same-timeframe internal/external "
+        "#55 policies (external windows >= internal, one larger). Pivot warm-up: "
+        "left+right+1; state mixed until high/low classes exist. Positive finite "
+        "Decimal break buffer: <=64 digits, abs(exponent/adjusted exponent)<=128; "
+        "close count 1..500. Exact C-001/002/003 and #55 lineage required. C-008 "
+        "evidence; C-012 market-structure category."
     ),
     output_nullable=True,
     timing=IndicatorTiming.CONFIRMATORY,
