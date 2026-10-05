@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
@@ -27,6 +28,7 @@ from trading_platform_api.analysis.indicator_registry import (
 )
 from trading_platform_api.analysis.price_action import (
     _INTERVALS,
+    EVIDENCE_SCHEMA_VERSION,
     PRICE_ACTION_INDICATOR_ID,
     PRICE_ACTION_METADATA_VERSION,
     PRICE_ACTION_METHOD_VERSION,
@@ -233,6 +235,14 @@ def _stable_id(*parts: object) -> UUID:
     return uuid5(_IDENTITY_NAMESPACE, canonical_json_dumps(parts))
 
 
+def _immutable_json(value: object) -> object:
+    if isinstance(value, list):
+        return tuple(_immutable_json(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _immutable_json(item) for key, item in value.items()}
+    return value
+
+
 def _validate_price_action(
     *,
     analysis: PriceActionAnalysis,
@@ -300,6 +310,53 @@ def _validate_price_action(
         or timeframe not in metadata.timeframes
     ):
         raise MarketStructureError("The exact #55 method is not validated here.")
+    try:
+        evidence_value = analysis.evidence.value
+        if (
+            type(evidence_value) is not str
+            or len(evidence_value.encode("utf-8")) > MAX_DOCUMENT_BYTES
+        ):
+            raise MarketStructureError("#55 C-008 pivot evidence is invalid.")
+        evidence_payload = json.loads(evidence_value)
+        if (
+            type(evidence_payload) is not dict
+            or canonical_json_dumps(_immutable_json(evidence_payload)) != evidence_value
+        ):
+            raise MarketStructureError("#55 C-008 pivot evidence is not canonical.")
+        expected_payload_fields = {
+            "payload_version": EVIDENCE_SCHEMA_VERSION,
+            "method_version": PRICE_ACTION_METHOD_VERSION,
+            "timeframe": timeframe,
+            "instrument_id": snapshot.instrument_id,
+            "venue_id": snapshot.venue_id,
+            "price_unit": analysis.price_unit,
+            "snapshot_id": snapshot.snapshot_id,
+            "quality_report_id": quality.report_id,
+            "as_of": snapshot.as_of,
+            "source_record_ids": snapshot.source_record_ids,
+            "input_market_data_ids": snapshot.market_data_ids,
+            "support_resistance_policy": pivot_policy,
+            "pivots": analysis.pivots,
+        }
+        if any(
+            field not in evidence_payload
+            or canonical_json_dumps(_immutable_json(evidence_payload[field]))
+            != canonical_json_dumps(expected)
+            for field, expected in expected_payload_fields.items()
+        ):
+            raise MarketStructureError(
+                "#55 C-008 pivot evidence does not match the analysis or inputs."
+            )
+    except MarketStructureError:
+        raise
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise MarketStructureError("#55 C-008 pivot evidence is invalid.") from exc
     candle_indices = {
         item.market_data_id: index for index, item in enumerate(observations)
     }

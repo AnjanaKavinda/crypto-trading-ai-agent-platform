@@ -433,7 +433,7 @@ def test_forged_pivot_source_ohlc_mismatch_is_rejected(tamper):
         )
     forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
 
-    with pytest.raises(MarketStructureError, match="Pivot"):
+    with pytest.raises(MarketStructureError, match="C-008 pivot evidence|Pivot"):
         calculate_spot_market_structure(
             snapshot=snapshot,
             observations=candles,
@@ -463,7 +463,9 @@ def test_forged_pivot_confirmation_id_and_time_must_match_declared_window():
     )
     forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
 
-    with pytest.raises(MarketStructureError, match="confirmation index"):
+    with pytest.raises(
+        MarketStructureError, match="C-008 pivot evidence|confirmation index"
+    ):
         calculate_spot_market_structure(
             snapshot=snapshot,
             observations=candles,
@@ -500,7 +502,47 @@ def test_forged_pivot_policy_and_times_are_rejected(field):
         )
     forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
 
-    with pytest.raises(MarketStructureError, match="Pivot"):
+    with pytest.raises(MarketStructureError, match="C-008 pivot evidence|Pivot"):
+        calculate_spot_market_structure(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            timeframe="1m",
+            internal_price_action=forged_analysis,
+            external_price_action=ext_pa,
+            internal_pivot_policy=internal,
+            external_pivot_policy=external,
+            break_policy=MarketStructurePolicy("test", "1", Decimal("0.1"), 1),
+        )
+
+
+def test_valid_non_extreme_forged_pivot_must_match_original_c008_evidence():
+    snapshot, candles, quality, internal, external, int_pa, ext_pa, _ = _analyze()
+    pivot = next(item for item in int_pa.pivots if item.kind is PivotKind.HIGH)
+    source_index = next(
+        index
+        for index, candle in enumerate(candles)
+        if candle.market_data_id == pivot.source_market_data_id
+    )
+    forged_source_index = source_index + 1
+    forged_confirmation_index = forged_source_index + pivot.right_window
+    forged_source = candles[forged_source_index]
+    forged_confirmation = candles[forged_confirmation_index]
+    source_metrics = {metric.metric_name: metric for metric in forged_source.metrics}
+    source_high = source_metrics["high"].value
+    assert source_high < pivot.price
+    forged_pivot = replace(
+        pivot,
+        price=source_high,
+        source_market_data_id=forged_source.market_data_id,
+        source_time=forged_source.event_time,
+        confirmation_market_data_id=forged_confirmation.market_data_id,
+        confirmation_time=forged_confirmation.event_time + timedelta(minutes=1),
+    )
+    forged_analysis = replace(int_pa, pivots=(forged_pivot, *int_pa.pivots[1:]))
+    assert forged_analysis.pivots != int_pa.pivots
+
+    with pytest.raises(MarketStructureError, match="C-008 pivot evidence"):
         calculate_spot_market_structure(
             snapshot=snapshot,
             observations=candles,
