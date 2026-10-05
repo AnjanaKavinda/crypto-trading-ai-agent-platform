@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
 from enum import StrEnum
+from hashlib import sha256
 from uuid import UUID, uuid5
 
 from trading_platform_api.analysis.contracts import (
@@ -28,6 +29,7 @@ from trading_platform_api.contracts.serialization import (
     CANONICAL_JSON_VERSION,
     MAX_DOCUMENT_BYTES,
     canonical_json_dumps,
+    canonical_sha256,
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
@@ -333,6 +335,8 @@ class PivotObservation:
     confirmation_time: datetime
     left_window: int
     right_window: int
+    policy_id: str
+    policy_version: str
     tie_rule: str
     method_version: str
 
@@ -799,6 +803,8 @@ def _pivots(
                     kind.value,
                     policy.policy_id,
                     policy.version,
+                    policy.left_window,
+                    policy.right_window,
                 )
                 result.append(
                     PivotObservation(
@@ -811,6 +817,8 @@ def _pivots(
                         confirmation_time=_candle_end(confirmation, timeframe),
                         left_window=policy.left_window,
                         right_window=policy.right_window,
+                        policy_id=policy.policy_id,
+                        policy_version=policy.version,
                         tie_rule=(
                             "earliest equal extreme wins: strictly more extreme than "
                             "all left candles and at least as extreme as all right "
@@ -823,7 +831,7 @@ def _pivots(
 
 
 def _stable_id(*parts: object) -> UUID:
-    return uuid5(_IDENTITY_NAMESPACE, "|".join(str(part) for part in parts))
+    return uuid5(_IDENTITY_NAMESPACE, canonical_json_dumps(parts))
 
 
 def _zones(
@@ -836,6 +844,7 @@ def _zones(
     timeframe: str,
 ) -> tuple[SupportResistanceZone, ...]:
     zones: list[SupportResistanceZone] = []
+    policy_digest = canonical_sha256(policy)
     with localcontext() as context:
         context.prec = _WORK_PRECISION
         for kind in (PivotKind.HIGH, PivotKind.LOW):
@@ -899,6 +908,7 @@ def _zones(
                             "zone",
                             policy.policy_id,
                             policy.version,
+                            policy_digest,
                             kind.value,
                             anchor,
                             *(pivot.pivot_id for pivot in group),
@@ -945,14 +955,17 @@ def _make_contract_evidence(
         raise PriceActionError(
             "Canonical analysis evidence could not be encoded."
         ) from exc
-    if len(encoded.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+    encoded_bytes = encoded.encode("utf-8")
+    if len(encoded_bytes) > MAX_DOCUMENT_BYTES:
         raise PriceActionError("Price-action evidence exceeds the bounded output size.")
+    payload_digest = sha256(encoded_bytes).hexdigest()
     evidence_id = _stable_id(
         "evidence",
         snapshot.snapshot_id,
         quality.report_id,
         PRICE_ACTION_METHOD_VERSION,
         payload.payload_version,
+        payload_digest,
     )
     evidence_method = VersionReference(
         PRICE_ACTION_INDICATOR_ID, PRICE_ACTION_METHOD_VERSION

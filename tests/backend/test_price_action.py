@@ -185,6 +185,49 @@ def test_zero_range_close_location_is_explicitly_unavailable() -> None:
     assert point.range_comparison_reason is RangeComparisonReason.NO_CALLER_BASELINE
 
 
+def test_range_baseline_equality_and_zero_baseline_are_explicit() -> None:
+    snapshot, observations, quality = _bars(
+        (
+            ("10", "11", "9", "10.5"),
+            ("10", "12.25", "9.75", "12"),
+        )
+    )
+    baseline = RangeBaselinePolicy("one-prior", "1", 1, Decimal("0.25"))
+    result = _calculate(
+        snapshot,
+        observations,
+        quality,
+        range_baseline_policy=baseline,
+    )
+    assert result.geometry[1].range == Decimal("2.5")
+    assert result.geometry[1].range_direction is RangeDirection.UNCHANGED
+    lower_snapshot, lower_observations, lower_quality = _bars(
+        (("10", "11", "9", "10.5"), ("10", "10.75", "9.25", "10"))
+    )
+    lower = _calculate(
+        lower_snapshot,
+        lower_observations,
+        lower_quality,
+        range_baseline_policy=baseline,
+    )
+    assert lower.geometry[1].range == Decimal("1.5")
+    assert lower.geometry[1].range_direction is RangeDirection.UNCHANGED
+
+    zero_snapshot, zero_observations, zero_quality = _bars(
+        (("10", "10", "10", "10"), ("10", "11", "9", "10.5"))
+    )
+    zero = _calculate(
+        zero_snapshot,
+        zero_observations,
+        zero_quality,
+        range_baseline_policy=baseline,
+    )
+    assert zero.geometry[1].baseline_mean_range == 0
+    assert (
+        zero.geometry[1].range_comparison_reason is RangeComparisonReason.ZERO_BASELINE
+    )
+
+
 @pytest.mark.parametrize(
     ("bars", "expected"),
     (
@@ -436,6 +479,8 @@ def test_pivots_wait_for_closed_right_window_and_do_not_repaint() -> None:
     assert pivot.source_time == extended[1].event_time
     assert pivot.confirmation_market_data_id == extended[2].market_data_id
     assert pivot.confirmation_time == extended[2].event_time + STEP
+    assert pivot.policy_id == "test-zones"
+    assert pivot.policy_version == "1"
 
     later = _calculate(
         extended_snapshot,
@@ -444,6 +489,29 @@ def test_pivots_wait_for_closed_right_window_and_do_not_repaint() -> None:
         support_resistance_policy=_zone_policy(),
     )
     assert next(item for item in later.pivots if item.kind is PivotKind.HIGH) == pivot
+
+    first_policy = _zone_policy(policy_id="x|y", version="z")
+    second_policy = _zone_policy(policy_id="x", version="y|z")
+    first_policy_result = _calculate(
+        extended_snapshot,
+        extended,
+        extended_quality,
+        support_resistance_policy=first_policy,
+    )
+    second_policy_result = _calculate(
+        extended_snapshot,
+        extended,
+        extended_quality,
+        support_resistance_policy=second_policy,
+    )
+    assert (
+        next(
+            item for item in first_policy_result.pivots if item.kind is PivotKind.HIGH
+        ).pivot_id
+        != next(
+            item for item in second_policy_result.pivots if item.kind is PivotKind.HIGH
+        ).pivot_id
+    )
 
 
 def test_pivot_ties_choose_the_earliest_equal_extreme_and_edges_warm_up() -> None:
@@ -519,6 +587,14 @@ def test_zones_use_fixed_lowest_anchor_and_count_distinct_later_interactions() -
         )
         == result
     )
+    changed = _calculate(
+        snapshot,
+        observations,
+        quality,
+        support_resistance_policy=replace(policy, close_break_buffer=Decimal("0.6")),
+    )
+    assert changed.zones[0].zone_id != result.zones[0].zone_id
+    assert changed.evidence.evidence_id != result.evidence.evidence_id
     high_zones = tuple(zone for zone in result.zones if zone.kind is PivotKind.HIGH)
     assert tuple(zone.anchor_price for zone in high_zones) == (
         Decimal(10),
@@ -571,6 +647,18 @@ def test_canonical_evidence_and_c012_findings_preserve_lineage_without_observati
     )
     result = _calculate(snapshot, observations, quality)
     repeated = _calculate(snapshot, observations, quality)
+    policy_result = _calculate(
+        snapshot,
+        observations,
+        quality,
+        pattern_policy=_pattern_policy(),
+    )
+    changed_policy_result = _calculate(
+        snapshot,
+        observations,
+        quality,
+        pattern_policy=_pattern_policy(doji_maximum_body_fraction=Decimal("0.04")),
+    )
     encoded = json.loads(result.evidence.value)
     assert encoded["snapshot_id"] == str(snapshot.snapshot_id)
     assert encoded["quality_report_id"] == str(quality.report_id)
@@ -581,6 +669,10 @@ def test_canonical_evidence_and_c012_findings_preserve_lineage_without_observati
     assert result.evidence.data_quality_report_id == quality.report_id
     assert result.evidence.method.version == result.method_version
     assert repeated == result
+    assert policy_result.evidence.evidence_id != result.evidence.evidence_id
+    assert (
+        changed_policy_result.evidence.evidence_id != policy_result.evidence.evidence_id
+    )
     assert result.assessment.contract_id == "C-012"
     assert result.assessment.status is AssessmentStatus.AVAILABLE
     assert result.assessment.observations == ()
