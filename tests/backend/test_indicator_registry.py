@@ -33,6 +33,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         "price-action-support-resistance",
         "spot-market-structure",
         "spot-smart-money-concepts",
+        "spot-wyckoff-analysis",
     }
     for item in entries:
         assert item.output_nullable
@@ -94,10 +95,22 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     assert smc.evidence_dependencies
     assert "C-003:quality" in smc.inputs
     assert smc.failure_modes
+    wyckoff = SPOT_RESEARCH_INDICATORS.get("spot-wyckoff-analysis", "1")
+    assert wyckoff.phase is IndicatorPhase.VALIDATED
+    assert wyckoff.calculation_version == "spot-wyckoff-v1"
+    assert wyckoff.category is IndicatorCategory.WYCKOFF
+    assert wyckoff.minimum_warmup_candles == 3
+    assert wyckoff.output_nullable
+    assert not wyckoff.evidence_independent
+    assert wyckoff.evidence_dependencies == ("spot-ohlcv-price", "spot-ohlcv-volume")
+    assert "maximum_climactic_close_fraction" in wyckoff.output_schema
+    assert "maximum_output_records" in {item.name for item in wyckoff.parameters}
     with pytest.raises(IndicatorMetadataError, match="exact"):
         SPOT_RESEARCH_INDICATORS.get("spot-market-structure", "2")
     with pytest.raises(IndicatorMetadataError, match="exact"):
         SPOT_RESEARCH_INDICATORS.get("spot-smart-money-concepts", "2")
+    with pytest.raises(IndicatorMetadataError, match="exact"):
+        SPOT_RESEARCH_INDICATORS.get("spot-wyckoff-analysis", "2")
     for name in ("ema-20", "ema-50"):
         assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.PLANNED
         assert SPOT_RESEARCH_INDICATORS.get(name, "2").phase is IndicatorPhase.VALIDATED
