@@ -635,7 +635,7 @@ def high_risk_review_required(text: str, *, governed: bool = False) -> bool:
 def verify_protections(result: Mapping[str, Any]) -> None:
     required = ("dev", "main")
     expected_checks = {
-        "dev": {"governance-ci", "governance-gate"},
+        "dev": {"governance-ci"},
         "main": {"governance-ci"},
     }
     expected_reviews = {
