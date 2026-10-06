@@ -1539,6 +1539,45 @@ class GovernanceTests(unittest.TestCase):
             workflow)
 
 
+    def test_agent_labels_resolve_to_existing_custom_profiles(self):
+        expected = {
+            "agent:architect": ("Platform Architect", ".github/agents/architect.agent.md"),
+            "agent:backend-foundation": ("Backend Foundation Engineer",
+                                         ".github/agents/backend-foundation.agent.md"),
+            "agent:trading-intelligence": ("Trading Intelligence Engineer",
+                                           ".github/agents/trading-intelligence.agent.md"),
+            "agent:qa-security-review": ("QA Security Reviewer",
+                                         ".github/agents/qa-security.agent.md"),
+        }
+        self.assertEqual(set(AGENTS), set(expected))
+        self.assertEqual(set(AGENT_PROFILE_FILES), set(expected))
+        for label, (profile_name, profile_path) in expected.items():
+            self.assertEqual(AGENTS[label], {
+                "agent:architect": "Platform Architect",
+                "agent:backend-foundation": "Backend/Foundation Engineer",
+                "agent:trading-intelligence": "Trading Intelligence Engineer",
+                "agent:qa-security-review": "QA/Security Reviewer",
+            }[label])
+            self.assertEqual(AGENT_PROFILE_NAMES[label], profile_name)
+            self.assertEqual(AGENT_PROFILE_FILES[label], profile_path)
+            path = Path(__file__).parents[2] / profile_path
+            self.assertTrue(path.is_file(), profile_path)
+            content = path.read_text(encoding="utf-8")
+            declared_name = next(
+                (line.removeprefix("name:").strip()
+                 for line in content.splitlines() if line.startswith("name:")),
+                None)
+            self.assertEqual(declared_name, profile_name, profile_path)
+
+    def test_trading_intelligence_default_paths_are_current_and_bounded(self):
+        paths = set(ROLE_PATHS["Trading Intelligence Engineer"])
+        self.assertIn("apps/api/src/trading_platform_api/analysis/**", paths)
+        self.assertIn("tests/backend/**", paths)
+        self.assertNotIn("services/**", paths)
+        self.assertNotIn("tests/trading-intelligence/**", paths)
+        self.assertFalse(any("risk" in path or "execution" in path for path in paths))
+
+
 def load_tests(loader, tests, pattern):
     """Ensure Governance CI's legacy entry point also runs reviewer-adapter tests."""
     import test_independent_reviewer
