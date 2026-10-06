@@ -32,6 +32,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
         "volume-confirmation",
         "price-action-support-resistance",
         "spot-market-structure",
+        "spot-smart-money-concepts",
     }
     for item in entries:
         assert item.output_nullable
@@ -83,8 +84,20 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     assert market_structure.evidence_dependencies
     assert "C-003:quality" in market_structure.inputs
     assert market_structure.failure_modes
+    smc = SPOT_RESEARCH_INDICATORS.get("spot-smart-money-concepts", "1")
+    assert smc.phase is IndicatorPhase.VALIDATED
+    assert smc.category is IndicatorCategory.SMART_MONEY_CONCEPTS
+    assert smc.calculation_version == "spot-smc-v1"
+    assert smc.minimum_warmup_candles == 3
+    assert smc.output_nullable
+    assert not smc.evidence_independent
+    assert smc.evidence_dependencies
+    assert "C-003:quality" in smc.inputs
+    assert smc.failure_modes
     with pytest.raises(IndicatorMetadataError, match="exact"):
         SPOT_RESEARCH_INDICATORS.get("spot-market-structure", "2")
+    with pytest.raises(IndicatorMetadataError, match="exact"):
+        SPOT_RESEARCH_INDICATORS.get("spot-smart-money-concepts", "2")
     for name in ("ema-20", "ema-50"):
         assert SPOT_RESEARCH_INDICATORS.get(name, "1").phase is IndicatorPhase.PLANNED
         assert SPOT_RESEARCH_INDICATORS.get(name, "2").phase is IndicatorPhase.VALIDATED

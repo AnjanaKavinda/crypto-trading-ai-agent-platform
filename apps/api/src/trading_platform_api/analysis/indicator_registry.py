@@ -19,6 +19,7 @@ class IndicatorCategory(StrEnum):
     VOLATILITY_RISK = "volatility-risk"
     VOLUME_STRUCTURE = "volume-structure"
     MARKET_STRUCTURE = "market-structure"
+    SMART_MONEY_CONCEPTS = "smart-money-concepts"
     PRICE_ACTION = "price-action"
     VOLUME_CONFIRMATION = "volume-confirmation"
 
@@ -641,6 +642,67 @@ _MARKET_STRUCTURE_METADATA = IndicatorMetadata(
     phase=IndicatorPhase.VALIDATED,
 )
 
+_SPOT_SMC_METADATA = IndicatorMetadata(
+    indicator_id="spot-smart-money-concepts",
+    metadata_version="1",
+    calculation_version="spot-smc-v1",
+    display_name="Spot Smart Money Concepts",
+    category=IndicatorCategory.SMART_MONEY_CONCEPTS,
+    purpose=(
+        "Describe deterministic Spot OHLCV-derived SMC observations from exact "
+        "confirmed same-timeframe pivots and structure events; no trading authority."
+    ),
+    inputs=(
+        "C-001:closed-spot-ohlcv.open",
+        "C-001:closed-spot-ohlcv.high",
+        "C-001:closed-spot-ohlcv.low",
+        "C-001:closed-spot-ohlcv.close",
+        "C-002:snapshot",
+        "C-003:quality",
+        "spot-market-structure:exact-versioned-output",
+        "spot-market-structure:C-008-evidence",
+    ),
+    timeframes=_SPOT_TIMEFRAMES,
+    parameters=(
+        ParameterMetadata("minimum-pivot-count", "pivots", 2, 2, 500),
+        ParameterMetadata("order-block-lookback", "candles", 1, 1, 500),
+        ParameterMetadata("displacement-lookback", "candles", 1, 1, 500),
+        ParameterMetadata("maximum-output-records", "records", 1, 1, 10000),
+    ),
+    minimum_warmup_candles=3,
+    output_unit="input-price-unit",
+    output_schema=(
+        "Nullable, bounded C-008 structured objects and C-013 observations. A "
+        "caller-supplied immutable policy is mandatory; registry parameter values "
+        "are metadata only and are never applied. Caller price_tolerance > 0, "
+        "sweep_buffer >= 0, minimum_body_fraction in [0,1], and "
+        "minimum_range_multiple in (0,1000]; integer lookbacks/count/output bounds "
+        "are declared here. Dynamic displacement warm-up requires the full prior "
+        "lookback. Evidence links C-001/C-002/C-003 and exact #56 C-008 pivots/events."
+    ),
+    output_nullable=True,
+    timing=IndicatorTiming.CONFIRMATORY,
+    best_regimes=("observable-spot-structure",),
+    weak_regimes=("stale-or-gapped-market", "insufficient-confirmed-pivots"),
+    failure_modes=(
+        "invalid-quality-or-provenance",
+        "stale-or-gapped-market",
+        "non-spot-input",
+        "mismatched-market-structure-or-evidence",
+        "unsupported-or-unregistered-method-version",
+        "invalid-caller-policy",
+        "bounded-sweep-work-exceeded",
+        "bounded-evidence-output-exceeded",
+    ),
+    evidence_independent=False,
+    evidence_dependencies=("spot-ohlcv-price", "confirmed-price-action-pivots"),
+    evidence_graph_role=(
+        "Descriptive SMC evidence derived from the same Spot OHLCV and confirmed "
+        "pivots/events; correlated with source candles and price-derived indicators."
+    ),
+    phase=IndicatorPhase.VALIDATED,
+)
+
 
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
@@ -648,6 +710,7 @@ SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
         *_VOLUME_STRUCTURE_METADATA,
         *_PRICE_ACTION_METADATA,
         _MARKET_STRUCTURE_METADATA,
+        _SPOT_SMC_METADATA,
         _ema(20),
         _ema(50),
         replace(
