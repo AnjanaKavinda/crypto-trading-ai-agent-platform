@@ -468,6 +468,7 @@ def test_output_bound_and_candle_order_are_rejected() -> None:
             policy=_policy(),
         )
 
+
 def test_evidence_expiry_is_anchored_to_the_latest_candle_boundary() -> None:
     snapshot, observations, quality = _input(_bars())
     interval = timedelta(minutes=1)
