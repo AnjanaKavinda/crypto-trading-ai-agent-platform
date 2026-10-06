@@ -492,6 +492,9 @@ def test_rejects_reordered_duplicate_and_gapped_candles():
         replace(
             candles[5],
             event_time=candles[5].event_time + timedelta(minutes=1),
+            provider_time=candles[5].provider_time + timedelta(minutes=1),
+            ingestion_time=candles[5].ingestion_time + timedelta(minutes=1),
+            availability_time=candles[5].availability_time + timedelta(minutes=1),
         ),
         *candles[6:],
     )
