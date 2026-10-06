@@ -168,6 +168,55 @@ def test_exact_version_lookup_does_not_silently_pick_a_newer_definition() -> Non
         IndicatorRegistry((original, original))
 
 
+def test_fibonacci_registry_covers_timeframes_policy_bounds_and_failure_modes() -> None:
+    fibonacci = SPOT_RESEARCH_INDICATORS.get("spot-fibonacci", "1")
+    assert fibonacci.timeframes == ("1m", "5m", "15m", "1h", "4h", "1d")
+    assert fibonacci.minimum_warmup_candles == 3
+    assert fibonacci.output_nullable
+    assert fibonacci.output_unit == "input-price-unit"
+    assert len(fibonacci.output_schema) <= 512
+    assert [
+        (item.name, item.unit, item.default, item.minimum, item.maximum)
+        for item in fibonacci.parameters
+    ] == [
+        ("maximum-output-records", "records", 32, 1, 10000),
+        ("invalidation-consecutive-close-count", "candles", 500, 1, 500),
+    ]
+    assert (
+        "Retracement ratios: {0.236,0.382,0.500,0.618,0.786,1.000}" in fibonacci.purpose
+    )
+    assert "extensions: {1.272,1.618,2.618}" in fibonacci.purpose
+    for bound in (
+        "policy_id/version <=128 chars",
+        "scale {internal,external}",
+        "distinct UUID anchor IDs",
+        "nonempty ratio subsets (bounds in purpose)",
+        "positive finite Decimal confluence_tolerance/invalidation_buffer",
+        "<=64 digits, abs exponent/adjusted <=128",
+        "close count [1,500]",
+        "output records [1,10000]",
+    ):
+        assert bound in fibonacci.output_schema
+    assert set(fibonacci.failure_modes) == {
+        "invalid-quality-or-provenance",
+        "stale-or-gapped-market",
+        "non-spot-input",
+        "mismatched-market-structure-or-evidence",
+        "unconfirmed-or-invalid-anchor-selection",
+        "unsupported-or-unregistered-method-version",
+        "invalid-caller-policy",
+        "decimal-precision-or-exponent-limit",
+        "expired-point-in-time-evidence",
+        "bounded-evidence-output-exceeded",
+    }
+    assert fibonacci.phase is IndicatorPhase.VALIDATED
+    assert not fibonacci.evidence_independent
+    assert fibonacci.evidence_dependencies == (
+        "spot-ohlcv-price",
+        "confirmed-price-action-pivots",
+    )
+
+
 def test_invalid_metadata_cannot_claim_available_analysis_or_independence() -> None:
     original = SPOT_RESEARCH_INDICATORS.get("ema-20", "1")
     invalid = (

@@ -15,6 +15,7 @@ from trading_platform_api.analysis import (
     SpotFibonacciPolicy,
     calculate_spot_fibonacci,
 )
+from trading_platform_api.analysis import fibonacci as fibonacci_module
 from trading_platform_api.analysis.fibonacci import (
     _fixed_anchor_groups,
     _immutable_json,
@@ -431,6 +432,203 @@ def test_fail_closed_on_invalid_quality_unknown_anchor_and_exact_version():
                 ),
             }
         )
+
+
+@pytest.mark.parametrize(
+    "status",
+    (DataQualityStatus.STALE, DataQualityStatus.UNAVAILABLE),
+)
+def test_rejects_stale_or_unavailable_quality(status):
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
+        calculate_spot_fibonacci(
+            snapshot=snapshot,
+            observations=candles,
+            quality=replace(quality, status=status),
+            market_structure=structure,
+            timeframe="1m",
+            policy=_policy(origin, endpoint),
+        )
+
+
+def test_rejects_future_provisional_and_unavailable_candles():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    last = candles[-1]
+    cases = (
+        replace(
+            last,
+            event_time=snapshot.as_of + timedelta(minutes=1),
+            provider_time=snapshot.as_of + timedelta(minutes=1),
+            ingestion_time=snapshot.as_of + timedelta(minutes=1),
+            availability_time=snapshot.as_of + timedelta(minutes=1),
+        ),
+        replace(
+            last,
+            event_time=snapshot.as_of,
+            provider_time=snapshot.as_of,
+        ),
+        replace(
+            last,
+            availability_time=snapshot.as_of + timedelta(minutes=1),
+        ),
+    )
+    for candle in cases:
+        with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
+            calculate_spot_fibonacci(
+                snapshot=snapshot,
+                observations=(*candles[:-1], candle),
+                quality=quality,
+                market_structure=structure,
+                timeframe="1m",
+                policy=_policy(origin, endpoint),
+            )
+
+
+def test_rejects_reordered_duplicate_and_gapped_candles():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    cases = (
+        tuple(reversed(candles)),
+        (*candles[:-1], candles[-2]),
+        (
+            *candles[:5],
+            replace(
+                candles[5],
+                event_time=candles[5].event_time - timedelta(minutes=1),
+            ),
+            *candles[6:],
+        ),
+    )
+    for observations in cases:
+        with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
+            calculate_spot_fibonacci(
+                snapshot=snapshot,
+                observations=observations,
+                quality=quality,
+                market_structure=structure,
+                timeframe="1m",
+                policy=_policy(origin, endpoint),
+            )
+
+
+def test_rejects_snapshot_quality_and_pivot_identity_mismatches():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    args = dict(
+        snapshot=snapshot,
+        observations=candles,
+        quality=quality,
+        market_structure=structure,
+        timeframe="1m",
+        policy=_policy(origin, endpoint),
+    )
+    with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
+        calculate_spot_fibonacci(
+            **{**args, "snapshot": replace(snapshot, snapshot_id=uuid4())}
+        )
+    with pytest.raises(SpotFibonacciError, match="lineage"):
+        calculate_spot_fibonacci(
+            **{**args, "quality": replace(quality, report_id=uuid4())}
+        )
+    with pytest.raises(SpotFibonacciError, match="lineage"):
+        calculate_spot_fibonacci(
+            **{
+                **args,
+                "market_structure": replace(structure, snapshot_id=uuid4()),
+            }
+        )
+
+
+def test_rejects_unsupported_timeframe_and_mismatched_price_unit():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    args = dict(
+        snapshot=snapshot,
+        observations=candles,
+        quality=quality,
+        market_structure=structure,
+        policy=_policy(origin, endpoint),
+    )
+    with pytest.raises(SpotFibonacciError, match="Unsupported Spot timeframe"):
+        calculate_spot_fibonacci(**args, timeframe="2m")
+    altered = replace(
+        candles[0],
+        metrics=tuple(
+            replace(metric, unit="USD") if metric.metric_name == "close" else metric
+            for metric in candles[0].metrics
+        ),
+    )
+    with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
+        calculate_spot_fibonacci(
+            **{**args, "observations": (altered, *candles[1:])},
+            timeframe="1m",
+        )
+
+
+def test_cutoff_prefix_is_invariant_and_later_candle_or_pivot_is_rejected():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    policy = _policy(origin, endpoint)
+    args = dict(
+        snapshot=snapshot,
+        quality=quality,
+        market_structure=structure,
+        timeframe="1m",
+        policy=policy,
+    )
+    before = calculate_spot_fibonacci(observations=candles, **args)
+    future = replace(
+        candles[-1],
+        market_data_id=uuid4(),
+        event_time=snapshot.as_of,
+        provider_time=snapshot.as_of,
+        ingestion_time=snapshot.as_of + timedelta(minutes=1),
+        availability_time=snapshot.as_of + timedelta(minutes=1),
+    )
+    extended_history = (*candles, future)
+    cutoff_prefix = tuple(
+        candle
+        for candle in extended_history
+        if candle.event_time + timedelta(minutes=1) <= snapshot.as_of
+    )
+    assert cutoff_prefix == candles
+    assert calculate_spot_fibonacci(observations=cutoff_prefix, **args) == before
+    with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
+        calculate_spot_fibonacci(observations=extended_history, **args)
+
+    swings = list(structure.swings)
+    endpoint_index = next(
+        index
+        for index, swing in enumerate(swings)
+        if swing.pivot.pivot_id == endpoint.pivot_id
+    )
+    swings[endpoint_index] = replace(
+        swings[endpoint_index],
+        pivot=replace(
+            endpoint,
+            confirmation_time=snapshot.as_of + timedelta(minutes=1),
+        ),
+    )
+    with pytest.raises(SpotFibonacciError, match="unconfirmed"):
+        calculate_spot_fibonacci(
+            **{
+                **args,
+                "market_structure": _structure_with_swings(structure, tuple(swings)),
+            },
+            observations=candles,
+        )
+
+
+def test_rejects_fibonacci_evidence_exceeding_serialization_limit(monkeypatch):
+    inputs = _bullish()
+    validate_structure = fibonacci_module._validate_structure
+
+    def validate_then_limit_evidence(**kwargs):
+        pivots = validate_structure(**kwargs)
+        monkeypatch.setattr(fibonacci_module, "MAX_DOCUMENT_BYTES", 1)
+        return pivots
+
+    monkeypatch.setattr(
+        fibonacci_module, "_validate_structure", validate_then_limit_evidence
+    )
+    with pytest.raises(SpotFibonacciError, match="Fibonacci evidence exceeds"):
+        _calculate(inputs)
 
 
 def test_rejects_self_consistent_but_non_extreme_market_structure_pivot():
