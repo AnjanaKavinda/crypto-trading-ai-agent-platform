@@ -7,15 +7,19 @@ from uuid import uuid4
 import pytest
 from test_market_structure import HIGHS, LOWS, _analyze
 from trading_platform_api.analysis import (
+    SPOT_FIBONACCI_METHOD_VERSION,
     FibonacciLevel,
     MarketStructureScale,
     PivotKind,
-    SPOT_FIBONACCI_METHOD_VERSION,
     SpotFibonacciError,
     SpotFibonacciPolicy,
     calculate_spot_fibonacci,
 )
-from trading_platform_api.analysis.fibonacci import _fixed_anchor_groups
+from trading_platform_api.analysis.fibonacci import (
+    _fixed_anchor_groups,
+    _immutable_json,
+)
+from trading_platform_api.contracts.serialization import canonical_json_dumps
 from trading_platform_api.market_data.contracts import DataQualityStatus
 
 RETRACEMENTS = tuple(
@@ -25,11 +29,7 @@ EXTENSIONS = tuple(Decimal(value) for value in ("1.272", "1.618", "2.618"))
 
 
 def _anchor_pair(structure, scale, origin_kind, endpoint_kind):
-    swings = [
-        swing
-        for swing in structure.swings
-        if swing.scale is scale
-    ]
+    swings = [swing for swing in structure.swings if swing.scale is scale]
     for origin in swings:
         for endpoint in swings:
             if (
@@ -71,6 +71,40 @@ def _bullish():
     return snapshot, candles, quality, structure, origin, endpoint
 
 
+def _bearish():
+    highs = tuple(str(100 - Decimal(low)) for low in LOWS)
+    lows = tuple(str(100 - Decimal(high)) for high in HIGHS)
+    closes = tuple(
+        str((Decimal(high) + Decimal(low)) / 2)
+        for high, low in zip(highs, lows, strict=True)
+    )
+    snapshot, candles, quality, _, _, _, _, structure = _analyze(
+        highs=highs,
+        lows=lows,
+        closes=closes,
+    )
+    origin, endpoint = _anchor_pair(
+        structure,
+        MarketStructureScale.INTERNAL,
+        PivotKind.HIGH,
+        PivotKind.LOW,
+    )
+    return snapshot, candles, quality, structure, origin, endpoint, highs, lows, closes
+
+
+def _structure_with_swings(structure, swings):
+    payload = _immutable_json(json.loads(structure.evidence.value))
+    payload["swings"] = swings
+    return replace(
+        structure,
+        swings=swings,
+        evidence=replace(
+            structure.evidence,
+            value=canonical_json_dumps(payload),
+        ),
+    )
+
+
 def _calculate(inputs=None, **changes):
     snapshot, candles, quality, structure, origin, endpoint = inputs or _bullish()
     return calculate_spot_fibonacci(
@@ -96,27 +130,13 @@ def test_bullish_and_bearish_reference_levels_use_exact_decimal_ratios():
         for ratio in EXTENSIONS
     }
     assert bullish.method_version == SPOT_FIBONACCI_METHOD_VERSION
-    assert {(level.category, level.ratio): level.price for level in bullish.levels} == expected
+    assert {
+        (level.category, level.ratio): level.price for level in bullish.levels
+    } == expected
     assert bullish.direction == "bullish"
     assert bullish.assessment.analytical_confidence == Decimal(0)
 
-    bearish_highs = tuple(str(100 - Decimal(low)) for low in LOWS)
-    bearish_lows = tuple(str(100 - Decimal(high)) for high in HIGHS)
-    bearish_closes = tuple(
-        str((Decimal(high) + Decimal(low)) / 2)
-        for high, low in zip(bearish_highs, bearish_lows, strict=True)
-    )
-    snapshot, candles, quality, _, _, _, _, structure = _analyze(
-        highs=bearish_highs,
-        lows=bearish_lows,
-        closes=bearish_closes,
-    )
-    origin, endpoint = _anchor_pair(
-        structure,
-        MarketStructureScale.INTERNAL,
-        PivotKind.HIGH,
-        PivotKind.LOW,
-    )
+    snapshot, candles, quality, structure, origin, endpoint, *_ = _bearish()
     bearish = calculate_spot_fibonacci(
         snapshot=snapshot,
         observations=candles,
@@ -133,13 +153,17 @@ def test_bullish_and_bearish_reference_levels_use_exact_decimal_ratios():
         ("extension-level", ratio): endpoint.price - move * ratio
         for ratio in EXTENSIONS
     }
-    assert {(level.category, level.ratio): level.price for level in bearish.levels} == expected
+    assert {
+        (level.category, level.ratio): level.price for level in bearish.levels
+    } == expected
     assert bearish.direction == "bearish"
 
 
 def test_fixed_anchor_confluence_is_sorted_and_does_not_chain():
     levels = tuple(
-        FibonacciLevel(uuid4(), "retracement-level", Decimal(index), Decimal(price), (), uuid4())
+        FibonacciLevel(
+            uuid4(), "retracement-level", Decimal(index), Decimal(price), (), uuid4()
+        )
         for index, price in enumerate(("1", "1.9", "2.8", "10"))
     )
     groups = _fixed_anchor_groups(levels, Decimal("1"))
@@ -152,12 +176,18 @@ def test_fixed_anchor_confluence_is_sorted_and_does_not_chain():
     assert groups[0][1] == (levels[0].level_id, levels[1].level_id)
     assert _fixed_anchor_groups((), Decimal("1")) == ()
     assert _fixed_anchor_groups((levels[0],), Decimal("1")) == ()
-    assert len(
-        _fixed_anchor_groups(
-            (replace(levels[0], price=Decimal("1")), replace(levels[1], price=Decimal("2"))),
-            Decimal("1"),
+    assert (
+        len(
+            _fixed_anchor_groups(
+                (
+                    replace(levels[0], price=Decimal("1")),
+                    replace(levels[1], price=Decimal("2")),
+                ),
+                Decimal("1"),
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 def test_analysis_evidence_lineage_expiry_invalidation_and_repeatability():
@@ -181,11 +211,183 @@ def test_analysis_evidence_lineage_expiry_invalidation_and_repeatability():
         assert payload["policy"]["origin_pivot_id"]
         assert payload["snapshot_id"] == str(first.snapshot_id)
         assert payload["quality_report_id"] == str(first.quality_report_id)
-        assert payload["market_structure_evidence_id"] == str(inputs[3].evidence.evidence_id)
+        assert payload["market_structure_evidence_id"] == str(
+            inputs[3].evidence.evidence_id
+        )
         assert payload["uncertainty"]
         assert evidence.source_record_ids == first.source_record_ids
         assert evidence.quality_status is DataQualityStatus.VALID
         assert evidence.expires_at == first.evidence_expires_at
+
+
+def test_confluence_membership_is_linked_to_each_level_evidence():
+    result = _calculate(
+        confluence_tolerance=Decimal("100"),
+    )
+    assert len(result.confluence_groups) == 1
+    group = result.confluence_groups[0]
+    assert group.member_level_ids == tuple(
+        level.level_id
+        for level in sorted(
+            result.levels, key=lambda item: (item.price, str(item.level_id))
+        )
+    )
+    assert group.member_ratios == tuple(
+        level.ratio
+        for level in sorted(
+            result.levels, key=lambda item: (item.price, str(item.level_id))
+        )
+    )
+    assert group.lower_bound == min(group.member_prices)
+    assert group.upper_bound == max(group.member_prices)
+    assert group.upper_bound - group.fixed_anchor_price <= group.tolerance
+    assert all(group.group_id in level.confluence_group_ids for level in result.levels)
+    for level in result.levels:
+        observation = next(
+            item
+            for item in result.assessment.observations
+            if item.observation_type == level.category
+            and json.loads(item.value)["level_id"] == str(level.level_id)
+        )
+        assert group.evidence_id in observation.evidence_ids
+    with pytest.raises(SpotFibonacciError, match="output exceeds"):
+        _calculate(maximum_output_records=1)
+
+
+def test_invalidation_is_strict_consecutive_and_resets_on_equality():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    endpoint_index = next(
+        index
+        for index, candle in enumerate(candles)
+        if candle.market_data_id == endpoint.source_market_data_id
+    )
+    first_after_confirmation = endpoint_index + endpoint.right_window + 1
+    closes = [
+        str((Decimal(high) + Decimal(low)) / 2)
+        for high, low in zip(HIGHS, LOWS, strict=True)
+    ]
+    lows = list(LOWS)
+    threshold = origin.price - Decimal("0.1")
+    for index in range(first_after_confirmation, first_after_confirmation + 3):
+        lows[index] = str(threshold - Decimal("0.2"))
+    closes[first_after_confirmation] = str(threshold)
+    closes[first_after_confirmation + 1] = str(threshold - Decimal("0.1"))
+    closes[first_after_confirmation + 2] = str(threshold - Decimal("0.1"))
+    snapshot, candles, quality, _, _, _, _, structure = _analyze(
+        lows=tuple(lows), closes=tuple(closes)
+    )
+    origin, endpoint = _anchor_pair(
+        structure,
+        MarketStructureScale.INTERNAL,
+        PivotKind.LOW,
+        PivotKind.HIGH,
+    )
+    result = calculate_spot_fibonacci(
+        snapshot=snapshot,
+        observations=candles,
+        quality=quality,
+        market_structure=structure,
+        timeframe="1m",
+        policy=_policy(origin, endpoint),
+    )
+    assert result.invalidation.invalidated
+    assert (
+        result.invalidation.confirming_market_data_id
+        == candles[first_after_confirmation + 2].market_data_id
+    )
+
+    closes[first_after_confirmation + 1] = str(threshold + Decimal("0.1"))
+    snapshot, candles, quality, _, _, _, _, structure = _analyze(
+        lows=tuple(lows), closes=tuple(closes)
+    )
+    origin, endpoint = _anchor_pair(
+        structure,
+        MarketStructureScale.INTERNAL,
+        PivotKind.LOW,
+        PivotKind.HIGH,
+    )
+    result = calculate_spot_fibonacci(
+        snapshot=snapshot,
+        observations=candles,
+        quality=quality,
+        market_structure=structure,
+        timeframe="1m",
+        policy=_policy(origin, endpoint),
+    )
+    assert not result.invalidation.invalidated
+    assert result.invalidation.observed_consecutive_closes == 0
+
+
+def test_wick_only_breach_and_bearish_close_invalidation():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    endpoint_index = next(
+        index
+        for index, candle in enumerate(candles)
+        if candle.market_data_id == endpoint.source_market_data_id
+    )
+    wick_index = endpoint_index + endpoint.right_window + 1
+    lows = list(LOWS)
+    closes = [
+        str((Decimal(high) + Decimal(low)) / 2)
+        for high, low in zip(HIGHS, LOWS, strict=True)
+    ]
+    lows[wick_index] = str(origin.price - Decimal("1"))
+    closes[wick_index] = str(origin.price)
+    snapshot, candles, quality, _, _, _, _, structure = _analyze(
+        lows=tuple(lows), closes=tuple(closes)
+    )
+    origin, endpoint = _anchor_pair(
+        structure,
+        MarketStructureScale.INTERNAL,
+        PivotKind.LOW,
+        PivotKind.HIGH,
+    )
+    result = calculate_spot_fibonacci(
+        snapshot=snapshot,
+        observations=candles,
+        quality=quality,
+        market_structure=structure,
+        timeframe="1m",
+        policy=_policy(
+            origin,
+            endpoint,
+            invalidation_consecutive_close_count=1,
+        ),
+    )
+    assert not result.invalidation.invalidated
+
+    _, candles, _, structure, origin, endpoint, highs, lows, closes = _bearish()
+    endpoint_index = next(
+        index
+        for index, candle in enumerate(candles)
+        if candle.market_data_id == endpoint.source_market_data_id
+    )
+    first_after_confirmation = endpoint_index + endpoint.right_window + 1
+    highs = list(highs)
+    lows = list(lows)
+    closes = list(closes)
+    threshold = origin.price + Decimal("0.1")
+    for index in range(first_after_confirmation, first_after_confirmation + 2):
+        highs[index] = str(threshold + Decimal("0.2"))
+        closes[index] = str(threshold + Decimal("0.1"))
+    snapshot, candles, quality, _, _, _, _, structure = _analyze(
+        highs=tuple(highs), lows=tuple(lows), closes=tuple(closes)
+    )
+    origin, endpoint = _anchor_pair(
+        structure,
+        MarketStructureScale.INTERNAL,
+        PivotKind.HIGH,
+        PivotKind.LOW,
+    )
+    result = calculate_spot_fibonacci(
+        snapshot=snapshot,
+        observations=candles,
+        quality=quality,
+        market_structure=structure,
+        timeframe="1m",
+        policy=_policy(origin, endpoint, invalidation_consecutive_close_count=2),
+    )
+    assert result.invalidation.invalidated
 
 
 def test_fail_closed_on_invalid_quality_unknown_anchor_and_exact_version():
@@ -218,4 +420,124 @@ def test_fail_closed_on_invalid_quality_unknown_anchor_and_exact_version():
                 },
                 "retracement_ratios": (Decimal("0.75"),),
             }
+        )
+    with pytest.raises(SpotFibonacciError, match="after Fibonacci evidence expiry"):
+        calculate_spot_fibonacci(
+            **{
+                **args,
+                "quality": replace(
+                    quality,
+                    assessed_at=snapshot.as_of + timedelta(minutes=1),
+                ),
+            }
+        )
+
+
+def test_rejects_self_consistent_but_non_extreme_market_structure_pivot():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    swing = structure.swings[0]
+    source_index = 2
+    confirmation_index = source_index + swing.pivot.right_window
+    source = candles[source_index]
+    confirmation = candles[confirmation_index]
+    source_metrics = {metric.metric_name: metric for metric in source.metrics}
+    forged_pivot = replace(
+        swing.pivot,
+        pivot_id=uuid4(),
+        kind=PivotKind.HIGH,
+        price=source_metrics["high"].value,
+        source_market_data_id=source.market_data_id,
+        source_time=source.event_time,
+        confirmation_market_data_id=confirmation.market_data_id,
+        confirmation_time=confirmation.event_time + timedelta(minutes=1),
+        policy_id=structure.internal_pivot_policy.policy_id,
+        policy_version=structure.internal_pivot_policy.version,
+        left_window=structure.internal_pivot_policy.left_window,
+        right_window=structure.internal_pivot_policy.right_window,
+    )
+    swings = list(structure.swings)
+    swings[0] = replace(
+        swing,
+        scale=MarketStructureScale.INTERNAL,
+        pivot=forged_pivot,
+    )
+    forged_swings = tuple(swings)
+    forged_structure = _structure_with_swings(structure, forged_swings)
+    with pytest.raises(SpotFibonacciError, match="not an exact local extreme"):
+        calculate_spot_fibonacci(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            market_structure=forged_structure,
+            timeframe="1m",
+            policy=_policy(origin, endpoint),
+        )
+
+
+def test_rejects_malformed_market_structure_pivot_decimal():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    swings = list(structure.swings)
+    swings[0] = replace(
+        swings[0],
+        pivot=replace(swings[0].pivot, price="malformed"),
+    )
+    forged_structure = _structure_with_swings(structure, tuple(swings))
+    with pytest.raises(SpotFibonacciError, match="pivot price"):
+        calculate_spot_fibonacci(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            market_structure=forged_structure,
+            timeframe="1m",
+            policy=_policy(origin, endpoint),
+        )
+
+
+def test_rejects_pivot_kinds_that_contradict_the_signed_price_move():
+    highs = ["220"] * len(HIGHS)
+    lows = ["200"] * len(LOWS)
+    for index, high, low in (
+        (2, "150", "110"),
+        (3, "130", "100"),
+        (4, "140", "120"),
+        (5, "120", "110"),
+        (6, "100", "80"),
+        (7, "85", "75"),
+        (8, "90", "70"),
+        (9, "85", "75"),
+    ):
+        highs[index] = high
+        lows[index] = low
+    closes = tuple(
+        str((Decimal(high) + Decimal(low)) / 2)
+        for high, low in zip(highs, lows, strict=True)
+    )
+    snapshot, candles, quality, _, _, _, _, structure = _analyze(
+        highs=tuple(highs),
+        lows=tuple(lows),
+        closes=closes,
+    )
+    pivots = tuple(
+        swing.pivot
+        for swing in structure.swings
+        if swing.scale is MarketStructureScale.INTERNAL
+    )
+    origin = next(
+        pivot
+        for pivot in pivots
+        if pivot.kind is PivotKind.LOW and pivot.source_time == candles[3].event_time
+    )
+    endpoint = next(
+        pivot
+        for pivot in pivots
+        if pivot.kind is PivotKind.HIGH and pivot.source_time == candles[8].event_time
+    )
+    with pytest.raises(SpotFibonacciError, match="upward price move"):
+        calculate_spot_fibonacci(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            market_structure=structure,
+            timeframe="1m",
+            policy=_policy(origin, endpoint),
         )

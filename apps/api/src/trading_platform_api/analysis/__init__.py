@@ -1,15 +1,5 @@
 from trading_platform_api.analysis.contracts import *  # noqa: F403
 from trading_platform_api.analysis.contracts import __all__ as _contract_exports
-from trading_platform_api.analysis.indicator_registry import (
-    SPOT_RESEARCH_INDICATORS,
-    IndicatorCategory,
-    IndicatorMetadata,
-    IndicatorMetadataError,
-    IndicatorPhase,
-    IndicatorRegistry,
-    IndicatorTiming,
-    ParameterMetadata,
-)
 from trading_platform_api.analysis.fibonacci import (
     SPOT_FIBONACCI_EVIDENCE_VERSION,
     SPOT_FIBONACCI_INDICATOR_ID,
@@ -23,6 +13,16 @@ from trading_platform_api.analysis.fibonacci import (
     SpotFibonacciError,
     SpotFibonacciPolicy,
     calculate_spot_fibonacci,
+)
+from trading_platform_api.analysis.indicator_registry import (
+    SPOT_RESEARCH_INDICATORS,
+    IndicatorCategory,
+    IndicatorMetadata,
+    IndicatorMetadataError,
+    IndicatorPhase,
+    IndicatorRegistry,
+    IndicatorTiming,
+    ParameterMetadata,
 )
 from trading_platform_api.analysis.market_structure import (
     MARKET_STRUCTURE_EVIDENCE_VERSION,

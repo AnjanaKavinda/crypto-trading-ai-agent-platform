@@ -134,7 +134,7 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     assert "invalidation_buffer" in fibonacci.output_schema
     assert {item.name for item in fibonacci.parameters} == {
         "maximum-output-records",
-        "maximum-consecutive-closes",
+        "invalidation-consecutive-close-count",
     }
     with pytest.raises(IndicatorMetadataError, match="exact"):
         SPOT_RESEARCH_INDICATORS.get("spot-market-structure", "2")

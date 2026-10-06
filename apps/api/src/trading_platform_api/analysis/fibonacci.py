@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_EVEN, localcontext
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from hashlib import sha256
 from uuid import UUID, uuid5
 
@@ -18,6 +18,7 @@ from trading_platform_api.analysis.contracts import (
     EvidenceRelation,
     FibonacciAssessment,
     MethodologyCategory,
+    TechnicalAssessment,
     VersionReference,
 )
 from trading_platform_api.analysis.indicator_registry import (
@@ -32,13 +33,17 @@ from trading_platform_api.analysis.market_structure import (
     MARKET_STRUCTURE_METHOD_VERSION,
     ClassifiedSwing,
     MarketStructureAnalysis,
+    MarketStructurePolicy,
     MarketStructureScale,
 )
 from trading_platform_api.analysis.price_action import (
+    _INTERVALS,
+    PRICE_ACTION_INDICATOR_ID,
+    PRICE_ACTION_METADATA_VERSION,
     PRICE_ACTION_METHOD_VERSION,
     PivotKind,
     PivotObservation,
-    _INTERVALS,
+    SupportResistancePolicy,
     _bounded_decimal,
 )
 from trading_platform_api.analysis.volatility import VolatilityError, _ohlc
@@ -122,8 +127,13 @@ class SpotFibonacciPolicy:
             ):
                 raise SpotFibonacciError(f"{name} must be bounded nonblank text.")
         if not isinstance(self.scale, MarketStructureScale):
-            raise SpotFibonacciError("scale must be an explicit market-structure scale.")
-        if type(self.origin_pivot_id) is not UUID or type(self.endpoint_pivot_id) is not UUID:
+            raise SpotFibonacciError(
+                "scale must be an explicit market-structure scale."
+            )
+        if (
+            type(self.origin_pivot_id) is not UUID
+            or type(self.endpoint_pivot_id) is not UUID
+        ):
             raise SpotFibonacciError("Anchor IDs must be UUIDs.")
         if self.origin_pivot_id == self.endpoint_pivot_id:
             raise SpotFibonacciError("Origin and endpoint pivot IDs must be distinct.")
@@ -152,9 +162,7 @@ class SpotFibonacciPolicy:
                 raise SpotFibonacciError(f"{name} must be strictly positive.")
         if (
             type(self.invalidation_consecutive_close_count) is not int
-            or not 1
-            <= self.invalidation_consecutive_close_count
-            <= _MAX_CLOSES
+            or not 1 <= self.invalidation_consecutive_close_count <= _MAX_CLOSES
         ):
             raise SpotFibonacciError(
                 f"invalidation_consecutive_close_count must be in [1, {_MAX_CLOSES}]."
@@ -283,6 +291,7 @@ def _validate_structure(
     if (
         structure.timeframe != timeframe
         or structure.instrument_id != snapshot.instrument_id
+        or structure.asset != snapshot.instrument_id
         or structure.venue_id != snapshot.venue_id
         or structure.snapshot_id != snapshot.snapshot_id
         or structure.quality_report_id != quality.report_id
@@ -290,6 +299,11 @@ def _validate_structure(
         or structure.source_record_ids != snapshot.source_record_ids
         or structure.input_market_data_ids != snapshot.market_data_ids
         or structure.price_unit != price_unit
+        or type(structure.internal_pivot_policy) is not SupportResistancePolicy
+        or type(structure.external_pivot_policy) is not SupportResistancePolicy
+        or type(structure.break_policy) is not MarketStructurePolicy
+        or structure.internal_pivot_policy.price_unit != price_unit
+        or structure.external_pivot_policy.price_unit != price_unit
     ):
         raise SpotFibonacciError("#56 output lineage does not match exact inputs.")
     try:
@@ -306,24 +320,39 @@ def _validate_structure(
         raise SpotFibonacciError("#56 method is not validated for this timeframe.")
     evidence = structure.evidence
     if (
-        evidence.contract_id != "C-008"
+        type(evidence) is not EvidenceItem
+        or evidence.contract_id != "C-008"
         or evidence.method.component != MARKET_STRUCTURE_INDICATOR_ID
         or evidence.method.version != MARKET_STRUCTURE_METHOD_VERSION
         or evidence.source_record_ids != snapshot.source_record_ids
         or evidence.data_quality_report_id != quality.report_id
         or evidence.quality_status is not DataQualityStatus.VALID
         or evidence.expires_at != structure.evidence_expires_at
+        or evidence.observed_at != snapshot.as_of
+        or evidence.available_at != quality.assessed_at
+        or evidence.unit != price_unit
+        or evidence.reliability != quality.source_reliability
+        or not evidence.usable
+        or VersionReference(PRICE_ACTION_INDICATOR_ID, PRICE_ACTION_METHOD_VERSION)
+        not in evidence.provenance
+        or VersionReference(
+            "market-structure-evidence", MARKET_STRUCTURE_EVIDENCE_VERSION
+        )
+        not in evidence.provenance
     ):
         raise SpotFibonacciError("#56 C-008 evidence lineage is invalid.")
     assessment = structure.assessment
     if (
-        assessment.contract_id != "C-012"
+        type(assessment) is not TechnicalAssessment
+        or assessment.contract_id != "C-012"
         or assessment.status is not AssessmentStatus.AVAILABLE
         or assessment.instrument_id != snapshot.instrument_id
         or assessment.timeframe != timeframe
         or assessment.as_of != snapshot.as_of
         or assessment.data_quality_report_id != quality.report_id
         or assessment.evidence_ids != (evidence.evidence_id,)
+        or assessment.available_at != quality.assessed_at
+        or assessment.expires_at != structure.evidence_expires_at
     ):
         raise SpotFibonacciError("#56 assessment lineage is invalid.")
     if (
@@ -356,17 +385,17 @@ def _validate_structure(
             "external_pivot_policy": structure.external_pivot_policy,
             "break_policy": structure.break_policy,
             "internal_pivot_method_version": PRICE_ACTION_METHOD_VERSION,
-            "internal_pivot_metadata_version": "1",
+            "internal_pivot_metadata_version": PRICE_ACTION_METADATA_VERSION,
             "external_pivot_method_version": PRICE_ACTION_METHOD_VERSION,
-            "external_pivot_metadata_version": "1",
+            "external_pivot_metadata_version": PRICE_ACTION_METADATA_VERSION,
             "swings": structure.swings,
             "states": structure.states,
             "events": structure.events,
             "uncertainty": structure.uncertainty,
             "limitations": structure.limitations,
         }
-        if any(
-            field not in payload or not _same_json(payload[field], expected)
+        if set(payload) != set(expected_fields) or any(
+            not _same_json(payload[field], expected)
             for field, expected in expected_fields.items()
         ):
             raise SpotFibonacciError("#56 C-008 evidence does not match its output.")
@@ -381,7 +410,9 @@ def _validate_structure(
     ) as exc:
         raise SpotFibonacciError("#56 C-008 evidence is invalid.") from exc
 
-    index_by_id = {candle.market_data_id: index for index, candle in enumerate(observations)}
+    index_by_id = {
+        candle.market_data_id: index for index, candle in enumerate(observations)
+    }
     result: dict[UUID, tuple[MarketStructureScale, PivotObservation]] = {}
     swings = structure.swings
     if (
@@ -413,6 +444,7 @@ def _validate_structure(
             or pivot.left_window != policy.left_window
             or pivot.right_window != policy.right_window
             or pivot.tie_rule != _PIVOT_TIE_RULE
+            or source_index < pivot.left_window
         ):
             raise SpotFibonacciError("#56 pivot policy or source identity is invalid.")
         confirmation_index = source_index + pivot.right_window
@@ -425,15 +457,39 @@ def _validate_structure(
         source = observations[source_index]
         confirmation = observations[confirmation_index]
         metrics = {metric.metric_name: metric for metric in source.metrics}
+        price_field = "high" if pivot.kind is PivotKind.HIGH else "low"
+        source_price = metrics[price_field].value
+        try:
+            _bounded_decimal("pivot.price", pivot.price)
+        except (TypeError, ValueError) as exc:
+            raise SpotFibonacciError(
+                "#56 pivot price exceeds supported Decimal bounds."
+            ) from exc
+        left_prices = tuple(
+            {metric.metric_name: metric.value for metric in candle.metrics}[price_field]
+            for candle in observations[source_index - pivot.left_window : source_index]
+        )
+        right_prices = tuple(
+            {metric.metric_name: metric.value for metric in candle.metrics}[price_field]
+            for candle in observations[source_index + 1 : confirmation_index + 1]
+        )
+        is_confirmed_extreme = (
+            pivot.price > max(left_prices) and pivot.price >= max(right_prices)
+            if pivot.kind is PivotKind.HIGH
+            else pivot.price < min(left_prices) and pivot.price <= min(right_prices)
+        )
         if (
-            pivot.price != metrics["high" if pivot.kind is PivotKind.HIGH else "low"].value
+            pivot.price != source_price
             or pivot.source_time != source.event_time
             or pivot.confirmation_time
             != confirmation.event_time + timedelta(seconds=_INTERVALS[timeframe])
             or pivot.confirmation_time > snapshot.as_of
             or pivot.source_time >= confirmation.event_time
+            or not is_confirmed_extreme
         ):
-            raise SpotFibonacciError("#56 pivot is unconfirmed or mismatches source OHLC.")
+            raise SpotFibonacciError(
+                "#56 pivot is unconfirmed, not an exact local extreme, or mismatches source OHLC."
+            )
         result[pivot.pivot_id] = (swing.scale, pivot)
     return result
 
@@ -455,6 +511,27 @@ def _level_payload(
     group: FibonacciConfluenceGroup | None = None,
     invalidation: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    if level is not None:
+        value: object = {
+            "level_id": level.level_id,
+            "category": level.category,
+            "ratio": level.ratio,
+            "price": level.price,
+            "confluence_group_ids": level.confluence_group_ids,
+        }
+    elif group is not None:
+        value = {
+            "group_id": group.group_id,
+            "member_level_ids": group.member_level_ids,
+            "member_ratios": group.member_ratios,
+            "member_prices": group.member_prices,
+            "fixed_anchor_price": group.fixed_anchor_price,
+            "lower_bound": group.lower_bound,
+            "upper_bound": group.upper_bound,
+            "tolerance": group.tolerance,
+        }
+    else:
+        value = invalidation
     return {
         "evidence_version": SPOT_FIBONACCI_EVIDENCE_VERSION,
         "method_id": SPOT_FIBONACCI_INDICATOR_ID,
@@ -477,7 +554,7 @@ def _level_payload(
         "input_market_data_ids": snapshot.market_data_ids,
         "source_market_data_ids": source_ids,
         "market_structure_evidence_id": structure.evidence.evidence_id,
-        "value": level if level is not None else group if group is not None else invalidation,
+        "value": value,
         "uncertainty": _UNCERTAINTY,
         "limitations": _LIMITATIONS,
     }
@@ -488,7 +565,7 @@ def _make_evidence(
     payload: dict[str, object],
     snapshot: MarketSnapshot,
     quality: DataQualityReport,
-    expires_at: object,
+    expires_at: datetime,
     price_unit: str,
     evidence_kind: str,
     policy: SpotFibonacciPolicy,
@@ -503,7 +580,9 @@ def _make_evidence(
     return EvidenceItem(
         evidence_id=evidence_id,
         source_record_ids=snapshot.source_record_ids,
-        dataset_versions=(snapshot.dataset_version,) if snapshot.dataset_version else (),
+        dataset_versions=(snapshot.dataset_version,)
+        if snapshot.dataset_version
+        else (),
         feature_ids=(
             f"C-002:snapshot:{snapshot.snapshot_id}",
             *(f"C-001:market-data:{item_id}" for item_id in snapshot.market_data_ids),
@@ -512,7 +591,7 @@ def _make_evidence(
         relation=EvidenceRelation.NEUTRAL,
         observed_at=snapshot.as_of,
         available_at=quality.assessed_at,
-        expires_at=expires_at,  # type: ignore[arg-type]
+        expires_at=expires_at,
         method=VersionReference(
             SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
         ),
@@ -532,12 +611,16 @@ def _make_evidence(
             VersionReference("C-003", "1"),
             VersionReference("C-008", "1"),
             VersionReference("C-068", "1"),
-            VersionReference(MARKET_STRUCTURE_INDICATOR_ID, MARKET_STRUCTURE_METHOD_VERSION),
+            VersionReference(
+                MARKET_STRUCTURE_INDICATOR_ID, MARKET_STRUCTURE_METHOD_VERSION
+            ),
             VersionReference(
                 "market-structure-evidence", MARKET_STRUCTURE_EVIDENCE_VERSION
             ),
             VersionReference("canonical-json", CANONICAL_JSON_VERSION),
-            VersionReference("spot-fibonacci-evidence", SPOT_FIBONACCI_EVIDENCE_VERSION),
+            VersionReference(
+                "spot-fibonacci-evidence", SPOT_FIBONACCI_EVIDENCE_VERSION
+            ),
             VersionReference(policy.policy_id, policy.version),
         ),
         usable=True,
@@ -546,7 +629,18 @@ def _make_evidence(
 
 def _fixed_anchor_groups(
     levels: tuple[FibonacciLevel, ...], tolerance: Decimal
-) -> tuple[tuple[UUID, tuple[UUID, ...], tuple[Decimal, ...], tuple[Decimal, ...], Decimal, Decimal, Decimal], ...]:
+) -> tuple[
+    tuple[
+        UUID,
+        tuple[UUID, ...],
+        tuple[Decimal, ...],
+        tuple[Decimal, ...],
+        Decimal,
+        Decimal,
+        Decimal,
+    ],
+    ...,
+]:
     ordered = sorted(levels, key=lambda level: (level.price, str(level.level_id)))
     groups = []
     index = 0
@@ -555,10 +649,7 @@ def _fixed_anchor_groups(
         while index < len(ordered):
             fixed_anchor = ordered[index].price
             end = index + 1
-            while (
-                end < len(ordered)
-                and ordered[end].price - fixed_anchor <= tolerance
-            ):
+            while end < len(ordered) and ordered[end].price - fixed_anchor <= tolerance:
                 end += 1
             members = ordered[index:end]
             if len(members) > 1:
@@ -601,7 +692,9 @@ def calculate_spot_fibonacci(
         or len(observations) > _MAX_CANDLES
         or not all(type(item) is MarketData for item in observations)
     ):
-        raise SpotFibonacciError("Canonical bounded snapshot, quality, and candles are required.")
+        raise SpotFibonacciError(
+            "Canonical bounded snapshot, quality, and candles are required."
+        )
     if type(policy) is not SpotFibonacciPolicy:
         raise SpotFibonacciError("An explicit immutable caller policy is required.")
     if type(timeframe) is not str or timeframe not in _INTERVALS:
@@ -613,17 +706,23 @@ def calculate_spot_fibonacci(
             SPOT_FIBONACCI_INDICATOR_ID, metadata_version
         )
     except (IndicatorMetadataError, TypeError) as exc:
-        raise SpotFibonacciError("Unknown exact Spot Fibonacci metadata version.") from exc
+        raise SpotFibonacciError(
+            "Unknown exact Spot Fibonacci metadata version."
+        ) from exc
     if (
         metadata.phase is not IndicatorPhase.VALIDATED
         or metadata.calculation_version != SPOT_FIBONACCI_METHOD_VERSION
         or timeframe not in metadata.timeframes
     ):
-        raise SpotFibonacciError("Fibonacci method is not validated for this timeframe.")
+        raise SpotFibonacciError(
+            "Fibonacci method is not validated for this timeframe."
+        )
     if not snapshot.instrument_id.endswith("-SPOT") or not snapshot.venue_id.endswith(
         "-SPOT"
     ):
-        raise SpotFibonacciError("Only canonical Spot instruments and venues are supported.")
+        raise SpotFibonacciError(
+            "Only canonical Spot instruments and venues are supported."
+        )
     try:
         _, price_unit = _ohlc(
             snapshot=snapshot,
@@ -632,14 +731,18 @@ def calculate_spot_fibonacci(
             timeframe=timeframe,
         )
     except (VolatilityError, ArithmeticError) as exc:
-        raise SpotFibonacciError("Spot OHLCV failed shared analysis validation.") from exc
+        raise SpotFibonacciError(
+            "Spot OHLCV failed shared analysis validation."
+        ) from exc
     try:
         for candle in observations:
             metrics = {metric.metric_name: metric for metric in candle.metrics}
             for name in ("open", "high", "low", "close"):
                 _bounded_decimal(name, metrics[name].value)
     except (KeyError, TypeError, ValueError) as exc:
-        raise SpotFibonacciError("OHLC prices exceed supported Decimal bounds.") from exc
+        raise SpotFibonacciError(
+            "OHLC prices exceed supported Decimal bounds."
+        ) from exc
     if (
         tuple(dict.fromkeys(item.source_record_id for item in observations))
         != snapshot.source_record_ids
@@ -647,13 +750,19 @@ def calculate_spot_fibonacci(
         raise SpotFibonacciError("Ordered candle provenance must match the snapshot.")
     interval = timedelta(seconds=_INTERVALS[timeframe])
     if observations[-1].event_time + interval != snapshot.as_of:
-        raise SpotFibonacciError("The latest closed candle must end at snapshot cutoff.")
+        raise SpotFibonacciError(
+            "The latest closed candle must end at snapshot cutoff."
+        )
     try:
         expires_at = snapshot.as_of + interval
     except OverflowError as exc:
-        raise SpotFibonacciError("Fibonacci evidence expiry exceeds timestamp bounds.") from exc
+        raise SpotFibonacciError(
+            "Fibonacci evidence expiry exceeds timestamp bounds."
+        ) from exc
     if quality.assessed_at >= expires_at:
-        raise SpotFibonacciError("Quality was assessed at or after Fibonacci evidence expiry.")
+        raise SpotFibonacciError(
+            "Quality was assessed at or after Fibonacci evidence expiry."
+        )
     if len(observations) < metadata.minimum_warmup_candles:
         raise SpotFibonacciError("Insufficient warm-up for the registered method.")
 
@@ -672,19 +781,31 @@ def calculate_spot_fibonacci(
         raise SpotFibonacciError("Caller anchor ID is unknown or unconfirmed.") from exc
     if origin_scale is not policy.scale or endpoint_scale is not policy.scale:
         raise SpotFibonacciError("Both anchors must use the caller-designated scale.")
-    source_index = {item.market_data_id: index for index, item in enumerate(observations)}
+    source_index = {
+        item.market_data_id: index for index, item in enumerate(observations)
+    }
     if (
         source_index[origin.source_market_data_id]
         >= source_index[endpoint.source_market_data_id]
         or origin.confirmation_time >= endpoint.confirmation_time
     ):
-        raise SpotFibonacciError("Origin must precede endpoint in source and confirmation time.")
+        raise SpotFibonacciError(
+            "Origin must precede endpoint in source and confirmation time."
+        )
     if origin.kind is endpoint.kind:
         raise SpotFibonacciError("Fibonacci anchor pivot kinds must alternate.")
     if origin.kind is PivotKind.LOW and endpoint.kind is PivotKind.HIGH:
         direction = "bullish"
+        if endpoint.price <= origin.price:
+            raise SpotFibonacciError(
+                "Bullish anchors must define an upward price move."
+            )
     elif origin.kind is PivotKind.HIGH and endpoint.kind is PivotKind.LOW:
         direction = "bearish"
+        if endpoint.price >= origin.price:
+            raise SpotFibonacciError(
+                "Bearish anchors must define a downward price move."
+            )
     else:
         raise SpotFibonacciError("Anchor kinds do not define a valid impulse.")
     try:
@@ -695,6 +816,10 @@ def calculate_spot_fibonacci(
     with localcontext() as context:
         context.prec = _WORK_PRECISION
         move = abs(endpoint.price - origin.price)
+        try:
+            _bounded_decimal("anchor move", move)
+        except ValueError as exc:
+            raise SpotFibonacciError("Anchor move exceeds Decimal bounds.") from exc
         if move <= 0:
             raise SpotFibonacciError("Anchor move must be strictly positive.")
     anchors = tuple(
@@ -748,9 +873,13 @@ def calculate_spot_fibonacci(
                 try:
                     _bounded_decimal("fibonacci level", price)
                 except ValueError as exc:
-                    raise SpotFibonacciError("Fibonacci level exceeds Decimal bounds.") from exc
+                    raise SpotFibonacciError(
+                        "Fibonacci level exceeds Decimal bounds."
+                    ) from exc
                 if price <= 0:
-                    raise SpotFibonacciError("Fibonacci levels must be positive prices.")
+                    raise SpotFibonacciError(
+                        "Fibonacci levels must be positive prices."
+                    )
                 values.append((category, ratio, price))
 
         levels_without_evidence = tuple(
@@ -776,9 +905,7 @@ def calculate_spot_fibonacci(
             levels_without_evidence, policy.confluence_tolerance
         )
         grouped_ids = {
-            level_id: tuple(
-                group[0] for group in raw_groups if level_id in group[1]
-            )
+            level_id: tuple(group[0] for group in raw_groups if level_id in group[1])
             for level_id in (item.level_id for item in levels_without_evidence)
         }
         levels = tuple(
@@ -819,13 +946,23 @@ def calculate_spot_fibonacci(
             if direction == "bullish"
             else origin.price + policy.invalidation_buffer
         )
+        try:
+            _bounded_decimal("invalidation threshold", threshold)
+        except ValueError as exc:
+            raise SpotFibonacciError(
+                "Invalidation threshold exceeds Decimal bounds."
+            ) from exc
     close_values = []
     for candle in closes_after_endpoint:
-        close_metric = next(metric for metric in candle.metrics if metric.metric_name == "close")
+        close_metric = next(
+            metric for metric in candle.metrics if metric.metric_name == "close"
+        )
         try:
             _bounded_decimal("close", close_metric.value)
         except ValueError as exc:
-            raise SpotFibonacciError("Invalidation close exceeds Decimal bounds.") from exc
+            raise SpotFibonacciError(
+                "Invalidation close exceeds Decimal bounds."
+            ) from exc
         close_values.append((candle, close_metric.value))
     consecutive = 0
     confirming_candle: MarketData | None = None
@@ -952,7 +1089,9 @@ def calculate_spot_fibonacci(
         )
     groups = tuple(final_groups)
     invalidated = confirming_candle is not None
-    observed_count = policy.invalidation_consecutive_close_count if invalidated else consecutive
+    observed_count = (
+        policy.invalidation_consecutive_close_count if invalidated else consecutive
+    )
     invalidation_record = {
         "invalidated": invalidated,
         "direction": direction,
@@ -1019,7 +1158,9 @@ def calculate_spot_fibonacci(
             ),
             price_unit,
             timeframe,
-            VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+            VersionReference(
+                SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+            ),
             (anchor_evidence.evidence_id,),
         )
     ]
@@ -1030,7 +1171,9 @@ def calculate_spot_fibonacci(
             ClaimClassification.FACT,
             "Caller-selected confirmed same-timeframe Spot pivots define a positive price move.",
             (anchor_evidence.evidence_id,),
-            VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+            VersionReference(
+                SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+            ),
             "Superseded by corrected source candles, different anchor IDs, or a new policy/method version.",
             _LIMITATIONS,
         )
@@ -1038,10 +1181,12 @@ def calculate_spot_fibonacci(
     evidence_by_group = {item.group_id: item for item in groups}
     for level in levels:
         member_groups = tuple(
-            evidence_by_group[group_id]
-            for group_id in level.confluence_group_ids
+            evidence_by_group[group_id] for group_id in level.confluence_group_ids
         )
-        evidence_ids = (level.evidence_id, *(item.evidence_id for item in member_groups))
+        evidence_ids = (
+            level.evidence_id,
+            *(item.evidence_id for item in member_groups),
+        )
         observations_output.append(
             DomainObservation(
                 level.category,
@@ -1057,7 +1202,9 @@ def calculate_spot_fibonacci(
                 ),
                 price_unit,
                 timeframe,
-                VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+                VersionReference(
+                    SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+                ),
                 evidence_ids,
             )
         )
@@ -1068,38 +1215,14 @@ def calculate_spot_fibonacci(
                 ClaimClassification.FACT,
                 f"Caller-selected {level.category} reference level at ratio {level.ratio}.",
                 evidence_ids,
-                VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+                VersionReference(
+                    SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+                ),
                 "Expires at the next boundary for this timeframe or on source/policy correction.",
                 _LIMITATIONS,
             )
         )
     for group in groups:
-        observations_output.append(
-            DomainObservation(
-                "retracement-level",
-                canonical_json_dumps(
-                    {
-                        "confluence_group_id": group.group_id,
-                        "member_level_ids": group.member_level_ids,
-                        "member_ratios": group.member_ratios,
-                        "member_prices": group.member_prices,
-                        "fixed_anchor_price": group.fixed_anchor_price,
-                        "lower_bound": group.lower_bound,
-                        "upper_bound": group.upper_bound,
-                        "tolerance": group.tolerance,
-                        "interpretation": "overlapping calculated levels, not independent evidence",
-                    }
-                ),
-                price_unit,
-                timeframe,
-                VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
-                (
-                    group.evidence_id,
-                    *(next(level.evidence_id for level in levels if level.level_id == member_id)
-                      for member_id in group.member_level_ids),
-                ),
-            )
-        )
         findings.append(
             AnalyticalFinding(
                 _stable_id("finding", group.evidence_id),
@@ -1107,7 +1230,9 @@ def calculate_spot_fibonacci(
                 ClaimClassification.FACT,
                 "A fixed-anchor tolerance group contains overlapping calculated levels.",
                 (group.evidence_id,),
-                VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+                VersionReference(
+                    SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+                ),
                 "Expires with the linked level evidence or on source/policy correction.",
                 _LIMITATIONS,
             )
@@ -1118,7 +1243,9 @@ def calculate_spot_fibonacci(
             canonical_json_dumps(invalidation_record),
             price_unit,
             timeframe,
-            VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+            VersionReference(
+                SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+            ),
             (invalidation_evidence.evidence_id,),
         )
     )
@@ -1129,7 +1256,9 @@ def calculate_spot_fibonacci(
             ClaimClassification.FACT,
             "The explicit strict consecutive-close invalidation rule is evaluated through the snapshot cutoff.",
             (invalidation_evidence.evidence_id,),
-            VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+            VersionReference(
+                SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+            ),
             "Superseded by a source correction, new snapshot, or new policy/method version.",
             _LIMITATIONS,
         )
@@ -1173,8 +1302,12 @@ def calculate_spot_fibonacci(
             VersionReference("C-003", "1"),
             VersionReference("C-008", "1"),
             VersionReference("C-068", "1"),
-            VersionReference(MARKET_STRUCTURE_INDICATOR_ID, MARKET_STRUCTURE_METHOD_VERSION),
-            VersionReference(SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION),
+            VersionReference(
+                MARKET_STRUCTURE_INDICATOR_ID, MARKET_STRUCTURE_METHOD_VERSION
+            ),
+            VersionReference(
+                SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
+            ),
             VersionReference(policy.policy_id, policy.version),
         ),
         methodology=MethodologyCategory.TECHNICAL,

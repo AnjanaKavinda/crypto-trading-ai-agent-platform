@@ -795,18 +795,20 @@ _SPOT_FIBONACCI_METADATA = IndicatorMetadata(
     timeframes=_SPOT_TIMEFRAMES,
     parameters=(
         ParameterMetadata("maximum-output-records", "records", 32, 1, 10000),
-        ParameterMetadata("maximum-consecutive-closes", "candles", 500, 1, 500),
+        ParameterMetadata(
+            "invalidation-consecutive-close-count", "candles", 500, 1, 500
+        ),
     ),
     minimum_warmup_candles=3,
     output_unit="input-price-unit",
     output_schema=(
-        "Policy fields: policy_id,version,scale,origin_pivot_id,endpoint_pivot_id,"
-        "retracement_ratios,extension_ratios,confluence_tolerance,invalidation_buffer,"
-        "invalidation_consecutive_close_count [1,500],maximum_output_records "
-        "[1,10000]. Positive finite Decimal tolerances (<=64 digits; abs exponent "
-        "and adjusted <=128). No defaults. Confirmed alternating same-timeframe "
-        "#56 pivots; exact VALID C-001/002/003. C-008/C-068 only. Expiry as_of + "
-        "timeframe; quality before expiry. Fixed-anchor groups; nullable; confidence=0."
+        "policy_id/version <=128 chars; scale {internal,external}; distinct UUID "
+        "anchor IDs; nonempty ratio subsets (bounds in purpose); positive finite "
+        "Decimal confluence_tolerance/invalidation_buffer (<=64 digits, abs exponent/"
+        "adjusted <=128); close count [1,500]; output records [1,10000]. No defaults. "
+        "Confirmed alternating same-timeframe #56 pivots; exact VALID C-001/002/003. "
+        "C-008/C-068 only. Expiry as_of + timeframe; quality before expiry. "
+        "Fixed-anchor confluence; nullable, confidence=0."
     ),
     output_nullable=True,
     timing=IndicatorTiming.CONFIRMATORY,
