@@ -12,7 +12,10 @@ permissions:
   checks: read
 jobs:
   eligibility:
-    if: github.event.action == 'assigned' || contains(github.event.issue.labels.*.name, 'workflow:ready')
+    if: >-
+      (github.event.action == 'assigned' && github.event.assignee.login == 'Copilot') ||
+      (github.event.action == 'labeled' && github.event.label.name == 'workflow:ready') ||
+      (github.event.action == 'reopened' && contains(github.event.issue.labels.*.name, 'workflow:ready'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
