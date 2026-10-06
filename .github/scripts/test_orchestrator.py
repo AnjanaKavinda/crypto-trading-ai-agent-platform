@@ -1500,6 +1500,17 @@ class GovernanceTests(unittest.TestCase):
                         required_checks=["ci"], reviews=[{**review, "review_tier": "R2"}])
 
 
+    def test_canonical_issue_49_maps_refined_github_title(self):
+        catalog = Path(__file__).parents[2] / "docs/copilot-team/04-issues/ISSUE-CATALOG.md"
+        titles = parse_catalog_titles(catalog.read_text(encoding="utf-8"))
+        expected = "Deterministic Spot momentum indicators (RSI, MACD, Stochastic, CCI)"
+        self.assertEqual(titles[49], expected)
+        mapping = build_canonical_mapping([
+            {"number": 51, "title": expected, "body": "# Issue 049 — " + expected}
+        ], titles)
+        self.assertEqual(mapping, {49: 51})
+
+
 def load_tests(loader, tests, pattern):
     """Ensure Governance CI's legacy entry point also runs reviewer-adapter tests."""
     import test_independent_reviewer

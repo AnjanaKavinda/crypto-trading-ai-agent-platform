@@ -60,7 +60,7 @@ current-repository implementation contract and an executable readiness status.
 | 046 | 03 Data | Trading Intelligence Agent | Data platform failure and fallback tests | Chat 4 | 021 |
 | 047 | 04 Analysis | Trading Intelligence Agent | Indicator metadata registry | Chat 5 | 022,033-046 |
 | 048 | 04 Analysis | Trading Intelligence Agent | Moving average and trend indicator engine | Chat 5 | 022,033-046 |
-| 049 | 04 Analysis | Trading Intelligence Agent | Momentum indicator engine | Chat 5 | 022,033-046 |
+| 049 | 04 Analysis | Trading Intelligence Agent | Deterministic Spot momentum indicators (RSI, MACD, Stochastic, CCI) | Chat 5 | 022,033-046 |
 | 050 | 04 Analysis | Trading Intelligence Agent | Volatility indicator engine | Chat 5 | 022,033-046 |
 | 051 | 04 Analysis | Trading Intelligence Agent | VWAP and volume profile engine | Chat 5 | 022,033-046 |
 | 052 | 04 Analysis | Trading Intelligence Agent | Volume confirmation engine | Chat 5 | 022,033-046 |
