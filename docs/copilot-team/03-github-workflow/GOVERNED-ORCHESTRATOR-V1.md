@@ -7,12 +7,15 @@ least-privilege GitHub token for issue labels/comments and Copilot issue
 assignment; they do not grant repository-content write, approval, merge, or
 exchange capability.
 
-The workflows run these validations on eligible issue and pull-request events.
-They deliberately do not enable native auto-merge or merge queues. The issue
-workflow calls GitHub's supported full Copilot agent-assignment request with
-`copilot-swe-agent[bot]`, the resolved custom agent, the generated launch
-prompt, the target repository, and the resolved base branch. The assignment
-inputs and result are retained in the durable issue audit comment.
+The workflows run deterministic validations on eligible issue and
+pull-request events. They deliberately do not enable native auto-merge or merge
+queues. For an eligible issue, the issue workflow validates the inputs and
+records a `DISPATCH_READY` handoff prompt. The repository owner then selects
+the native Copilot custom-agent profile and assigns Copilot. The later
+assignment event validates the Copilot identity against the handoff; the
+current controller does not inspect or prove which native custom-agent profile
+was selected. The owner must record that profile selection in the issue
+handoff.
 
 Repository protection/ruleset verification is currently unavailable under the
 present GitHub repository/account capability. The incomplete
@@ -34,6 +37,16 @@ for automatic operation. Missing or unverifiable values fail closed.
 `GOVERNED_PILOT_ENABLED` must remain unset/false until the human owner
 explicitly activates the reserved canonical Issue 004 pilot after this
 implementation is merged.
+
+## Observed configuration and unresolved policy drift
+
+The normative V1.1 policy above still describes the pilot as disabled and
+reserves canonical Issue 004 / GitHub #6. A failed issue #58 dispatch run on
+2026-10-06 recorded `GOVERNED_PILOT_ENABLED=true` and
+`GOVERNED_PILOT_ISSUES=6,57`. This is observed runtime configuration, not an
+amendment or approval of the policy. Do not expand the allowlist or describe
+other issues as governed-ready based on that observation. The owner must resolve
+the policy/configuration mismatch through the established governance process.
 
 The implementation maps canonical backlog identifiers from issue content,
 defaults normal work to `dev`, validates the four supported agent labels,
