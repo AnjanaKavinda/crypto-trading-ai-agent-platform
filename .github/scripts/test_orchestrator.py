@@ -660,6 +660,7 @@ class GovernanceTests(unittest.TestCase):
     def test_issue_dispatch_only_runs_for_qualifying_events(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
                     "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
+        workflow = " ".join(workflow.split())
         self.assertIn(
             "github.event.action == 'assigned' && "
             "github.event.assignee.login == 'Copilot'",
