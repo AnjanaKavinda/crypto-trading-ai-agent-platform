@@ -467,3 +467,83 @@ def test_output_bound_and_candle_order_are_rejected() -> None:
             timeframe="1m",
             policy=_policy(),
         )
+
+def test_evidence_expiry_is_anchored_to_the_latest_candle_boundary() -> None:
+    snapshot, observations, quality = _input(_bars())
+    interval = timedelta(minutes=1)
+    delayed_quality = replace(
+        quality,
+        assessed_at=snapshot.as_of + timedelta(seconds=30),
+    )
+    result = calculate_spot_wyckoff(
+        snapshot=snapshot,
+        observations=observations,
+        quality=delayed_quality,
+        timeframe="1m",
+        policy=_policy(),
+    )
+    expected_expiry = snapshot.as_of + interval
+    assert result.evidence_expires_at == expected_expiry
+    assert all(item.expires_at == expected_expiry for item in result.evidence)
+    assert all(item.available_at == delayed_quality.assessed_at for item in result.evidence)
+
+    expired_quality = replace(
+        quality,
+        assessed_at=expected_expiry,
+    )
+    with pytest.raises(SpotWyckoffError, match="candle expiry"):
+        calculate_spot_wyckoff(
+            snapshot=snapshot,
+            observations=observations,
+            quality=expired_quality,
+            timeframe="1m",
+            policy=_policy(),
+        )
+
+
+def test_validation_fails_closed_for_future_provisional_malformed_gapped_and_mismatched_inputs() -> None:
+    snapshot, observations, quality = _input(_bars())
+    interval = timedelta(minutes=1)
+
+    future = replace(
+        observations[-1],
+        ingestion_time=observations[-1].ingestion_time + interval,
+        availability_time=observations[-1].availability_time + interval,
+    )
+    provisional = replace(observations[-1], observation_type="OHLCV-PROVISIONAL")
+    malformed = replace(
+        observations[-1],
+        metrics=tuple(
+            replace(metric, value=Decimal("1"))
+            if metric.metric_name == "high"
+            else metric
+            for metric in observations[-1].metrics
+        ),
+    )
+    gap_source = observations[3]
+    gapped = replace(
+        gap_source,
+        event_time=gap_source.event_time + interval,
+        provider_time=gap_source.provider_time + interval,
+        ingestion_time=gap_source.ingestion_time + interval,
+        availability_time=gap_source.availability_time + interval,
+    )
+    mismatched = replace(observations[-1], instrument_id="OTHER-SPOT")
+
+    cases = (
+        (len(observations) - 1, future),
+        (len(observations) - 1, provisional),
+        (len(observations) - 1, malformed),
+        (3, gapped),
+        (len(observations) - 1, mismatched),
+    )
+    for index, changed in cases:
+        candidate = (*observations[:index], changed, *observations[index + 1 :])
+        with pytest.raises(SpotWyckoffError):
+            calculate_spot_wyckoff(
+                snapshot=snapshot,
+                observations=candidate,
+                quality=quality,
+                timeframe="1m",
+                policy=_policy(),
+            )
