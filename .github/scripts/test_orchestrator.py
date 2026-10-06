@@ -657,6 +657,26 @@ class GovernanceTests(unittest.TestCase):
         self.assertNotIn("COPILOT_ASSIGNMENT_TOKEN", source + workflow)
         self.assertNotIn("issues/{issue_id}/assignees", source)
 
+    def test_issue_dispatch_only_runs_for_qualifying_events(self):
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "github.event.action == 'assigned' && "
+            "github.event.assignee.login == 'Copilot'",
+            workflow)
+        self.assertIn(
+            "github.event.action == 'labeled' && "
+            "github.event.label.name == 'workflow:ready'",
+            workflow)
+        self.assertIn(
+            "github.event.action == 'reopened' && "
+            "contains(github.event.issue.labels.*.name, 'workflow:ready')",
+            workflow)
+        self.assertNotIn(
+            "github.event.action == 'assigned' || "
+            "contains(github.event.issue.labels.*.name, 'workflow:ready')",
+            workflow)
+
     def test_v11_routing_context_and_escalation_are_fail_closed(self):
         inputs = {
             "canonical_issue": 207, "agent_role": "Backend/Foundation",
