@@ -54,7 +54,7 @@ jobs:
           head="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
           if [ -n "$head" ]; then
            gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
-             -f state=error -f context=governance-gate \
+             -f state=error -f context=governance-review \
              -f description='R1 trusted snapshot resolution failed; inspect workflow diagnostics'
           fi
           exit 1
@@ -80,7 +80,7 @@ jobs:
         run: |
           head="$(jq -r .head.sha .governance/r1/pr.json)"
           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
-            -f state=pending -f context=governance-gate \
+            -f state=pending -f context=governance-review \
             -f description='R1 requires current-head AnjanaKavinda approval and deterministic checks'
       - name: Publish trusted R1 result
         id: evaluate
@@ -117,7 +117,7 @@ jobs:
           state="$(jq -r .state .governance/r1/result.json)"
           test "$state" = not-applicable && exit 0 || true
           gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
-            -f state="$state" -f context=governance-gate \
+            -f state="$state" -f context=governance-review \
             -f description="$(jq -r .reason .governance/r1/result.json)"
           touch .governance/r1/final-status-emitted
       - name: Publish terminal evaluation error
@@ -131,6 +131,6 @@ jobs:
           head="$(jq -r .head.sha .governance/r1/pr.json)"
           if [ ! -e .governance/r1/final-status-emitted ]; then
            gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
-             -f state=error -f context=governance-gate \
+             -f state=error -f context=governance-review \
              -f description='R1 evaluation or publication failed; inspect workflow diagnostics'
           fi
