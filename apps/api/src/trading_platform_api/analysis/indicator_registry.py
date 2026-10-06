@@ -23,6 +23,7 @@ class IndicatorCategory(StrEnum):
     PRICE_ACTION = "price-action"
     VOLUME_CONFIRMATION = "volume-confirmation"
     WYCKOFF = "wyckoff"
+    FIBONACCI = "fibonacci"
 
 
 class IndicatorPhase(StrEnum):
@@ -769,6 +770,70 @@ _SPOT_WYCKOFF_METADATA = IndicatorMetadata(
     phase=IndicatorPhase.VALIDATED,
 )
 
+_SPOT_FIBONACCI_METADATA = IndicatorMetadata(
+    indicator_id="spot-fibonacci",
+    metadata_version="1",
+    calculation_version="spot-fibonacci-v1",
+    display_name="Spot Fibonacci",
+    category=IndicatorCategory.FIBONACCI,
+    purpose=(
+        "Calculate caller-selected Decimal reference levels and fixed-anchor groups "
+        "from confirmed same-timeframe #56 pivots. Retracement ratios: "
+        "{0.236,0.382,0.500,0.618,0.786,1.000}; extensions: {1.272,1.618,2.618}. "
+        "Levels are descriptive and highly correlated, not predictive."
+    ),
+    inputs=(
+        "C-001:closed-spot-ohlcv.open",
+        "C-001:closed-spot-ohlcv.high",
+        "C-001:closed-spot-ohlcv.low",
+        "C-001:closed-spot-ohlcv.close",
+        "C-002:snapshot",
+        "C-003:quality",
+        "spot-market-structure:exact-versioned-output",
+        "spot-market-structure:C-008-evidence",
+    ),
+    timeframes=_SPOT_TIMEFRAMES,
+    parameters=(
+        ParameterMetadata("maximum-output-records", "records", 32, 1, 10000),
+        ParameterMetadata("maximum-consecutive-closes", "candles", 500, 1, 500),
+    ),
+    minimum_warmup_candles=3,
+    output_unit="input-price-unit",
+    output_schema=(
+        "Policy fields: policy_id,version,scale,origin_pivot_id,endpoint_pivot_id,"
+        "retracement_ratios,extension_ratios,confluence_tolerance,invalidation_buffer,"
+        "invalidation_consecutive_close_count [1,500],maximum_output_records "
+        "[1,10000]. Positive finite Decimal tolerances (<=64 digits; abs exponent "
+        "and adjusted <=128). No defaults. Confirmed alternating same-timeframe "
+        "#56 pivots; exact VALID C-001/002/003. C-008/C-068 only. Expiry as_of + "
+        "timeframe; quality before expiry. Fixed-anchor groups; nullable; confidence=0."
+    ),
+    output_nullable=True,
+    timing=IndicatorTiming.CONFIRMATORY,
+    best_regimes=("confirmed-spot-pivots",),
+    weak_regimes=("stale-or-gapped-market", "insufficient-confirmed-pivots"),
+    failure_modes=(
+        "invalid-quality-or-provenance",
+        "stale-or-gapped-market",
+        "non-spot-input",
+        "mismatched-market-structure-or-evidence",
+        "unconfirmed-or-invalid-anchor-selection",
+        "unsupported-or-unregistered-method-version",
+        "invalid-caller-policy",
+        "decimal-precision-or-exponent-limit",
+        "expired-point-in-time-evidence",
+        "bounded-evidence-output-exceeded",
+    ),
+    evidence_independent=False,
+    evidence_dependencies=("spot-ohlcv-price", "confirmed-price-action-pivots"),
+    evidence_graph_role=(
+        "Descriptive, caller-anchored Fibonacci references derived from the same "
+        "Spot OHLCV and pivot pair; levels and clusters are highly correlated, not "
+        "independent confirmations."
+    ),
+    phase=IndicatorPhase.VALIDATED,
+)
+
 
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
@@ -778,6 +843,7 @@ SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
         _MARKET_STRUCTURE_METADATA,
         _SPOT_SMC_METADATA,
         _SPOT_WYCKOFF_METADATA,
+        _SPOT_FIBONACCI_METADATA,
         _ema(20),
         _ema(50),
         replace(
