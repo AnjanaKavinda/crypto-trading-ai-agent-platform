@@ -67,7 +67,7 @@ current-repository implementation contract and an executable readiness status.
 | 053 | 04 Analysis | Trading Intelligence Agent | Support/resistance and price action engine | Chat 5 | 022,033-046 |
 | 054 | 04 Analysis | Trading Intelligence Agent | Market structure engine | Chat 5 | 022,033-046 |
 | 055 | 04 Analysis | Trading Intelligence Agent | Smart Money Concepts engine | Chat 5 | 022,032-036,042-054 |
-| 056 | 04 Analysis | Trading Intelligence Agent | Wyckoff analysis engine | Chat 5 | 022,033-046 |
+| 056 | 04 Analysis | Trading Intelligence Agent | Wyckoff analysis engine | Chat 5 | 022,032-036,042-054 |
 | 057 | 04 Analysis | Trading Intelligence Agent | Fibonacci analysis engine | Chat 5 | 022,033-046 |
 | 058 | 04 Analysis | Trading Intelligence Agent | Order-flow and liquidity analysis engine | Chat 5 | 022,033-046 |
 | 059 | 04 Analysis | Trading Intelligence Agent | Derivatives analysis engine | Chat 5 | 022,033-046 |
