@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
 from hashlib import sha256
@@ -34,10 +34,9 @@ from trading_platform_api.analysis.market_structure import (
     MARKET_STRUCTURE_METHOD_VERSION,
     BreakDirection,
     MarketStructureAnalysis,
-    MarketStructureError,
     MarketStructureScale,
-    StructureEventType,
     StructuralBreak,
+    StructureEventType,
 )
 from trading_platform_api.analysis.price_action import (
     _INTERVALS,
@@ -125,7 +124,9 @@ class SpotSMCPolicy:
                 "minimum_range_multiple", self.minimum_range_multiple
             )
         except (TypeError, ValueError) as exc:
-            raise SpotSMCError("SMC policy decimals must be bounded finite Decimals.") from exc
+            raise SpotSMCError(
+                "SMC policy decimals must be bounded finite Decimals."
+            ) from exc
         if tolerance <= 0:
             raise SpotSMCError("price_tolerance must be strictly positive.")
         if buffer < 0:
@@ -146,9 +147,16 @@ class SpotSMCPolicy:
                 raise SpotSMCError(f"{name} must be in [{minimum}, {maximum}].")
 
 
-_AttributeValue: TypeAlias = str | Decimal | bool | int | UUID | datetime | None | tuple[
-    str | Decimal | UUID | datetime, ...
-]
+_AttributeValue: TypeAlias = (
+    str
+    | Decimal
+    | bool
+    | int
+    | UUID
+    | datetime
+    | None
+    | tuple[str | Decimal | UUID | datetime, ...]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,10 +266,10 @@ class SMCObject:
                 or value.utcoffset() is None
             ):
                 raise SpotSMCError(f"{name} must be timezone-aware.")
-        if self.creation_time > self.available_at or self.available_at > self.as_of:
+        if self.creation_time > self.as_of or self.creation_time > self.available_at:
             raise SpotSMCError("SMC creation and availability times are inconsistent.")
-        if self.as_of > self.expires_at:
-            raise SpotSMCError("SMC observation cannot expire before its cutoff.")
+        if self.available_at > self.expires_at:
+            raise SpotSMCError("SMC observation cannot expire before it is available.")
         if (self.lower_price is None) != (self.upper_price is None):
             raise SpotSMCError("SMC price range bounds must both be present or absent.")
         if self.lower_price is not None and self.upper_price is not None:
@@ -422,7 +430,9 @@ def _validate_structure_input(
         type(structure.evidence) is not EvidenceItem
         or structure.evidence.contract_id != "C-008"
         or structure.evidence.method
-        != VersionReference(MARKET_STRUCTURE_INDICATOR_ID, MARKET_STRUCTURE_METHOD_VERSION)
+        != VersionReference(
+            MARKET_STRUCTURE_INDICATOR_ID, MARKET_STRUCTURE_METHOD_VERSION
+        )
         or structure.evidence.data_quality_report_id != quality.report_id
         or structure.evidence.source_record_ids != snapshot.source_record_ids
         or structure.evidence.quality_status is not DataQualityStatus.VALID
@@ -456,7 +466,10 @@ def _validate_structure_input(
         raise SpotSMCError("Exact #56 method is not validated for this timeframe.")
     try:
         encoded = structure.evidence.value
-        if type(encoded) is not str or len(encoded.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+        if (
+            type(encoded) is not str
+            or len(encoded.encode("utf-8")) > MAX_DOCUMENT_BYTES
+        ):
             raise SpotSMCError("#56 C-008 evidence is invalid or oversized.")
         payload = json.loads(encoded)
         if (
@@ -499,11 +512,16 @@ def _validate_structure_input(
             raise SpotSMCError("#56 C-008 evidence differs from its exact output.")
     except SpotSMCError:
         raise
-    except (UnicodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as exc:
         raise SpotSMCError("#56 C-008 evidence is invalid.") from exc
-    if (
-        type(structure.events) is not tuple
-        or not all(type(event) is StructuralBreak for event in structure.events)
+    if type(structure.events) is not tuple or not all(
+        type(event) is StructuralBreak for event in structure.events
     ):
         raise SpotSMCError("#56 events must be an immutable exact output tuple.")
 
@@ -518,6 +536,7 @@ def _object(
     lower_price: Decimal | None,
     upper_price: Decimal | None,
     creation_time: datetime,
+    available_at: datetime | None = None,
     source_market_data_ids: tuple[UUID, ...],
     source_pivot_ids: tuple[UUID, ...],
     source_event_ids: tuple[UUID, ...],
@@ -552,7 +571,7 @@ def _object(
         lower_price=lower_price,
         upper_price=upper_price,
         creation_time=creation_time,
-        available_at=creation_time,
+        available_at=available_at or creation_time,
         as_of=snapshot.as_of,
         source_market_data_ids=source_market_data_ids,
         source_pivot_ids=source_pivot_ids,
@@ -573,18 +592,16 @@ def _object(
     )
 
 
-def _penetration(
-    *, proximal: Decimal, far: Decimal, extreme: Decimal
-) -> Decimal:
+def _penetration(*, proximal: Decimal, far: Decimal, extreme: Decimal) -> Decimal:
     width = abs(proximal - far)
     if width == 0:
-        beyond_proximal = extreme <= proximal if proximal >= far else extreme >= proximal
+        beyond_proximal = (
+            extreme <= proximal if proximal >= far else extreme >= proximal
+        )
         return Decimal(100) if beyond_proximal else Decimal(0)
     with localcontext() as context:
         context.prec = _RATIO_PRECISION
-        raw_distance = (
-            proximal - extreme if proximal > far else extreme - proximal
-        )
+        raw_distance = proximal - extreme if proximal > far else extreme - proximal
         distance = min(width, max(Decimal(0), raw_distance))
         return distance / width * Decimal(100)
 
@@ -615,6 +632,7 @@ def _fvg_objects(
             continue
         maximum_fill = Decimal(0)
         state = "active"
+        available_at = third.end
         lifecycle_ids: list[UUID] = []
         for later in candles[index + 1 :]:
             lifecycle_comparisons += 1
@@ -632,12 +650,14 @@ def _fvg_objects(
             if beyond_far_edge:
                 state = "invalidated"
                 maximum_fill = Decimal(100)
+                available_at = later.end
                 break
             if maximum_fill == Decimal(100):
                 state = "filled"
-                break
             if maximum_fill > 0:
-                state = "partially-filled"
+                if state != "filled":
+                    state = "partially-filled"
+            available_at = later.end
         rule = (
             "Bullish FVG when third closed candle low is strictly above first "
             "closed candle high; bearish FVG when third high is strictly below "
@@ -653,6 +673,7 @@ def _fvg_objects(
                 lower_price=lower,
                 upper_price=upper,
                 creation_time=third.end,
+                available_at=available_at,
                 source_market_data_ids=(
                     first.observation.market_data_id,
                     candles[index - 1].observation.market_data_id,
@@ -673,7 +694,9 @@ def _fvg_objects(
                 ),
                 details=(
                     SMCAttribute("direction", direction),
-                    SMCAttribute("creation_candle_id", third.observation.market_data_id),
+                    SMCAttribute(
+                        "creation_candle_id", third.observation.market_data_id
+                    ),
                     SMCAttribute("proximal_edge", proximal),
                     SMCAttribute("far_edge", far),
                     SMCAttribute("maximum_wick_fill_percentage", maximum_fill),
@@ -695,7 +718,10 @@ def _liquidity_objects(
     policy: SpotSMCPolicy,
     supporting_evidence_ids: tuple[UUID, ...],
     expires_at: datetime,
+    output_records_already_built: int,
 ) -> list[SMCObject]:
+    if output_records_already_built > policy.maximum_output_records:
+        raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
     areas: list[SMCObject] = []
     pivots = tuple(swing.pivot for swing in structure.swings)
     for kind in (PivotKind.HIGH, PivotKind.LOW):
@@ -718,11 +744,20 @@ def _liquidity_objects(
         for group in groups:
             if len(group) < policy.minimum_pivot_count:
                 continue
+            if (
+                output_records_already_built + len(areas)
+                >= policy.maximum_output_records
+            ):
+                raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
             typed_group = tuple(group)
             prices = tuple(item.price for item in typed_group)
             creation_time = max(item.confirmation_time for item in typed_group)
             lower, upper = min(prices), max(prices)
-            subtype = "potential-high-side-area" if kind is PivotKind.HIGH else "potential-low-side-area"
+            subtype = (
+                "potential-high-side-area"
+                if kind is PivotKind.HIGH
+                else "potential-low-side-area"
+            )
             area = _object(
                 category="liquidity",
                 subtype=subtype,
@@ -733,9 +768,7 @@ def _liquidity_objects(
                 upper_price=upper,
                 creation_time=creation_time,
                 source_market_data_ids=tuple(
-                    dict.fromkeys(
-                        item.source_market_data_id for item in typed_group
-                    )
+                    dict.fromkeys(item.source_market_data_id for item in typed_group)
                 ),
                 source_pivot_ids=tuple(item.pivot_id for item in typed_group),
                 source_event_ids=(),
@@ -756,16 +789,24 @@ def _liquidity_objects(
                 details=(
                     SMCAttribute("pivot_kind", kind.value),
                     SMCAttribute("anchor_price", typed_group[0].price),
-                    SMCAttribute("pivot_ids", tuple(item.pivot_id for item in typed_group)),
+                    SMCAttribute(
+                        "pivot_ids", tuple(item.pivot_id for item in typed_group)
+                    ),
                     SMCAttribute(
                         "pivot_prices",
                         tuple(item.price for item in typed_group),
                     ),
-                    SMCAttribute("pivot_source_times", tuple(item.source_time for item in typed_group)),
+                    SMCAttribute(
+                        "pivot_source_times",
+                        tuple(item.source_time for item in typed_group),
+                    ),
                 ),
             )
             areas.append(area)
-            if len(areas) > policy.maximum_output_records:
+            if (
+                output_records_already_built + len(areas)
+                > policy.maximum_output_records
+            ):
                 raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
     if len(areas) * len(candles) > _MAX_SWEEP_COMPARISONS:
         raise SpotSMCError("Potential-liquidity sweep work exceeds its bounded limit.")
@@ -794,6 +835,11 @@ def _liquidity_objects(
                 side = "low-side"
             if not qualifies:
                 continue
+            if (
+                output_records_already_built + len(areas) + len(sweeps)
+                >= policy.maximum_output_records
+            ):
+                raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
             sweeps.append(
                 _object(
                     category="liquidity",
@@ -827,7 +873,9 @@ def _liquidity_objects(
                     details=(
                         SMCAttribute("area_id", area.object_id),
                         SMCAttribute("side", side),
-                        SMCAttribute("source_candle_id", candle.observation.market_data_id),
+                        SMCAttribute(
+                            "source_candle_id", candle.observation.market_data_id
+                        ),
                         SMCAttribute("extreme", extreme),
                         SMCAttribute("wick_depth", depth),
                         SMCAttribute("close", candle.close),
@@ -836,8 +884,6 @@ def _liquidity_objects(
                     ),
                 )
             )
-    if len(areas) + len(sweeps) > policy.maximum_output_records:
-        raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
     return areas + sweeps
 
 
@@ -930,7 +976,9 @@ def _displacement_objects(
         history = tuple(
             item.observation.market_data_id
             for item in candles[
-                max(0, measure.candle_index - policy.displacement_lookback) : measure.candle_index
+                max(
+                    0, measure.candle_index - policy.displacement_lookback
+                ) : measure.candle_index
             ]
         )
         result.append(
@@ -968,7 +1016,10 @@ def _displacement_objects(
                 ),
                 details=(
                     SMCAttribute("source_candle_id", candle.observation.market_data_id),
-                    SMCAttribute("direction", measure.direction.value if measure.direction else None),
+                    SMCAttribute(
+                        "direction",
+                        measure.direction.value if measure.direction else None,
+                    ),
                     SMCAttribute("body", abs(candle.close - candle.opening)),
                     SMCAttribute("range", measure.range_value),
                     SMCAttribute("body_fraction", measure.body_fraction),
@@ -991,9 +1042,10 @@ def _structure_event_objects(
     price_unit: str,
     policy: SpotSMCPolicy,
     expires_at: datetime,
-) -> tuple[list[SMCObject], dict[UUID, tuple[StructuralBreak, UUID]]]:
+    output_records_already_built: int,
+) -> tuple[list[SMCObject], dict[UUID, tuple[StructuralBreak, int]]]:
     result: list[SMCObject] = []
-    event_map: dict[UUID, tuple[StructuralBreak, UUID]] = {}
+    event_map: dict[UUID, tuple[StructuralBreak, int]] = {}
     data_index = {
         candle.observation.market_data_id: index for index, candle in enumerate(candles)
     }
@@ -1005,6 +1057,8 @@ def _structure_event_objects(
         }.get(event.event_type)
         if category is None:
             continue
+        if output_records_already_built + len(result) >= policy.maximum_output_records:
+            raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
         if (
             event.instrument_id != snapshot.instrument_id
             or event.venue_id != snapshot.venue_id
@@ -1054,14 +1108,23 @@ def _structure_event_objects(
                     SMCAttribute("source_event_type", event.event_type.value),
                     SMCAttribute("source_scale", event.scale.value),
                     SMCAttribute("source_direction", event.direction.value),
-                    SMCAttribute("source_market_structure_evidence_id", structure.evidence.evidence_id),
+                    SMCAttribute(
+                        "source_market_structure_evidence_id",
+                        structure.evidence.evidence_id,
+                    ),
                     SMCAttribute("reference_price", event.reference_price),
                     SMCAttribute("confirming_close", event.confirming_close),
-                    SMCAttribute("confirming_market_data_id", event.confirming_market_data_id),
-                    SMCAttribute("confirming_candle_time", event.confirming_candle_time),
+                    SMCAttribute(
+                        "confirming_market_data_id", event.confirming_market_data_id
+                    ),
+                    SMCAttribute(
+                        "confirming_candle_time", event.confirming_candle_time
+                    ),
                     SMCAttribute("confirmation_time", event.confirmation_time),
                     SMCAttribute("break_buffer", event.break_buffer),
-                    SMCAttribute("consecutive_close_count", event.consecutive_close_count),
+                    SMCAttribute(
+                        "consecutive_close_count", event.consecutive_close_count
+                    ),
                     SMCAttribute("prior_state", event.prior_state.value),
                 ),
             )
@@ -1080,13 +1143,24 @@ def _order_block_objects(
     policy: SpotSMCPolicy,
     supporting_evidence_ids: tuple[UUID, ...],
     expires_at: datetime,
+    output_records_already_built: int,
 ) -> list[SMCObject]:
     result: list[SMCObject] = []
+    lifecycle_comparisons = 0
+
+    def append_bounded(record: SMCObject) -> None:
+        if output_records_already_built + len(result) >= policy.maximum_output_records:
+            raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
+        result.append(record)
+
     for event_id, (event, final_index) in events.items():
         final_measure = measures[final_index]
         expected_direction = event.direction
-        if not final_measure.qualifies or final_measure.direction is not expected_direction:
-            result.append(
+        if (
+            not final_measure.qualifies
+            or final_measure.direction is not expected_direction
+        ):
+            append_bounded(
                 _object(
                     category="order-block",
                     subtype="unavailable-no-confirming-displacement",
@@ -1114,7 +1188,9 @@ def _order_block_objects(
                         "meets the exact caller displacement policy and event direction."
                     ),
                     details=(
-                        SMCAttribute("reason", "final-confirming-candle-not-displacement"),
+                        SMCAttribute(
+                            "reason", "final-confirming-candle-not-displacement"
+                        ),
                         SMCAttribute("source_event_id", event_id),
                         SMCAttribute("source_event_type", event.event_type.value),
                         SMCAttribute("expected_direction", expected_direction.value),
@@ -1124,19 +1200,25 @@ def _order_block_objects(
             continue
         first_run_index = final_index - event.consecutive_close_count + 1
         if first_run_index < 0:
-            continue
+            raise SpotSMCError(
+                "#56 event confirmation run precedes its source candles."
+            )
         lower_search = max(0, first_run_index - policy.order_block_lookback)
-        candidates = [
-            index
-            for index in range(lower_search, first_run_index)
+        candidates = []
+        for index in range(lower_search, first_run_index):
+            lifecycle_comparisons += 1
+            if lifecycle_comparisons > _MAX_LIFECYCLE_COMPARISONS:
+                raise SpotSMCError(
+                    "Order-block lookback work exceeds its bounded limit."
+                )
             if (
                 candles[index].close < candles[index].opening
                 if expected_direction is BreakDirection.UP
                 else candles[index].close > candles[index].opening
-            )
-        ]
+            ):
+                candidates.append(index)
         if not candidates:
-            result.append(
+            append_bounded(
                 _object(
                     category="order-block",
                     subtype="unavailable-no-opposing-body",
@@ -1185,9 +1267,15 @@ def _order_block_objects(
         lifecycle_ids: list[UUID] = []
         status = "active"
         invalidated_at: _Candle | None = None
-        for later in candles:
-            if later.end <= event.confirmation_time:
-                continue
+        invalidated_index: int | None = None
+        available_at = snapshot.as_of
+        for later_index in range(final_index + 1, len(candles)):
+            lifecycle_comparisons += 1
+            if lifecycle_comparisons > _MAX_LIFECYCLE_COMPARISONS:
+                raise SpotSMCError(
+                    "Order-block lifecycle work exceeds its bounded limit."
+                )
+            later = candles[later_index]
             lifecycle_ids.append(later.observation.market_data_id)
             extreme = later.low if bullish else later.high
             maximum_mitigation = max(
@@ -1199,6 +1287,8 @@ def _order_block_objects(
                 status = "invalidated"
                 maximum_mitigation = Decimal(100)
                 invalidated_at = later
+                invalidated_index = later_index
+                available_at = later.end
                 break
             status = (
                 "fully-mitigated"
@@ -1214,6 +1304,10 @@ def _order_block_objects(
             "before the event's first consecutive-close confirmation candle; zone "
             "is the full source candle low-high range."
         )
+        selection_ids = tuple(
+            candles[index].observation.market_data_id
+            for index in range(lower_search, first_run_index)
+        )
         block = _object(
             category="order-block",
             subtype=direction_name,
@@ -1223,9 +1317,11 @@ def _order_block_objects(
             lower_price=lower,
             upper_price=upper,
             creation_time=event.confirmation_time,
+            available_at=available_at,
             source_market_data_ids=tuple(
                 dict.fromkeys(
                     (
+                        *selection_ids,
                         origin.observation.market_data_id,
                         event.confirming_market_data_id,
                         *lifecycle_ids,
@@ -1254,14 +1350,24 @@ def _order_block_objects(
                 SMCAttribute("source_event_type", event.event_type.value),
                 SMCAttribute("source_scale", event.scale.value),
                 SMCAttribute("source_direction", event.direction.value),
-                SMCAttribute("first_confirmation_run_candle_id", candles[first_run_index].observation.market_data_id),
+                SMCAttribute(
+                    "first_confirmation_run_candle_id",
+                    candles[first_run_index].observation.market_data_id,
+                ),
                 SMCAttribute("proximal_edge", proximal),
                 SMCAttribute("far_edge", far),
-                SMCAttribute("invalidating_candle_id", invalidated_at.observation.market_data_id if invalidated_at else None),
-                SMCAttribute("transition_time", invalidated_at.end if invalidated_at else None),
+                SMCAttribute(
+                    "invalidating_candle_id",
+                    invalidated_at.observation.market_data_id
+                    if invalidated_at
+                    else None,
+                ),
+                SMCAttribute(
+                    "transition_time", invalidated_at.end if invalidated_at else None
+                ),
             ),
         )
-        result.append(block)
+        append_bounded(block)
         if invalidated_at is None:
             continue
         breaker_bullish = not bullish
@@ -1272,15 +1378,22 @@ def _order_block_objects(
         breaker_status = "active"
         breaker_mitigation = Decimal(0)
         breaker_ids: list[UUID] = []
-        for later in candles:
-            if later.end <= invalidated_at.end:
-                continue
+        breaker_invalidated_at: _Candle | None = None
+        assert invalidated_index is not None
+        breaker_available_at = snapshot.as_of
+        for later_index in range(invalidated_index + 1, len(candles)):
+            lifecycle_comparisons += 1
+            if lifecycle_comparisons > _MAX_LIFECYCLE_COMPARISONS:
+                raise SpotSMCError("Breaker lifecycle work exceeds its bounded limit.")
+            later = candles[later_index]
             breaker_ids.append(later.observation.market_data_id)
             close_invalidates = (
                 later.close < lower if breaker_bullish else later.close > upper
             )
             if close_invalidates:
                 breaker_status = "invalidated"
+                breaker_invalidated_at = later
+                breaker_available_at = later.end
                 break
             intersects = later.high >= lower and later.low <= upper
             if intersects:
@@ -1294,7 +1407,7 @@ def _order_block_objects(
                     ),
                 )
                 breaker_status = "mitigated"
-        result.append(
+        append_bounded(
             _object(
                 category="breaker-block",
                 subtype=breaker_direction,
@@ -1304,6 +1417,7 @@ def _order_block_objects(
                 lower_price=lower,
                 upper_price=upper,
                 creation_time=invalidated_at.end,
+                available_at=breaker_available_at,
                 source_market_data_ids=tuple(
                     dict.fromkeys(
                         (
@@ -1332,11 +1446,24 @@ def _order_block_objects(
                 ),
                 details=(
                     SMCAttribute("origin_order_block_id", block.object_id),
-                    SMCAttribute("transition_candle_id", invalidated_at.observation.market_data_id),
+                    SMCAttribute(
+                        "transition_candle_id",
+                        invalidated_at.observation.market_data_id,
+                    ),
                     SMCAttribute("transition_time", invalidated_at.end),
                     SMCAttribute("direction", breaker_direction),
                     SMCAttribute("mitigation_percentage", breaker_mitigation),
                     SMCAttribute("origin_event_id", event_id),
+                    SMCAttribute(
+                        "invalidating_candle_id",
+                        breaker_invalidated_at.observation.market_data_id
+                        if breaker_invalidated_at
+                        else None,
+                    ),
+                    SMCAttribute(
+                        "invalidation_time",
+                        breaker_invalidated_at.end if breaker_invalidated_at else None,
+                    ),
                 ),
             )
         )
@@ -1362,8 +1489,16 @@ def _premium_discount_object(
     )
     highs = [pivot for pivot in pivots if pivot.kind is PivotKind.HIGH]
     lows = [pivot for pivot in pivots if pivot.kind is PivotKind.LOW]
-    high_pivot = max(highs, key=lambda item: (item.confirmation_time, item.source_time)) if highs else None
-    low_pivot = max(lows, key=lambda item: (item.confirmation_time, item.source_time)) if lows else None
+    high_pivot = (
+        max(highs, key=lambda item: (item.confirmation_time, item.source_time))
+        if highs
+        else None
+    )
+    low_pivot = (
+        max(lows, key=lambda item: (item.confirmation_time, item.source_time))
+        if lows
+        else None
+    )
     last = candles[-1]
     if high_pivot is None or low_pivot is None:
         state, reason, midpoint, lower, upper = (
@@ -1401,7 +1536,11 @@ def _premium_discount_object(
         dict.fromkeys(
             (
                 last.observation.market_data_id,
-                *(pivot.source_market_data_id for pivot in (high_pivot, low_pivot) if pivot),
+                *(
+                    pivot.source_market_data_id
+                    for pivot in (high_pivot, low_pivot)
+                    if pivot
+                ),
             )
         )
     )
@@ -1433,12 +1572,22 @@ def _premium_discount_object(
         ),
         details=(
             SMCAttribute("unavailable_reason", reason),
-            SMCAttribute("external_high_pivot_id", high_pivot.pivot_id if high_pivot else None),
-            SMCAttribute("external_high_price", high_pivot.price if high_pivot else None),
-            SMCAttribute("external_high_time", high_pivot.source_time if high_pivot else None),
-            SMCAttribute("external_low_pivot_id", low_pivot.pivot_id if low_pivot else None),
+            SMCAttribute(
+                "external_high_pivot_id", high_pivot.pivot_id if high_pivot else None
+            ),
+            SMCAttribute(
+                "external_high_price", high_pivot.price if high_pivot else None
+            ),
+            SMCAttribute(
+                "external_high_time", high_pivot.source_time if high_pivot else None
+            ),
+            SMCAttribute(
+                "external_low_pivot_id", low_pivot.pivot_id if low_pivot else None
+            ),
             SMCAttribute("external_low_price", low_pivot.price if low_pivot else None),
-            SMCAttribute("external_low_time", low_pivot.source_time if low_pivot else None),
+            SMCAttribute(
+                "external_low_time", low_pivot.source_time if low_pivot else None
+            ),
             SMCAttribute("midpoint", midpoint),
             SMCAttribute("last_closed_price", last.close),
         ),
@@ -1468,11 +1617,15 @@ def _evidence_contract(
     try:
         expires_at = quality.assessed_at + interval
     except OverflowError as exc:
-        raise SpotSMCError("Spot SMC evidence expiry exceeds timestamp bounds.") from exc
+        raise SpotSMCError(
+            "Spot SMC evidence expiry exceeds timestamp bounds."
+        ) from exc
     return EvidenceItem(
         evidence_id=evidence_id,
         source_record_ids=snapshot.source_record_ids,
-        dataset_versions=(snapshot.dataset_version,) if snapshot.dataset_version else (),
+        dataset_versions=(snapshot.dataset_version,)
+        if snapshot.dataset_version
+        else (),
         feature_ids=(),
         classification=ClaimClassification.FACT,
         relation=EvidenceRelation.NEUTRAL,
@@ -1525,7 +1678,9 @@ def calculate_spot_smc(
         or len(observations) > _MAX_CANDLES
         or not all(type(item) is MarketData for item in observations)
     ):
-        raise SpotSMCError("Canonical bounded snapshot, quality and candles are required.")
+        raise SpotSMCError(
+            "Canonical bounded snapshot, quality and candles are required."
+        )
     if type(policy) is not SpotSMCPolicy:
         raise SpotSMCError("An explicit immutable caller policy is required.")
     if type(timeframe) is not str or timeframe not in _INTERVALS:
@@ -1533,9 +1688,7 @@ def calculate_spot_smc(
     if type(metadata_version) is not str:
         raise SpotSMCError("metadata_version must be an exact version string.")
     try:
-        metadata = SPOT_RESEARCH_INDICATORS.get(
-            SPOT_SMC_INDICATOR_ID, metadata_version
-        )
+        metadata = SPOT_RESEARCH_INDICATORS.get(SPOT_SMC_INDICATOR_ID, metadata_version)
     except (IndicatorMetadataError, TypeError) as exc:
         raise SpotSMCError("Unknown exact Spot SMC metadata version.") from exc
     if (
@@ -1603,16 +1756,6 @@ def calculate_spot_smc(
             supporting_evidence_ids=support_evidence_ids,
             expires_at=expiry,
         )
-        liquidity = _liquidity_objects(
-            structure=market_structure,
-            candles=candle_tuple,
-            snapshot=snapshot,
-            timeframe=timeframe,
-            price_unit=price_unit,
-            policy=policy,
-            supporting_evidence_ids=support_evidence_ids,
-            expires_at=expiry,
-        )
         displacements = _displacement_measures(candles=candle_tuple, policy=policy)
         displacement_records = _displacement_objects(
             candles=candle_tuple,
@@ -1624,6 +1767,9 @@ def calculate_spot_smc(
             supporting_evidence_ids=support_evidence_ids,
             expires_at=expiry,
         )
+        output_records_already_built = len(fvg) + len(displacement_records) + 1
+        if output_records_already_built > policy.maximum_output_records:
+            raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
         structure_objects, events = _structure_event_objects(
             structure=market_structure,
             candles=candle_tuple,
@@ -1632,7 +1778,31 @@ def calculate_spot_smc(
             price_unit=price_unit,
             policy=policy,
             expires_at=expiry,
+            output_records_already_built=output_records_already_built,
         )
+        output_records_already_built += len(structure_objects)
+        premium_discount = _premium_discount_object(
+            structure=market_structure,
+            candles=candle_tuple,
+            snapshot=snapshot,
+            timeframe=timeframe,
+            price_unit=price_unit,
+            policy=policy,
+            supporting_evidence_ids=support_evidence_ids,
+            expires_at=expiry,
+        )
+        liquidity = _liquidity_objects(
+            structure=market_structure,
+            candles=candle_tuple,
+            snapshot=snapshot,
+            timeframe=timeframe,
+            price_unit=price_unit,
+            policy=policy,
+            supporting_evidence_ids=support_evidence_ids,
+            expires_at=expiry,
+            output_records_already_built=output_records_already_built,
+        )
+        output_records_already_built += len(liquidity)
         order_blocks = _order_block_objects(
             events=events,
             candles=candle_tuple,
@@ -1643,16 +1813,7 @@ def calculate_spot_smc(
             policy=policy,
             supporting_evidence_ids=support_evidence_ids,
             expires_at=expiry,
-        )
-        premium_discount = _premium_discount_object(
-            structure=market_structure,
-            candles=candle_tuple,
-            snapshot=snapshot,
-            timeframe=timeframe,
-            price_unit=price_unit,
-            policy=policy,
-            supporting_evidence_ids=support_evidence_ids,
-            expires_at=expiry,
+            output_records_already_built=output_records_already_built,
         )
     objects = tuple(
         sorted(
@@ -1670,6 +1831,24 @@ def calculate_spot_smc(
                 item.object_id.hex,
             ),
         )
+    )
+    data_availability = {
+        item.market_data_id: item.availability_time for item in observations
+    }
+    objects = tuple(
+        replace(
+            item,
+            available_at=max(
+                (
+                    quality.assessed_at,
+                    *(
+                        data_availability[source_id]
+                        for source_id in item.source_market_data_ids
+                    ),
+                )
+            ),
+        )
+        for item in objects
     )
     if len(objects) > policy.maximum_output_records:
         raise SpotSMCError("Spot SMC output exceeds the caller policy bound.")
@@ -1713,7 +1892,9 @@ def calculate_spot_smc(
             value=f"{item.subtype}:{item.object_id}",
             unit=item.price_unit,
             timeframe=timeframe,
-            calculation=VersionReference(metadata.indicator_id, metadata.calculation_version),
+            calculation=VersionReference(
+                metadata.indicator_id, metadata.calculation_version
+            ),
             evidence_ids=evidence_ids,
         )
         for item in objects

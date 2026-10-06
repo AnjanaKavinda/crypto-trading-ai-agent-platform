@@ -3,7 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
-from test_market_structure import HIGHS, LOWS, _analyze, _policies
+from test_market_structure import HIGHS, _analyze, _policies
 from trading_platform_api.analysis import (
     BreakDirection,
     MarketStructurePolicy,
@@ -38,9 +38,11 @@ def _inputs(
     overrides: dict[int, tuple[str, str, str, str]] | None = None,
     *,
     break_count: int = 1,
+    availability_delays: dict[int, timedelta] | None = None,
 ):
     snapshot, original, quality, internal, external, *_ = _analyze()
     overrides = overrides or {}
+    availability_delays = availability_delays or {}
     candles = []
     for index, candle in enumerate(original):
         metrics = {metric.metric_name: metric for metric in candle.metrics}
@@ -53,6 +55,8 @@ def _inputs(
         candles.append(
             replace(
                 candle,
+                availability_time=candle.availability_time
+                + availability_delays.get(index, timedelta(0)),
                 metrics=tuple(
                     replace(
                         metric,
@@ -108,9 +112,12 @@ def _calculate(
     *,
     policy: SpotSMCPolicy | None = None,
     break_count: int = 1,
+    availability_delays: dict[int, timedelta] | None = None,
 ):
     snapshot, observations, quality, structure = _inputs(
-        overrides, break_count=break_count
+        overrides,
+        break_count=break_count,
+        availability_delays=availability_delays,
     )
     result = calculate_spot_smc(
         snapshot=snapshot,
@@ -128,9 +135,7 @@ def _details(record):
 
 
 def _area_source(area, structure):
-    pivot_map = {
-        swing.pivot.pivot_id: swing.pivot for swing in structure.swings
-    }
+    pivot_map = {swing.pivot.pivot_id: swing.pivot for swing in structure.swings}
     return tuple(
         sorted(
             (
@@ -152,11 +157,18 @@ def _fvg_for_creation(result, candle_id):
     )
 
 
-def _fvg_overrides(third_low: str = "13", later: tuple[str, str, str, str] | None = None):
+def _fvg_overrides(
+    third_low: str = "13", later: tuple[str, str, str, str] | None = None
+):
     bars = {
         0: ("9", "10", "8", "9"),
         1: ("11", "12", "10", "11"),
-        2: ("13.5", "14", third_low, "13.8" if Decimal(third_low) < Decimal("13.8") else third_low),
+        2: (
+            "13.5",
+            "14",
+            third_low,
+            "13.8" if Decimal(third_low) < Decimal("13.8") else third_low,
+        ),
     }
     for index in range(3, len(HIGHS)):
         bars[index] = ("30", "31", "30", "30.5")
@@ -166,7 +178,7 @@ def _fvg_overrides(third_low: str = "13", later: tuple[str, str, str, str] | Non
 
 
 def test_fvg_strict_gap_boundary_and_creation_candle_no_lookahead():
-    _, observations, _, _, result = _calculate(_fvg_overrides())
+    snapshot, observations, _, _, result = _calculate(_fvg_overrides())
     bullish = _fvg_for_creation(result, observations[2].market_data_id)
     assert (bullish.lower_price, bullish.upper_price) == (
         Decimal("10"),
@@ -175,12 +187,12 @@ def test_fvg_strict_gap_boundary_and_creation_candle_no_lookahead():
     assert bullish.lifecycle_state == "active"
     assert bullish.mitigation_percentage == Decimal(0)
     assert bullish.creation_time == observations[2].event_time + timedelta(minutes=1)
+    assert bullish.available_at == snapshot.as_of
 
     _, equal_observations, _, _, equal = _calculate(_fvg_overrides("10"))
     assert not any(
         item.category == "fair-value-gap"
-        and _details(item)["creation_candle_id"]
-        == equal_observations[2].market_data_id
+        and _details(item)["creation_candle_id"] == equal_observations[2].market_data_id
         for item in equal.objects
     )
 
@@ -193,11 +205,43 @@ def test_fvg_strict_gap_boundary_and_creation_candle_no_lookahead():
         (("15", "32", "9", "9.5"), "invalidated", Decimal("100")),
     ),
 )
-def test_fvg_lifecycle_wick_fill_and_close_invalidation(later, expected_state, expected_fill):
+def test_fvg_lifecycle_wick_fill_and_close_invalidation(
+    later, expected_state, expected_fill
+):
     _, observations, _, _, result = _calculate(_fvg_overrides(later=later))
     fvg = _fvg_for_creation(result, observations[2].market_data_id)
     assert fvg.lifecycle_state == expected_state
     assert fvg.mitigation_percentage == expected_fill
+    if expected_state == "invalidated":
+        assert fvg.available_at == quality.assessed_at
+    else:
+        assert fvg.available_at == observations[-1].event_time + timedelta(minutes=1)
+
+
+def test_filled_fvg_remains_observed_until_later_close_invalidation():
+    bars = _fvg_overrides(later=("15", "32", "10", "11"))
+    bars[4] = ("15", "32", "9", "9.5")
+    _, observations, _, _, result = _calculate(bars)
+    fvg = _fvg_for_creation(result, observations[2].market_data_id)
+    assert fvg.lifecycle_state == "invalidated"
+    assert fvg.mitigation_percentage == Decimal(100)
+    assert fvg.available_at == quality.assessed_at
+
+
+def test_lifecycle_availability_includes_delayed_market_data_and_quality():
+    _, observations, quality, _, result = _calculate(
+        _fvg_overrides(later=("15", "32", "11.5", "15")),
+        availability_delays={3: timedelta(seconds=90)},
+    )
+    fvg = _fvg_for_creation(result, observations[2].market_data_id)
+    data_by_id = {item.market_data_id: item for item in observations}
+    latest_source_availability = max(
+        data_by_id[source_id].availability_time
+        for source_id in fvg.source_market_data_ids
+    )
+    assert fvg.available_at == quality.assessed_at
+    assert fvg.available_at >= latest_source_availability
+    assert fvg.available_at > observations[3].event_time + timedelta(minutes=1)
 
 
 def test_displacement_requires_full_prior_history_and_exact_thresholds():
@@ -270,6 +314,7 @@ def test_order_block_uses_linked_displacement_event_and_breaker_retest_lifecycle
     assert (block.lower_price, block.upper_price) == (Decimal("13"), Decimal("16"))
     assert block.lifecycle_state == "invalidated"
     assert block.mitigation_percentage == Decimal(100)
+    assert block.available_at == result.assessment.available_at
     assert block.source_event_ids
     breaker = next(
         item
@@ -280,6 +325,7 @@ def test_order_block_uses_linked_displacement_event_and_breaker_retest_lifecycle
     assert breaker.subtype == "bearish"
     assert breaker.lifecycle_state == "mitigated"
     assert breaker.mitigation_percentage > 0
+    assert breaker.available_at == result.assessment.available_at
     assert _details(breaker)["transition_candle_id"] == observations[18].market_data_id
     assert _details(breaker)["origin_event_id"] == block.source_event_ids[0]
 
@@ -327,8 +373,7 @@ def test_potential_liquidity_groups_same_kind_on_a_fixed_anchor_with_lineage():
     areas = [
         item
         for item in result.objects
-        if item.category == "liquidity"
-        and item.subtype.startswith("potential-")
+        if item.category == "liquidity" and item.subtype.startswith("potential-")
     ]
     assert areas
     for area in areas:
@@ -480,12 +525,40 @@ def test_smc_fails_closed_for_quality_lineage_policy_metadata_and_output_bounds(
         calculate_spot_smc(**{**args, "observations": tuple(gapped)})
 
 
+def test_liquidity_sweeps_stop_at_the_caller_output_bound():
+    policy = _policy(price_tolerance=Decimal("0.1"), sweep_buffer=Decimal(0))
+    _, _, _, _, baseline = _calculate(policy=policy)
+    areas = sum(
+        item.category == "liquidity" and item.subtype.startswith("potential-")
+        for item in baseline.objects
+    )
+    sweeps = sum(
+        item.category == "liquidity" and item.subtype == "liquidity-sweep"
+        for item in baseline.objects
+    )
+    assert areas and sweeps
+    baseline_count = sum(
+        item.category
+        in {
+            "fair-value-gap",
+            "displacement",
+            "bos",
+            "choch",
+            "mss",
+            "premium-discount",
+        }
+        for item in baseline.objects
+    )
+    cap = baseline_count
+    assert cap + areas < policy.maximum_output_records
+    with pytest.raises(SpotSMCError, match="caller policy bound"):
+        _calculate(policy=replace(policy, maximum_output_records=cap + areas))
+
+
 def test_external_premium_discount_anchor_and_midpoint_boundaries():
     snapshot, observations, quality, structure = _inputs()
     external = [
-        swing.pivot
-        for swing in structure.swings
-        if swing.scale.value == "external"
+        swing.pivot for swing in structure.swings if swing.scale.value == "external"
     ]
     highs = [pivot for pivot in external if pivot.kind is PivotKind.HIGH]
     lows = [pivot for pivot in external if pivot.kind is PivotKind.LOW]
@@ -525,7 +598,9 @@ def test_external_premium_discount_anchor_and_midpoint_boundaries():
         (midpoint - Decimal("0.1"), "discount"),
     ):
         result, point_structure = at_close(price)
-        premium = next(item for item in result.objects if item.category == "premium-discount")
+        premium = next(
+            item for item in result.objects if item.category == "premium-discount"
+        )
         assert premium.subtype == expected
         assert _details(premium)["midpoint"] == midpoint
         point_pivots = [
@@ -545,12 +620,11 @@ def test_external_premium_discount_anchor_and_midpoint_boundaries():
 
 
 def test_missing_external_pivots_are_reported_unavailable_not_guessed():
-    bars = {
-        index: ("9", "10", "8", "9")
-        for index in range(len(HIGHS))
-    }
+    bars = {index: ("9", "10", "8", "9") for index in range(len(HIGHS))}
     _, _, _, _, result = _calculate(bars)
-    premium = next(item for item in result.objects if item.category == "premium-discount")
+    premium = next(
+        item for item in result.objects if item.category == "premium-discount"
+    )
     assert premium.subtype == "unavailable"
     assert _details(premium)["unavailable_reason"] == (
         "missing-latest-confirmed-external-high-or-low"
