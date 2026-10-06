@@ -711,8 +711,11 @@ _SPOT_WYCKOFF_METADATA = IndicatorMetadata(
     display_name="Spot Wyckoff Analysis",
     category=IndicatorCategory.WYCKOFF,
     purpose=(
-        "Describe policy-defined same-timeframe Spot OHLCV measurements and "
-        "uncertain Wyckoff phase/event hypotheses without trading authority."
+        "Use explicit same-timeframe Spot OHLCV policy; threshold fields: "
+        "maximum_range_fraction, phase_close_fraction, minimum_phase_volume_ratio, "
+        "event_volume_ratio, high_volume_ratio, low_volume_ratio, wide_spread_ratio, "
+        "narrow_spread_ratio, absorption_volume_ratio, climactic_volume_ratio, and "
+        "maximum_climactic_close_fraction. Emit uncertain hypotheses only."
     ),
     inputs=(
         "C-001:closed-spot-ohlcv.open",
@@ -733,25 +736,13 @@ _SPOT_WYCKOFF_METADATA = IndicatorMetadata(
     minimum_warmup_candles=3,
     output_unit="input-price-unit-and-input-volume-unit",
     output_schema=(
-        "C-014 findings/observations in exactly phase, event, effort-result, "
-        "volume-spread, absorption, and climactic-action; each record links C-008 "
-        "to exact C-001 source candles, C-002 snapshot and C-003 quality. Immutable "
-        "caller policy is mandatory; metadata values are never applied as defaults. "
-        "Dynamic warm-up=max(3, range_window+breakout_confirmation, volume_window+1); "
-        "range_window, volume_window, breakout_confirmation are integers [2,500]. "
-        "maximum_output_records is [1,10000]. Decimal policy values are finite, "
-        "bounded [0,1000]: maximum_range_fraction, phase_close_fraction, "
-        "minimum_phase_volume_ratio, event_volume_ratio, high_volume_ratio, "
-        "low_volume_ratio, wide_spread_ratio, narrow_spread_ratio, "
-        "absorption_volume_ratio, climactic_volume_ratio, and "
-        "maximum_climactic_close_fraction. Fraction fields are [0,1]; the two close "
-        "fractions are <0.5; narrow_spread_ratio<=wide_spread_ratio. Zero prior "
-        "volume/spread baseline yields an explicit unavailable ratio; no volume is "
-        "inferred. Confidence is uncalibrated and reported as zero, never probability. "
-        "Output is nullable and bounded by the caller record limit and canonical "
-        "evidence document size; unsupported/stale/provisional/mismatched/gapped/"
-        "malformed/incomplete data, warm-up, policy, precision, registry, or output "
-        "bounds fail closed. Same-timeframe 1m/5m/15m/1h/4h/1d only; no look-ahead."
+        "Caller policy required; registry values are not defaults. "
+        "Warm-up=max(3,range_window+breakout_confirmation,volume_window+1). "
+        "Integer windows/counts [2,500], records [1,10000]. Decimal thresholds "
+        "finite [0,1000]; fractions [0,1], close fractions <0.5, narrow<=wide. "
+        "Zero baselines unavailable. Confidence=uncalibrated 0, not probability. "
+        "Nullable, bounded evidence. C-014 categories only; C-008 links exact C-001 "
+        "candles/C-002 snapshot/C-003 quality. Same timeframe; no look-ahead."
     ),
     output_nullable=True,
     timing=IndicatorTiming.CONFIRMATORY,

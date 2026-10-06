@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from hashlib import sha256
 from uuid import UUID, uuid5
 
@@ -120,7 +119,9 @@ class SpotWyckoffPolicy:
             try:
                 value = _bounded_decimal(name, getattr(self, name))
             except (TypeError, ValueError) as exc:
-                raise SpotWyckoffError(f"{name} must be a bounded finite Decimal.") from exc
+                raise SpotWyckoffError(
+                    f"{name} must be a bounded finite Decimal."
+                ) from exc
             if value < 0 or value > Decimal("1000"):
                 raise SpotWyckoffError(f"{name} must be in [0, 1000].")
         fractions = (
@@ -220,6 +221,7 @@ def _stable_id(*parts: object) -> UUID:
 def _mean(values: tuple[Decimal, ...]) -> Decimal:
     with localcontext() as context:
         context.prec = _WORK_PRECISION
+        context.rounding = ROUND_HALF_EVEN
         return sum(values, Decimal(0)) / Decimal(len(values))
 
 
@@ -228,6 +230,7 @@ def _ratio(numerator: Decimal, denominator: Decimal) -> Decimal | None:
         return None
     with localcontext() as context:
         context.prec = _RATIO_PRECISION
+        context.rounding = ROUND_HALF_EVEN
         return numerator / denominator
 
 
@@ -281,7 +284,6 @@ def _analyse_records(
     candles: tuple[_Candle, ...],
     timeframe: str,
     policy: SpotWyckoffPolicy,
-    as_of: datetime,
 ) -> tuple[_Record, ...]:
     records: list[_Record] = []
     n = len(candles)
@@ -292,9 +294,7 @@ def _analyse_records(
     range_high = max(item.high for item in prior_range)
     range_low = min(item.low for item in prior_range)
     range_width = range_high - range_low
-    range_fraction = _ratio(
-        range_width, (range_high + range_low) / Decimal(2)
-    )
+    range_fraction = _ratio(range_width, (range_high + range_low) / Decimal(2))
     prior_volume_ratio, prior_spread_ratio = _window_metrics(
         candles, latest, policy.volume_window
     )
@@ -331,7 +331,7 @@ def _analyse_records(
             )
         if volume_ratio is None or spread_ratio is None:
             continue
-        progress = abs(candle.close - candle.open)
+        progress = abs(candle.close - candle.opening)
         progress_fraction = _ratio(progress, candle.spread)
         if volume_ratio >= policy.high_volume_ratio and (
             progress_fraction is None
@@ -382,7 +382,7 @@ def _analyse_records(
         close_location = (
             None
             if candle.spread == 0
-            else (candle.close - candle.low) / candle.spread
+            else _ratio(candle.close - candle.low, candle.spread)
         )
         if (
             volume_ratio >= policy.climactic_volume_ratio
@@ -415,7 +415,7 @@ def _analyse_records(
             volume_ratio <= policy.low_volume_ratio
             and spread_ratio <= policy.narrow_spread_ratio
         ):
-            if candle.close <= candle.open:
+            if candle.close >= candle.opening:
                 label = "no-demand"
             else:
                 label = "no-supply"
@@ -453,7 +453,9 @@ def _analyse_records(
         volume_ratio, spread_ratio = _window_metrics(
             candles, index, policy.volume_window
         )
-        volume_ok = volume_ratio is not None and volume_ratio >= policy.event_volume_ratio
+        volume_ok = (
+            volume_ratio is not None and volume_ratio >= policy.event_volume_ratio
+        )
         event_indices = tuple(range(previous_start, index + 1))
         if current.low < prior_low and current.close > prior_low and volume_ok:
             records.append(
@@ -501,7 +503,7 @@ def _analyse_records(
             and volume_ratio >= policy.event_volume_ratio
             and spread_ratio >= policy.wide_spread_ratio
         ):
-            if current.close < current.open and current.close < previous[-1].close:
+            if current.close < current.opening and current.close < previous[-1].close:
                 records.append(
                     _record(
                         category="event",
@@ -520,7 +522,7 @@ def _analyse_records(
                         alternative="A high-volume decline may be continuation rather than preliminary support.",
                     )
                 )
-            if current.close > current.open and current.close > previous[-1].close:
+            if current.close > current.opening and current.close > previous[-1].close:
                 records.append(
                     _record(
                         category="event",
@@ -591,9 +593,13 @@ def _analyse_records(
                 weakness_events.append((index, base_low, event.candle_indices))
 
         current = candles[index]
-        earlier_strength = [event for event in strength_events if event[0] < index]
-        if earlier_strength:
-            event_index, resistance, event_sources = earlier_strength[-1]
+        earlier_strength = (
+            strength_events[-1]
+            if strength_events and strength_events[-1][0] < index
+            else None
+        )
+        if earlier_strength is not None:
+            event_index, resistance, event_sources = earlier_strength
             invalidated = any(
                 candles[position].close <= resistance
                 for position in range(event_index + 1, index + 1)
@@ -601,14 +607,17 @@ def _analyse_records(
             if (
                 not invalidated
                 and current.low > resistance
-                and current.close > current.open
+                and current.close > current.opening
             ):
                 records.append(
                     _record(
                         category="event",
                         label="last-point-of-support-candidate",
                         value=canonical_json_dumps(
-                            {"reference_resistance": str(resistance), "low": str(current.low)}
+                            {
+                                "reference_resistance": str(resistance),
+                                "low": str(current.low),
+                            }
                         ),
                         indices=event_sources + (index,),
                         classification=ClaimClassification.INFERENCE,
@@ -617,9 +626,13 @@ def _analyse_records(
                         alternative="A higher low after a breakout does not prove institutional support.",
                     )
                 )
-        earlier_weakness = [event for event in weakness_events if event[0] < index]
-        if earlier_weakness:
-            event_index, support, event_sources = earlier_weakness[-1]
+        earlier_weakness = (
+            weakness_events[-1]
+            if weakness_events and weakness_events[-1][0] < index
+            else None
+        )
+        if earlier_weakness is not None:
+            event_index, support, event_sources = earlier_weakness
             invalidated = any(
                 candles[position].close >= support
                 for position in range(event_index + 1, index + 1)
@@ -627,14 +640,17 @@ def _analyse_records(
             if (
                 not invalidated
                 and current.high < support
-                and current.close < current.open
+                and current.close < current.opening
             ):
                 records.append(
                     _record(
                         category="event",
                         label="last-point-of-supply-candidate",
                         value=canonical_json_dumps(
-                            {"reference_support": str(support), "high": str(current.high)}
+                            {
+                                "reference_support": str(support),
+                                "high": str(current.high),
+                            }
                         ),
                         indices=event_sources + (index,),
                         classification=ClaimClassification.INFERENCE,
@@ -667,9 +683,7 @@ def _analyse_records(
             and range_fraction <= policy.maximum_range_fraction
             and range_low <= candles[latest].close <= range_high
         ):
-            close_location = _ratio(
-                candles[latest].close - range_low, range_width
-            )
+            close_location = _ratio(candles[latest].close - range_low, range_width)
             if (
                 close_location is not None
                 and close_location <= policy.phase_close_fraction
@@ -696,9 +710,10 @@ def _analyse_records(
                 for item in records
                 if item.category == "event"
                 and (
-                    phase_label.startswith("accumulation")
-                    and item.label in {"upthrust-candidate", "sign-of-weakness-candidate"}
-                    or phase_label.startswith("distribution")
+                    phase_label in {"accumulation-hypothesis", "markup"}
+                    and item.label
+                    in {"upthrust-candidate", "sign-of-weakness-candidate"}
+                    or phase_label in {"distribution-hypothesis", "markdown"}
                     and item.label in {"spring-candidate", "sign-of-strength-candidate"}
                 )
                 for index in item.candle_indices
@@ -748,8 +763,7 @@ def _evidence_item(
     quality: DataQualityReport,
     timeframe: str,
     policy: SpotWyckoffPolicy,
-    as_of: object,
-    expires_at: object,
+    expires_at: datetime,
 ) -> EvidenceItem:
     selected = tuple(candles[index] for index in record.candle_indices)
     if not selected:
@@ -764,7 +778,7 @@ def _evidence_item(
         "method_version": SPOT_WYCKOFF_METHOD_VERSION,
         "policy": policy,
         "timeframe": timeframe,
-        "as_of": as_of,
+        "as_of": max(item.end for item in selected),
         "category": record.category,
         "label": record.label,
         "value": record.value,
@@ -800,7 +814,9 @@ def _evidence_item(
         source_record_ids=tuple(
             dict.fromkeys(item.observation.source_record_id for item in selected)
         ),
-        dataset_versions=(snapshot.dataset_version,) if snapshot.dataset_version else (),
+        dataset_versions=(snapshot.dataset_version,)
+        if snapshot.dataset_version
+        else (),
         feature_ids=(
             f"C-002:snapshot:{snapshot.snapshot_id}",
             *(
@@ -813,9 +829,7 @@ def _evidence_item(
         observed_at=max(item.end for item in selected),
         available_at=available_at,
         expires_at=expires_at,
-        method=VersionReference(
-            SPOT_WYCKOFF_INDICATOR_ID, SPOT_WYCKOFF_METHOD_VERSION
-        ),
+        method=VersionReference(SPOT_WYCKOFF_INDICATOR_ID, SPOT_WYCKOFF_METHOD_VERSION),
         value=encoded,
         unit=None,
         interpretation=(
@@ -872,9 +886,7 @@ def calculate_spot_wyckoff(
             SPOT_WYCKOFF_INDICATOR_ID, metadata_version
         )
     except (IndicatorMetadataError, TypeError) as exc:
-        raise SpotWyckoffError(
-            "Unknown exact Spot Wyckoff metadata version."
-        ) from exc
+        raise SpotWyckoffError("Unknown exact Spot Wyckoff metadata version.") from exc
     if (
         metadata.phase is not IndicatorPhase.VALIDATED
         or metadata.calculation_version != SPOT_WYCKOFF_METHOD_VERSION
@@ -883,11 +895,12 @@ def calculate_spot_wyckoff(
         raise SpotWyckoffError(
             "Spot Wyckoff method is not validated for this timeframe."
         )
-    if (
-        not snapshot.instrument_id.endswith("-SPOT")
-        or not snapshot.venue_id.endswith("-SPOT")
+    if not snapshot.instrument_id.endswith("-SPOT") or not snapshot.venue_id.endswith(
+        "-SPOT"
     ):
-        raise SpotWyckoffError("Only canonical Spot instruments and venues are supported.")
+        raise SpotWyckoffError(
+            "Only canonical Spot instruments and venues are supported."
+        )
     try:
         _, price_unit = _ohlc(
             snapshot=snapshot,
@@ -897,9 +910,10 @@ def calculate_spot_wyckoff(
         )
     except (VolatilityError, ArithmeticError) as exc:
         raise SpotWyckoffError("Spot OHLCV failed shared analysis validation.") from exc
-    if tuple(
-        dict.fromkeys(item.source_record_id for item in observations)
-    ) != snapshot.source_record_ids:
+    if (
+        tuple(dict.fromkeys(item.source_record_id for item in observations))
+        != snapshot.source_record_ids
+    ):
         raise SpotWyckoffError("Ordered candle provenance must match the snapshot.")
     interval = timedelta(seconds=_INTERVALS[timeframe])
     if observations[-1].event_time + interval != snapshot.as_of:
@@ -925,7 +939,9 @@ def calculate_spot_wyckoff(
             for metric in (*prices, volume):
                 _bounded_decimal(metric.metric_name, metric.value)
         except (TypeError, ValueError) as exc:
-            raise SpotWyckoffError("OHLCV precision or exponent is unsupported.") from exc
+            raise SpotWyckoffError(
+                "OHLCV precision or exponent is unsupported."
+            ) from exc
         if volume.value < 0:
             raise SpotWyckoffError("Spot candle volume must not be negative.")
         if volume_unit is not None and volume.unit != volume_unit:
@@ -947,13 +963,17 @@ def calculate_spot_wyckoff(
     try:
         expires_at = quality.assessed_at + interval
     except OverflowError as exc:
-        raise SpotWyckoffError("Wyckoff evidence expiry exceeds timestamp bounds.") from exc
-    records = _analyse_records(
-        candles=candle_tuple,
-        timeframe=timeframe,
-        policy=policy,
-        as_of=as_of,
-    )
+        raise SpotWyckoffError(
+            "Wyckoff evidence expiry exceeds timestamp bounds."
+        ) from exc
+    with localcontext() as context:
+        context.prec = _WORK_PRECISION
+        context.rounding = ROUND_HALF_EVEN
+        records = _analyse_records(
+            candles=candle_tuple,
+            timeframe=timeframe,
+            policy=policy,
+        )
     evidence = tuple(
         _evidence_item(
             record=record,
@@ -962,7 +982,6 @@ def calculate_spot_wyckoff(
             quality=quality,
             timeframe=timeframe,
             policy=policy,
-            as_of=as_of,
             expires_at=expires_at,
         )
         for record in records
@@ -997,7 +1016,9 @@ def calculate_spot_wyckoff(
                 {
                     "label": record.label,
                     "value": record.value,
-                    "as_of": as_of,
+                    "as_of": max(
+                        candle_tuple[index].end for index in record.candle_indices
+                    ),
                     "source_market_data_ids": tuple(
                         candle_tuple[index].observation.market_data_id
                         for index in record.candle_indices
@@ -1028,9 +1049,7 @@ def calculate_spot_wyckoff(
         for item in evidence
         if item.relation is EvidenceRelation.CONTRADICTING
     )
-    uncertainty_ids = tuple(
-        item.evidence_id for item in evidence if item.limitations
-    )
+    uncertainty_ids = tuple(item.evidence_id for item in evidence if item.limitations)
     assessment = WyckoffAssessment(
         assessment_id=_stable_id(
             "assessment",
@@ -1039,6 +1058,7 @@ def calculate_spot_wyckoff(
             SPOT_WYCKOFF_METHOD_VERSION,
             policy.policy_id,
             policy.version,
+            tuple(item.evidence_id for item in evidence),
         ),
         asset=snapshot.instrument_id,
         instrument_id=snapshot.instrument_id,
@@ -1060,9 +1080,7 @@ def calculate_spot_wyckoff(
             VersionReference("C-003", "1"),
             VersionReference("C-008", "1"),
             VersionReference("C-014", "1"),
-            VersionReference(
-                SPOT_WYCKOFF_INDICATOR_ID, SPOT_WYCKOFF_METHOD_VERSION
-            ),
+            VersionReference(SPOT_WYCKOFF_INDICATOR_ID, SPOT_WYCKOFF_METHOD_VERSION),
             VersionReference(policy.policy_id, policy.version),
         ),
         methodology=MethodologyCategory.TECHNICAL,

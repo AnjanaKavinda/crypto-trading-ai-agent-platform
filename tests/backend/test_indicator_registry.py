@@ -103,8 +103,21 @@ def test_spot_catalog_is_explicitly_planned_and_price_correlated() -> None:
     assert wyckoff.output_nullable
     assert not wyckoff.evidence_independent
     assert wyckoff.evidence_dependencies == ("spot-ohlcv-price", "spot-ohlcv-volume")
-    assert "maximum_climactic_close_fraction" in wyckoff.output_schema
-    assert "maximum_output_records" in {item.name for item in wyckoff.parameters}
+    threshold_fields = {
+        "maximum_range_fraction",
+        "phase_close_fraction",
+        "minimum_phase_volume_ratio",
+        "event_volume_ratio",
+        "high_volume_ratio",
+        "low_volume_ratio",
+        "wide_spread_ratio",
+        "narrow_spread_ratio",
+        "absorption_volume_ratio",
+        "climactic_volume_ratio",
+        "maximum_climactic_close_fraction",
+    }
+    assert all(field in wyckoff.purpose for field in threshold_fields)
+    assert "maximum-output-records" in {item.name for item in wyckoff.parameters}
     with pytest.raises(IndicatorMetadataError, match="exact"):
         SPOT_RESEARCH_INDICATORS.get("spot-market-structure", "2")
     with pytest.raises(IndicatorMetadataError, match="exact"):
