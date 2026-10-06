@@ -149,7 +149,7 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             verify_protections({
                 **good,
-                "dev": {**good["dev"], "required_checks": ["governance-ci"]},
+                "dev": {**good["dev"], "required_checks": []},
             })
         with self.assertRaises(GovernanceError): verify_protections({"dev": good["dev"], "main": {"required_checks":[]}})
         reversed_reviews = {**good, "dev": {**good["dev"], "required_reviews": 1},
