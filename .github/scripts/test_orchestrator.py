@@ -90,7 +90,7 @@ class GovernanceTests(unittest.TestCase):
                 "rules": [
                     {"type": "pull_request", "parameters": {"required_approving_review_count": 0}},
                     {"type": "required_status_checks", "parameters": {
-                        "required_status_checks": [{"context": "governance-ci"}, {"context": "governance-gate"}]
+                        "required_status_checks": [{"context": "governance-ci"}]
                     }},
                     {"type": "deletion"},
                     {"type": "non_fast_forward"},
@@ -122,7 +122,7 @@ class GovernanceTests(unittest.TestCase):
         protection = orchestrate_issue.build_protection_snapshot(hydrated, repository_settings={"allow_auto_merge": False})
         self.assertTrue(protection["dev"]["verified"])
         self.assertTrue(protection["main"]["verified"])
-        self.assertEqual(protection["dev"]["required_checks"], ["governance-ci", "governance-gate"])
+        self.assertEqual(protection["dev"]["required_checks"], ["governance-ci"])
         self.assertEqual(protection["main"]["required_checks"], ["governance-ci"])
         self.assertEqual(protection["dev"]["required_reviews"], 0)
         self.assertEqual(protection["main"]["required_reviews"], 1)
@@ -137,7 +137,7 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError): safe_content("token=supersecret")
         good = {
             "dev": {"verified": True, "enforcement": "active",
-                    "required_checks": ["governance-ci", "governance-gate"],
+                    "required_checks": ["governance-ci"],
                     "required_reviews": 0, "bypass_actors": [],
                     "auto_merge": False, "merge_queue": False},
             "main": {"verified": True, "enforcement": "active",
