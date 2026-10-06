@@ -961,11 +961,18 @@ def calculate_spot_wyckoff(
     candle_tuple = tuple(candles)
     as_of = snapshot.as_of
     try:
-        expires_at = quality.assessed_at + interval
+        # Evidence expires at the next candle boundary, measured from the
+        # latest closed candle. A delayed quality assessment must not extend
+        # the lifetime of an older snapshot.
+        expires_at = as_of + interval
     except OverflowError as exc:
         raise SpotWyckoffError(
             "Wyckoff evidence expiry exceeds timestamp bounds."
         ) from exc
+    if quality.assessed_at >= expires_at:
+        raise SpotWyckoffError(
+            "Quality evidence was assessed at or after the candle expiry."
+        )
     with localcontext() as context:
         context.prec = _WORK_PRECISION
         context.rounding = ROUND_HALF_EVEN
