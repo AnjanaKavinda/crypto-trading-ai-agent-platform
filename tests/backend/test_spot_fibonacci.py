@@ -486,19 +486,27 @@ def test_rejects_future_provisional_and_unavailable_candles():
 
 def test_rejects_reordered_duplicate_and_gapped_candles():
     snapshot, candles, quality, structure, origin, endpoint = _bullish()
-    cases = (
-        tuple(reversed(candles)),
-        (*candles[:-1], candles[-2]),
-        (
-            *candles[:5],
-            replace(
-                candles[5],
-                event_time=candles[5].event_time - timedelta(minutes=1),
-            ),
-            *candles[6:],
+    duplicate = (*candles[:-1], candles[-2])
+    gap = (
+        *candles[:5],
+        replace(
+            candles[5],
+            event_time=candles[5].event_time + timedelta(minutes=1),
         ),
+        *candles[6:],
     )
-    for observations in cases:
+    with pytest.raises(
+        fibonacci_module.VolatilityError,
+        match="Candles must be ordered and contiguous",
+    ):
+        fibonacci_module._ohlc(
+            snapshot=snapshot,
+            observations=gap,
+            quality=quality,
+            timeframe="1m",
+        )
+
+    for observations in (tuple(reversed(candles)), duplicate, gap):
         with pytest.raises(SpotFibonacciError, match="shared analysis validation"):
             calculate_spot_fibonacci(
                 snapshot=snapshot,
