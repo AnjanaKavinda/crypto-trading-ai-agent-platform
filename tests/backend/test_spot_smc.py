@@ -157,6 +157,14 @@ def _fvg_for_creation(result, candle_id):
     )
 
 
+def _latest_source_availability(record, observations):
+    data_by_id = {item.market_data_id: item for item in observations}
+    return max(
+        data_by_id[source_id].availability_time
+        for source_id in record.source_market_data_ids
+    )
+
+
 def _fvg_overrides(
     third_low: str = "13", later: tuple[str, str, str, str] | None = None
 ):
@@ -208,12 +216,12 @@ def test_fvg_strict_gap_boundary_and_creation_candle_no_lookahead():
 def test_fvg_lifecycle_wick_fill_and_close_invalidation(
     later, expected_state, expected_fill
 ):
-    _, observations, quality, _, result = _calculate(_fvg_overrides(later=later))
+    _, observations, _, _, result = _calculate(_fvg_overrides(later=later))
     fvg = _fvg_for_creation(result, observations[2].market_data_id)
     assert fvg.lifecycle_state == expected_state
     assert fvg.mitigation_percentage == expected_fill
     if expected_state == "invalidated":
-        assert fvg.available_at == quality.assessed_at
+        assert fvg.available_at == _latest_source_availability(fvg, observations)
     else:
         assert fvg.available_at == observations[-1].event_time + timedelta(minutes=1)
 
@@ -221,27 +229,23 @@ def test_fvg_lifecycle_wick_fill_and_close_invalidation(
 def test_filled_fvg_remains_observed_until_later_close_invalidation():
     bars = _fvg_overrides(later=("15", "32", "10", "11"))
     bars[4] = ("15", "32", "9", "9.5")
-    _, observations, quality, _, result = _calculate(bars)
+    _, observations, _, _, result = _calculate(bars)
     fvg = _fvg_for_creation(result, observations[2].market_data_id)
     assert fvg.lifecycle_state == "invalidated"
     assert fvg.mitigation_percentage == Decimal(100)
-    assert fvg.available_at == quality.assessed_at
+    assert fvg.available_at == _latest_source_availability(fvg, observations)
 
 
 def test_lifecycle_availability_includes_delayed_market_data_and_quality():
     _, observations, quality, _, result = _calculate(
-        _fvg_overrides(later=("15", "32", "11.5", "15")),
+        _fvg_overrides(later=("15", "32", "9", "9.5")),
         availability_delays={3: timedelta(seconds=90)},
     )
     fvg = _fvg_for_creation(result, observations[2].market_data_id)
-    data_by_id = {item.market_data_id: item for item in observations}
-    latest_source_availability = max(
-        data_by_id[source_id].availability_time
-        for source_id in fvg.source_market_data_ids
-    )
-    assert fvg.available_at == quality.assessed_at
-    assert fvg.available_at >= latest_source_availability
+    assert fvg.available_at == _latest_source_availability(fvg, observations)
+    assert fvg.available_at == observations[3].availability_time
     assert fvg.available_at > observations[3].event_time + timedelta(minutes=1)
+    assert fvg.available_at < quality.assessed_at
 
 
 def test_displacement_requires_full_prior_history_and_exact_thresholds():
@@ -314,7 +318,7 @@ def test_order_block_uses_linked_displacement_event_and_breaker_retest_lifecycle
     assert (block.lower_price, block.upper_price) == (Decimal("13"), Decimal("16"))
     assert block.lifecycle_state == "invalidated"
     assert block.mitigation_percentage == Decimal(100)
-    assert block.available_at == result.assessment.available_at
+    assert block.available_at == _latest_source_availability(block, observations)
     assert block.source_event_ids
     breaker = next(
         item
@@ -325,7 +329,7 @@ def test_order_block_uses_linked_displacement_event_and_breaker_retest_lifecycle
     assert breaker.subtype == "bearish"
     assert breaker.lifecycle_state == "mitigated"
     assert breaker.mitigation_percentage > 0
-    assert breaker.available_at == result.assessment.available_at
+    assert breaker.available_at == _latest_source_availability(breaker, observations)
     assert _details(breaker)["transition_candle_id"] == observations[18].market_data_id
     assert _details(breaker)["origin_event_id"] == block.source_event_ids[0]
 

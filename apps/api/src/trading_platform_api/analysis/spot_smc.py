@@ -1851,8 +1851,13 @@ def calculate_spot_smc(
         replace(
             item,
             available_at=max(
-                data_availability[source_id]
-                for source_id in item.source_market_data_ids
+                (
+                    item.creation_time,
+                    *(
+                        data_availability[source_id]
+                        for source_id in item.source_market_data_ids
+                    ),
+                )
             ),
         )
         for item in objects
