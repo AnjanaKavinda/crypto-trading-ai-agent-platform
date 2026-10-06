@@ -19,10 +19,22 @@ AGENTS = {
     "agent:trading-intelligence": "Trading Intelligence Engineer",
     "agent:qa-security-review": "QA/Security Reviewer",
 }
+AGENT_PROFILE_NAMES = {
+    "agent:architect": "Platform Architect",
+    "agent:backend-foundation": "Backend Foundation Engineer",
+    "agent:trading-intelligence": "Trading Intelligence Engineer",
+    "agent:qa-security-review": "QA Security Reviewer",
+}
+AGENT_PROFILE_FILES = {
+    "agent:architect": ".github/agents/architect.agent.md",
+    "agent:backend-foundation": ".github/agents/backend-foundation.agent.md",
+    "agent:trading-intelligence": ".github/agents/trading-intelligence.agent.md",
+    "agent:qa-security-review": ".github/agents/qa-security.agent.md",
+}
 ROLE_PATHS = {
     "Platform Architect": ("docs/**", ".github/**", "AGENTS.md", "README.md"),
     "Backend/Foundation Engineer": ("apps/api/**", "packages/**", "infrastructure/**", ".github/**"),
-    "Trading Intelligence Engineer": ("services/**", "agents/**", "tests/trading-intelligence/**"),
+    "Trading Intelligence Engineer": ("apps/api/src/trading_platform_api/analysis/**", "tests/backend/**"),
     "QA/Security Reviewer": ("tests/**", "scripts/**", ".github/**", "docs/security/**"),
 }
 STATES = {
