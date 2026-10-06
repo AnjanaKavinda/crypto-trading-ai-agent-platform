@@ -66,6 +66,12 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(dependencies, [22, 32, 33, 34, 35, 36, 42, 43, 44, 45, 46,
                                         47, 48, 49, 50, 51, 52, 53, 54])
 
+    def test_wyckoff_catalog_dependencies_match_spot_prerequisites(self):
+        catalog = Path(__file__).parents[2] / "docs/copilot-team/04-issues/ISSUE-CATALOG.md"
+        dependencies = parse_catalog_dependencies(catalog.read_text(encoding="utf-8"))[56]
+        self.assertEqual(dependencies, [22, 32, 33, 34, 35, 36, 42, 43, 44, 45, 46,
+                                        47, 48, 49, 50, 51, 52, 53, 54])
+
     def test_ambiguous_mapping_blocks(self):
         with self.assertRaises(GovernanceError): resolve_canonical_number("Backlog Issue 004; Backlog Issue 005")
         with self.assertRaises(GovernanceError):
