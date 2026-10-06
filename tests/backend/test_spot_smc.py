@@ -127,6 +127,22 @@ def _details(record):
     return {item.name: item.value for item in record.details}
 
 
+def _area_source(area, structure):
+    pivot_map = {
+        swing.pivot.pivot_id: swing.pivot for swing in structure.swings
+    }
+    return tuple(
+        sorted(
+            (
+                pivot_map[pivot_id].kind.value,
+                pivot_map[pivot_id].source_time,
+                pivot_map[pivot_id].price,
+            )
+            for pivot_id in area.source_pivot_ids
+        )
+    )
+
+
 def _fvg_for_creation(result, candle_id):
     return next(
         item
@@ -216,6 +232,94 @@ def test_displacement_requires_full_prior_history_and_exact_thresholds():
     assert _details(exact)["direction"] == BreakDirection.UP.value
 
 
+def test_order_block_uses_linked_displacement_event_and_breaker_retest_lifecycle():
+    bars = {
+        15: ("16", "20", "14", "15"),
+        16: ("15", "16", "13", "14"),
+        17: ("12", "22", "12", "21"),
+        18: ("17", "18", "10", "12"),
+        19: ("10.5", "13.5", "10", "11"),
+    }
+    policy = _policy(
+        order_block_lookback=3,
+        displacement_lookback=2,
+        minimum_body_fraction=Decimal("0.5"),
+        minimum_range_multiple=Decimal("1.5"),
+    )
+    _, observations, _, structure, result = _calculate(
+        bars, policy=policy, break_count=1
+    )
+    confirming_id = observations[17].market_data_id
+    linked_events = [
+        event
+        for event in structure.events
+        if event.confirming_market_data_id == confirming_id
+        and event.event_type.value in {"BOS", "CHoCH", "MSS"}
+        and event.direction is BreakDirection.UP
+    ]
+    assert linked_events
+    blocks = [
+        item
+        for item in result.objects
+        if item.category == "order-block"
+        and item.subtype == "bullish"
+        and _details(item)["origin_candle_id"] == observations[16].market_data_id
+    ]
+    assert blocks
+    block = blocks[0]
+    assert (block.lower_price, block.upper_price) == (Decimal("13"), Decimal("16"))
+    assert block.lifecycle_state == "invalidated"
+    assert block.mitigation_percentage == Decimal(100)
+    assert block.source_event_ids
+    breaker = next(
+        item
+        for item in result.objects
+        if item.category == "breaker-block"
+        and _details(item)["origin_order_block_id"] == block.object_id
+    )
+    assert breaker.subtype == "bearish"
+    assert breaker.lifecycle_state == "mitigated"
+    assert breaker.mitigation_percentage > 0
+    assert _details(breaker)["transition_candle_id"] == observations[18].market_data_id
+    assert _details(breaker)["origin_event_id"] == block.source_event_ids[0]
+
+
+def test_order_block_reports_when_no_opposing_candle_is_in_bounded_lookback():
+    bars = {
+        14: ("13.5", "15", "12", "13.5"),
+        15: ("16", "20", "14", "16"),
+        16: ("14", "16", "13", "14"),
+        17: ("12", "22", "12", "21"),
+    }
+    policy = _policy(
+        order_block_lookback=3,
+        displacement_lookback=2,
+        minimum_body_fraction=Decimal("0.5"),
+        minimum_range_multiple=Decimal("1.5"),
+    )
+    _, observations, _, structure, result = _calculate(
+        bars, policy=policy, break_count=1
+    )
+    confirming_id = observations[17].market_data_id
+    assert any(
+        event.confirming_market_data_id == confirming_id
+        and event.event_type.value in {"BOS", "CHoCH", "MSS"}
+        and event.direction is BreakDirection.UP
+        for event in structure.events
+    )
+    unavailable = [
+        item
+        for item in result.objects
+        if item.category == "order-block"
+        and item.subtype == "unavailable-no-opposing-body"
+    ]
+    assert unavailable
+    assert all(
+        _details(item)["reason"] == "no-opposing-body-in-bounded-lookback"
+        for item in unavailable
+    )
+
+
 def test_potential_liquidity_groups_same_kind_on_a_fixed_anchor_with_lineage():
     policy = _policy(price_tolerance=Decimal("100"))
     _, _, _, structure, result = _calculate(policy=policy)
@@ -246,6 +350,74 @@ def test_potential_liquidity_groups_same_kind_on_a_fixed_anchor_with_lineage():
         assert area.upper_price == max(pivot.price for pivot in group)
         assert "potential-area" == area.lifecycle_state
         assert "not a confirmed stop cluster" in area.invalidation_condition
+
+
+@pytest.mark.parametrize("side", ("high", "low"))
+def test_potential_liquidity_sweep_requires_strict_buffer_and_reclaim(side):
+    policy = _policy(
+        price_tolerance=Decimal("0.1"),
+        sweep_buffer=Decimal(1),
+    )
+    snapshot, _, _, structure, baseline = _calculate(policy=policy)
+    side_name = "high-side" if side == "high" else "low-side"
+    areas = [
+        item
+        for item in baseline.objects
+        if item.category == "liquidity"
+        and item.subtype == f"potential-{side_name}-area"
+        and item.available_at <= snapshot.as_of - timedelta(minutes=1)
+    ]
+    assert areas
+    area = areas[0]
+    assert area.lower_price is not None and area.upper_price is not None
+    target = area.upper_price if side == "high" else area.lower_price
+    strict_extreme = target + Decimal("2") if side == "high" else target - Decimal("2")
+    equality_extreme = target + Decimal(1) if side == "high" else target - Decimal(1)
+    assert strict_extreme > 0 and equality_extreme > 0
+    candle_id_index = len(HIGHS) - 1
+    _, original_candles, _, _ = _inputs()
+    original = {
+        metric.metric_name: metric.value
+        for metric in original_candles[candle_id_index].metrics
+    }
+
+    def analyze(extreme: Decimal):
+        if side == "high":
+            low = min(original["low"], target - Decimal(1))
+            bar = (str(target), str(extreme), str(low), str(target))
+        else:
+            high = max(original["high"], target + Decimal(1))
+            bar = (str(target), str(high), str(extreme), str(target))
+        _, final_candles, _, final_structure, result = _calculate(
+            {candle_id_index: bar}, policy=policy
+        )
+        target_source = _area_source(area, structure)
+        matching_area = next(
+            item
+            for item in result.objects
+            if item.category == "liquidity"
+            and item.subtype == f"potential-{side_name}-area"
+            and _area_source(item, final_structure) == target_source
+        )
+        matching_sweeps = [
+            item
+            for item in result.objects
+            if item.category == "liquidity"
+            and item.subtype == "liquidity-sweep"
+            and _details(item)["area_id"] == matching_area.object_id
+            and _details(item)["source_candle_id"]
+            == final_candles[candle_id_index].market_data_id
+        ]
+        return matching_sweeps
+
+    assert not analyze(equality_extreme)
+    sweeps = analyze(strict_extreme)
+    assert sweeps
+    sweep = sweeps[0]
+    assert _details(sweep)["reclaimed"] is True
+    assert _details(sweep)["wick_depth"] == Decimal(2)
+    assert _details(sweep)["source_candle_id"] == sweep.source_market_data_ids[-1]
+    assert "hidden stops" in sweep.limitations[1]
 
 
 def test_spot_smc_is_repeatable_evidence_linked_and_descriptive_only():
