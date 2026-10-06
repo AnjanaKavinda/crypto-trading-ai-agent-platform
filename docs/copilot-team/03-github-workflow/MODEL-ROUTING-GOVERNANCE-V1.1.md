@@ -16,6 +16,21 @@ remain unset/false, and canonical Backlog Issue 004
 (`AnjanaKavinda/crypto-trading-ai-agent-platform#6`) must not be dispatched by
 this policy.
 
+### Observed implementation/configuration drift — 2026-10-06
+
+This policy remains normative. The failed governed dispatch for GitHub issue #58
+reported `GOVERNED_PILOT_ENABLED=true` and
+`GOVERNED_PILOT_ISSUES=6,57`, while this document requires the pilot to remain
+disabled and reserves canonical Issue 004 / GitHub #6. The observed setting does
+not amend this policy or authorize additional issues. Treat the difference as
+unresolved governance/configuration drift; do not expand dispatch eligibility
+until the owner resolves it through an approved policy decision.
+
+The current issue controller records a `DISPATCH_READY` handoff and validates
+a later Copilot assignee. It does not prove the native custom-agent profile
+selected in the owner-led Copilot assignment. Record profile selection
+separately; do not infer it from an agent label.
+
 ### Solo-maintainer identity boundaries
 
 The following identities are distinct control-plane roles, even when one
