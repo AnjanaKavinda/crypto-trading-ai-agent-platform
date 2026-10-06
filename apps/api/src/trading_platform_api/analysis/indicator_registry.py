@@ -22,6 +22,7 @@ class IndicatorCategory(StrEnum):
     SMART_MONEY_CONCEPTS = "smart-money-concepts"
     PRICE_ACTION = "price-action"
     VOLUME_CONFIRMATION = "volume-confirmation"
+    WYCKOFF = "wyckoff"
 
 
 class IndicatorPhase(StrEnum):
@@ -703,6 +704,71 @@ _SPOT_SMC_METADATA = IndicatorMetadata(
     phase=IndicatorPhase.VALIDATED,
 )
 
+_SPOT_WYCKOFF_METADATA = IndicatorMetadata(
+    indicator_id="spot-wyckoff-analysis",
+    metadata_version="1",
+    calculation_version="spot-wyckoff-v1",
+    display_name="Spot Wyckoff Analysis",
+    category=IndicatorCategory.WYCKOFF,
+    purpose=(
+        "Use explicit same-timeframe Spot OHLCV policy; threshold fields: "
+        "maximum_range_fraction, phase_close_fraction, minimum_phase_volume_ratio, "
+        "event_volume_ratio, high_volume_ratio, low_volume_ratio, wide_spread_ratio, "
+        "narrow_spread_ratio, absorption_volume_ratio, climactic_volume_ratio, and "
+        "maximum_climactic_close_fraction. Emit uncertain hypotheses only."
+    ),
+    inputs=(
+        "C-001:closed-spot-ohlcv.open",
+        "C-001:closed-spot-ohlcv.high",
+        "C-001:closed-spot-ohlcv.low",
+        "C-001:closed-spot-ohlcv.close",
+        "C-001:closed-spot-ohlcv.volume",
+        "C-002:snapshot",
+        "C-003:quality",
+    ),
+    timeframes=_SPOT_TIMEFRAMES,
+    parameters=(
+        ParameterMetadata("range-window", "candles", 20, 2, 500),
+        ParameterMetadata("volume-window", "candles", 20, 2, 500),
+        ParameterMetadata("breakout-confirmation", "candles", 2, 2, 500),
+        ParameterMetadata("maximum-output-records", "records", 1000, 1, 10000),
+    ),
+    minimum_warmup_candles=3,
+    output_unit="input-price-unit-and-input-volume-unit",
+    output_schema=(
+        "Caller policy required; registry values are not defaults. "
+        "Warm-up=max(3,range_window+breakout_confirmation,volume_window+1). "
+        "Integer windows/counts [2,500], records [1,10000]. Decimal thresholds "
+        "finite [0,1000]; fractions [0,1], close fractions <0.5, narrow<=wide. "
+        "Zero baselines unavailable. Confidence=uncalibrated 0, not probability. "
+        "Nullable, bounded evidence. C-014 categories only; C-008 links exact C-001 "
+        "candles/C-002 snapshot/C-003 quality. Same timeframe; no look-ahead."
+    ),
+    output_nullable=True,
+    timing=IndicatorTiming.CONFIRMATORY,
+    best_regimes=("observable-spot-range-and-volume",),
+    weak_regimes=("stale-or-gapped-market", "insufficient-history", "zero-baseline"),
+    failure_modes=(
+        "invalid-quality-or-provenance",
+        "stale-or-gapped-market",
+        "non-spot-input",
+        "unsupported-timeframe-or-method-version",
+        "invalid-caller-policy",
+        "insufficient-warmup",
+        "missing-or-invalid-volume",
+        "decimal-precision-or-exponent-limit",
+        "zero-prior-baseline",
+        "bounded-evidence-output-exceeded",
+    ),
+    evidence_independent=False,
+    evidence_dependencies=("spot-ohlcv-price", "spot-ohlcv-volume"),
+    evidence_graph_role=(
+        "Descriptive same-timeframe Spot OHLCV measurements and policy-defined "
+        "hypotheses; all evidence shares correlated price/volume inputs."
+    ),
+    phase=IndicatorPhase.VALIDATED,
+)
+
 
 SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
     (
@@ -711,6 +777,7 @@ SPOT_RESEARCH_INDICATORS = IndicatorRegistry(
         *_PRICE_ACTION_METADATA,
         _MARKET_STRUCTURE_METADATA,
         _SPOT_SMC_METADATA,
+        _SPOT_WYCKOFF_METADATA,
         _ema(20),
         _ema(50),
         replace(

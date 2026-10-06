@@ -90,6 +90,17 @@ from trading_platform_api.analysis.spot_smc import (
     SpotSMCPolicy,
     calculate_spot_smc,
 )
+from trading_platform_api.analysis.spot_wyckoff import (
+    SPOT_WYCKOFF_EVIDENCE_VERSION,
+    SPOT_WYCKOFF_INDICATOR_ID,
+    SPOT_WYCKOFF_METADATA_VERSION,
+    SPOT_WYCKOFF_METHOD_VERSION,
+    SpotWyckoffAnalysis,
+    SpotWyckoffError,
+    SpotWyckoffPolicy,
+    WyckoffObservation,
+    calculate_spot_wyckoff,
+)
 from trading_platform_api.analysis.volatility import (
     BandWidthDirection,
     BollingerPoint,
@@ -202,6 +213,15 @@ __all__ = [
     "SpotSMCError",
     "SpotSMCPolicy",
     "calculate_spot_smc",
+    "SPOT_WYCKOFF_EVIDENCE_VERSION",
+    "SPOT_WYCKOFF_INDICATOR_ID",
+    "SPOT_WYCKOFF_METADATA_VERSION",
+    "SPOT_WYCKOFF_METHOD_VERSION",
+    "SpotWyckoffAnalysis",
+    "SpotWyckoffError",
+    "SpotWyckoffPolicy",
+    "WyckoffObservation",
+    "calculate_spot_wyckoff",
     "CCIPoint",
     "CCISeries",
     "MACDPoint",
