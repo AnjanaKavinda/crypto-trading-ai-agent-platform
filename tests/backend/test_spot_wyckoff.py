@@ -485,7 +485,9 @@ def test_evidence_expiry_is_anchored_to_the_latest_candle_boundary() -> None:
     expected_expiry = snapshot.as_of + interval
     assert result.evidence_expires_at == expected_expiry
     assert all(item.expires_at == expected_expiry for item in result.evidence)
-    assert all(item.available_at == delayed_quality.assessed_at for item in result.evidence)
+    assert all(
+        item.available_at == delayed_quality.assessed_at for item in result.evidence
+    )
 
     expired_quality = replace(
         quality,
@@ -501,7 +503,7 @@ def test_evidence_expiry_is_anchored_to_the_latest_candle_boundary() -> None:
         )
 
 
-def test_validation_fails_closed_for_future_provisional_malformed_gapped_and_mismatched_inputs() -> None:
+def test_validation_rejects_unsafe_market_inputs() -> None:
     snapshot, observations, quality = _input(_bars())
     interval = timedelta(minutes=1)
 
