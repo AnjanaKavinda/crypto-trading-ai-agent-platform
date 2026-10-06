@@ -208,7 +208,7 @@ def test_fvg_strict_gap_boundary_and_creation_candle_no_lookahead():
 def test_fvg_lifecycle_wick_fill_and_close_invalidation(
     later, expected_state, expected_fill
 ):
-    _, observations, _, _, result = _calculate(_fvg_overrides(later=later))
+    _, observations, quality, _, result = _calculate(_fvg_overrides(later=later))
     fvg = _fvg_for_creation(result, observations[2].market_data_id)
     assert fvg.lifecycle_state == expected_state
     assert fvg.mitigation_percentage == expected_fill
@@ -221,7 +221,7 @@ def test_fvg_lifecycle_wick_fill_and_close_invalidation(
 def test_filled_fvg_remains_observed_until_later_close_invalidation():
     bars = _fvg_overrides(later=("15", "32", "10", "11"))
     bars[4] = ("15", "32", "9", "9.5")
-    _, observations, _, _, result = _calculate(bars)
+    _, observations, quality, _, result = _calculate(bars)
     fvg = _fvg_for_creation(result, observations[2].market_data_id)
     assert fvg.lifecycle_state == "invalidated"
     assert fvg.mitigation_percentage == Decimal(100)

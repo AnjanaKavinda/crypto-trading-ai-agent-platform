@@ -633,6 +633,7 @@ def _fvg_objects(
         maximum_fill = Decimal(0)
         state = "active"
         available_at = third.end
+        invalidated_at: _Candle | None = None
         lifecycle_ids: list[UUID] = []
         for later in candles[index + 1 :]:
             lifecycle_comparisons += 1
@@ -651,6 +652,7 @@ def _fvg_objects(
                 state = "invalidated"
                 maximum_fill = Decimal(100)
                 available_at = later.end
+                invalidated_at = later
                 break
             if maximum_fill == Decimal(100):
                 state = "filled"
@@ -700,6 +702,16 @@ def _fvg_objects(
                     SMCAttribute("proximal_edge", proximal),
                     SMCAttribute("far_edge", far),
                     SMCAttribute("maximum_wick_fill_percentage", maximum_fill),
+                    SMCAttribute(
+                        "invalidating_candle_id",
+                        invalidated_at.observation.market_data_id
+                        if invalidated_at
+                        else None,
+                    ),
+                    SMCAttribute(
+                        "invalidation_time",
+                        invalidated_at.end if invalidated_at else None,
+                    ),
                 ),
             )
         )
@@ -1839,13 +1851,8 @@ def calculate_spot_smc(
         replace(
             item,
             available_at=max(
-                (
-                    quality.assessed_at,
-                    *(
-                        data_availability[source_id]
-                        for source_id in item.source_market_data_ids
-                    ),
-                )
+                data_availability[source_id]
+                for source_id in item.source_market_data_ids
             ),
         )
         for item in objects
