@@ -621,7 +621,10 @@ def _make_evidence(
             VersionReference(
                 "spot-fibonacci-evidence", SPOT_FIBONACCI_EVIDENCE_VERSION
             ),
-            VersionReference(policy.policy_id, policy.version),
+            VersionReference(
+                "spot-fibonacci-policy",
+                canonical_json_dumps((policy.policy_id, policy.version)),
+            ),
         ),
         usable=True,
     )
@@ -964,6 +967,18 @@ def calculate_spot_fibonacci(
                 "Invalidation close exceeds Decimal bounds."
             ) from exc
         close_values.append((candle, close_metric.value))
+    wick_only_breaches_count = 0
+    for candle, close in close_values:
+        candle_metrics = {metric.metric_name: metric.value for metric in candle.metrics}
+        wick_crossed = (
+            candle_metrics["low"] < threshold
+            if direction == "bullish"
+            else candle_metrics["high"] > threshold
+        )
+        close_inside = close >= threshold if direction == "bullish" else close <= threshold
+        if wick_crossed and close_inside:
+            wick_only_breaches_count += 1
+
     consecutive = 0
     confirming_candle: MarketData | None = None
     for candle, close in close_values:
@@ -1101,7 +1116,7 @@ def calculate_spot_fibonacci(
         "consecutive_close_count": policy.invalidation_consecutive_close_count,
         "observed_consecutive_closes": observed_count,
         "strict_comparison": "below" if direction == "bullish" else "above",
-        "wick_only_breaches_count": False,
+        "wick_only_breaches_count": wick_only_breaches_count,
         "evaluated_after_endpoint_confirmation": endpoint.confirmation_time,
         "confirming_market_data_id": (
             confirming_candle.market_data_id if confirming_candle else None
