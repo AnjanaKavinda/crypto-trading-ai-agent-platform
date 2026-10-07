@@ -7,21 +7,39 @@ from uuid import uuid4
 
 import pytest
 from trading_platform_api.market_data import (
+    BookDelta,
+    BookFailure,
+    BookLevel,
+    BookPolicy,
+    BookSide,
+    BookSnapshot,
+    BookSource,
+    BookStatus,
+    ChecksumStatus,
     DataQualityAssessmentError,
     DataQualityPolicy,
     DataQualityStatus,
     DatasetVersion,
     DatasetVersionReference,
     DataSourceRecord,
+    LevelChange,
     MarketData,
     MarketSnapshot,
     MetricBound,
     MetricValue,
+    NormalizedTradeTicks,
     ProviderBatch,
     ProviderBatchStatus,
     ProviderDataKind,
+    RawTradeTick,
+    ReportedSide,
+    SideSemantics,
+    TradeTickPolicy,
+    apply_book_delta,
     assess_complete_binance_spot_batch,
     assess_data_quality,
+    normalize_book_snapshot,
+    normalize_trade_ticks,
 )
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -115,6 +133,227 @@ def assess(data: tuple | None = None, policy_override: DataQualityPolicy | None 
         assessed_at=CUTOFF,
         finalized_market_data_ids=finality,
     )
+
+
+def normalized_events(
+    *,
+    kind: ProviderDataKind = ProviderDataKind.TRADE,
+    sequences: tuple[int | None, ...] = (5, 6),
+    side_semantics: SideSemantics = SideSemantics.AGGRESSOR,
+) -> tuple[NormalizedTradeTicks, MarketSnapshot, DataQualityPolicy]:
+    event_times = (CUTOFF - timedelta(seconds=20), CUTOFF - timedelta(seconds=10))
+    raw = tuple(
+        RawTradeTick(
+            source_record_id=uuid4(),
+            market_data_id=uuid4(),
+            provider_event_id=f"event-{index}",
+            instrument_id="BTCUSDT-SPOT",
+            venue_id="synthetic-venue",
+            data_kind=kind,
+            event_time=event_time,
+            price=Decimal("100"),
+            quantity=Decimal("1") if kind is ProviderDataKind.TRADE else None,
+            price_unit="USDT",
+            quantity_unit="BTC",
+            reported_side=ReportedSide.BUY,
+            side_semantics=side_semantics,
+            sequence=sequences[index],
+            sequence_scope="spot-stream" if sequences[index] is not None else None,
+            raw_source_bytes=f"event-{index}".encode(),
+            provider_id="synthetic-provider",
+            provider_version="fixture-v1",
+            raw_schema_version="fixture-schema-v1",
+            adapter_version="fixture-adapter-v1",
+            licensing_reference="synthetic-fixture",
+            retrieval_time=event_time + timedelta(seconds=1),
+            ingestion_time=event_time + timedelta(seconds=2),
+            availability_time=event_time + timedelta(seconds=3),
+        )
+        for index, event_time in enumerate(event_times)
+    )
+    trade_policy = TradeTickPolicy(
+        instrument_id="BTCUSDT-SPOT",
+        venue_id="synthetic-venue",
+        data_kind=kind,
+        price_unit="USDT",
+        quantity_unit="BTC",
+        price_places=2,
+        quantity_places=2,
+    )
+    normalized = normalize_trade_ticks(raw, trade_policy)
+    snapshot = MarketSnapshot(
+        uuid4(),
+        CUTOFF,
+        CUTOFF,
+        "BTCUSDT-SPOT",
+        "synthetic-venue",
+        tuple(item.market_data_id for item in normalized.market_data),
+        tuple(item.source_record_id for item in normalized.source_records),
+    )
+    metrics = ("price", "quantity") if kind is ProviderDataKind.TRADE else ("price",)
+    bounds = tuple(
+        MetricBound(
+            name,
+            Decimal("0"),
+            Decimal("1000"),
+            "USDT" if name == "price" else "BTC",
+        )
+        for name in metrics
+    )
+    quality_policy = DataQualityPolicy(
+        policy_version="synthetic-event-quality-v1",
+        data_kind=kind,
+        instrument_id="BTCUSDT-SPOT",
+        venue_id="synthetic-venue",
+        required_data_cutoff=CUTOFF,
+        coverage_start=CUTOFF - timedelta(seconds=30),
+        coverage_end=CUTOFF,
+        interval_seconds=None,
+        freshness_seconds=60,
+        maximum_missing_intervals=None,
+        required_metrics=metrics,
+        metric_bounds=bounds,
+        expected_record_count=2,
+        provider_identity=(
+            "synthetic-provider",
+            "fixture-v1",
+            "fixture-schema-v1",
+            "fixture-adapter-v1",
+            "synthetic-fixture",
+        ),
+        expected_sequence_start=(
+            sequences[0] if all(value is not None for value in sequences) else None
+        ),
+        expected_sequence_end=(
+            sequences[-1] if all(value is not None for value in sequences) else None
+        ),
+    )
+    return normalized, snapshot, quality_policy
+
+
+def book_evidence(
+    *,
+    checksum: bool = False,
+) -> tuple[tuple, MarketSnapshot, DataQualityPolicy]:
+    book_policy = BookPolicy(
+        instrument_id="BTCUSDT-SPOT",
+        venue_id="synthetic-venue",
+        price_unit="USDT",
+        quantity_unit="BTC",
+        price_places=2,
+        quantity_places=2,
+        maximum_depth=2,
+        maximum_age_seconds=60,
+        maximum_lineage=5,
+        extreme_spread_bps=Decimal("1000"),
+    )
+    verifier = (lambda bids, asks, value: True) if checksum else None
+
+    def source(event_id: str, seconds_ago: int) -> BookSource:
+        event_time = CUTOFF - timedelta(seconds=seconds_ago)
+        return BookSource(
+            source_record_id=uuid4(),
+            market_data_id=uuid4(),
+            event_id=event_id,
+            instrument_id="BTCUSDT-SPOT",
+            venue_id="synthetic-venue",
+            provider_id="synthetic-provider",
+            provider_version="fixture-v1",
+            raw_schema_version="fixture-schema-v1",
+            adapter_version="fixture-adapter-v1",
+            licensing_reference="synthetic-fixture",
+            event_time=event_time,
+            retrieval_time=event_time + timedelta(seconds=1),
+            ingestion_time=event_time + timedelta(seconds=2),
+            availability_time=event_time + timedelta(seconds=3),
+            raw_source_bytes=event_id.encode(),
+        )
+
+    initial_source = source("book-snapshot", 20)
+    initial = normalize_book_snapshot(
+        BookSnapshot(
+            initial_source,
+            (
+                BookLevel(Decimal("99"), Decimal("2")),
+                BookLevel(Decimal("98"), Decimal("1")),
+            ),
+            (
+                BookLevel(Decimal("101"), Decimal("2")),
+                BookLevel(Decimal("102"), Decimal("1")),
+            ),
+            10,
+            "snapshot-checksum" if checksum else None,
+        ),
+        book_policy,
+        as_of=CUTOFF,
+        checksum_verifier=verifier,
+    )
+    delta_source = source("book-delta", 10)
+    delta = apply_book_delta(
+        initial.state,
+        BookDelta(
+            delta_source,
+            (LevelChange(BookSide.BID, Decimal("99"), Decimal("1.5")),),
+            11,
+            11,
+            "delta-checksum" if checksum else None,
+        ),
+        book_policy,
+        as_of=CUTOFF,
+        sequence_verifier=lambda previous, start, end: (
+            start == previous + 1 and end == start
+        ),
+        checksum_verifier=verifier,
+    )
+    transitions = (initial, delta)
+    observations = tuple(item.market_data for item in transitions)
+    sources = tuple(item.source_record for item in transitions)
+    assert all(item is not None for item in observations + sources)
+    data = tuple(item for item in observations if item is not None)
+    source_records = tuple(item for item in sources if item is not None)
+    snapshot = MarketSnapshot(
+        uuid4(),
+        CUTOFF,
+        CUTOFF,
+        "BTCUSDT-SPOT",
+        "synthetic-venue",
+        tuple(item.market_data_id for item in data),
+        tuple(item.source_record_id for item in source_records),
+    )
+    metric_names = tuple(metric.metric_name for metric in data[-1].metrics)
+    quality_policy = DataQualityPolicy(
+        policy_version="synthetic-book-quality-v1",
+        data_kind=ProviderDataKind.ORDER_BOOK,
+        instrument_id="BTCUSDT-SPOT",
+        venue_id="synthetic-venue",
+        required_data_cutoff=CUTOFF,
+        coverage_start=CUTOFF - timedelta(seconds=30),
+        coverage_end=CUTOFF,
+        interval_seconds=None,
+        freshness_seconds=60,
+        maximum_missing_intervals=None,
+        required_metrics=metric_names,
+        metric_bounds=tuple(
+            MetricBound(
+                name,
+                Decimal("0"),
+                Decimal("1000"),
+                "USDT" if name.endswith("_price") else "BTC",
+            )
+            for name in metric_names
+        ),
+        expected_record_count=2,
+        provider_identity=(
+            "synthetic-provider",
+            "fixture-v1",
+            "fixture-schema-v1",
+            "fixture-adapter-v1",
+            "synthetic-fixture",
+        ),
+        expected_sequence_start=10,
+        expected_sequence_end=11,
+    )
+    return transitions, snapshot, quality_policy
 
 
 def test_complete_single_source_is_valid_without_claiming_cross_source_agreement() -> (
@@ -369,6 +608,283 @@ def test_known_complete_spot_batch_can_supply_finality_without_a_contract_change
             ),
             policy(),
             assessed_at=CUTOFF,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "sequences"),
+    [
+        (ProviderDataKind.TRADE, (5, 6)),
+        (ProviderDataKind.TICK, (5, 6)),
+    ],
+)
+def test_event_quality_uses_exact_handoff_and_measured_sequence_coverage(
+    kind: ProviderDataKind, sequences: tuple[int, ...]
+) -> None:
+    normalized, snapshot, quality_policy = normalized_events(
+        kind=kind, sequences=sequences
+    )
+    report = assess_data_quality(
+        snapshot,
+        normalized.market_data,
+        normalized.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=normalized,
+    )
+    assert report.snapshot_id == snapshot.snapshot_id
+    assert report.status is DataQualityStatus.VALID
+    assert (
+        report.completeness,
+        report.freshness,
+        report.accuracy,
+        report.consistency,
+        report.source_reliability,
+        report.coverage,
+        report.continuity,
+    ) == (Decimal("1"),) * 7
+
+
+def test_unverified_sequence_and_unknown_aggressor_degrade_without_inventing_side() -> (
+    None
+):
+    normalized, snapshot, quality_policy = normalized_events(
+        sequences=(None, None),
+        side_semantics=SideSemantics.UNKNOWN,
+    )
+    report = assess_data_quality(
+        snapshot,
+        normalized.market_data,
+        normalized.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=normalized,
+    )
+    assert report.status is DataQualityStatus.DEGRADED
+    assert report.continuity == Decimal("0")
+    assert "sequence-unverified" in report.anomalies
+    assert any(item.startswith("unknown-aggressor:") for item in report.anomalies)
+    assert all(
+        metric.metric_name != "aggressor_sign"
+        for item in normalized.market_data
+        for metric in item.metrics
+    )
+
+
+def test_event_empty_duplicate_missing_coverage_and_comparator_fail_closed() -> None:
+    normalized, snapshot, quality_policy = normalized_events()
+    with pytest.raises(DataQualityAssessmentError, match="exact assessed"):
+        assess_data_quality(
+            snapshot,
+            normalized.market_data[:-1],
+            normalized.source_records[:-1],
+            quality_policy,
+            assessed_at=CUTOFF,
+            trade_ticks=replace(
+                normalized,
+                market_data=normalized.market_data[:-1],
+                source_records=normalized.source_records[:-1],
+                identities=normalized.identities[:-1],
+            ),
+        )
+    with pytest.raises(DataQualityAssessmentError, match="Empty"):
+        empty = replace(normalized, quality=replace(normalized.quality, empty=True))
+        assess_data_quality(
+            snapshot,
+            normalized.market_data,
+            normalized.source_records,
+            quality_policy,
+            assessed_at=CUTOFF,
+            trade_ticks=empty,
+        )
+    duplicate_handoff = replace(
+        normalized,
+        quality=replace(
+            normalized.quality, duplicate_event_ids=("event-0",)
+        ),
+    )
+    duplicate_report = assess_data_quality(
+        snapshot,
+        normalized.market_data,
+        normalized.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=duplicate_handoff,
+    )
+    assert duplicate_report.status is DataQualityStatus.INVALID
+    assert duplicate_report.duplicate_record_ids == ("event-0",)
+    partial_policy = replace(
+        quality_policy,
+        expected_record_count=3,
+        expected_sequence_start=None,
+        expected_sequence_end=None,
+    )
+    incomplete = assess_data_quality(
+        snapshot,
+        normalized.market_data,
+        normalized.source_records,
+        partial_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=normalized,
+    )
+    assert incomplete.status is DataQualityStatus.INCOMPLETE
+    assert incomplete.coverage == Decimal(2) / 3
+    with pytest.raises(DataQualityAssessmentError, match="Independent"):
+        assess_data_quality(
+            snapshot,
+            normalized.market_data,
+            normalized.source_records,
+            replace(quality_policy, require_independent_comparison=True),
+            assessed_at=CUTOFF,
+            trade_ticks=normalized,
+        )
+
+
+def test_event_cutoff_freshness_units_and_snapshot_membership_are_checked() -> None:
+    normalized, snapshot, quality_policy = normalized_events()
+    stale = assess_data_quality(
+        snapshot,
+        normalized.market_data,
+        normalized.source_records,
+        replace(quality_policy, freshness_seconds=1),
+        assessed_at=CUTOFF,
+        trade_ticks=normalized,
+    )
+    assert stale.status is DataQualityStatus.STALE
+    assert stale.freshness == Decimal("0")
+    data = normalized.market_data[0]
+    wrong_unit = replace(
+        data,
+        metrics=(replace(data.metrics[0], unit="OTHER"),) + data.metrics[1:],
+    )
+    wrong_handoff = replace(
+        normalized, market_data=(wrong_unit,) + normalized.market_data[1:]
+    )
+    invalid = assess_data_quality(
+        snapshot,
+        wrong_handoff.market_data,
+        wrong_handoff.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=wrong_handoff,
+    )
+    assert invalid.status is DataQualityStatus.INVALID
+    with pytest.raises(DataQualityAssessmentError, match="exact assessed"):
+        assess_data_quality(
+            replace(snapshot, market_data_ids=(uuid4(),) + snapshot.market_data_ids[1:]),
+            normalized.market_data,
+            normalized.source_records,
+            quality_policy,
+            assessed_at=CUTOFF,
+            trade_ticks=normalized,
+        )
+
+
+def test_order_book_delta_lineage_checksum_and_all_seven_dimensions() -> None:
+    transitions, snapshot, quality_policy = book_evidence(checksum=True)
+    report = assess_data_quality(
+        snapshot,
+        tuple(item.market_data for item in transitions if item.market_data is not None),
+        tuple(item.source_record for item in transitions if item.source_record is not None),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=transitions,
+    )
+    assert report.status is DataQualityStatus.VALID
+    assert (
+        report.completeness,
+        report.freshness,
+        report.accuracy,
+        report.consistency,
+        report.source_reliability,
+        report.coverage,
+        report.continuity,
+    ) == (Decimal("1"),) * 7
+    assert all(
+        item.quality.checksum is ChecksumStatus.VERIFIED for item in transitions
+    )
+
+
+def test_order_book_point_snapshot_missing_checksum_and_duplicate_degrade_or_reject() -> (
+    None
+):
+    transitions, snapshot, quality_policy = book_evidence()
+    no_checksum = assess_data_quality(
+        snapshot,
+        tuple(item.market_data for item in transitions if item.market_data is not None),
+        tuple(item.source_record for item in transitions if item.source_record is not None),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=transitions,
+    )
+    assert no_checksum.status is DataQualityStatus.DEGRADED
+    assert any("checksum-not-available" in item for item in no_checksum.anomalies)
+    duplicate = replace(
+        transitions[-1],
+        source_record=None,
+        market_data=None,
+        quality=replace(transitions[-1].quality, duplicate=True),
+    )
+    duplicate_report = assess_data_quality(
+        snapshot,
+        tuple(item.market_data for item in transitions if item.market_data is not None),
+        tuple(item.source_record for item in transitions if item.source_record is not None),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=transitions + (duplicate,),
+    )
+    assert duplicate_report.status is DataQualityStatus.INVALID
+    assert duplicate_report.duplicate_record_ids == ("book-delta",)
+
+
+def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> None:
+    transitions, snapshot, quality_policy = book_evidence(checksum=True)
+    invalid_state = replace(
+        transitions[-1].state,
+        status=BookStatus.INVALID,
+        failure=BookFailure.SEQUENCE,
+    )
+    invalid_transition = replace(transitions[-1], state=invalid_state)
+    invalid = assess_data_quality(
+        snapshot,
+        tuple(item.market_data for item in transitions if item.market_data is not None),
+        tuple(item.source_record for item in transitions if item.source_record is not None),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=(transitions[0], invalid_transition),
+    )
+    assert invalid.status is DataQualityStatus.INVALID
+    assert "book-state:SEQUENCE" in invalid.invalid_record_ids
+    bad_checksum = replace(
+        transitions[-1],
+        quality=replace(
+            transitions[-1].quality, checksum=ChecksumStatus.NOT_AVAILABLE
+        ),
+    )
+    checksum_report = assess_data_quality(
+        snapshot,
+        tuple(item.market_data for item in transitions if item.market_data is not None),
+        tuple(item.source_record for item in transitions if item.source_record is not None),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=(transitions[0], bad_checksum),
+    )
+    assert checksum_report.status is DataQualityStatus.INVALID
+    bad_lineage_state = replace(
+        transitions[-1].state, source_lineage=transitions[-1].state.source_lineage[:-1]
+    )
+    with pytest.raises(DataQualityAssessmentError, match="state, thresholds"):
+        assess_data_quality(
+            snapshot,
+            tuple(
+                item.market_data for item in transitions if item.market_data is not None
+            ),
+            tuple(
+                item.source_record for item in transitions if item.source_record is not None
+            ),
+            quality_policy,
+            assessed_at=CUTOFF,
+            book_transitions=(transitions[0], replace(transitions[-1], state=bad_lineage_state)),
         )
     with pytest.raises(DataQualityAssessmentError, match="Complete trusted"):
         assess_complete_binance_spot_batch(
