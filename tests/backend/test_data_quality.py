@@ -791,7 +791,9 @@ def test_event_cutoff_freshness_units_and_snapshot_membership_are_checked() -> N
         )
 
 
-def test_event_policy_requires_completeness_evidence_and_rejects_sequence_gaps() -> None:
+def test_event_policy_requires_completeness_evidence_and_rejects_sequence_gaps() -> (
+    None
+):
     normalized, snapshot, quality_policy = normalized_events()
     with pytest.raises(DataQualityAssessmentError, match="Expected record count"):
         replace(
@@ -879,6 +881,40 @@ def test_event_assessment_is_repeatable_except_report_identity() -> None:
         second.duplicate_record_ids,
         second.anomalies,
     )
+
+
+def test_single_verified_event_has_vacuously_complete_sequence_continuity() -> None:
+    normalized, _, quality_policy = normalized_events()
+    single = replace(
+        normalized,
+        market_data=normalized.market_data[:1],
+        source_records=normalized.source_records[:1],
+        identities=normalized.identities[:1],
+    )
+    snapshot = MarketSnapshot(
+        uuid4(),
+        CUTOFF,
+        CUTOFF,
+        "BTCUSDT-SPOT",
+        "synthetic-venue",
+        (single.market_data[0].market_data_id,),
+        (single.source_records[0].source_record_id,),
+    )
+    single_policy = replace(
+        quality_policy,
+        expected_record_count=1,
+        expected_sequence_end=quality_policy.expected_sequence_start,
+    )
+    report = assess_data_quality(
+        snapshot,
+        single.market_data,
+        single.source_records,
+        single_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=single,
+    )
+    assert report.status is DataQualityStatus.VALID
+    assert report.continuity == Decimal("1")
 
 
 def test_order_book_delta_lineage_checksum_and_all_seven_dimensions() -> None:

@@ -238,8 +238,7 @@ class DataQualityPolicy:
             if (
                 self.expected_sequence_start is not None
                 and self.expected_record_count is not None
-                and self.data_kind
-                in (ProviderDataKind.TRADE, ProviderDataKind.TICK)
+                and self.data_kind in (ProviderDataKind.TRADE, ProviderDataKind.TICK)
                 and self.expected_sequence_end is not None
                 and self.expected_sequence_end - self.expected_sequence_start + 1
                 != self.expected_record_count
@@ -454,9 +453,13 @@ def _assess_event_or_book_quality(
             invalid_ids.append("mixed-sequence-availability")
         elif all(value is not None for value in sequences):
             numbers = tuple(value for value in sequences if value is not None)
-            continuity_numerator = sum(
-                current == previous + 1
-                for previous, current in zip(numbers, numbers[1:])
+            continuity_numerator = (
+                1
+                if expected == 1 and trade_ticks.quality.sequence_verified
+                else sum(
+                    current == previous + 1
+                    for previous, current in zip(numbers, numbers[1:])
+                )
             )
             if (
                 len(scopes) != 1
