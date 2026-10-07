@@ -35,6 +35,8 @@ from trading_platform_api.analysis.market_structure import (
     MarketStructureAnalysis,
     MarketStructurePolicy,
     MarketStructureScale,
+)
+from trading_platform_api.analysis.market_structure import (
     _stable_id as _market_structure_stable_id,
 )
 from trading_platform_api.analysis.price_action import (
