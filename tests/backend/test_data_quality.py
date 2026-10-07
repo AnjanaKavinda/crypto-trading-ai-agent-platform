@@ -999,20 +999,21 @@ def test_order_book_point_snapshot_missing_checksum_and_duplicate_degrade_or_rej
     assert duplicate_report.duplicate_record_ids == ("book-delta",)
 
 
-def test_order_book_point_in_time_snapshot_does_not_claim_delta_continuity() -> None:
+def test_order_book_point_in_time_snapshot_fails_unmeasurable_continuity() -> None:
     transitions, snapshot, quality_policy = book_evidence(include_delta=False)
     assert len(transitions) == len(snapshot.market_data_ids) == 1
-    report = assess_data_quality(
-        snapshot,
-        (transitions[0].market_data,),
-        (transitions[0].source_record,),
-        quality_policy,
-        assessed_at=CUTOFF,
-        book_transitions=transitions,
-    )
-    assert report.status is DataQualityStatus.DEGRADED
-    assert report.continuity == Decimal("0")
-    assert "book-delta-continuity-unverified" in report.anomalies
+    with pytest.raises(
+        DataQualityAssessmentError,
+        match="C-003 contract gap: continuity is unmeasurable",
+    ):
+        assess_data_quality(
+            snapshot,
+            (transitions[0].market_data,),
+            (transitions[0].source_record,),
+            quality_policy,
+            assessed_at=CUTOFF,
+            book_transitions=transitions,
+        )
 
 
 def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> None:

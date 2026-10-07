@@ -284,18 +284,21 @@ def _assess_event_or_book_quality(
     consistency is correctly linked and time-ordered records / supplied
     records; source reliability is exact C-091 provider identity links /
     supplied records; coverage is supplied records / expected records.
-    Continuity is verified adjacent sequence transitions / max(expected
-    records - 1, 1). Event continuity requires the normalized sequence and
-    sequence-scope handoff; one sequence-verified event scores one because no
-    adjacency is missing. Multi-record books require sequence-bounded validated
-    delta fingerprints. A point-in-time book has no adjacent transition, so its
-    continuity score is zero over the one-record conservative denominator and
-    the report is DEGRADED with `book-delta-continuity-unverified`. This numeric
-    value is explicitly an absence-of-proof marker, not a measured delta
-    success rate; the C-003 schema has no unavailable dimension value. A
-    point-in-time state never proves continuous coverage. Independent-source
-    agreement is not scored and an explicit comparison requirement fails closed
-    without comparable evidence.
+    Continuity is verified adjacent sequence transitions / expected adjacent
+    transitions. Event continuity requires the normalized sequence and
+    sequence-scope handoff; one sequence-verified event scores one because its
+    explicit expected sequence range contains that event. Multi-record books
+    require sequence-bounded validated delta fingerprints. A point-in-time book
+    has zero expected delta transitions, so continuity is unmeasurable. C-003
+    requires all seven dimensions (completeness, freshness, accuracy,
+    consistency, source reliability, coverage, continuity) as numeric values
+    from zero to one and cannot represent an unavailable dimension. Therefore,
+    this assessor fails closed without producing a C-003 report for a
+    point-in-time book; the shared contract needs governed evolution before
+    such a report can be represented faithfully. A point-in-time state never
+    proves continuous coverage. Independent-source agreement is not scored and
+    an explicit comparison requirement fails closed without comparable
+    evidence.
     """
     now = _utc("assessed_at", assessed_at)
     cutoff = policy.required_data_cutoff
@@ -433,7 +436,11 @@ def _assess_event_or_book_quality(
         invalid_ids.append("dataset-source-mismatch")
 
     continuity_numerator = 0
-    continuity_denominator = max(expected - 1, 1)
+    continuity_denominator = (
+        expected - 1
+        if policy.data_kind is ProviderDataKind.ORDER_BOOK
+        else max(expected - 1, 1)
+    )
     if policy.data_kind in (ProviderDataKind.TRADE, ProviderDataKind.TICK):
         if (
             trade_ticks is None
@@ -644,6 +651,12 @@ def _assess_event_or_book_quality(
             ):
                 invalid_ids.append("book-sequence-range-mismatch")
         else:
+            if len(fingerprints) == 1 and expected_count == 1:
+                raise DataQualityAssessmentError(
+                    "C-003 contract gap: continuity is unmeasurable for a "
+                    "point-in-time ORDER_BOOK snapshot, and the report schema "
+                    "requires a numeric continuity dimension."
+                )
             anomalies.append("book-delta-continuity-unverified")
 
     denominator = expected * len(policy.required_metrics)
