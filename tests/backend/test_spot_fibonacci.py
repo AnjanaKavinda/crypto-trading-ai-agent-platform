@@ -231,6 +231,7 @@ def test_policy_provenance_is_namespaced_from_contract_versions():
             if reference.component == "spot-fibonacci-policy"
         )
         assert policy_reference.version == canonical_json_dumps(("C-001", "1"))
+    assert len(result.assessment.provenance) == len(set(result.assessment.provenance))
 
 
 def test_confluence_membership_is_linked_to_each_level_evidence():
