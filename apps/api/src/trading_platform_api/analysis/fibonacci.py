@@ -409,16 +409,6 @@ def _validate_structure(
             for field, expected in expected_fields.items()
         ):
             raise SpotFibonacciError("#56 C-008 evidence does not match its output.")
-        expected_evidence_id = _market_structure_stable_id(
-            "evidence",
-            snapshot.snapshot_id,
-            quality.report_id,
-            structure.method_version,
-            MARKET_STRUCTURE_EVIDENCE_VERSION,
-            sha256(evidence.value.encode("utf-8")).hexdigest(),
-        )
-        if evidence.evidence_id != expected_evidence_id:
-            raise SpotFibonacciError("#56 C-008 evidence identity is invalid.")
     except SpotFibonacciError:
         raise
     except (
@@ -511,6 +501,16 @@ def _validate_structure(
                 "#56 pivot is unconfirmed, not an exact local extreme, or mismatches source OHLC."
             )
         result[pivot.pivot_id] = (swing.scale, pivot)
+    expected_evidence_id = _market_structure_stable_id(
+        "evidence",
+        snapshot.snapshot_id,
+        quality.report_id,
+        structure.method_version,
+        MARKET_STRUCTURE_EVIDENCE_VERSION,
+        sha256(evidence.value.encode("utf-8")).hexdigest(),
+    )
+    if evidence.evidence_id != expected_evidence_id:
+        raise SpotFibonacciError("#56 C-008 evidence identity is invalid.")
     return result
 
 
