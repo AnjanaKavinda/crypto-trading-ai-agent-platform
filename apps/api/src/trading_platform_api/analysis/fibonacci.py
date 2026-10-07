@@ -35,6 +35,7 @@ from trading_platform_api.analysis.market_structure import (
     MarketStructureAnalysis,
     MarketStructurePolicy,
     MarketStructureScale,
+    _stable_id as _market_structure_stable_id,
 )
 from trading_platform_api.analysis.price_action import (
     _INTERVALS,
@@ -406,6 +407,16 @@ def _validate_structure(
             for field, expected in expected_fields.items()
         ):
             raise SpotFibonacciError("#56 C-008 evidence does not match its output.")
+        expected_evidence_id = _market_structure_stable_id(
+            "evidence",
+            snapshot.snapshot_id,
+            quality.report_id,
+            structure.method_version,
+            MARKET_STRUCTURE_EVIDENCE_VERSION,
+            sha256(evidence.value.encode("utf-8")).hexdigest(),
+        )
+        if evidence.evidence_id != expected_evidence_id:
+            raise SpotFibonacciError("#56 C-008 evidence identity is invalid.")
     except SpotFibonacciError:
         raise
     except (
