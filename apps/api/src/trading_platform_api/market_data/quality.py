@@ -246,13 +246,18 @@ class DataQualityPolicy:
                 raise DataQualityAssessmentError(
                     "Expected sequence range must match expected record count."
                 )
-            if self.data_kind is ProviderDataKind.ORDER_BOOK and (
-                self.expected_sequence_start is None
-                or self.expected_sequence_end is None
-                or self.expected_sequence_start >= self.expected_sequence_end
+            if (
+                self.data_kind is ProviderDataKind.ORDER_BOOK
+                and self.expected_record_count is not None
+                and self.expected_record_count > 1
+                and (
+                    self.expected_sequence_start is None
+                    or self.expected_sequence_end is None
+                    or self.expected_sequence_start >= self.expected_sequence_end
+                )
             ):
                 raise DataQualityAssessmentError(
-                    "Order-book policy requires an explicit delta sequence window."
+                    "Multi-record book policies require a delta sequence window."
                 )
         object.__setattr__(self, "required_data_cutoff", cutoff)
         object.__setattr__(self, "coverage_start", start)
@@ -270,15 +275,27 @@ def _assess_event_or_book_quality(
     trade_ticks: NormalizedTradeTicks | None,
     book_transitions: tuple[BookTransition, ...] | None,
 ) -> DataQualityReport:
-    """Use explicit event counts and sequence evidence, never candle slots.
+    """Assess normalized events/books without applying candle slot semantics.
 
-    For each modality, completeness is present required metric cells over
-    expected cells, freshness is fresh records over supplied records, accuracy
-    is in-bound records over supplied records, consistency is correctly linked
-    and ordered records over supplied records, source reliability is exact C-091
-    links over supplied records, coverage is supplied records over expected
-    records, and continuity is verified adjacent sequences over expected
-    transitions.
+    All fractions use exact expected/supplied C-001 record and required-metric
+    counts. Completeness is populated required metric cells / expected cells;
+    freshness is records within the policy age / supplied records; accuracy is
+    records with required, unit-matched, bounded metrics / supplied records;
+    consistency is correctly linked and time-ordered records / supplied
+    records; source reliability is exact C-091 provider identity links /
+    supplied records; coverage is supplied records / expected records.
+    Continuity is verified adjacent sequence transitions / max(expected
+    records - 1, 1). Event continuity requires the normalized sequence and
+    sequence-scope handoff; one sequence-verified event scores one because no
+    adjacency is missing. Multi-record books require sequence-bounded validated
+    delta fingerprints. A point-in-time book has no adjacent transition, so its
+    continuity score is zero over the one-record conservative denominator and
+    the report is DEGRADED with `book-delta-continuity-unverified`. This numeric
+    value is explicitly an absence-of-proof marker, not a measured delta
+    success rate; the C-003 schema has no unavailable dimension value. A
+    point-in-time state never proves continuous coverage. Independent-source
+    agreement is not scored and an explicit comparison requirement fails closed
+    without comparable evidence.
     """
     now = _utc("assessed_at", assessed_at)
     cutoff = policy.required_data_cutoff
@@ -513,6 +530,25 @@ def _assess_event_or_book_quality(
                 "Order-book assessment requires exact transition handoffs only."
             )
         book_state = book_transitions[-1].state
+        expected_count = policy.expected_record_count or len(observations)
+        if len(observations) > 1 and (
+            policy.expected_sequence_start is None
+            or policy.expected_sequence_end is None
+        ):
+            raise DataQualityAssessmentError(
+                "Multi-record book assessment requires a delta sequence window."
+            )
+        if (
+            len(observations) == 1
+            and expected_count == 1
+            and (
+                policy.expected_sequence_start is not None
+                or policy.expected_sequence_end is not None
+            )
+        ):
+            raise DataQualityAssessmentError(
+                "Point-in-time book assessment must not claim a delta sequence window."
+            )
         if (
             type(book_state) is not BookState
             or book_state.policy.instrument_id != policy.instrument_id

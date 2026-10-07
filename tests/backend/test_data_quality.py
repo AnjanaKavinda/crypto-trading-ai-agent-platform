@@ -234,6 +234,7 @@ def normalized_events(
 def book_evidence(
     *,
     checksum: bool = False,
+    include_delta: bool = True,
 ) -> tuple[tuple, MarketSnapshot, DataQualityPolicy]:
     book_policy = BookPolicy(
         instrument_id="BTCUSDT-SPOT",
@@ -288,24 +289,26 @@ def book_evidence(
         as_of=CUTOFF,
         checksum_verifier=verifier,
     )
-    delta_source = source("book-delta", 10)
-    delta = apply_book_delta(
-        initial.state,
-        BookDelta(
-            delta_source,
-            (LevelChange(BookSide.BID, Decimal("99"), Decimal("1.5")),),
-            11,
-            11,
-            "delta-checksum" if checksum else None,
-        ),
-        book_policy,
-        as_of=CUTOFF,
-        sequence_verifier=lambda previous, start, end: (
-            start == previous + 1 and end == start
-        ),
-        checksum_verifier=verifier,
-    )
-    transitions = (initial, delta)
+    transitions = (initial,)
+    if include_delta:
+        delta_source = source("book-delta", 10)
+        delta = apply_book_delta(
+            initial.state,
+            BookDelta(
+                delta_source,
+                (LevelChange(BookSide.BID, Decimal("99"), Decimal("1.5")),),
+                11,
+                11,
+                "delta-checksum" if checksum else None,
+            ),
+            book_policy,
+            as_of=CUTOFF,
+            sequence_verifier=lambda previous, start, end: (
+                start == previous + 1 and end == start
+            ),
+            checksum_verifier=verifier,
+        )
+        transitions += (delta,)
     observations = tuple(item.market_data for item in transitions)
     sources = tuple(item.source_record for item in transitions)
     assert all(item is not None for item in observations + sources)
@@ -342,7 +345,7 @@ def book_evidence(
             )
             for name in metric_names
         ),
-        expected_record_count=2,
+        expected_record_count=len(transitions),
         provider_identity=(
             "synthetic-provider",
             "fixture-v1",
@@ -350,8 +353,8 @@ def book_evidence(
             "fixture-adapter-v1",
             "synthetic-fixture",
         ),
-        expected_sequence_start=10,
-        expected_sequence_end=11,
+        expected_sequence_start=10 if include_delta else None,
+        expected_sequence_end=11 if include_delta else None,
     )
     return transitions, snapshot, quality_policy
 
@@ -994,6 +997,22 @@ def test_order_book_point_snapshot_missing_checksum_and_duplicate_degrade_or_rej
     )
     assert duplicate_report.status is DataQualityStatus.INVALID
     assert duplicate_report.duplicate_record_ids == ("book-delta",)
+
+
+def test_order_book_point_in_time_snapshot_does_not_claim_delta_continuity() -> None:
+    transitions, snapshot, quality_policy = book_evidence(include_delta=False)
+    assert len(transitions) == len(snapshot.market_data_ids) == 1
+    report = assess_data_quality(
+        snapshot,
+        (transitions[0].market_data,),
+        (transitions[0].source_record,),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=transitions,
+    )
+    assert report.status is DataQualityStatus.DEGRADED
+    assert report.continuity == Decimal("0")
+    assert "book-delta-continuity-unverified" in report.anomalies
 
 
 def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> None:
