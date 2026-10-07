@@ -274,10 +274,14 @@ def test_c003_v1_canonical_bytes_digest_and_identity_are_unchanged() -> None:
     assert encode(legacy) == expected
     assert canonical_sha256(legacy) == "".join(
         (
-            "6db37205049b7110",
-            "ac4e306c4badc4c7",
-            "58dfd715618be34d",
-            "1da302614cfb6a54",
+            "6db37205",
+            "049b7110",
+            "ac4e306c",
+            "4badc4c7",
+            "58dfd715",
+            "618be34d",
+            "1da30261",
+            "4cfb6a54",
         )
     )
     assert key_for(legacy) == LineageKey("C-003", str(REPORT_ID), "1")
