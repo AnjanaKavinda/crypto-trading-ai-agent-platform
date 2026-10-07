@@ -91,3 +91,23 @@ and stable observation keys. C-092 source membership includes the universe
 and eligible ancestry used to make the selection; unrelated/future sources
 cannot silently enter that exact dataset. #46 owns persistence and immutable
 ID/content binding, not new selection semantics.
+
+## Issue #335 — C-003 schema 2 compatibility
+
+[`ADR-0008`](../adr/ADR-0008-versioned-c003-v2-compatibility.md) records the
+owner-approved additive C-003 v2 boundary. C-003 schema `1` remains byte- and
+identity-compatible; schema `2` uses the existing `wire-1` envelope and a
+distinct typed model selected by `schema_version`. No global schema or
+canonicalization version changes.
+
+The lineage key remains `(C-003, report_id, schema_version)`: schema 1 keeps
+version `1`, while schema 2 uses version `2`. The existing key/unique constraint
+already includes `version`, so there is no DDL, rewrite, backfill, or v1
+reinterpretation.
+
+This release provides codec and lineage read compatibility only. V2 writes,
+producers, and analysis-consumer migration remain disabled/deferred. Before a
+producer is added, it must resolve an exact recognized assessment-policy ID
+and version and verify any `NOT_APPLICABLE` permission. Revalidate every
+receiving reader, add consumer dimension-required checks, and independently
+review/approve enabling v2 writes before rollout.

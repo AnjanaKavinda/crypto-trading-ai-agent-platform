@@ -17,6 +17,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0005 | [Personal Spot market-history storage and retention](ADR-0005-personal-spot-market-history-retention.md) | Accepted | 2026-09-29 | Platform Architect / AnjanaKavinda (explicit owner approval) | OD-0008, OD-0017 (bounded personal OHLCV scope) | C-001/C-002/C-003/C-091 (no semantics changed) | — | — |
 | ADR-0006 | [Separate immutable market evidence from hot payload storage](ADR-0006-market-payload-archive-boundary.md) | Accepted | 2026-10-04 | Platform Architect / AnjanaKavinda | OD-0008, OD-0017 (personal Spot OHLCV payload-tier boundary) | C-001/C-002/C-003 (no semantic change) | — | — |
 | ADR-0007 | [Local-first backup for the personal research phase](ADR-0007-local-first-phase-market-data-backup.md) | Accepted | 2026-10-04 | Platform Architect / AnjanaKavinda (explicit owner approval) | — (Phase 1 only) | No contract semantics changed | ADR-0005 cloud/cost clauses; ADR-0006 off-site backup prerequisite (Phase 1 only) | — |
+| ADR-0008 | [Versioned C-003 v2 compatibility and rollout](ADR-0008-versioned-c003-v2-compatibility.md) | Accepted | 2026-10-07 | Platform Architect / AnjanaKavinda | — | C-003 schema 2, wire-1 | — | — |
 
 ## Creating an ADR
 

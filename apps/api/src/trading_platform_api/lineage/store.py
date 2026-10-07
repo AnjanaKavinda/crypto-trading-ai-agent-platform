@@ -316,6 +316,10 @@ class SqlAlchemyLineageStore:
 
     async def append(self, record: object) -> LineageKey:
         """Insert or verify an identical retry; never commit the caller's session."""
+        if type(record) is DataQualityReportV2:
+            raise LineageError(
+                "C-003 schema v2 writes are disabled pending consumer readiness."
+            )
         key = key_for(record)
         document = encode(record)
         refs = await self._check_references(record)

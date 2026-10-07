@@ -8,6 +8,7 @@ import os
 import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from hashlib import sha256
 from uuid import uuid4
 
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from test_history_selection import history
 from test_lineage_quality import records_for_report
 from test_point_in_time import evidence
+from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage import local_backup_cli
 from trading_platform_api.lineage.archival import archive_market_data_batch
 from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
@@ -28,6 +30,7 @@ from trading_platform_api.lineage.codec import LineageError, encode, key_for
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
+    references,
 )
 from trading_platform_api.lineage.tables import (
     archive_members,
@@ -36,7 +39,15 @@ from trading_platform_api.lineage.tables import (
     payload_events,
     records,
 )
-from trading_platform_api.market_data.contracts import DatasetVersionReference
+from trading_platform_api.market_data.contracts import (
+    DataQualityDimension,
+    DataQualityDimensionResult,
+    DataQualityDimensionState,
+    DataQualityEvidenceReference,
+    DataQualityReportV2,
+    DataQualityStatus,
+    DatasetVersionReference,
+)
 from trading_platform_api.market_data.history_selection import reconstruct_history
 from trading_platform_api.market_data.point_in_time import reconstruct_pinned_snapshot
 
@@ -103,6 +114,96 @@ def test_postgresql_roundtrip_graph_and_replay(database_url):
                     await store.resolve(
                         (key_for(expected.manifest),), maximum_records=1
                     )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(check())
+
+
+def test_postgresql_c003_versions_keep_separate_keys_and_v2_is_read_only(
+    database_url,
+):
+    async def check():
+        engine = create_async_engine(database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        sources, observations, snapshot, legacy = records_for_report()
+        source = sources[0]
+        evidence_reference = DataQualityEvidenceReference(
+            "C-091",
+            str(source.source_record_id),
+            "1",
+            canonical_sha256(source),
+        )
+        dimensions = tuple(
+            DataQualityDimensionResult(
+                dimension,
+                DataQualityDimensionState.MEASURED,
+                (
+                    Decimal("0")
+                    if dimension is DataQualityDimension.CONTINUITY
+                    else Decimal("1")
+                ),
+                numerator=(
+                    0 if dimension is DataQualityDimension.CONTINUITY else 1
+                ),
+                denominator=1,
+                basis_unit="observations",
+                evidence_reference=(
+                    evidence_reference
+                    if dimension is DataQualityDimension.CONTINUITY
+                    else None
+                ),
+            )
+            for dimension in DataQualityDimension
+        )
+        current = DataQualityReportV2(
+            report_id=legacy.report_id,
+            snapshot_id=legacy.snapshot_id,
+            assessed_at=legacy.assessed_at,
+            required_data_cutoff=legacy.required_data_cutoff,
+            assessment_policy_id="snapshot-policy",
+            assessment_policy_version="1",
+            dimensions=dimensions,
+            status=DataQualityStatus.VALID,
+        )
+        try:
+            async with sessions.begin() as session:
+                store = SqlAlchemyLineageStore(session)
+                for record in (*sources, *observations, snapshot, legacy):
+                    await store.append(record)
+                with pytest.raises(LineageError, match="writes are disabled"):
+                    await store.append(current)
+
+                document = encode(current)
+                current_key = key_for(current)
+                await session.execute(
+                    insert(records).values(
+                        contract_id=current_key.contract_id,
+                        record_id=current_key.record_id,
+                        version=current_key.version,
+                        document=document,
+                        document_sha256=sha256(document.encode()).hexdigest(),
+                        evidence_sha256=canonical_sha256(current),
+                    )
+                )
+                await session.execute(
+                    insert(links),
+                    [
+                        {
+                            "contract_id": current_key.contract_id,
+                            "record_id": current_key.record_id,
+                            "version": current_key.version,
+                            "target_contract_id": reference.key.contract_id,
+                            "target_record_id": reference.key.record_id,
+                            "target_version": reference.key.version,
+                        }
+                        for reference in references(current)
+                    ],
+                )
+                assert current_key.version == "2"
+                assert await store.get(key_for(legacy)) == legacy
+                assert await store.get(current_key) == current
+                assert key_for(legacy) != current_key
         finally:
             await engine.dispose()
 

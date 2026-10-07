@@ -14,6 +14,7 @@ from trading_platform_api.lineage.codec import (
     key_for,
 )
 from trading_platform_api.lineage.store import (
+    SqlAlchemyLineageStore,
     append_validated_market_snapshot,
     references,
 )
@@ -263,8 +264,33 @@ def test_v2_codec_is_version_directed_and_has_a_distinct_lineage_identity() -> N
     envelope["schema_version"] = "3"
     with pytest.raises(LineageError):
         decode(json.dumps(envelope, separators=(",", ":"), sort_keys=True))
+    for schema_version in ("1", "future"):
+        envelope = json.loads(document)
+        envelope["schema_version"] = schema_version
+        with pytest.raises(LineageError):
+            decode(json.dumps(envelope, separators=(",", ":"), sort_keys=True))
     with pytest.raises(LineageError):
         decode(document + " ")
+
+
+def test_codec_rejects_unknown_v2_state_and_reason_codes() -> None:
+    dimensions = tuple(
+        DataQualityDimensionResult(
+            dimension,
+            DataQualityDimensionState.NOT_APPLICABLE,
+            reason_code=DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT,
+            not_applicable_policy=POLICY,
+        )
+        if dimension is DataQualityDimension.CONTINUITY
+        else measured(dimension)
+        for dimension in DataQualityDimension
+    )
+    document = encode(report(dimensions))
+    for field_name, value in (("state", "FUTURE_STATE"), ("reason_code", "FUTURE")):
+        envelope = json.loads(document)
+        envelope["payload"]["dimensions"][-1][field_name] = value
+        with pytest.raises(LineageError):
+            decode(json.dumps(envelope, separators=(",", ":"), sort_keys=True))
 
 
 def test_existing_validated_snapshot_writer_does_not_accept_v2() -> None:
@@ -283,3 +309,9 @@ def test_existing_validated_snapshot_writer_does_not_accept_v2() -> None:
             )
         )
     assert store.appended == []
+
+
+def test_generic_lineage_store_keeps_v2_writes_disabled() -> None:
+    store = object.__new__(SqlAlchemyLineageStore)
+    with pytest.raises(LineageError, match="writes are disabled"):
+        asyncio.run(store.append(report()))
