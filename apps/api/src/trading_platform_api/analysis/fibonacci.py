@@ -873,9 +873,9 @@ def calculate_spot_fibonacci(
                     )
                 else:
                     price = (
-                        endpoint.price + move * ratio
+                        origin.price + move * ratio
                         if direction == "bullish"
-                        else endpoint.price - move * ratio
+                        else origin.price - move * ratio
                     )
                 try:
                     _bounded_decimal("fibonacci level", price)
