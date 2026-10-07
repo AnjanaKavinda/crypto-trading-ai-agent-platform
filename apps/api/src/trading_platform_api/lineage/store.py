@@ -28,6 +28,7 @@ from trading_platform_api.lineage.tables import (
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
     DatasetVersion,
     DataSourceRecord,
@@ -50,8 +51,21 @@ class Reference:
 
 def references(record: object) -> tuple[Reference, ...]:
     result: list[Reference] = []
-    if type(record) is DataQualityReport:
+    if type(record) in (DataQualityReport, DataQualityReportV2):
         result.append(Reference(LineageKey("C-002", str(record.snapshot_id))))
+    if type(record) is DataQualityReportV2:
+        result.extend(
+            Reference(
+                LineageKey(
+                    item.evidence_reference.contract_id,
+                    item.evidence_reference.record_id,
+                    item.evidence_reference.version,
+                ),
+                item.evidence_reference.evidence_sha256,
+            )
+            for item in record.dimensions
+            if item.evidence_reference is not None
+        )
     if type(record) is MarketData:
         result.append(Reference(LineageKey("C-091", str(record.source_record_id))))
     if isinstance(record, (MarketSnapshot, DatasetVersion, HistoricalUniverse)):

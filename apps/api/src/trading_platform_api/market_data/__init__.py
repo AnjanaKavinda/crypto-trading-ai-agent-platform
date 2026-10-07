@@ -1,6 +1,13 @@
 from trading_platform_api.market_data.contracts import (
     CONTRACT_SCHEMA_VERSION,
+    AssessmentPolicyReference,
+    DataQualityDimension,
+    DataQualityDimensionReasonCode,
+    DataQualityDimensionResult,
+    DataQualityDimensionState,
+    DataQualityEvidenceReference,
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
     DatasetVersion,
     DatasetVersionReference,
@@ -101,6 +108,13 @@ from trading_platform_api.market_data.trades import (
 )
 
 __all__ = [
+    "AssessmentPolicyReference",
+    "DataQualityDimension",
+    "DataQualityDimensionReasonCode",
+    "DataQualityDimensionResult",
+    "DataQualityDimensionState",
+    "DataQualityEvidenceReference",
+    "DataQualityReportV2",
     "HistoricalEvidencePin",
     "HistoricalUniverse",
     "ObservationRevision",

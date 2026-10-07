@@ -22,8 +22,33 @@ class DataQualityStatus(StrEnum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class DataQualityDimension(StrEnum):
+    COMPLETENESS = "completeness"
+    FRESHNESS = "freshness"
+    ACCURACY = "accuracy"
+    CONSISTENCY = "consistency"
+    SOURCE_RELIABILITY = "source_reliability"
+    COVERAGE = "coverage"
+    CONTINUITY = "continuity"
+
+
+class DataQualityDimensionState(StrEnum):
+    MEASURED = "MEASURED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class DataQualityDimensionReasonCode(StrEnum):
+    MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
+    SEQUENCE_UNVERIFIED = "SEQUENCE_UNVERIFIED"
+    DENOMINATOR_UNAVAILABLE = "DENOMINATOR_UNAVAILABLE"
+    PROVENANCE_UNVERIFIABLE = "PROVENANCE_UNVERIFIABLE"
+    SINGLE_POINT_SNAPSHOT = "SINGLE_POINT_SNAPSHOT"
+
+
 CONTRACT_SCHEMA_VERSION = "1"
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_POLICY_REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _T = TypeVar("_T")
 
 
@@ -528,6 +553,259 @@ class DataQualityReport:
             _quality_dimension(field_name, getattr(self, field_name))
         if not isinstance(self.status, DataQualityStatus):
             raise MarketDataContractError("status must be a DataQualityStatus.")
+        for field_name in (
+            "missing_fields",
+            "invalid_record_ids",
+            "duplicate_record_ids",
+            "anomalies",
+            "source_conflicts",
+        ):
+            _text_tuple(field_name, getattr(self, field_name))
+        if self.status is DataQualityStatus.VALID and any(
+            getattr(self, field_name)
+            for field_name in (
+                "missing_fields",
+                "invalid_record_ids",
+                "duplicate_record_ids",
+                "anomalies",
+                "source_conflicts",
+            )
+        ):
+            raise MarketDataContractError(
+                "VALID status cannot contain unresolved quality findings."
+            )
+        object.__setattr__(self, "assessed_at", assessed_at)
+        object.__setattr__(self, "required_data_cutoff", required_data_cutoff)
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentPolicyReference:
+    policy_id: str
+    version: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("policy_id", "version"):
+            value = _required_text(field_name, getattr(self, field_name))
+            if _POLICY_REFERENCE_PATTERN.fullmatch(value) is None:
+                raise MarketDataContractError(
+                    f"{field_name} must be a bounded stable policy reference."
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityEvidenceReference:
+    contract_id: str
+    record_id: str
+    version: str
+    evidence_sha256: str
+
+    def __post_init__(self) -> None:
+        contract_id = _required_text("contract_id", self.contract_id)
+        if re.fullmatch(r"C-[0-9]{3}", contract_id) is None:
+            raise MarketDataContractError("contract_id must match C-###.")
+        record_id = _required_text("record_id", self.record_id)
+        version = _required_text("version", self.version)
+        if len(record_id.encode("utf-8")) > 512 or len(version.encode("utf-8")) > 512:
+            raise MarketDataContractError("Evidence reference identity is too long.")
+        _sha256("evidence_sha256", self.evidence_sha256)
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityDimensionResult:
+    dimension: DataQualityDimension
+    state: DataQualityDimensionState
+    score: Decimal | None = None
+    numerator: int | None = None
+    denominator: int | None = None
+    basis_unit: str | None = None
+    evidence_reference: DataQualityEvidenceReference | None = None
+    reason_code: DataQualityDimensionReasonCode | None = None
+    not_applicable_policy: AssessmentPolicyReference | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.dimension) is not DataQualityDimension:
+            raise MarketDataContractError("dimension must be a DataQualityDimension.")
+        if type(self.state) is not DataQualityDimensionState:
+            raise MarketDataContractError("state must be a DataQualityDimensionState.")
+        if self.reason_code is not None and type(
+            self.reason_code
+        ) is not DataQualityDimensionReasonCode:
+            raise MarketDataContractError(
+                "reason_code must be a DataQualityDimensionReasonCode."
+            )
+        if self.evidence_reference is not None and type(
+            self.evidence_reference
+        ) is not DataQualityEvidenceReference:
+            raise MarketDataContractError(
+                "evidence_reference must be a DataQualityEvidenceReference."
+            )
+        if self.not_applicable_policy is not None and type(
+            self.not_applicable_policy
+        ) is not AssessmentPolicyReference:
+            raise MarketDataContractError(
+                "not_applicable_policy must be an AssessmentPolicyReference."
+            )
+
+        has_count_value = any(
+            value is not None for value in (self.numerator, self.denominator, self.basis_unit)
+        )
+        has_count_basis = (
+            type(self.numerator) is int
+            and type(self.denominator) is int
+            and type(self.basis_unit) is str
+        )
+        if has_count_value and not has_count_basis:
+            raise MarketDataContractError(
+                "A measurement count basis requires numerator, denominator, and unit."
+            )
+        if has_count_basis:
+            _required_text("basis_unit", self.basis_unit)
+            if (
+                self.numerator < 0
+                or self.denominator <= 0
+                or self.numerator > self.denominator
+            ):
+                raise MarketDataContractError("Invalid measurement numerator/denominator.")
+
+        if self.state is DataQualityDimensionState.MEASURED:
+            if self.score is None:
+                raise MarketDataContractError("MEASURED dimensions require a score.")
+            score = _quality_dimension("score", self.score)
+            if self.reason_code is not None or self.not_applicable_policy is not None:
+                raise MarketDataContractError(
+                    "MEASURED dimensions cannot carry a reason or N/A policy."
+                )
+            if has_count_basis:
+                if score != Decimal(self.numerator) / Decimal(self.denominator):
+                    raise MarketDataContractError(
+                        "score must match its verified measurement ratio."
+                    )
+                if (score == 0) != (self.evidence_reference is not None):
+                    raise MarketDataContractError(
+                        "A measured zero requires immutable evidence for its denominator."
+                    )
+            elif score == 0:
+                raise MarketDataContractError(
+                    "A measured zero requires a positive auditable denominator."
+                )
+            elif (
+                self.evidence_reference is None
+                or has_count_value
+            ):
+                raise MarketDataContractError(
+                    "MEASURED dimensions require a valid count basis or evidence reference."
+                )
+            return
+
+        if any(
+            value is not None
+            for value in (
+                self.score,
+                self.numerator,
+                self.denominator,
+                self.basis_unit,
+                self.evidence_reference,
+            )
+        ):
+            raise MarketDataContractError(
+                "Non-measured dimensions cannot carry scores or measurement bases."
+            )
+
+        if self.state is DataQualityDimensionState.NOT_APPLICABLE:
+            if (
+                self.reason_code
+                is not DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT
+                or self.not_applicable_policy is None
+            ):
+                raise MarketDataContractError(
+                    "NOT_APPLICABLE requires its approved reason and policy reference."
+                )
+        elif (
+            self.state is DataQualityDimensionState.UNAVAILABLE
+            and self.reason_code
+            not in {
+                DataQualityDimensionReasonCode.MISSING_REQUIRED_EVIDENCE,
+                DataQualityDimensionReasonCode.SEQUENCE_UNVERIFIED,
+                DataQualityDimensionReasonCode.DENOMINATOR_UNAVAILABLE,
+                DataQualityDimensionReasonCode.PROVENANCE_UNVERIFIABLE,
+            }
+        ):
+            raise MarketDataContractError(
+                "UNAVAILABLE requires a recognized unavailable reason code."
+            )
+        if self.state is DataQualityDimensionState.UNAVAILABLE and (
+            self.not_applicable_policy is not None
+        ):
+            raise MarketDataContractError(
+                "UNAVAILABLE dimensions cannot carry an N/A policy reference."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityReportV2:
+    report_id: UUID
+    snapshot_id: UUID
+    assessed_at: datetime
+    required_data_cutoff: datetime
+    assessment_policy_id: str
+    assessment_policy_version: str
+    dimensions: tuple[DataQualityDimensionResult, ...]
+    status: DataQualityStatus
+    missing_fields: tuple[str, ...] = ()
+    invalid_record_ids: tuple[str, ...] = ()
+    duplicate_record_ids: tuple[str, ...] = ()
+    anomalies: tuple[str, ...] = ()
+    source_conflicts: tuple[str, ...] = ()
+    contract_id: str = field(default="C-003", init=False)
+    schema_version: str = field(default="2", init=False)
+
+    def __post_init__(self) -> None:
+        _uuid("report_id", self.report_id)
+        _uuid("snapshot_id", self.snapshot_id)
+        assessed_at = _utc_datetime("assessed_at", self.assessed_at)
+        required_data_cutoff = _utc_datetime(
+            "required_data_cutoff", self.required_data_cutoff
+        )
+        _ordered(
+            earlier_name="required_data_cutoff",
+            earlier=required_data_cutoff,
+            later_name="assessed_at",
+            later=assessed_at,
+        )
+        AssessmentPolicyReference(
+            self.assessment_policy_id, self.assessment_policy_version
+        )
+        if (
+            type(self.dimensions) is not tuple
+            or len(self.dimensions) != len(DataQualityDimension)
+            or not all(type(item) is DataQualityDimensionResult for item in self.dimensions)
+            or tuple(item.dimension for item in self.dimensions)
+            != tuple(DataQualityDimension)
+        ):
+            raise MarketDataContractError(
+                "dimensions must contain each C-003 dimension exactly once in canonical order."
+            )
+        if type(self.status) is not DataQualityStatus:
+            raise MarketDataContractError("status must be a DataQualityStatus.")
+        for item in self.dimensions:
+            if (
+                item.state is DataQualityDimensionState.NOT_APPLICABLE
+                and (
+                    item.not_applicable_policy.policy_id != self.assessment_policy_id
+                    or item.not_applicable_policy.version
+                    != self.assessment_policy_version
+                )
+            ):
+                raise MarketDataContractError(
+                    "NOT_APPLICABLE policy reference must match the report policy."
+                )
+        if self.status is DataQualityStatus.VALID and any(
+            item.state is DataQualityDimensionState.UNAVAILABLE
+            for item in self.dimensions
+        ):
+            raise MarketDataContractError(
+                "VALID status cannot contain an UNAVAILABLE dimension."
+            )
         for field_name in (
             "missing_fields",
             "invalid_record_ids",
