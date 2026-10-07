@@ -123,9 +123,7 @@ def test_measured_dimension_rejects_invalid_or_unaudited_basis(
 
 
 def test_measured_zero_requires_a_positive_denominator_and_immutable_evidence() -> None:
-    evidence = DataQualityEvidenceReference(
-        "C-091", "source-record", "1", "a" * 64
-    )
+    evidence = DataQualityEvidenceReference("C-091", "source-record", "1", "a" * 64)
     zero = DataQualityDimensionResult(
         DataQualityDimension.CONTINUITY,
         DataQualityDimensionState.MEASURED,
@@ -160,9 +158,7 @@ def test_measurement_ratio_validation_ignores_ambient_decimal_precision() -> Non
 
 
 def test_v2_evidence_reference_is_a_hashed_lineage_dependency() -> None:
-    evidence = DataQualityEvidenceReference(
-        "C-091", "source-record", "1", "a" * 64
-    )
+    evidence = DataQualityEvidenceReference("C-091", "source-record", "1", "a" * 64)
     dimensions = tuple(
         DataQualityDimensionResult(
             dimension,
@@ -196,7 +192,10 @@ def test_not_applicable_requires_matching_policy_and_has_no_measurement() -> Non
         n_a if dimension is DataQualityDimension.CONTINUITY else measured(dimension)
         for dimension in DataQualityDimension
     )
-    assert report(dimensions).dimensions[-1].state is DataQualityDimensionState.NOT_APPLICABLE
+    assert (
+        report(dimensions).dimensions[-1].state
+        is DataQualityDimensionState.NOT_APPLICABLE
+    )
     with pytest.raises(MarketDataContractError, match="policy reference"):
         report(dimensions, assessment_policy_version="2")
     with pytest.raises(MarketDataContractError, match="measurement bases"):
@@ -209,7 +208,9 @@ def test_not_applicable_requires_matching_policy_and_has_no_measurement() -> Non
         )
 
 
-def test_single_point_snapshot_cannot_mark_non_continuity_dimensions_not_applicable() -> None:
+def test_single_point_snapshot_cannot_mark_non_continuity_dimensions_not_applicable() -> (
+    None
+):
     with pytest.raises(MarketDataContractError, match="dimension-approved"):
         DataQualityDimensionResult(
             DataQualityDimension.COMPLETENESS,
@@ -219,7 +220,9 @@ def test_single_point_snapshot_cannot_mark_non_continuity_dimensions_not_applica
         )
 
 
-def test_unavailable_requires_a_closed_reason_set_and_valid_cannot_be_unavailable() -> None:
+def test_unavailable_requires_a_closed_reason_set_and_valid_cannot_be_unavailable() -> (
+    None
+):
     unavailable = DataQualityDimensionResult(
         DataQualityDimension.CONTINUITY,
         DataQualityDimensionState.UNAVAILABLE,
@@ -270,14 +273,7 @@ def test_c003_v1_canonical_bytes_digest_and_identity_are_unchanged() -> None:
     legacy = v1_report()
     assert encode(legacy) == expected
     assert canonical_sha256(legacy) == (
-        "6db37205"
-        "049b7110"
-        "ac4e306c"
-        "4badc4c7"
-        "58dfd715"
-        "618be34d"
-        "1da30261"
-        "4cfb6a54"
+        "6db37205049b7110ac4e306c4badc4c758dfd715618be34d1da302614cfb6a54"
     )
     assert key_for(legacy) == LineageKey("C-003", str(REPORT_ID), "1")
     assert type(decode(expected)) is DataQualityReport

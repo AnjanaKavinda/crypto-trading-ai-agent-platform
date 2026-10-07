@@ -627,27 +627,31 @@ class DataQualityDimensionResult:
             raise MarketDataContractError("dimension must be a DataQualityDimension.")
         if type(self.state) is not DataQualityDimensionState:
             raise MarketDataContractError("state must be a DataQualityDimensionState.")
-        if self.reason_code is not None and type(
-            self.reason_code
-        ) is not DataQualityDimensionReasonCode:
+        if (
+            self.reason_code is not None
+            and type(self.reason_code) is not DataQualityDimensionReasonCode
+        ):
             raise MarketDataContractError(
                 "reason_code must be a DataQualityDimensionReasonCode."
             )
-        if self.evidence_reference is not None and type(
-            self.evidence_reference
-        ) is not DataQualityEvidenceReference:
+        if (
+            self.evidence_reference is not None
+            and type(self.evidence_reference) is not DataQualityEvidenceReference
+        ):
             raise MarketDataContractError(
                 "evidence_reference must be a DataQualityEvidenceReference."
             )
-        if self.not_applicable_policy is not None and type(
-            self.not_applicable_policy
-        ) is not AssessmentPolicyReference:
+        if (
+            self.not_applicable_policy is not None
+            and type(self.not_applicable_policy) is not AssessmentPolicyReference
+        ):
             raise MarketDataContractError(
                 "not_applicable_policy must be an AssessmentPolicyReference."
             )
 
         has_count_value = any(
-            value is not None for value in (self.numerator, self.denominator, self.basis_unit)
+            value is not None
+            for value in (self.numerator, self.denominator, self.basis_unit)
         )
         has_count_basis = (
             type(self.numerator) is int
@@ -665,7 +669,9 @@ class DataQualityDimensionResult:
                 or self.denominator <= 0
                 or self.numerator > self.denominator
             ):
-                raise MarketDataContractError("Invalid measurement numerator/denominator.")
+                raise MarketDataContractError(
+                    "Invalid measurement numerator/denominator."
+                )
 
         if self.state is DataQualityDimensionState.MEASURED:
             if self.score is None:
@@ -691,10 +697,7 @@ class DataQualityDimensionResult:
                 raise MarketDataContractError(
                     "A measured zero requires a positive auditable denominator."
                 )
-            elif (
-                self.evidence_reference is None
-                or has_count_value
-            ):
+            elif self.evidence_reference is None or has_count_value:
                 raise MarketDataContractError(
                     "MEASURED dimensions require a valid count basis or evidence reference."
                 )
@@ -782,7 +785,9 @@ class DataQualityReportV2:
         if (
             type(self.dimensions) is not tuple
             or len(self.dimensions) != len(DataQualityDimension)
-            or not all(type(item) is DataQualityDimensionResult for item in self.dimensions)
+            or not all(
+                type(item) is DataQualityDimensionResult for item in self.dimensions
+            )
             or tuple(item.dimension for item in self.dimensions)
             != tuple(DataQualityDimension)
         ):
@@ -792,13 +797,9 @@ class DataQualityReportV2:
         if type(self.status) is not DataQualityStatus:
             raise MarketDataContractError("status must be a DataQualityStatus.")
         for item in self.dimensions:
-            if (
-                item.state is DataQualityDimensionState.NOT_APPLICABLE
-                and (
-                    item.not_applicable_policy.policy_id != self.assessment_policy_id
-                    or item.not_applicable_policy.version
-                    != self.assessment_policy_version
-                )
+            if item.state is DataQualityDimensionState.NOT_APPLICABLE and (
+                item.not_applicable_policy.policy_id != self.assessment_policy_id
+                or item.not_applicable_policy.version != self.assessment_policy_version
             ):
                 raise MarketDataContractError(
                     "NOT_APPLICABLE policy reference must match the report policy."

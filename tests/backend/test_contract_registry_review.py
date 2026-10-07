@@ -153,7 +153,9 @@ def test_versioned_contract_models_keep_their_canonical_owner_and_schema() -> No
     owners = _canonical_owners()
     assert owners["C-003"].__name__ == "DataQualityReport"
     for contract_type, expected in VERSIONED_CONTRACT_TYPES.items():
-        descriptor = describe_dataclass_contract(contract_type, payload_version="wire-1")
+        descriptor = describe_dataclass_contract(
+            contract_type, payload_version="wire-1"
+        )
         assert (descriptor.contract_id, descriptor.schema_version) == expected
 
 

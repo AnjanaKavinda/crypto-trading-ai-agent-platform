@@ -143,9 +143,7 @@ def test_postgresql_c003_versions_keep_separate_keys_and_v2_is_read_only(
                     if dimension is DataQualityDimension.CONTINUITY
                     else Decimal("1")
                 ),
-                numerator=(
-                    0 if dimension is DataQualityDimension.CONTINUITY else 1
-                ),
+                numerator=(0 if dimension is DataQualityDimension.CONTINUITY else 1),
                 denominator=1,
                 basis_unit="observations",
                 evidence_reference=(
