@@ -959,6 +959,10 @@ def calculate_spot_fibonacci(
             raise SpotFibonacciError(
                 "Invalidation threshold exceeds Decimal bounds."
             ) from exc
+        if threshold <= 0:
+            raise SpotFibonacciError(
+                "Invalidation threshold must be a positive price."
+            )
     close_values = []
     for candle in closes_after_endpoint:
         close_metric = next(
