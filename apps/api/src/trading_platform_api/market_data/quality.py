@@ -19,17 +19,17 @@ from trading_platform_api.market_data.contracts import (
     MarketData,
     MarketSnapshot,
 )
-from trading_platform_api.market_data.providers import (
-    ProviderBatch,
-    ProviderBatchStatus,
-    ProviderDataKind,
-)
 from trading_platform_api.market_data.order_book import (
     BookFailure,
     BookState,
     BookStatus,
     BookTransition,
     ChecksumStatus,
+)
+from trading_platform_api.market_data.providers import (
+    ProviderBatch,
+    ProviderBatchStatus,
+    ProviderDataKind,
 )
 from trading_platform_api.market_data.trades import (
     NormalizedTradeTicks,
@@ -139,7 +139,9 @@ class DataQualityPolicy:
                 or window % self.interval_seconds
                 or not 2 <= window / self.interval_seconds <= 10000
             ):
-                raise DataQualityAssessmentError("Coverage must have 2–10000 exact slots.")
+                raise DataQualityAssessmentError(
+                    "Coverage must have 2–10000 exact slots."
+                )
             if (
                 type(self.maximum_missing_intervals) is not int
                 or self.maximum_missing_intervals < 0
@@ -149,7 +151,10 @@ class DataQualityPolicy:
                 self.required_metrics
             ):
                 raise DataQualityAssessmentError("OHLCV metrics are required.")
-        elif self.interval_seconds is not None or self.maximum_missing_intervals is not None:
+        elif (
+            self.interval_seconds is not None
+            or self.maximum_missing_intervals is not None
+        ):
             raise DataQualityAssessmentError(
                 "Event and book policies must not use candle interval fields."
             )
@@ -174,7 +179,9 @@ class DataQualityPolicy:
                 and not self.required_metrics
             )
         ):
-            raise DataQualityAssessmentError("Required metrics must be explicit and unique.")
+            raise DataQualityAssessmentError(
+                "Required metrics must be explicit and unique."
+            )
         if (
             type(self.metric_bounds) is not tuple
             or not all(type(bound) is MetricBound for bound in self.metric_bounds)
@@ -190,22 +197,16 @@ class DataQualityPolicy:
                 "Every event/book metric bound must declare a unit."
             )
         if self.data_kind is not ProviderDataKind.OHLCV:
-            if (
-                self.expected_record_count is not None
-                and (
-                    type(self.expected_record_count) is not int
-                    or not 1 <= self.expected_record_count <= 10000
-                )
+            if self.expected_record_count is not None and (
+                type(self.expected_record_count) is not int
+                or not 1 <= self.expected_record_count <= 10000
             ):
                 raise DataQualityAssessmentError("Invalid expected record count.")
             if (
                 type(self.maximum_missing_records) is not int
                 or self.maximum_missing_records < 0
                 or type(self.provider_complete) is not bool
-                or (
-                    self.expected_record_count is None
-                    and not self.provider_complete
-                )
+                or (self.expected_record_count is None and not self.provider_complete)
             ):
                 raise DataQualityAssessmentError(
                     "Expected record count or provider completeness is required."
@@ -237,6 +238,9 @@ class DataQualityPolicy:
             if (
                 self.expected_sequence_start is not None
                 and self.expected_record_count is not None
+                and self.data_kind
+                in (ProviderDataKind.TRADE, ProviderDataKind.TICK)
+                and self.expected_sequence_end is not None
                 and self.expected_sequence_end - self.expected_sequence_start + 1
                 != self.expected_record_count
             ):
@@ -376,9 +380,7 @@ def _assess_event_or_book_quality(
         if linked:
             reliable_count += 1
             consistent_count += 1
-            if cutoff - item.event_time <= timedelta(
-                seconds=policy.freshness_seconds
-            ):
+            if cutoff - item.event_time <= timedelta(seconds=policy.freshness_seconds):
                 fresh_count += 1
         else:
             invalid_ids.append(label)
@@ -389,6 +391,16 @@ def _assess_event_or_book_quality(
             if metric is not None and (
                 metric.unit != bound.unit
                 or not bound.minimum <= metric.value <= bound.maximum
+                or (
+                    policy.data_kind
+                    in (
+                        ProviderDataKind.TRADE,
+                        ProviderDataKind.TICK,
+                        ProviderDataKind.ORDER_BOOK,
+                    )
+                    and name.endswith(("price", "quantity"))
+                    and metric.value <= 0
+                )
             ):
                 accurate = False
                 invalid_ids.append(label)
@@ -452,12 +464,9 @@ def _assess_event_or_book_quality(
                 or not trade_ticks.quality.sequence_verified
             ):
                 invalid_ids.append("sequence-gap-or-verification-mismatch")
-            if (
-                policy.expected_sequence_start is not None
-                and (
-                    numbers[0] != policy.expected_sequence_start
-                    or numbers[-1] != policy.expected_sequence_end
-                )
+            if policy.expected_sequence_start is not None and (
+                numbers[0] != policy.expected_sequence_start
+                or numbers[-1] != policy.expected_sequence_end
             ):
                 invalid_ids.append("sequence-range-mismatch")
         else:
@@ -469,23 +478,20 @@ def _assess_event_or_book_quality(
         unknown_ids = set(trade_ticks.quality.unknown_aggressor_event_ids)
         if not unknown_ids.issubset(event_ids):
             invalid_ids.append("unknown-aggressor-identity-mismatch")
-        for item in trade_ticks.identities:
+        for event_identity in trade_ticks.identities:
             unknown = (
-                item.side_semantics is not SideSemantics.AGGRESSOR
-                or item.reported_side is ReportedSide.UNKNOWN
+                event_identity.side_semantics is not SideSemantics.AGGRESSOR
+                or event_identity.reported_side is ReportedSide.UNKNOWN
             )
             if (
-                (unknown and item.aggressor_side is not ReportedSide.UNKNOWN)
-                or (
-                    not unknown
-                    and item.aggressor_side is not item.reported_side
-                )
+                unknown and event_identity.aggressor_side is not ReportedSide.UNKNOWN
+            ) or (
+                not unknown
+                and event_identity.aggressor_side is not event_identity.reported_side
             ):
-                invalid_ids.append(str(item.market_data_id))
-            elif not _book_metrics_match(transition):
-                invalid_ids.append(str(item.market_data_id))
+                invalid_ids.append(str(event_identity.market_data_id))
             if unknown:
-                unknown_ids.add(item.provider_event_id)
+                unknown_ids.add(event_identity.provider_event_id)
         if unknown_ids:
             anomalies.extend(
                 f"unknown-aggressor:{event_id}" for event_id in sorted(unknown_ids)
@@ -558,6 +564,8 @@ def _assess_event_or_book_quality(
                 or transition.state.market_data_ids != observation_ids[: index + 1]
                 or transition.state.source_lineage != source_ids[: index + 1]
             ):
+                invalid_ids.append(str(item.market_data_id))
+            elif not _book_metrics_match(transition):
                 invalid_ids.append(str(item.market_data_id))
             fingerprint = fingerprints[index]
             checksum_status = transition.quality.checksum

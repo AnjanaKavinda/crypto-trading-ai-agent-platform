@@ -710,9 +710,7 @@ def test_event_empty_duplicate_missing_coverage_and_comparator_fail_closed() -> 
         )
     duplicate_handoff = replace(
         normalized,
-        quality=replace(
-            normalized.quality, duplicate_event_ids=("event-0",)
-        ),
+        quality=replace(normalized.quality, duplicate_event_ids=("event-0",)),
     )
     duplicate_report = assess_data_quality(
         snapshot,
@@ -782,7 +780,9 @@ def test_event_cutoff_freshness_units_and_snapshot_membership_are_checked() -> N
     assert invalid.status is DataQualityStatus.INVALID
     with pytest.raises(DataQualityAssessmentError, match="exact assessed"):
         assess_data_quality(
-            replace(snapshot, market_data_ids=(uuid4(),) + snapshot.market_data_ids[1:]),
+            replace(
+                snapshot, market_data_ids=(uuid4(),) + snapshot.market_data_ids[1:]
+            ),
             normalized.market_data,
             normalized.source_records,
             quality_policy,
@@ -791,12 +791,104 @@ def test_event_cutoff_freshness_units_and_snapshot_membership_are_checked() -> N
         )
 
 
+def test_event_policy_requires_completeness_evidence_and_rejects_sequence_gaps() -> None:
+    normalized, snapshot, quality_policy = normalized_events()
+    with pytest.raises(DataQualityAssessmentError, match="Expected record count"):
+        replace(
+            quality_policy,
+            expected_record_count=None,
+            provider_complete=False,
+        )
+    gapped = replace(
+        normalized,
+        identities=(
+            normalized.identities[0],
+            replace(normalized.identities[1], sequence=8),
+        ),
+    )
+    report = assess_data_quality(
+        snapshot,
+        gapped.market_data,
+        gapped.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=gapped,
+    )
+    assert report.status is DataQualityStatus.INVALID
+    assert "sequence-gap-or-verification-mismatch" in report.invalid_record_ids
+    stale_snapshot = replace(
+        snapshot,
+        as_of=CUTOFF - timedelta(seconds=1),
+    )
+    with pytest.raises(DataQualityAssessmentError, match="cutoff mismatch"):
+        assess_data_quality(
+            stale_snapshot,
+            normalized.market_data,
+            normalized.source_records,
+            quality_policy,
+            assessed_at=CUTOFF,
+            trade_ticks=normalized,
+        )
+
+
+def test_event_assessment_is_repeatable_except_report_identity() -> None:
+    normalized, snapshot, quality_policy = normalized_events()
+
+    def result():
+        return assess_data_quality(
+            snapshot,
+            normalized.market_data,
+            normalized.source_records,
+            quality_policy,
+            assessed_at=CUTOFF,
+            trade_ticks=normalized,
+        )
+
+    first, second = result(), result()
+    assert first.report_id != second.report_id
+    assert (
+        first.snapshot_id,
+        first.assessed_at,
+        first.required_data_cutoff,
+        first.completeness,
+        first.freshness,
+        first.accuracy,
+        first.consistency,
+        first.source_reliability,
+        first.coverage,
+        first.continuity,
+        first.status,
+        first.missing_fields,
+        first.invalid_record_ids,
+        first.duplicate_record_ids,
+        first.anomalies,
+    ) == (
+        second.snapshot_id,
+        second.assessed_at,
+        second.required_data_cutoff,
+        second.completeness,
+        second.freshness,
+        second.accuracy,
+        second.consistency,
+        second.source_reliability,
+        second.coverage,
+        second.continuity,
+        second.status,
+        second.missing_fields,
+        second.invalid_record_ids,
+        second.duplicate_record_ids,
+        second.anomalies,
+    )
+
+
 def test_order_book_delta_lineage_checksum_and_all_seven_dimensions() -> None:
     transitions, snapshot, quality_policy = book_evidence(checksum=True)
     report = assess_data_quality(
         snapshot,
         tuple(item.market_data for item in transitions if item.market_data is not None),
-        tuple(item.source_record for item in transitions if item.source_record is not None),
+        tuple(
+            item.source_record for item in transitions if item.source_record is not None
+        ),
         quality_policy,
         assessed_at=CUTOFF,
         book_transitions=transitions,
@@ -811,9 +903,7 @@ def test_order_book_delta_lineage_checksum_and_all_seven_dimensions() -> None:
         report.coverage,
         report.continuity,
     ) == (Decimal("1"),) * 7
-    assert all(
-        item.quality.checksum is ChecksumStatus.VERIFIED for item in transitions
-    )
+    assert all(item.quality.checksum is ChecksumStatus.VERIFIED for item in transitions)
 
 
 def test_order_book_point_snapshot_missing_checksum_and_duplicate_degrade_or_reject() -> (
@@ -823,7 +913,9 @@ def test_order_book_point_snapshot_missing_checksum_and_duplicate_degrade_or_rej
     no_checksum = assess_data_quality(
         snapshot,
         tuple(item.market_data for item in transitions if item.market_data is not None),
-        tuple(item.source_record for item in transitions if item.source_record is not None),
+        tuple(
+            item.source_record for item in transitions if item.source_record is not None
+        ),
         quality_policy,
         assessed_at=CUTOFF,
         book_transitions=transitions,
@@ -839,7 +931,9 @@ def test_order_book_point_snapshot_missing_checksum_and_duplicate_degrade_or_rej
     duplicate_report = assess_data_quality(
         snapshot,
         tuple(item.market_data for item in transitions if item.market_data is not None),
-        tuple(item.source_record for item in transitions if item.source_record is not None),
+        tuple(
+            item.source_record for item in transitions if item.source_record is not None
+        ),
         quality_policy,
         assessed_at=CUTOFF,
         book_transitions=transitions + (duplicate,),
@@ -859,7 +953,9 @@ def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> No
     invalid = assess_data_quality(
         snapshot,
         tuple(item.market_data for item in transitions if item.market_data is not None),
-        tuple(item.source_record for item in transitions if item.source_record is not None),
+        tuple(
+            item.source_record for item in transitions if item.source_record is not None
+        ),
         quality_policy,
         assessed_at=CUTOFF,
         book_transitions=(transitions[0], invalid_transition),
@@ -868,14 +964,14 @@ def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> No
     assert "book-state:SEQUENCE" in invalid.invalid_record_ids
     bad_checksum = replace(
         transitions[-1],
-        quality=replace(
-            transitions[-1].quality, checksum=ChecksumStatus.NOT_AVAILABLE
-        ),
+        quality=replace(transitions[-1].quality, checksum=ChecksumStatus.NOT_AVAILABLE),
     )
     checksum_report = assess_data_quality(
         snapshot,
         tuple(item.market_data for item in transitions if item.market_data is not None),
-        tuple(item.source_record for item in transitions if item.source_record is not None),
+        tuple(
+            item.source_record for item in transitions if item.source_record is not None
+        ),
         quality_policy,
         assessed_at=CUTOFF,
         book_transitions=(transitions[0], bad_checksum),
@@ -891,12 +987,54 @@ def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> No
                 item.market_data for item in transitions if item.market_data is not None
             ),
             tuple(
-                item.source_record for item in transitions if item.source_record is not None
+                item.source_record
+                for item in transitions
+                if item.source_record is not None
             ),
             quality_policy,
             assessed_at=CUTOFF,
-            book_transitions=(transitions[0], replace(transitions[-1], state=bad_lineage_state)),
+            book_transitions=(
+                transitions[0],
+                replace(transitions[-1], state=bad_lineage_state),
+            ),
         )
+
+
+def test_order_book_stale_and_crossed_state_cannot_be_valid() -> None:
+    transitions, snapshot, quality_policy = book_evidence(checksum=True)
+    observations = tuple(
+        item.market_data for item in transitions if item.market_data is not None
+    )
+    sources = tuple(
+        item.source_record for item in transitions if item.source_record is not None
+    )
+    stale = assess_data_quality(
+        snapshot,
+        observations,
+        sources,
+        replace(quality_policy, freshness_seconds=1),
+        assessed_at=CUTOFF,
+        book_transitions=transitions,
+    )
+    assert stale.status is DataQualityStatus.STALE
+    crossed_state = replace(
+        transitions[-1].state,
+        bids=(BookLevel(Decimal("102"), Decimal("1")),),
+        asks=(BookLevel(Decimal("101"), Decimal("1")),),
+    )
+    crossed = assess_data_quality(
+        snapshot,
+        observations,
+        sources,
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=(
+            transitions[0],
+            replace(transitions[-1], state=crossed_state),
+        ),
+    )
+    assert crossed.status is DataQualityStatus.INVALID
+    assert "empty-locked-or-crossed-book" in crossed.invalid_record_ids
 
 
 def test_event_identity_handoff_must_match_exact_records() -> None:
