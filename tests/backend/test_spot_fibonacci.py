@@ -394,9 +394,7 @@ def test_wick_only_breach_and_bearish_close_invalidation():
         for index, candle in enumerate(bearish_candles)
         if candle.market_data_id == bearish_endpoint.source_market_data_id
     )
-    bearish_wick_index = (
-        bearish_endpoint_index + bearish_endpoint.right_window + 1
-    )
+    bearish_wick_index = bearish_endpoint_index + bearish_endpoint.right_window + 1
     bearish_threshold = bearish_origin.price + Decimal("0.1")
     bearish_highs = list(bearish_highs)
     bearish_lows = list(bearish_lows)
