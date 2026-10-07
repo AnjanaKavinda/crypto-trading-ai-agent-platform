@@ -818,6 +818,24 @@ def test_event_policy_requires_completeness_evidence_and_rejects_sequence_gaps()
     )
     assert report.status is DataQualityStatus.INVALID
     assert "sequence-gap-or-verification-mismatch" in report.invalid_record_ids
+    missing_scope = replace(
+        normalized,
+        identities=tuple(
+            replace(identity, sequence_scope=None) for identity in normalized.identities
+        ),
+    )
+    missing_scope_report = assess_data_quality(
+        snapshot,
+        missing_scope.market_data,
+        missing_scope.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=missing_scope,
+    )
+    assert missing_scope_report.status is DataQualityStatus.INVALID
+    assert "sequence-gap-or-verification-mismatch" in (
+        missing_scope_report.invalid_record_ids
+    )
     stale_snapshot = replace(
         snapshot,
         as_of=CUTOFF - timedelta(seconds=1),

@@ -463,10 +463,10 @@ def _assess_event_or_book_quality(
             )
             if (
                 len(scopes) != 1
-                or (
-                    len(numbers) > 1
-                    and continuity_numerator != len(numbers) - 1
+                or any(
+                    not isinstance(scope, str) or not scope.strip() for scope in scopes
                 )
+                or (len(numbers) > 1 and continuity_numerator != len(numbers) - 1)
                 or not trade_ticks.quality.sequence_verified
             ):
                 invalid_ids.append("sequence-gap-or-verification-mismatch")
