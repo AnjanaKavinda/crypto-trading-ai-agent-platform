@@ -790,6 +790,31 @@ def test_rejects_self_consistent_but_non_extreme_market_structure_pivot():
         )
 
 
+def test_rejects_market_structure_evidence_with_stale_content_identity():
+    snapshot, candles, quality, structure, origin, endpoint = _bullish()
+    modified_uncertainty = (*structure.uncertainty, "Tampered upstream uncertainty.")
+    payload = _immutable_json(json.loads(structure.evidence.value))
+    payload["uncertainty"] = modified_uncertainty
+    forged_structure = replace(
+        structure,
+        uncertainty=modified_uncertainty,
+        evidence=replace(
+            structure.evidence,
+            value=canonical_json_dumps(payload),
+        ),
+    )
+
+    with pytest.raises(SpotFibonacciError, match="evidence identity is invalid"):
+        calculate_spot_fibonacci(
+            snapshot=snapshot,
+            observations=candles,
+            quality=quality,
+            market_structure=forged_structure,
+            timeframe="1m",
+            policy=_policy(origin, endpoint),
+        )
+
+
 def test_rejects_malformed_market_structure_pivot_decimal():
     snapshot, candles, quality, structure, origin, endpoint = _bullish()
     swings = list(structure.swings)
