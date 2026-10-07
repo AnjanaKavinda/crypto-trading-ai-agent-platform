@@ -209,6 +209,16 @@ def test_not_applicable_requires_matching_policy_and_has_no_measurement() -> Non
         )
 
 
+def test_single_point_snapshot_cannot_mark_non_continuity_dimensions_not_applicable() -> None:
+    with pytest.raises(MarketDataContractError, match="dimension-approved"):
+        DataQualityDimensionResult(
+            DataQualityDimension.COMPLETENESS,
+            DataQualityDimensionState.NOT_APPLICABLE,
+            reason_code=DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT,
+            not_applicable_policy=POLICY,
+        )
+
+
 def test_unavailable_requires_a_closed_reason_set_and_valid_cannot_be_unavailable() -> None:
     unavailable = DataQualityDimensionResult(
         DataQualityDimension.CONTINUITY,

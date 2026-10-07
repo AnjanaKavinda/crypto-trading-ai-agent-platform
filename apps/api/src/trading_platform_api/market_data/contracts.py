@@ -718,10 +718,11 @@ class DataQualityDimensionResult:
             if (
                 self.reason_code
                 is not DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT
+                or self.dimension is not DataQualityDimension.CONTINUITY
                 or self.not_applicable_policy is None
             ):
                 raise MarketDataContractError(
-                    "NOT_APPLICABLE requires its approved reason and policy reference."
+                    "NOT_APPLICABLE requires a dimension-approved reason and policy reference."
                 )
         elif (
             self.state is DataQualityDimensionState.UNAVAILABLE
