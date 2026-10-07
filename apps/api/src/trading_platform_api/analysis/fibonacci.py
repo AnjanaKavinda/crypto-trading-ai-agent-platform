@@ -976,9 +976,7 @@ def calculate_spot_fibonacci(
             else candle_metrics["high"] > threshold
         )
         close_inside = (
-            close >= threshold
-            if direction == "bullish"
-            else close <= threshold
+            close >= threshold if direction == "bullish" else close <= threshold
         )
         if wick_crossed and close_inside:
             wick_only_breaches_count += 1
