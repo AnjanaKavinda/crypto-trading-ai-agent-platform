@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal
 from enum import StrEnum
 from typing import TypeVar, cast
 from uuid import UUID
@@ -676,7 +676,10 @@ class DataQualityDimensionResult:
                     "MEASURED dimensions cannot carry a reason or N/A policy."
                 )
             if has_count_basis:
-                if score != Decimal(self.numerator) / Decimal(self.denominator):
+                ratio = Context(prec=28, rounding=ROUND_HALF_EVEN).divide(
+                    Decimal(self.numerator), Decimal(self.denominator)
+                )
+                if score != ratio:
                     raise MarketDataContractError(
                         "score must match its verified measurement ratio."
                     )

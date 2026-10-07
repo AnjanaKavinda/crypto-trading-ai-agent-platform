@@ -202,7 +202,8 @@ def test_postgresql_c003_versions_keep_separate_keys_and_v2_is_read_only(
                 )
                 assert current_key.version == "2"
                 assert await store.get(key_for(legacy)) == legacy
-                assert await store.get(current_key) == current
+                resolved = await store.resolve((current_key,))
+                assert resolved[current_key] == current
                 assert key_for(legacy) != current_key
         finally:
             await engine.dispose()

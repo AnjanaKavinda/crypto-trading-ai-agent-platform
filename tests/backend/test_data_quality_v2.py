@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from uuid import UUID
 
 import pytest
@@ -145,6 +145,20 @@ def test_measured_zero_requires_a_positive_denominator_and_immutable_evidence() 
         )
 
 
+def test_measurement_ratio_validation_ignores_ambient_decimal_precision() -> None:
+    with localcontext() as context:
+        context.prec = 5
+        value = DataQualityDimensionResult(
+            DataQualityDimension.COVERAGE,
+            DataQualityDimensionState.MEASURED,
+            Decimal("0.3333333333333333333333333333"),
+            numerator=1,
+            denominator=3,
+            basis_unit="observations",
+        )
+    assert value.score == Decimal("0.3333333333333333333333333333")
+
+
 def test_v2_evidence_reference_is_a_hashed_lineage_dependency() -> None:
     evidence = DataQualityEvidenceReference(
         "C-091", "source-record", "1", "a" * 64
@@ -246,7 +260,14 @@ def test_c003_v1_canonical_bytes_digest_and_identity_are_unchanged() -> None:
     legacy = v1_report()
     assert encode(legacy) == expected
     assert canonical_sha256(legacy) == (
-        "6db37205049b7110ac4e306c4badc4c758dfd715618be34d1da302614cfb6a54"
+        "6db37205"
+        "049b7110"
+        "ac4e306c"
+        "4badc4c7"
+        "58dfd715"
+        "618be34d"
+        "1da30261"
+        "4cfb6a54"
     )
     assert key_for(legacy) == LineageKey("C-003", str(REPORT_ID), "1")
     assert type(decode(expected)) is DataQualityReport

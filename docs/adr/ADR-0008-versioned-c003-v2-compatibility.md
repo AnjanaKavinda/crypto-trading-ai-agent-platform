@@ -66,8 +66,10 @@ dimensions. Results have one explicit state:
 
 - `MEASURED`: finite Decimal score in `[0, 1]`, backed by a positive-denominator
   numerator/denominator and unit or a hashed immutable evidence reference.
-  Measured zero additionally requires both a positive denominator and an
-  immutable evidence reference.
+  Count-basis scores equal the ratio rounded to 28 significant digits using
+  round-half-even, independent of the caller's Decimal context. Measured zero
+  additionally requires both a positive denominator and an immutable evidence
+  reference.
 - `NOT_APPLICABLE`: no score or measurement basis; requires
   `SINGLE_POINT_SNAPSHOT` and an explicit assessment-policy ID/version equal to
   the report's policy binding.

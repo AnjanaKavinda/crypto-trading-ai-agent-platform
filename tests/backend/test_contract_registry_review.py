@@ -15,6 +15,7 @@ from trading_platform_api.learning import (
     Experience,
     ExperienceRecord,
 )
+from trading_platform_api.market_data import DataQualityReportV2
 from trading_platform_api.strategy import ValidationReference
 from trading_platform_api.validation import CalibrationResult
 
@@ -43,6 +44,7 @@ REFERENCE_ONLY_TYPES = {
     ValidationReference: "C-028",
     AgentIndependenceReference: "C-093",
 }
+VERSIONED_CONTRACT_TYPES = {DataQualityReportV2: ("C-003", "2")}
 ALIAS_NAMES = {"CalibrationRecord", "ExperienceRecord"}
 AUTHORITY_METHOD_NAMES = {
     "approve",
@@ -98,7 +100,11 @@ def _canonical_owners() -> dict[str, type[object]]:
     owners_by_id: dict[str, list[tuple[str, type[object]]]] = defaultdict(list)
     reference_types = set(REFERENCE_ONLY_TYPES)
     for export_name, contract_type in _exported_contract_candidates():
-        if export_name in ALIAS_NAMES or contract_type in reference_types:
+        if (
+            export_name in ALIAS_NAMES
+            or contract_type in reference_types
+            or contract_type in VERSIONED_CONTRACT_TYPES
+        ):
             continue
         contract_id = _fixed_contract_id(contract_type)
         assert contract_id is not None
@@ -141,6 +147,14 @@ def test_every_canonical_owner_has_stable_v1_schema_metadata() -> None:
         assert first == second
         assert first.contract_id == contract_id
         assert first.schema_version == "1"
+
+
+def test_versioned_contract_models_keep_their_canonical_owner_and_schema() -> None:
+    owners = _canonical_owners()
+    assert owners["C-003"].__name__ == "DataQualityReport"
+    for contract_type, expected in VERSIONED_CONTRACT_TYPES.items():
+        descriptor = describe_dataclass_contract(contract_type, payload_version="wire-1")
+        assert (descriptor.contract_id, descriptor.schema_version) == expected
 
 
 def test_aliases_and_reference_only_types_are_not_competing_owners() -> None:
