@@ -51,9 +51,10 @@ class Reference:
 
 def references(record: object) -> tuple[Reference, ...]:
     result: list[Reference] = []
-    if type(record) in (DataQualityReport, DataQualityReportV2):
+    if type(record) is DataQualityReport:
         result.append(Reference(LineageKey("C-002", str(record.snapshot_id))))
-    if type(record) is DataQualityReportV2:
+    elif type(record) is DataQualityReportV2:
+        result.append(Reference(LineageKey("C-002", str(record.snapshot_id))))
         result.extend(
             Reference(
                 LineageKey(

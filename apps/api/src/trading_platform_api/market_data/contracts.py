@@ -653,22 +653,24 @@ class DataQualityDimensionResult:
             value is not None
             for value in (self.numerator, self.denominator, self.basis_unit)
         )
-        has_count_basis = (
-            type(self.numerator) is int
-            and type(self.denominator) is int
-            and type(self.basis_unit) is str
-        )
-        if has_count_value and not has_count_basis:
-            raise MarketDataContractError(
-                "A measurement count basis requires numerator, denominator, and unit."
-            )
-        if has_count_basis:
-            _required_text("basis_unit", self.basis_unit)
+        numerator = self.numerator
+        denominator = self.denominator
+        basis_unit = self.basis_unit
+        count_basis: tuple[int, int, str] | None = None
+        if has_count_value:
             if (
-                self.numerator < 0
-                or self.denominator <= 0
-                or self.numerator > self.denominator
+                type(numerator) is not int
+                or type(denominator) is not int
+                or type(basis_unit) is not str
             ):
+                raise MarketDataContractError(
+                    "A measurement count basis requires numerator, denominator, and unit."
+                )
+            count_basis = (numerator, denominator, basis_unit)
+        if count_basis is not None:
+            numerator, denominator, basis_unit = count_basis
+            _required_text("basis_unit", basis_unit)
+            if numerator < 0 or denominator <= 0 or numerator > denominator:
                 raise MarketDataContractError(
                     "Invalid measurement numerator/denominator."
                 )
@@ -681,9 +683,10 @@ class DataQualityDimensionResult:
                 raise MarketDataContractError(
                     "MEASURED dimensions cannot carry a reason or N/A policy."
                 )
-            if has_count_basis:
+            if count_basis is not None:
+                numerator, denominator, _ = count_basis
                 ratio = Context(prec=28, rounding=ROUND_HALF_EVEN).divide(
-                    Decimal(self.numerator), Decimal(self.denominator)
+                    Decimal(numerator), Decimal(denominator)
                 )
                 if score != ratio:
                     raise MarketDataContractError(
@@ -797,9 +800,16 @@ class DataQualityReportV2:
         if type(self.status) is not DataQualityStatus:
             raise MarketDataContractError("status must be a DataQualityStatus.")
         for item in self.dimensions:
-            if item.state is DataQualityDimensionState.NOT_APPLICABLE and (
-                item.not_applicable_policy.policy_id != self.assessment_policy_id
-                or item.not_applicable_policy.version != self.assessment_policy_version
+            if item.state is not DataQualityDimensionState.NOT_APPLICABLE:
+                continue
+            policy = item.not_applicable_policy
+            if policy is None:
+                raise MarketDataContractError(
+                    "NOT_APPLICABLE policy reference must match the report policy."
+                )
+            if (
+                policy.policy_id != self.assessment_policy_id
+                or policy.version != self.assessment_policy_version
             ):
                 raise MarketDataContractError(
                     "NOT_APPLICABLE policy reference must match the report policy."
