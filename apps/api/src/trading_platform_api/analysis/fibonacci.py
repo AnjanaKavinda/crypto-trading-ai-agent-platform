@@ -257,6 +257,13 @@ def _stable_id(*parts: object) -> UUID:
     return uuid5(_IDENTITY_NAMESPACE, canonical_json_dumps(parts))
 
 
+def _policy_reference(policy: SpotFibonacciPolicy) -> VersionReference:
+    return VersionReference(
+        "spot-fibonacci-policy",
+        canonical_json_dumps((policy.policy_id, policy.version)),
+    )
+
+
 def _immutable_json(value: object) -> object:
     if isinstance(value, list):
         return tuple(_immutable_json(item) for item in value)
@@ -621,10 +628,7 @@ def _make_evidence(
             VersionReference(
                 "spot-fibonacci-evidence", SPOT_FIBONACCI_EVIDENCE_VERSION
             ),
-            VersionReference(
-                "spot-fibonacci-policy",
-                canonical_json_dumps((policy.policy_id, policy.version)),
-            ),
+            _policy_reference(policy),
         ),
         usable=True,
     )
@@ -1325,7 +1329,7 @@ def calculate_spot_fibonacci(
             VersionReference(
                 SPOT_FIBONACCI_INDICATOR_ID, SPOT_FIBONACCI_METHOD_VERSION
             ),
-            VersionReference(policy.policy_id, policy.version),
+            _policy_reference(policy),
         ),
         methodology=MethodologyCategory.TECHNICAL,
     )
