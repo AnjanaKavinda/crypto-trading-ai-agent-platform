@@ -123,12 +123,14 @@ def test_bullish_and_bearish_reference_levels_use_exact_decimal_ratios():
     bullish = _calculate(bullish_inputs)
     origin, endpoint = bullish_inputs[-2:]
     move = abs(endpoint.price - origin.price)
+    assert (origin.price, endpoint.price) == (Decimal("8"), Decimal("17"))
     expected = {
         ("retracement-level", ratio): endpoint.price - move * ratio
         for ratio in RETRACEMENTS
     } | {
-        ("extension-level", ratio): endpoint.price + move * ratio
-        for ratio in EXTENSIONS
+        ("extension-level", Decimal("1.272")): Decimal("19.448"),
+        ("extension-level", Decimal("1.618")): Decimal("22.562"),
+        ("extension-level", Decimal("2.618")): Decimal("31.562"),
     }
     assert bullish.method_version == SPOT_FIBONACCI_METHOD_VERSION
     assert {
@@ -147,12 +149,14 @@ def test_bullish_and_bearish_reference_levels_use_exact_decimal_ratios():
         policy=_policy(origin, endpoint),
     )
     move = abs(endpoint.price - origin.price)
+    assert (origin.price, endpoint.price) == (Decimal("92"), Decimal("83"))
     expected = {
         ("retracement-level", ratio): endpoint.price + move * ratio
         for ratio in RETRACEMENTS
     } | {
-        ("extension-level", ratio): endpoint.price - move * ratio
-        for ratio in EXTENSIONS
+        ("extension-level", Decimal("1.272")): Decimal("80.552"),
+        ("extension-level", Decimal("1.618")): Decimal("77.438"),
+        ("extension-level", Decimal("2.618")): Decimal("68.438"),
     }
     assert {
         (level.category, level.ratio): level.price for level in bearish.levels
