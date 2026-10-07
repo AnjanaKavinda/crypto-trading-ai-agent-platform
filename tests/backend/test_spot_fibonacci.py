@@ -221,6 +221,18 @@ def test_analysis_evidence_lineage_expiry_invalidation_and_repeatability():
         assert evidence.expires_at == first.evidence_expires_at
 
 
+def test_policy_provenance_is_namespaced_from_contract_versions():
+    result = _calculate(policy_id="C-001", version="1")
+    for evidence in result.evidence:
+        assert len(evidence.provenance) == len(set(evidence.provenance))
+        policy_reference = next(
+            reference
+            for reference in evidence.provenance
+            if reference.component == "spot-fibonacci-policy"
+        )
+        assert policy_reference.version == canonical_json_dumps(("C-001", "1"))
+
+
 def test_confluence_membership_is_linked_to_each_level_evidence():
     result = _calculate(
         confluence_tolerance=Decimal("100"),
@@ -356,6 +368,85 @@ def test_wick_only_breach_and_bearish_close_invalidation():
         ),
     )
     assert not result.invalidation.invalidated
+    invalidation_evidence = next(
+        evidence
+        for evidence in result.evidence
+        if evidence.evidence_id == result.invalidation.evidence_id
+    )
+    assert (
+        json.loads(invalidation_evidence.value)["value"]["wick_only_breaches_count"]
+        == 1
+    )
+
+    (
+        _,
+        bearish_candles,
+        _,
+        _,
+        bearish_origin,
+        bearish_endpoint,
+        bearish_highs,
+        bearish_lows,
+        bearish_closes,
+    ) = _bearish()
+    bearish_endpoint_index = next(
+        index
+        for index, candle in enumerate(bearish_candles)
+        if candle.market_data_id == bearish_endpoint.source_market_data_id
+    )
+    bearish_wick_index = (
+        bearish_endpoint_index + bearish_endpoint.right_window + 1
+    )
+    bearish_threshold = bearish_origin.price + Decimal("0.1")
+    bearish_highs = list(bearish_highs)
+    bearish_lows = list(bearish_lows)
+    bearish_closes = list(bearish_closes)
+    bearish_highs[bearish_wick_index] = str(bearish_threshold + Decimal("0.2"))
+    bearish_closes[bearish_wick_index] = str(bearish_threshold)
+    (
+        bearish_snapshot,
+        bearish_candles,
+        bearish_quality,
+        _,
+        _,
+        _,
+        _,
+        bearish_structure,
+    ) = _analyze(
+        highs=tuple(bearish_highs),
+        lows=tuple(bearish_lows),
+        closes=tuple(bearish_closes),
+    )
+    bearish_origin, bearish_endpoint = _anchor_pair(
+        bearish_structure,
+        MarketStructureScale.INTERNAL,
+        PivotKind.HIGH,
+        PivotKind.LOW,
+    )
+    bearish_wick_result = calculate_spot_fibonacci(
+        snapshot=bearish_snapshot,
+        observations=bearish_candles,
+        quality=bearish_quality,
+        market_structure=bearish_structure,
+        timeframe="1m",
+        policy=_policy(
+            bearish_origin,
+            bearish_endpoint,
+            invalidation_consecutive_close_count=500,
+        ),
+    )
+    assert not bearish_wick_result.invalidation.invalidated
+    bearish_invalidation_evidence = next(
+        evidence
+        for evidence in bearish_wick_result.evidence
+        if evidence.evidence_id == bearish_wick_result.invalidation.evidence_id
+    )
+    assert (
+        json.loads(bearish_invalidation_evidence.value)["value"][
+            "wick_only_breaches_count"
+        ]
+        == 1
+    )
 
     _, candles, _, structure, origin, endpoint, highs, lows, closes = _bearish()
     endpoint_index = next(
