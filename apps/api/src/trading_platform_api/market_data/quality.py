@@ -155,11 +155,11 @@ class DataQualityPolicy:
             )
         if (
             type(self.required_metrics) is not tuple
-            or len(self.required_metrics) != len(set(self.required_metrics))
             or any(
                 not isinstance(name, str) or not name or name != name.strip()
                 for name in self.required_metrics
             )
+            or len(self.required_metrics) != len(set(self.required_metrics))
             or (self.data_kind is ProviderDataKind.OHLCV and not self.required_metrics)
             or (
                 self.data_kind in (ProviderDataKind.TRADE, ProviderDataKind.TICK)
@@ -234,23 +234,6 @@ class DataQualityPolicy:
                 )
             ):
                 raise DataQualityAssessmentError("Invalid expected sequence range.")
-            if (
-                self.expected_sequence_start is not None
-                and self.expected_record_count is not None
-                and self.expected_sequence_end - self.expected_sequence_start + 1
-                != self.expected_record_count
-            ):
-                raise DataQualityAssessmentError(
-                    "Expected sequence range must match expected record count."
-                )
-            if self.data_kind is ProviderDataKind.ORDER_BOOK and (
-                self.expected_sequence_start is None
-                or self.expected_sequence_end is None
-                or self.expected_sequence_start >= self.expected_sequence_end
-            ):
-                raise DataQualityAssessmentError(
-                    "Order-book policy requires an explicit delta sequence window."
-                )
             if (
                 self.expected_sequence_start is not None
                 and self.expected_record_count is not None
@@ -435,6 +418,16 @@ def _assess_event_or_book_quality(
             raise DataQualityAssessmentError(
                 "Exact normalized trade/tick identity and quality handoff is required."
             )
+        for identity, item, source in zip(
+            trade_ticks.identities, observations, sources
+        ):
+            if (
+                identity.market_data_id != item.market_data_id
+                or identity.source_record_id != item.source_record_id
+                or identity.source_record_id != source.source_record_id
+                or not identity.provider_event_id
+            ):
+                invalid_ids.append(str(item.market_data_id))
         event_ids = tuple(item.provider_event_id for item in trade_ticks.identities)
         duplicate_event_ids = {
             event_id for event_id in event_ids if event_ids.count(event_id) > 1
@@ -489,6 +482,8 @@ def _assess_event_or_book_quality(
                 )
             ):
                 invalid_ids.append(str(item.market_data_id))
+            elif not _book_metrics_match(transition):
+                invalid_ids.append(str(item.market_data_id))
             if unknown:
                 unknown_ids.add(item.provider_event_id)
         if unknown_ids:
@@ -528,6 +523,8 @@ def _assess_event_or_book_quality(
             invalid_ids.append(
                 f"book-state:{(book_state.failure or BookFailure.INVALID_INPUT).value}"
             )
+        if any(item.state.status is not BookStatus.VALID for item in book_transitions):
+            invalid_ids.append("invalid-book-transition-state")
         canonical_transitions = tuple(
             item
             for item in book_transitions
@@ -641,6 +638,30 @@ def _assess_event_or_book_quality(
         duplicate_record_ids=tuple(dict.fromkeys(duplicate_ids)),
         anomalies=tuple(dict.fromkeys(anomalies)),
     )
+
+
+def _book_metrics_match(transition: BookTransition) -> bool:
+    if transition.market_data is None:
+        return False
+    expected: dict[str, tuple[Decimal, str]] = {}
+    for side_name, levels in (
+        ("bid", transition.state.bids),
+        ("ask", transition.state.asks),
+    ):
+        for index, level in enumerate(levels, start=1):
+            expected[f"{side_name}_{index}_price"] = (
+                level.price,
+                transition.state.policy.price_unit,
+            )
+            expected[f"{side_name}_{index}_quantity"] = (
+                level.quantity,
+                transition.state.policy.quantity_unit,
+            )
+    supplied = {
+        metric.metric_name: (metric.value, metric.unit)
+        for metric in transition.market_data.metrics
+    }
+    return supplied == expected
 
 
 def assess_data_quality(

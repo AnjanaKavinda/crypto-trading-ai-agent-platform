@@ -609,6 +609,17 @@ def test_known_complete_spot_batch_can_supply_finality_without_a_contract_change
             policy(),
             assessed_at=CUTOFF,
         )
+    with pytest.raises(DataQualityAssessmentError, match="Complete trusted"):
+        assess_complete_binance_spot_batch(
+            replace(
+                batch,
+                source_records=tuple(
+                    replace(s, adapter_version="v2") for s in known_sources
+                ),
+            ),
+            policy(),
+            assessed_at=CUTOFF,
+        )
 
 
 @pytest.mark.parametrize(
@@ -886,14 +897,50 @@ def test_order_book_invalid_state_stale_checksum_and_lineage_fail_closed() -> No
             assessed_at=CUTOFF,
             book_transitions=(transitions[0], replace(transitions[-1], state=bad_lineage_state)),
         )
-    with pytest.raises(DataQualityAssessmentError, match="Complete trusted"):
-        assess_complete_binance_spot_batch(
-            replace(
-                batch,
-                source_records=tuple(
-                    replace(s, adapter_version="v2") for s in known_sources
-                ),
-            ),
-            policy(),
-            assessed_at=CUTOFF,
-        )
+
+
+def test_event_identity_handoff_must_match_exact_records() -> None:
+    normalized, snapshot, quality_policy = normalized_events()
+    foreign_identity = replace(
+        normalized.identities[0],
+        market_data_id=uuid4(),
+        provider_event_id="foreign-event",
+    )
+    forged = replace(
+        normalized,
+        identities=(foreign_identity,) + normalized.identities[1:],
+    )
+    report = assess_data_quality(
+        snapshot,
+        forged.market_data,
+        forged.source_records,
+        quality_policy,
+        assessed_at=CUTOFF,
+        trade_ticks=forged,
+    )
+    assert report.status is DataQualityStatus.INVALID
+    assert str(normalized.market_data[0].market_data_id) in report.invalid_record_ids
+
+
+def test_book_metrics_must_match_levels_and_checksum_status() -> None:
+    transitions, snapshot, quality_policy = book_evidence(checksum=True)
+    last = transitions[-1]
+    assert last.market_data is not None
+    tampered = replace(
+        last.market_data,
+        metrics=tuple(
+            replace(metric, value=metric.value + Decimal("1"))
+            for metric in last.market_data.metrics
+        ),
+    )
+    tampered_transition = replace(last, market_data=tampered)
+    report = assess_data_quality(
+        snapshot,
+        (transitions[0].market_data, tampered),
+        (transitions[0].source_record, last.source_record),
+        quality_policy,
+        assessed_at=CUTOFF,
+        book_transitions=(transitions[0], tampered_transition),
+    )
+    assert report.status is DataQualityStatus.INVALID
+    assert str(tampered.market_data_id) in report.invalid_record_ids
