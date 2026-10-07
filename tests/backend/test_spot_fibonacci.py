@@ -336,6 +336,19 @@ def test_invalidation_is_strict_consecutive_and_resets_on_equality():
     assert result.invalidation.observed_consecutive_closes == 0
 
 
+@pytest.mark.parametrize("buffer_delta", (Decimal("0"), Decimal("0.1")))
+def test_rejects_bullish_invalidation_buffer_that_makes_threshold_non_positive(
+    buffer_delta,
+):
+    inputs = _bullish()
+    origin = inputs[-2]
+    with pytest.raises(SpotFibonacciError, match="threshold must be a positive price"):
+        _calculate(
+            inputs,
+            invalidation_buffer=origin.price + buffer_delta,
+        )
+
+
 def test_wick_only_breach_and_bearish_close_invalidation():
     snapshot, candles, quality, structure, origin, endpoint = _bullish()
     endpoint_index = next(
