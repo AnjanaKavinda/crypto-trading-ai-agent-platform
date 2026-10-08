@@ -64,7 +64,9 @@ def _id(value: int) -> UUID:
     return UUID(f"00000000-0000-0000-0000-{value:012d}")
 
 
-def _ref(contract: str, record: object, record_id: str, lineage: str) -> AnalysisRecordReference:
+def _ref(
+    contract: str, record: object, record_id: str, lineage: str
+) -> AnalysisRecordReference:
     return AnalysisRecordReference(
         contract,
         record_id,
@@ -145,7 +147,11 @@ def _analysis_case(
     include_trade: bool = True,
     include_book: bool = True,
 ):
-    trade = _trade_inputs(unknown_side=unknown_side, sequenced=sequenced) if include_trade else None
+    trade = (
+        _trade_inputs(unknown_side=unknown_side, sequenced=sequenced)
+        if include_trade
+        else None
+    )
     if trade is not None and failed_trade_accuracy:
         normalized, snapshot, report = trade
         dimensions = tuple(
@@ -161,7 +167,9 @@ def _analysis_case(
         trade = (
             normalized,
             snapshot,
-            replace(report, dimensions=dimensions, status=DataQualityStatus.UNAVAILABLE),
+            replace(
+                report, dimensions=dimensions, status=DataQualityStatus.UNAVAILABLE
+            ),
         )
     book = _book_inputs() if include_book else None
     bindings = []
@@ -188,7 +196,9 @@ def _analysis_case(
                 ),
                 tuple(
                     ObservationSourceBinding(
-                        _ref("C-001", observation, str(observation.market_data_id), "1"),
+                        _ref(
+                            "C-001", observation, str(observation.market_data_id), "1"
+                        ),
                         _ref("C-091", source, str(source.source_record_id), "1"),
                     )
                     for observation, source in zip(
@@ -245,7 +255,9 @@ def _analysis_case(
                 ),
             )
         )
-    bindings.sort(key=lambda item: (item.modality.value, item.market_snapshot.record_id))
+    bindings.sort(
+        key=lambda item: (item.modality.value, item.market_snapshot.record_id)
+    )
     assessment_id = _id(103)
     evidence_ids = {
         modality: _id(110 + index) for index, modality in enumerate(modalities)
@@ -317,8 +329,7 @@ def test_spot_order_flow_calculates_deterministic_book_and_trade_metrics() -> No
     )
     book_imbalance = _metric(result, OrderFlowMetricName.BOOK_IMBALANCE)
     assert any(
-        "bid depth − ask depth" in limitation
-        and "denominator" in limitation
+        "bid depth − ask depth" in limitation and "denominator" in limitation
         for limitation in book_imbalance.limitations
     )
     trade_delta = _metric(result, OrderFlowMetricName.CUMULATIVE_DELTA)
@@ -328,7 +339,10 @@ def test_spot_order_flow_calculates_deterministic_book_and_trade_metrics() -> No
     )
     assert any("C-003 schema 2 report" in item for item in trade_delta.limitations)
     assert any("policy spot-trade-quality@" in item for item in trade_delta.limitations)
-    assert any("continuity=1/1 sequence_transitions" in item for item in trade_delta.limitations)
+    assert any(
+        "continuity=1/1 sequence_transitions" in item
+        for item in trade_delta.limitations
+    )
 
     trade, book, snapshots, reports, manifest, _, _ = case
     observations = {
@@ -444,7 +458,9 @@ def test_unverified_trade_sequence_fails_closed_for_trade_metrics() -> None:
         assert _metric(result, name).state is OrderFlowMetricState.UNAVAILABLE
 
 
-def test_each_trade_metric_stays_unavailable_when_required_quality_dimension_fails() -> None:
+def test_each_trade_metric_stays_unavailable_when_required_quality_dimension_fails() -> (
+    None
+):
     result = _calculate(_analysis_case(failed_trade_accuracy=True))
     assert _metric(result, OrderFlowMetricName.BEST_BID_PRICE).state is (
         OrderFlowMetricState.AVAILABLE
@@ -465,7 +481,9 @@ def test_gap_in_normalized_sequence_is_rejected_not_reinterpreted() -> None:
     case = _analysis_case()
     trade, book, snapshots, reports, manifest, assessment_id, evidence_ids = case
     handoff = trade[0]
-    changed_identity = replace(handoff.identities[1], sequence=handoff.identities[1].sequence + 1)
+    changed_identity = replace(
+        handoff.identities[1], sequence=handoff.identities[1].sequence + 1
+    )
     invalid = replace(
         handoff,
         identities=(handoff.identities[0], changed_identity),
@@ -496,7 +514,9 @@ def test_cross_modality_units_must_match_exact_quality_policies() -> None:
 def test_snapshot_report_or_modality_lineage_mismatch_fails_closed() -> None:
     case = _analysis_case()
     trade, book, snapshots, reports, manifest, assessment_id, evidence_ids = case
-    wrong_report = replace(next(iter(reports.values())), status=DataQualityStatus.INVALID)
+    wrong_report = replace(
+        next(iter(reports.values())), status=DataQualityStatus.INVALID
+    )
     wrong_reports = dict(reports)
     wrong_reports[wrong_report.report_id] = wrong_report
     with pytest.raises(SpotOrderFlowError, match="resolution failed closed"):

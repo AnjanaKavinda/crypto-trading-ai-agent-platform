@@ -56,7 +56,6 @@ from trading_platform_api.market_data.trades import (
     TradeTickQuality,
 )
 
-
 SPOT_ORDER_FLOW_METHOD = VersionReference("spot-order-flow", "1")
 _BASE_DIMENSIONS = (
     DataQualityDimension.COMPLETENESS,
@@ -445,8 +444,7 @@ def _quality_trace(item: ResolvedInputBinding) -> str:
         f"policy {item.report.assessment_policy_id}@"
         f"{item.report.assessment_policy_version}; "
         f"snapshot {item.snapshot.snapshot_id} cutoff "
-        f"{item.snapshot.as_of.isoformat()}; quality basis: "
-        + ", ".join(dimensions)
+        f"{item.snapshot.as_of.isoformat()}; quality basis: " + ", ".join(dimensions)
     )
 
 
@@ -459,7 +457,9 @@ def _quality_failure_reason(
     for dimension in required:
         result = results[dimension]
         if result.state is not DataQualityDimensionState.MEASURED:
-            reason = "" if result.reason_code is None else f" ({result.reason_code.value})"
+            reason = (
+                "" if result.reason_code is None else f" ({result.reason_code.value})"
+            )
             failed.append(f"{dimension.value}={result.state.value}{reason}")
             continue
         expected_denominator = (
@@ -628,7 +628,9 @@ def calculate_spot_order_flow(
         or not isinstance(reports, Mapping)
         or not isinstance(evidence_ids, Mapping)
     ):
-        raise SpotOrderFlowError("Exact manifest, policy, snapshots, and reports required.")
+        raise SpotOrderFlowError(
+            "Exact manifest, policy, snapshots, and reports required."
+        )
     if not isinstance(assessment_id, UUID):
         raise SpotOrderFlowError("assessment_id must be a UUID.")
     if (
@@ -639,7 +641,9 @@ def calculate_spot_order_flow(
         or validated_at.tzinfo is None
         or validated_at.utcoffset() is None
     ):
-        raise SpotOrderFlowError("calculated_at and validated_at must be timezone-aware.")
+        raise SpotOrderFlowError(
+            "calculated_at and validated_at must be timezone-aware."
+        )
     calculation_time = calculated_at.astimezone(manifest.analysis_cutoff.tzinfo)
     by_modality: dict[InputModality, ResolvedInputBinding] = {}
     manifest_bindings = {item.modality: item for item in manifest.bindings}
@@ -650,9 +654,13 @@ def calculate_spot_order_flow(
             InputModality.SPOT_TRADES,
             InputModality.ORDER_BOOK,
         }:
-            raise SpotOrderFlowError("This slice supports only TRADE and point-book inputs.")
+            raise SpotOrderFlowError(
+                "This slice supports only TRADE and point-book inputs."
+            )
     if (trade_handoff is None) != (InputModality.SPOT_TRADES not in manifest_bindings):
-        raise SpotOrderFlowError("TRADE handoff presence must match the C-007 manifest.")
+        raise SpotOrderFlowError(
+            "TRADE handoff presence must match the C-007 manifest."
+        )
     if (book_handoff is None) != (InputModality.ORDER_BOOK not in manifest_bindings):
         raise SpotOrderFlowError("Book handoff presence must match the C-007 manifest.")
     if any(
@@ -660,10 +668,9 @@ def calculate_spot_order_flow(
         for key, value in evidence_ids.items()
     ) or not set(evidence_ids).issubset(set(manifest_bindings)):
         raise SpotOrderFlowError("Evidence IDs must reference bound modalities.")
-    if (
-        assessment_id not in manifest.assessment_ids
-        or len(set(evidence_ids.values())) != len(evidence_ids)
-    ):
+    if assessment_id not in manifest.assessment_ids or len(
+        set(evidence_ids.values())
+    ) != len(evidence_ids):
         raise SpotOrderFlowError("Assessment identity must be predeclared in C-007.")
 
     observations: dict[UUID, MarketData] = {}
@@ -681,7 +688,8 @@ def calculate_spot_order_flow(
             or len(trade_handoff.market_data) != len(trade_handoff.identities)
             or not all(type(value) is MarketData for value in trade_handoff.market_data)
             or not all(
-                type(value) is DataSourceRecord for value in trade_handoff.source_records
+                type(value) is DataSourceRecord
+                for value in trade_handoff.source_records
             )
         ):
             raise SpotOrderFlowError("Exact normalized TRADE handoff is required.")
@@ -703,10 +711,15 @@ def calculate_spot_order_flow(
             or type(book_handoff[0].market_data) is not MarketData
             or type(book_handoff[0].source_record) is not DataSourceRecord
         ):
-            raise SpotOrderFlowError("One normalized point-book transition is required.")
+            raise SpotOrderFlowError(
+                "One normalized point-book transition is required."
+            )
         observation = book_handoff[0].market_data
         source = book_handoff[0].source_record
-        if observation.market_data_id in observations or source.source_record_id in sources:
+        if (
+            observation.market_data_id in observations
+            or source.source_record_id in sources
+        ):
             raise SpotOrderFlowError("Duplicate order-book input identity.")
         observations[observation.market_data_id] = observation
         sources[source.source_record_id] = source
@@ -724,8 +737,7 @@ def calculate_spot_order_flow(
         raise SpotOrderFlowError("C-007 input resolution failed closed.") from exc
     by_modality = {item.binding.modality: item for item in resolved_bindings}
     if any(
-        item.snapshot.as_of != manifest.analysis_cutoff
-        for item in resolved_bindings
+        item.snapshot.as_of != manifest.analysis_cutoff for item in resolved_bindings
     ):
         raise SpotOrderFlowError(
             "Every Spot modality snapshot must match the exact analysis cutoff."
@@ -743,7 +755,8 @@ def calculate_spot_order_flow(
 
     if not (
         calculation_time <= manifest.analysis_cutoff
-        and calculation_time >= max(
+        and calculation_time
+        >= max(
             (item.snapshot.as_of for item in resolved_bindings),
             default=calculation_time,
         )
@@ -772,7 +785,9 @@ def calculate_spot_order_flow(
                 "A C-008 identity is required for measurable source reliability."
             )
         if evidence_ids[modality] not in manifest.evidence_ids:
-            raise SpotOrderFlowError("C-008 evidence identity is not predeclared in C-007.")
+            raise SpotOrderFlowError(
+                "C-008 evidence identity is not predeclared in C-007."
+            )
         evidence = _build_evidence(
             item,
             evidence_ids[modality],
@@ -882,12 +897,9 @@ def calculate_spot_order_flow(
             "",
         )
 
-    sequence_dimensions_pass = (
-        trade_item is not None
-        and _dimension_passes(
-            trade_item,
-            (*_BASE_DIMENSIONS, DataQualityDimension.CONTINUITY),
-        )
+    sequence_dimensions_pass = trade_item is not None and _dimension_passes(
+        trade_item,
+        (*_BASE_DIMENSIONS, DataQualityDimension.CONTINUITY),
     )
     strict_sequence = (
         trade_handoff is not None
@@ -964,7 +976,9 @@ def calculate_spot_order_flow(
     metrics: list[OrderFlowMetric] = []
     for name in OrderFlowMetricName:
         modality = (
-            InputModality.ORDER_BOOK if name in _BOOK_METRICS else InputModality.SPOT_TRADES
+            InputModality.ORDER_BOOK
+            if name in _BOOK_METRICS
+            else InputModality.SPOT_TRADES
         )
         metric_item = by_modality.get(modality)
         evidence = evidence_by_modality.get(modality)
@@ -1076,21 +1090,24 @@ def calculate_spot_order_flow(
             reasons.append(
                 f"Both book sides do not contain the configured top {policy.depth_levels} levels."
             )
-        elif name is OrderFlowMetricName.TRADE_RECORD_COUNT and not positive_trade_window:
+        elif (
+            name is OrderFlowMetricName.TRADE_RECORD_COUNT and not positive_trade_window
+        ):
             reasons.append("A positive-duration trade window cannot be established.")
         elif name in _DIRECTIONAL_METRICS and not known_aggressors:
-            reasons.append("Unknown or non-aggressor side prevents full-window directional totals.")
+            reasons.append(
+                "Unknown or non-aggressor side prevents full-window directional totals."
+            )
         elif name in _DIRECTIONAL_METRICS and not strict_sequence:
-            reasons.append("Verified contiguous sequence and passing continuity are required.")
+            reasons.append(
+                "Verified contiguous sequence and passing continuity are required."
+            )
         else:
             reasons.append("Required evidence or calculation inputs are unavailable.")
         can_bind = (
             metric_item is not None
             and evidence is not None
-            and (
-                modality is InputModality.ORDER_BOOK
-                or positive_trade_window
-            )
+            and (modality is InputModality.ORDER_BOOK or positive_trade_window)
         )
         metrics.append(
             OrderFlowMetric(
@@ -1122,7 +1139,11 @@ def calculate_spot_order_flow(
                 ),
                 limitations=(
                     *limitations_by_modality.get(modality, ()),
-                    *((_quality_trace(metric_item),) if metric_item is not None else ()),
+                    *(
+                        (_quality_trace(metric_item),)
+                        if metric_item is not None
+                        else ()
+                    ),
                 ),
                 unavailable_reason=" ".join(reasons),
             )
