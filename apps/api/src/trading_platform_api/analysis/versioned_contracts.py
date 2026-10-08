@@ -65,10 +65,19 @@ class InputModality(StrEnum):
 
 
 class OrderFlowMetricName(StrEnum):
-    SPREAD = "spread"
-    DISPLAYED_DEPTH = "displayed-depth"
+    BEST_BID_PRICE = "best-bid-price"
+    BEST_ASK_PRICE = "best-ask-price"
+    MIDPOINT_PRICE = "midpoint-price"
+    ABSOLUTE_SPREAD = "absolute-spread"
+    SPREAD_BPS = "spread-bps"
+    BID_DEPTH = "bid-depth"
+    ASK_DEPTH = "ask-depth"
+    BID_NOTIONAL = "bid-notional"
+    ASK_NOTIONAL = "ask-notional"
     BOOK_IMBALANCE = "book-imbalance"
-    TRADE_VOLUME = "trade-volume"
+    TRADE_RECORD_COUNT = "trade-record-count"
+    BUY_AGGRESSOR_VOLUME = "buy-aggressor-volume"
+    SELL_AGGRESSOR_VOLUME = "sell-aggressor-volume"
     VOLUME_DELTA = "volume-delta"
     CUMULATIVE_DELTA = "cumulative-delta"
 
@@ -421,7 +430,7 @@ class EvidenceItemV2:
 class OrderFlowMetric:
     name: OrderFlowMetricName
     state: OrderFlowMetricState
-    value: Decimal | None
+    value: Decimal | int | None
     unit: str
     calculated_at: datetime
     window_start: datetime
@@ -443,27 +452,70 @@ class OrderFlowMetric:
         end = _time("window_end", self.window_end)
         if start > end:
             raise AnalysisV2ContractError("window_start must not be after window_end.")
-        if self.value is not None and (
-            type(self.value) is not Decimal or not self.value.is_finite()
+        if self.value is not None:
+            if type(self.value) is Decimal:
+                if not self.value.is_finite():
+                    raise AnalysisV2ContractError("value must be a finite Decimal.")
+            elif (
+                type(self.value) is not int
+                or self.name is not OrderFlowMetricName.TRADE_RECORD_COUNT
+            ):
+                raise AnalysisV2ContractError(
+                    "Only trade record count may use an integer value."
+                )
+        if (
+            self.value is not None
+            and self.name
+            in {
+                OrderFlowMetricName.BEST_BID_PRICE,
+                OrderFlowMetricName.BEST_ASK_PRICE,
+                OrderFlowMetricName.MIDPOINT_PRICE,
+                OrderFlowMetricName.ABSOLUTE_SPREAD,
+                OrderFlowMetricName.SPREAD_BPS,
+                OrderFlowMetricName.BID_DEPTH,
+                OrderFlowMetricName.ASK_DEPTH,
+                OrderFlowMetricName.BID_NOTIONAL,
+                OrderFlowMetricName.ASK_NOTIONAL,
+                OrderFlowMetricName.TRADE_RECORD_COUNT,
+                OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
+                OrderFlowMetricName.SELL_AGGRESSOR_VOLUME,
+            }
+            and self.value < 0
         ):
+            raise AnalysisV2ContractError("This order-flow metric cannot be negative.")
+        if self.name is OrderFlowMetricName.TRADE_RECORD_COUNT:
+            if self.unit != "trades" or (
+                self.value is not None and type(self.value) is not int
+            ):
+                raise AnalysisV2ContractError(
+                    "Trade record count requires a non-negative integer and 'trades' unit."
+                )
+        elif type(self.value) is int:
             raise AnalysisV2ContractError(
-                "value must be a finite Decimal when present."
+                "Only trade record count may use an integer value."
+            )
+        if self.name is OrderFlowMetricName.SPREAD_BPS and self.unit != "bps":
+            raise AnalysisV2ContractError(
+                "Spread basis-point values require 'bps' unit."
             )
         if (
             self.value is not None
             and self.name
             in {
-                OrderFlowMetricName.SPREAD,
-                OrderFlowMetricName.DISPLAYED_DEPTH,
-                OrderFlowMetricName.TRADE_VOLUME,
+                OrderFlowMetricName.BEST_BID_PRICE,
+                OrderFlowMetricName.BEST_ASK_PRICE,
+                OrderFlowMetricName.MIDPOINT_PRICE,
             }
-            and self.value < 0
+            and self.value == 0
         ):
-            raise AnalysisV2ContractError("This order-flow metric cannot be negative.")
+            raise AnalysisV2ContractError("Order-book prices must be positive.")
         if (
             self.value is not None
             and self.name is OrderFlowMetricName.BOOK_IMBALANCE
-            and (not Decimal("-1") <= self.value <= Decimal("1"))
+            and (
+                type(self.value) is not Decimal
+                or not Decimal("-1") <= self.value <= Decimal("1")
+            )
         ):
             raise AnalysisV2ContractError("Book imbalance must be between -1 and 1.")
         if self.state is OrderFlowMetricState.UNAVAILABLE:
@@ -1197,8 +1249,15 @@ def validate_order_flow_assessment(
         if item is None:
             raise AnalysisV2ContractError("Metric references an unknown C-007 binding.")
         book_metric = metric.name in {
-            OrderFlowMetricName.SPREAD,
-            OrderFlowMetricName.DISPLAYED_DEPTH,
+            OrderFlowMetricName.BEST_BID_PRICE,
+            OrderFlowMetricName.BEST_ASK_PRICE,
+            OrderFlowMetricName.MIDPOINT_PRICE,
+            OrderFlowMetricName.ABSOLUTE_SPREAD,
+            OrderFlowMetricName.SPREAD_BPS,
+            OrderFlowMetricName.BID_DEPTH,
+            OrderFlowMetricName.ASK_DEPTH,
+            OrderFlowMetricName.BID_NOTIONAL,
+            OrderFlowMetricName.ASK_NOTIONAL,
             OrderFlowMetricName.BOOK_IMBALANCE,
         }
         if (book_metric and item.binding.modality is not InputModality.ORDER_BOOK) or (
@@ -1287,6 +1346,8 @@ def validate_order_flow_assessment(
                 "DEGRADED report findings must remain limitations."
             )
         if metric.name in {
+            OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
+            OrderFlowMetricName.SELL_AGGRESSOR_VOLUME,
             OrderFlowMetricName.VOLUME_DELTA,
             OrderFlowMetricName.CUMULATIVE_DELTA,
         } and any(

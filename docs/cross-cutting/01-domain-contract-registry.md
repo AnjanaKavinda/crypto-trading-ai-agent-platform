@@ -163,10 +163,15 @@ C-006 schema 2 references that manifest and typed assessments without copying
 its binding list. C-003 v2 remains in-memory only: this allocation does not
 enable report writes, persistence, or a producer.
 
-C-104 `OrderFlowAssessment` is analysis-only. Each metric has an explicit
-`AVAILABLE`, `PARTIAL`, or `UNAVAILABLE` state, and each schema-1 metric binds
-to exactly one modality. This version defines no cross-modal comparison metric
-and grants no signal, risk, approval, or execution authority.
+C-104 `OrderFlowAssessment` is analysis-only. Its schema-1 metric vocabulary
+separately represents best bid/ask, midpoint, absolute spread, spread bps,
+bid/ask depth and notional, book imbalance, trade-record count, buy/sell
+aggressor volume, volume delta, and cumulative delta. Each component has an
+explicit `AVAILABLE`, `PARTIAL`, or `UNAVAILABLE` state, a typed value and unit,
+and binds to exactly one modality: book components to one point-book binding,
+trade components to one exact trade-window binding. Trade-record count is a
+non-negative integer with unit `trades`; spread bps uses unit `bps`. The
+assessment grants no signal, risk, approval, or execution authority.
 
 ## Canonical name / alias / supersession clarifications
 

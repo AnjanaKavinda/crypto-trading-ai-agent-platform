@@ -471,18 +471,20 @@ def _metric(
     binding: InputBindingV2,
     evidence_id: UUID,
     *,
-    value: Decimal | None = Decimal("1"),
+    value: Decimal | int | None = Decimal("1"),
     state: OrderFlowMetricState = OrderFlowMetricState.AVAILABLE,
     window_start: datetime | None = None,
     reason: str | None = None,
     limitations: tuple[str, ...] = (),
 ) -> OrderFlowMetric:
     point = binding.modality is InputModality.ORDER_BOOK
+    if name is OrderFlowMetricName.TRADE_RECORD_COUNT and value == Decimal("1"):
+        value = 1
     return OrderFlowMetric(
         name,
         state,
         value,
-        "USDT",
+        _metric_unit(name),
         CUTOFF,
         CUTOFF if point else (window_start or CUTOFF - timedelta(seconds=2)),
         CUTOFF,
@@ -492,6 +494,26 @@ def _metric(
         limitations,
         reason,
     )
+
+
+def _metric_unit(name: OrderFlowMetricName) -> str:
+    return {
+        OrderFlowMetricName.BEST_BID_PRICE: "USDT",
+        OrderFlowMetricName.BEST_ASK_PRICE: "USDT",
+        OrderFlowMetricName.MIDPOINT_PRICE: "USDT",
+        OrderFlowMetricName.ABSOLUTE_SPREAD: "USDT",
+        OrderFlowMetricName.SPREAD_BPS: "bps",
+        OrderFlowMetricName.BID_DEPTH: "BTC",
+        OrderFlowMetricName.ASK_DEPTH: "BTC",
+        OrderFlowMetricName.BID_NOTIONAL: "USDT",
+        OrderFlowMetricName.ASK_NOTIONAL: "USDT",
+        OrderFlowMetricName.BOOK_IMBALANCE: "ratio",
+        OrderFlowMetricName.TRADE_RECORD_COUNT: "trades",
+        OrderFlowMetricName.BUY_AGGRESSOR_VOLUME: "BTC",
+        OrderFlowMetricName.SELL_AGGRESSOR_VOLUME: "BTC",
+        OrderFlowMetricName.VOLUME_DELTA: "BTC",
+        OrderFlowMetricName.CUMULATIVE_DELTA: "BTC",
+    }[name]
 
 
 def _order_flow_assessment(
@@ -512,8 +534,15 @@ def _order_flow_assessment(
             InputModality.ORDER_BOOK
             if name
             in {
-                OrderFlowMetricName.SPREAD,
-                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.BEST_BID_PRICE,
+                OrderFlowMetricName.BEST_ASK_PRICE,
+                OrderFlowMetricName.MIDPOINT_PRICE,
+                OrderFlowMetricName.ABSOLUTE_SPREAD,
+                OrderFlowMetricName.SPREAD_BPS,
+                OrderFlowMetricName.BID_DEPTH,
+                OrderFlowMetricName.ASK_DEPTH,
+                OrderFlowMetricName.BID_NOTIONAL,
+                OrderFlowMetricName.ASK_NOTIONAL,
                 OrderFlowMetricName.BOOK_IMBALANCE,
             }
             else InputModality.SPOT_TRADES
@@ -526,7 +555,7 @@ def _order_flow_assessment(
                     name,
                     OrderFlowMetricState.UNAVAILABLE,
                     None,
-                    "USDT",
+                    _metric_unit(name),
                     CUTOFF,
                     CUTOFF,
                     CUTOFF,
@@ -539,7 +568,14 @@ def _order_flow_assessment(
             continue
         state, value, reason, limitations = (overrides or {}).get(
             name,
-            (OrderFlowMetricState.AVAILABLE, Decimal("1"), None, ()),
+            (
+                OrderFlowMetricState.AVAILABLE,
+                2 if name is OrderFlowMetricName.TRADE_RECORD_COUNT else Decimal("1"),
+                None,
+                evidence.limitations
+                if evidence.quality_status is DataQualityStatus.DEGRADED
+                else (),
+            ),
         )
         metrics.append(
             _metric(
@@ -895,6 +931,53 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
             InputModality.ORDER_BOOK: book_evidence,
         },
     )
+    expected_metric_names = (
+        OrderFlowMetricName.BEST_BID_PRICE,
+        OrderFlowMetricName.BEST_ASK_PRICE,
+        OrderFlowMetricName.MIDPOINT_PRICE,
+        OrderFlowMetricName.ABSOLUTE_SPREAD,
+        OrderFlowMetricName.SPREAD_BPS,
+        OrderFlowMetricName.BID_DEPTH,
+        OrderFlowMetricName.ASK_DEPTH,
+        OrderFlowMetricName.BID_NOTIONAL,
+        OrderFlowMetricName.ASK_NOTIONAL,
+        OrderFlowMetricName.BOOK_IMBALANCE,
+        OrderFlowMetricName.TRADE_RECORD_COUNT,
+        OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
+        OrderFlowMetricName.SELL_AGGRESSOR_VOLUME,
+        OrderFlowMetricName.VOLUME_DELTA,
+        OrderFlowMetricName.CUMULATIVE_DELTA,
+    )
+    assert tuple(metric.name for metric in assessment.metrics) == expected_metric_names
+    assert tuple(OrderFlowMetricName) == expected_metric_names
+    assert all(
+        metric.binding_ids == book_evidence.binding_ids
+        for metric in assessment.metrics[:10]
+    )
+    assert all(
+        metric.binding_ids == trade_evidence.binding_ids
+        for metric in assessment.metrics[10:]
+    )
+    assert {metric.name: metric.unit for metric in assessment.metrics}[
+        OrderFlowMetricName.SPREAD_BPS
+    ] == "bps"
+    trade_count = next(
+        metric
+        for metric in assessment.metrics
+        if metric.name is OrderFlowMetricName.TRADE_RECORD_COUNT
+    )
+    assert trade_count.value == 2
+    assert type(trade_count.value) is int
+    assert trade_count.unit == "trades"
+    with pytest.raises(AnalysisV2ContractError, match="'trades' unit"):
+        replace(
+            trade_count,
+            state=OrderFlowMetricState.UNAVAILABLE,
+            value=None,
+            unit="BTC",
+            unavailable_reason="count unavailable",
+        )
+    assert decode_analysis_contract(encode_analysis_contract(assessment)) == assessment
     manifest = _manifest(
         bindings,
         (assessment_id,),
@@ -1175,7 +1258,9 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
                 (),
             )
             for name in (
-                OrderFlowMetricName.TRADE_VOLUME,
+                OrderFlowMetricName.TRADE_RECORD_COUNT,
+                OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
+                OrderFlowMetricName.SELL_AGGRESSOR_VOLUME,
                 OrderFlowMetricName.VOLUME_DELTA,
                 OrderFlowMetricName.CUMULATIVE_DELTA,
             )
@@ -1188,8 +1273,15 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
                 ("book-limit-warning",),
             )
             for name in (
-                OrderFlowMetricName.SPREAD,
-                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.BEST_BID_PRICE,
+                OrderFlowMetricName.BEST_ASK_PRICE,
+                OrderFlowMetricName.MIDPOINT_PRICE,
+                OrderFlowMetricName.ABSOLUTE_SPREAD,
+                OrderFlowMetricName.SPREAD_BPS,
+                OrderFlowMetricName.BID_DEPTH,
+                OrderFlowMetricName.ASK_DEPTH,
+                OrderFlowMetricName.BID_NOTIONAL,
+                OrderFlowMetricName.ASK_NOTIONAL,
                 OrderFlowMetricName.BOOK_IMBALANCE,
             )
         },
@@ -1205,8 +1297,13 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
         now=CREATED,
     )
     bad_metrics = list(assessment.metrics)
-    bad_metrics[3] = replace(
-        bad_metrics[3],
+    unavailable_trade_metric = next(
+        index
+        for index, item in enumerate(bad_metrics)
+        if item.name is OrderFlowMetricName.BUY_AGGRESSOR_VOLUME
+    )
+    bad_metrics[unavailable_trade_metric] = replace(
+        bad_metrics[unavailable_trade_metric],
         state=OrderFlowMetricState.AVAILABLE,
         value=Decimal("0"),
         unavailable_reason=None,
@@ -1360,7 +1457,7 @@ def test_attempted_cross_modal_metric_is_rejected_and_unavailable_needs_reason()
         )
     with pytest.raises(AnalysisV2ContractError, match="explicit reason"):
         OrderFlowMetric(
-            OrderFlowMetricName.TRADE_VOLUME,
+            OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
             OrderFlowMetricState.UNAVAILABLE,
             None,
             "BTC",
@@ -1538,8 +1635,15 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
                 (),
             )
             for name in (
-                OrderFlowMetricName.SPREAD,
-                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.BEST_BID_PRICE,
+                OrderFlowMetricName.BEST_ASK_PRICE,
+                OrderFlowMetricName.MIDPOINT_PRICE,
+                OrderFlowMetricName.ABSOLUTE_SPREAD,
+                OrderFlowMetricName.SPREAD_BPS,
+                OrderFlowMetricName.BID_DEPTH,
+                OrderFlowMetricName.ASK_DEPTH,
+                OrderFlowMetricName.BID_NOTIONAL,
+                OrderFlowMetricName.ASK_NOTIONAL,
                 OrderFlowMetricName.BOOK_IMBALANCE,
             )
         },
@@ -1603,7 +1707,6 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
         observations[UUID(item.observation.record_id)] for item in book.observations
     )
     book_evidence = _evidence(book, book_report, book_observations, _id(703))
-    unknown_aggressor = ("unknown-aggressor:event-1",)
     flow = _order_flow_assessment(
         _id(601),
         bindings,
@@ -1612,23 +1715,29 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
             InputModality.ORDER_BOOK: book_evidence,
         },
         overrides={
-            OrderFlowMetricName.TRADE_VOLUME: (
+            OrderFlowMetricName.BUY_AGGRESSOR_VOLUME: (
                 OrderFlowMetricState.AVAILABLE,
                 Decimal("1"),
                 None,
-                unknown_aggressor,
+                trade_evidence.limitations,
+            ),
+            OrderFlowMetricName.SELL_AGGRESSOR_VOLUME: (
+                OrderFlowMetricState.AVAILABLE,
+                Decimal("1"),
+                None,
+                trade_evidence.limitations,
             ),
             OrderFlowMetricName.VOLUME_DELTA: (
                 OrderFlowMetricState.AVAILABLE,
                 Decimal("1"),
                 None,
-                unknown_aggressor,
+                trade_evidence.limitations,
             ),
             OrderFlowMetricName.CUMULATIVE_DELTA: (
                 OrderFlowMetricState.UNAVAILABLE,
                 None,
                 "unknown aggressor side",
-                unknown_aggressor,
+                trade_evidence.limitations,
             ),
         },
     )
@@ -1719,7 +1828,7 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
     )
     evidence = _evidence(valid_trade, report, valid_observations, _id(701))
     out_of_window = _metric(
-        OrderFlowMetricName.TRADE_VOLUME,
+        OrderFlowMetricName.TRADE_RECORD_COUNT,
         valid_trade,
         evidence.evidence_id,
         window_start=CUTOFF - timedelta(seconds=3),
@@ -1730,7 +1839,12 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
         {InputModality.SPOT_TRADES: evidence},
     )
     assessment_metrics = list(assessment.metrics)
-    assessment_metrics[3] = out_of_window
+    trade_record_count_index = next(
+        index
+        for index, item in enumerate(assessment_metrics)
+        if item.name is OrderFlowMetricName.TRADE_RECORD_COUNT
+    )
+    assessment_metrics[trade_record_count_index] = out_of_window
     assessment = replace(assessment, metrics=tuple(assessment_metrics))
     with pytest.raises(AnalysisV2ContractError, match="window does not match"):
         validate_order_flow_assessment(
@@ -1747,7 +1861,7 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
         item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES
     )
     partial = _metric(
-        OrderFlowMetricName.TRADE_VOLUME,
+        OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
         trade,
         _id(700),
         state=OrderFlowMetricState.PARTIAL,
@@ -1758,7 +1872,7 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
         replace(partial, limitations=())
     with pytest.raises(AnalysisV2ContractError, match="cannot be negative"):
         _metric(
-            OrderFlowMetricName.SPREAD,
+            OrderFlowMetricName.ABSOLUTE_SPREAD,
             trade,
             _id(700),
             value=Decimal("-1"),
@@ -1779,5 +1893,18 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
             CUTOFF,
             EXPIRES,
             OrderFlowAssessmentState.AVAILABLE,
-            (_metric(OrderFlowMetricName.TRADE_VOLUME, trade, _id(700)),),
+            (_metric(OrderFlowMetricName.BUY_AGGRESSOR_VOLUME, trade, _id(700)),),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="integer"):
+        OrderFlowMetric(
+            OrderFlowMetricName.TRADE_RECORD_COUNT,
+            OrderFlowMetricState.AVAILABLE,
+            Decimal("1"),
+            "trades",
+            CUTOFF,
+            CUTOFF - timedelta(seconds=2),
+            CUTOFF,
+            VersionReference("order-flow-method", "1"),
+            (_id(700),),
+            (trade.binding_id,),
         )

@@ -140,6 +140,17 @@ def _decode_value(kind: Any, value: object) -> object:
         candidates = tuple(item for item in args if item is not type(None))
         if len(candidates) == 1:
             return _decode_value(candidates[0], value)
+        scalar_match = next(
+            (
+                candidate
+                for candidate in candidates
+                if (candidate is int and type(value) is int)
+                or (candidate is Decimal and type(value) is str)
+            ),
+            None,
+        )
+        if scalar_match is not None:
+            return _decode_value(scalar_match, value)
         if not isinstance(value, Mapping):
             raise AnalysisV2ContractError("Expected a typed analysis object.")
         contract_id = value.get("contract_id")

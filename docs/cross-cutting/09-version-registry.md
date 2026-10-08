@@ -122,6 +122,16 @@ C-104 `OrderFlowAssessment` is the sequential additive schema-1 contract
 recorded in the domain registry. C-003 v2 remains in-memory only; this change
 does not enable its lineage writes or persistence.
 
+Before C-104's first merge, its schema-1 metric set was completed to preserve
+each agreed #60 output independently: best bid/ask, midpoint, absolute spread,
+spread bps, bid/ask depth and notional, book imbalance, trade-record count,
+buy/sell aggressor volume, volume delta, and cumulative delta. Each is a typed
+metric component with its own value/unit, state, calculation time/window, method
+version, evidence IDs, and one modality binding. Trade-record count is an
+integer with `trades` unit; spread bps uses `bps`. This completes the proposed
+unreleased schema-1 allocation and does not introduce a cross-modal metric or
+calculation/runtime behavior.
+
 Canonical dependency digests for C-001 observations, C-002 snapshots, C-003
 schema-2 reports, C-091 source records, and C-092 dataset versions are
 `SHA-256(canonical_json_dumps(record).encode("utf-8"))`, using the existing
