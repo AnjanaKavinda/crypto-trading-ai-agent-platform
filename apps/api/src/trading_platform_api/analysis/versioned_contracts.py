@@ -1048,6 +1048,8 @@ def validate_evidence_item_v2(
         raise AnalysisV2ContractError(
             "Evidence or manifest is stale or not yet available."
         )
+    if evidence.evidence_id not in manifest.evidence_ids:
+        raise AnalysisV2ContractError("C-008 evidence is not listed by its manifest.")
     by_id = {item.binding.binding_id: item for item in resolved_bindings}
     selected = []
     for binding_id in evidence.binding_ids:
@@ -1233,7 +1235,11 @@ def validate_order_flow_assessment(
         selected_evidence: list[EvidenceItemV2] = []
         for evidence_id in metric.evidence_ids:
             item_evidence = evidence.get(evidence_id)
-            if item_evidence is None or evidence_id not in manifest.evidence_ids:
+            if (
+                item_evidence is None
+                or item_evidence.evidence_id != evidence_id
+                or evidence_id not in manifest.evidence_ids
+            ):
                 raise AnalysisV2ContractError(
                     "Metric references unresolved C-008 evidence."
                 )

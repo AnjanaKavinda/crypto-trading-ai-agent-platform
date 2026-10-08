@@ -1002,6 +1002,25 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         },
         now=CREATED,
     )
+    unlisted_evidence = replace(trade_evidence, evidence_id=_id(797))
+    with pytest.raises(AnalysisV2ContractError, match="not listed"):
+        validate_evidence_item_v2(
+            unlisted_evidence,
+            manifest,
+            resolved_bindings=resolved,
+            now=CREATED,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="unresolved C-008"):
+        validate_order_flow_assessment(
+            assessment,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={
+                trade_evidence.evidence_id: unlisted_evidence,
+                book_evidence.evidence_id: book_evidence,
+            },
+            now=CREATED,
+        )
     with pytest.raises(AnalysisV2ContractError, match="mapping key"):
         validate_market_context_v2(
             context,
