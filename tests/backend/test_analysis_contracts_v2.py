@@ -60,6 +60,7 @@ from trading_platform_api.market_data import (
     DataQualityStatus,
     DataSourceRecord,
     DatasetVersion,
+    DatasetVersionReference,
     MarketData,
     MarketSnapshot,
     MetricValue,
@@ -267,38 +268,49 @@ def _case(
         InputModality.ORDER_BOOK,
     ),
     failed_modality: InputModality | None = None,
+    failed_status: DataQualityStatus = DataQualityStatus.UNAVAILABLE,
     degraded_modality: InputModality | None = None,
     anomaly: str | None = None,
     future_modality: InputModality | None = None,
+    stale_modality: InputModality | None = None,
+    dataset_modality: InputModality | None = None,
+    snapshot_cutoffs: dict[InputModality, datetime] | None = None,
 ) -> tuple[
     tuple[InputBindingV2, ...],
     dict[UUID, MarketSnapshot],
     dict[UUID, DataQualityReportV2],
     dict[UUID, MarketData],
     dict[UUID, DataSourceRecord],
+    dict[tuple[str, str], DatasetVersion],
 ]:
     bindings = []
     snapshots = {}
     reports = {}
     observations = {}
     sources = {}
+    datasets = {}
     for index, modality in enumerate(modalities):
-        policy = _policy(modality)
+        snapshot_cutoff = (
+            CUTOFF if snapshot_cutoffs is None else snapshot_cutoffs.get(modality, CUTOFF)
+        )
+        policy = _policy(modality, snapshot_cutoff)
         event_times = (
-            (CUTOFF - timedelta(seconds=2), CUTOFF - timedelta(seconds=1))
+            (snapshot_cutoff - timedelta(seconds=2), snapshot_cutoff - timedelta(seconds=1))
             if modality is InputModality.SPOT_TRADES
-            else (CUTOFF,)
+            else (snapshot_cutoff,)
         )
         record_values = []
         source_values = []
         for offset, when in enumerate(event_times):
             number = 10 + (index * 10) + offset
-            source = _source(_id(number + 100), when)
             observation_time = (
-                CUTOFF + timedelta(seconds=1)
+                snapshot_cutoff + timedelta(seconds=1)
                 if modality is future_modality
+                else snapshot_cutoff - timedelta(seconds=20)
+                if modality is stale_modality
                 else when
             )
+            source = _source(_id(number + 100), observation_time)
             observation = _observation(
                 _id(number), source.source_record_id, modality, observation_time
             )
@@ -306,17 +318,37 @@ def _case(
             source_values.append(source)
             observations[observation.market_data_id] = observation
             sources[source.source_record_id] = source
+        dataset = (
+            DatasetVersion(
+                f"dataset-{modality.value}",
+                "v1",
+                snapshot_cutoff,
+                min(item.event_time for item in record_values),
+                max(item.event_time for item in record_values),
+                snapshot_cutoff,
+                tuple(item.source_record_id for item in source_values),
+                "1",
+                HASH,
+            )
+            if modality is dataset_modality
+            else None
+        )
+        if dataset is not None:
+            datasets[(dataset.dataset_id, dataset.version)] = dataset
         snapshot = MarketSnapshot(
             _id(200 + index),
-            CUTOFF,
-            CUTOFF,
+            snapshot_cutoff,
+            snapshot_cutoff,
             INSTRUMENT,
             VENUE,
             tuple(item.market_data_id for item in record_values),
             tuple(item.source_record_id for item in source_values),
+            None
+            if dataset is None
+            else DatasetVersionReference(dataset.dataset_id, dataset.version),
         )
         policy_report_status = (
-            DataQualityStatus.UNAVAILABLE
+            failed_status
             if modality is failed_modality
             else DataQualityStatus.DEGRADED
             if modality is degraded_modality
@@ -360,10 +392,13 @@ def _case(
                     _record_ref("C-091", source, str(source.source_record_id), "1")
                     for source in source_values
                 ),
+                None
+                if dataset is None
+                else _record_ref("C-092", dataset, dataset.dataset_id, dataset.version),
             )
         )
     bindings.sort(key=lambda item: (item.modality.value, item.market_snapshot.record_id))
-    return tuple(bindings), snapshots, reports, observations, sources
+    return tuple(bindings), snapshots, reports, observations, sources, datasets
 
 
 def _evidence(binding: InputBindingV2, report: DataQualityReportV2, observations: tuple[MarketData, ...], evidence_id: UUID) -> EvidenceItemV2:
@@ -448,7 +483,7 @@ def _manifest(
 
 
 def _resolved(case: tuple[object, ...]):
-    bindings, snapshots, reports, observations, sources = case
+    bindings, snapshots, reports, observations, sources, datasets = case
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
@@ -456,6 +491,7 @@ def _resolved(case: tuple[object, ...]):
         reports=reports,
         observations=observations,
         sources=sources,
+        datasets=datasets,
     )
     return manifest, resolved
 
@@ -657,7 +693,7 @@ def test_v2_manifest_mixed_bindings_and_codec_are_deterministic() -> None:
 
 def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
     case = _case()
-    bindings, _, reports, observations, _ = case
+    bindings, _, reports, observations, _, _ = case
     assessment_id = _id(600)
     evidence_by_binding = {
         item.modality: _evidence(
@@ -795,22 +831,25 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
 def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> None:
     case = _case(
         failed_modality=InputModality.SPOT_TRADES,
+        failed_status=DataQualityStatus.DEGRADED,
         degraded_modality=InputModality.ORDER_BOOK,
         anomaly="book-limit-warning",
     )
-    bindings, _, reports, observations, sources = case
+    bindings, snapshots, reports, observations, sources, datasets = case
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
-        snapshots=case[1],
+        snapshots=snapshots,
         reports=reports,
         observations=observations,
         sources=sources,
+        datasets=datasets,
     )
     trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
     book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
     trade_report = reports[UUID(trade.data_quality_report.record_id)]
     book_report = reports[UUID(book.data_quality_report.record_id)]
+    assert trade_report.status is DataQualityStatus.DEGRADED
     trade_data = tuple(observations[UUID(link.observation.record_id)] for link in trade.observations)
     book_data = tuple(observations[UUID(link.observation.record_id)] for link in book.observations)
     trade_evidence = _evidence(trade, trade_report, trade_data, _id(700))
@@ -876,7 +915,7 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
 
 def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations() -> None:
     case = _case()
-    bindings, snapshots, reports, observations, sources = case
+    bindings, snapshots, reports, observations, sources, datasets = case
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     altered = next(iter(observations.values()))
     tampered = replace(altered, metrics=(MetricValue("different", Decimal("1"), "unit"),))
@@ -906,10 +945,18 @@ def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations
             reports=reports,
             observations=observations,
             sources=sources,
+            datasets=datasets,
         )
 
     future_case = _case(future_modality=InputModality.SPOT_TRADES)
-    future_bindings, future_snapshots, future_reports, future_obs, future_sources = future_case
+    (
+        future_bindings,
+        future_snapshots,
+        future_reports,
+        future_obs,
+        future_sources,
+        future_datasets,
+    ) = future_case
     future_manifest = _manifest(future_bindings, (_id(600),), (_id(700), _id(701)))
     with pytest.raises(AnalysisV2ContractError, match="cutoff mismatch"):
         resolve_analysis_snapshot_v2(
@@ -918,6 +965,7 @@ def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations
             reports=future_reports,
             observations=future_obs,
             sources=future_sources,
+            datasets=future_datasets,
         )
 
 
@@ -978,3 +1026,305 @@ def test_attempted_cross_modal_metric_is_rejected_and_unavailable_needs_reason()
             (_id(700),),
             (trade.binding_id,),
         )
+
+
+def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_closed() -> None:
+    bindings, snapshots, reports, observations, sources, datasets = _case()
+    trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    original_report = reports[UUID(trade.data_quality_report.record_id)]
+    mismatched_report = replace(original_report, snapshot_id=_id(999))
+    mismatched_binding = replace(
+        trade,
+        data_quality_report=_record_ref(
+            "C-003", mismatched_report, str(mismatched_report.report_id), "2"
+        ),
+    )
+    mismatched_bindings = tuple(
+        mismatched_binding if item.binding_id == trade.binding_id else item
+        for item in bindings
+    )
+    mismatch_manifest = _manifest(
+        mismatched_bindings, (_id(600),), (_id(700), _id(701))
+    )
+    with pytest.raises(AnalysisV2ContractError, match="identity, digest, policy, or cutoff"):
+        resolve_analysis_snapshot_v2(
+            mismatch_manifest,
+            snapshots=snapshots,
+            reports={**reports, mismatched_report.report_id: mismatched_report},
+            observations=observations,
+            sources=sources,
+            datasets=datasets,
+        )
+
+    unknown_policy_report = replace(
+        original_report,
+        assessment_policy_version="2",
+    )
+    unknown_policy_binding = replace(
+        trade,
+        data_quality_report=_record_ref(
+            "C-003", unknown_policy_report, str(unknown_policy_report.report_id), "2"
+        ),
+        assessment_policy=QualityPolicyReference(
+            original_report.assessment_policy_id, "2"
+        ),
+    )
+    unknown_policy_bindings = tuple(
+        unknown_policy_binding if item.binding_id == trade.binding_id else item
+        for item in bindings
+    )
+    unknown_policy_manifest = _manifest(
+        unknown_policy_bindings, (_id(600),), (_id(700), _id(701))
+    )
+    with pytest.raises(AnalysisV2ContractError, match="Unknown C-003 assessment policy"):
+        resolve_analysis_snapshot_v2(
+            unknown_policy_manifest,
+            snapshots=snapshots,
+            reports={**reports, unknown_policy_report.report_id: unknown_policy_report},
+            observations=observations,
+            sources=sources,
+            datasets=datasets,
+        )
+
+    with pytest.raises(ValueError, match="observation references"):
+        replace(
+            trade,
+            observations=(trade.observations[0], trade.observations[0]),
+        )
+
+
+def test_dataset_closure_and_different_snapshot_cutoffs_are_explicit() -> None:
+    cutoffs = {
+        InputModality.ORDER_BOOK: CUTOFF - timedelta(seconds=1),
+        InputModality.SPOT_TRADES: CUTOFF,
+    }
+    case = _case(
+        dataset_modality=InputModality.ORDER_BOOK,
+        snapshot_cutoffs=cutoffs,
+    )
+    bindings, snapshots, reports, observations, sources, datasets = case
+    manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=snapshots,
+        reports=reports,
+        observations=observations,
+        sources=sources,
+        datasets=datasets,
+    )
+    assert len({item.snapshot.as_of for item in resolved}) == 2
+    assert sum(item.dataset is not None for item in resolved) == 1
+
+    with pytest.raises(AnalysisV2ContractError, match="C-092 dataset is unresolved"):
+        resolve_analysis_snapshot_v2(
+            manifest,
+            snapshots=snapshots,
+            reports=reports,
+            observations=observations,
+            sources=sources,
+        )
+    dataset_key, dataset = next(iter(datasets.items()))
+    changed_dataset = replace(dataset, lineage_sha256="b" * 64)
+    with pytest.raises(AnalysisV2ContractError, match="C-092 identity"):
+        resolve_analysis_snapshot_v2(
+            manifest,
+            snapshots=snapshots,
+            reports=reports,
+            observations=observations,
+            sources=sources,
+            datasets={dataset_key: changed_dataset},
+        )
+
+
+def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailable() -> None:
+    stale_case = _case(stale_modality=InputModality.ORDER_BOOK)
+    bindings, snapshots, reports, observations, sources, datasets = stale_case
+    manifest = _manifest(bindings, (_id(600),), (_id(701),))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=snapshots,
+        reports=reports,
+        observations=observations,
+        sources=sources,
+        datasets=datasets,
+    )
+    book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
+    book_report = reports[UUID(book.data_quality_report.record_id)]
+    book_observations = tuple(
+        observations[UUID(item.observation.record_id)] for item in book.observations
+    )
+    book_evidence = _evidence(book, book_report, book_observations, _id(701))
+    assessment = OrderFlowAssessment(
+        _id(600),
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        OrderFlowAssessmentState.AVAILABLE,
+        (_metric(OrderFlowMetricName.SPREAD, book, book_evidence.evidence_id),),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="failed required"):
+        validate_order_flow_assessment(
+            assessment,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={book_evidence.evidence_id: book_evidence},
+        )
+
+    unknown_side_case = _case(
+        degraded_modality=InputModality.SPOT_TRADES,
+        anomaly="unknown-aggressor:event-1",
+    )
+    bindings, snapshots, reports, observations, sources, datasets = unknown_side_case
+    manifest = _manifest(bindings, (_id(601),), (_id(702),))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=snapshots,
+        reports=reports,
+        observations=observations,
+        sources=sources,
+        datasets=datasets,
+    )
+    trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    trade_report = reports[UUID(trade.data_quality_report.record_id)]
+    trade_observations = tuple(
+        observations[UUID(item.observation.record_id)] for item in trade.observations
+    )
+    trade_evidence = _evidence(trade, trade_report, trade_observations, _id(702))
+    flow = OrderFlowAssessment(
+        _id(601),
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        OrderFlowAssessmentState.AVAILABLE,
+        (
+            _metric(
+                OrderFlowMetricName.VOLUME_DELTA,
+                trade,
+                trade_evidence.evidence_id,
+                limitations=("unknown-aggressor:event-1",),
+            ),
+        ),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="Unknown aggressor side"):
+        validate_order_flow_assessment(
+            flow,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={trade_evidence.evidence_id: trade_evidence},
+        )
+
+
+def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
+    case = _case(modalities=(InputModality.SPOT_TRADES,))
+    bindings, snapshots, reports, observations, sources, datasets = case
+    trade = bindings[0]
+    original = reports[UUID(trade.data_quality_report.record_id)]
+    n_a_continuity = DataQualityDimensionResult(
+        DataQualityDimension.CONTINUITY,
+        DataQualityDimensionState.NOT_APPLICABLE,
+        reason_code=DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT,
+        not_applicable_policy=QualityPolicyReference(
+            original.assessment_policy_id, original.assessment_policy_version
+        ),
+    )
+    report_dimensions = tuple(
+        n_a_continuity if item.dimension is DataQualityDimension.CONTINUITY else item
+        for item in original.dimensions
+    )
+    n_a_report = replace(original, dimensions=report_dimensions)
+    changed_binding = replace(
+        trade,
+        data_quality_report=_record_ref(
+            "C-003", n_a_report, str(n_a_report.report_id), "2"
+        ),
+    )
+    changed_bindings = (changed_binding,)
+    manifest = _manifest(changed_bindings, (_id(600),), (_id(700),))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=snapshots,
+        reports={**reports, n_a_report.report_id: n_a_report},
+        observations=observations,
+        sources=sources,
+        datasets=datasets,
+    )
+    trade_observations = tuple(
+        observations[UUID(item.observation.record_id)] for item in changed_binding.observations
+    )
+    evidence = _evidence(changed_binding, n_a_report, trade_observations, _id(700))
+    flow = OrderFlowAssessment(
+        _id(600),
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        OrderFlowAssessmentState.AVAILABLE,
+        (_metric(OrderFlowMetricName.TRADE_VOLUME, changed_binding, evidence.evidence_id),),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="failed required"):
+        validate_order_flow_assessment(
+            flow,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={evidence.evidence_id: evidence},
+        )
+
+    valid_case = _case(modalities=(InputModality.SPOT_TRADES,))
+    valid_bindings, snapshots, reports, observations, sources, datasets = valid_case
+    manifest = _manifest(valid_bindings, (_id(601),), (_id(701),))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=snapshots,
+        reports=reports,
+        observations=observations,
+        sources=sources,
+        datasets=datasets,
+    )
+    valid_trade = valid_bindings[0]
+    report = reports[UUID(valid_trade.data_quality_report.record_id)]
+    valid_observations = tuple(
+        observations[UUID(item.observation.record_id)] for item in valid_trade.observations
+    )
+    evidence = _evidence(valid_trade, report, valid_observations, _id(701))
+    out_of_window = _metric(
+        OrderFlowMetricName.TRADE_VOLUME,
+        valid_trade,
+        evidence.evidence_id,
+        window_start=CUTOFF - timedelta(seconds=3),
+    )
+    assessment = OrderFlowAssessment(
+        _id(601),
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        OrderFlowAssessmentState.AVAILABLE,
+        (out_of_window,),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="window does not match"):
+        validate_order_flow_assessment(
+            assessment,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={evidence.evidence_id: evidence},
+        )
+
+
+def test_partial_metric_requires_a_value_and_explanation() -> None:
+    trade = next(item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES)
+    partial = _metric(
+        OrderFlowMetricName.TRADE_VOLUME,
+        trade,
+        _id(700),
+        state=OrderFlowMetricState.PARTIAL,
+        limitations=("partial population",),
+    )
+    assert partial.value == Decimal("1")
+    with pytest.raises(AnalysisV2ContractError, match="PARTIAL metrics require"):
+        replace(partial, limitations=())

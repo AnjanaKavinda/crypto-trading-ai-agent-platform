@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, fields
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
@@ -905,8 +905,6 @@ def validate_evidence_item_v2(
         raise AnalysisV2ContractError("Evidence contains a future observation.")
     if evidence.available_at > manifest.created_at:
         raise AnalysisV2ContractError("Evidence was not available when the manifest was created.")
-    if evidence.usable and any(not _quality_eligible(item) for item in selected):
-        raise AnalysisV2ContractError("Usable evidence has a failed metric-required quality gate.")
     if evidence.usable and any(
         item.report.status is DataQualityStatus.DEGRADED for item in selected
     ):
@@ -957,8 +955,10 @@ def validate_order_flow_assessment(
             not book_metric and item.binding.modality is not InputModality.SPOT_TRADES
         ):
             raise AnalysisV2ContractError("Metric cannot use an incompatible modality.")
-        if metric.calculated_at > manifest.analysis_cutoff:
-            raise AnalysisV2ContractError("Metric calculation is after the analysis cutoff.")
+        if not item.snapshot.as_of <= metric.calculated_at <= manifest.analysis_cutoff:
+            raise AnalysisV2ContractError(
+                "Metric calculation must follow its input cutoff and precede the analysis cutoff."
+            )
         if book_metric:
             if (
                 metric.window_start != item.snapshot.as_of
@@ -1007,6 +1007,8 @@ def validate_order_flow_assessment(
                 )
         if metric.state is OrderFlowMetricState.UNAVAILABLE:
             continue
+        if any(not value.usable for value in selected_evidence):
+            raise AnalysisV2ContractError("Available metrics require usable evidence.")
         if (
             item.report.status is DataQualityStatus.DEGRADED
             and not set(
@@ -1020,7 +1022,10 @@ def validate_order_flow_assessment(
             ).issubset(set(metric.limitations))
         ):
             raise AnalysisV2ContractError("DEGRADED report findings must remain limitations.")
-        if not book_metric and any(
+        if metric.name in {
+            OrderFlowMetricName.VOLUME_DELTA,
+            OrderFlowMetricName.CUMULATIVE_DELTA,
+        } and any(
             finding.startswith("unknown-aggressor:")
             for finding in item.report.anomalies
         ):
@@ -1051,6 +1056,12 @@ def validate_market_context_v2(
         != tuple(str(item) for item in manifest.assessment_ids)
     ):
         raise AnalysisV2ContractError("C-006 v2 does not resolve to the exact C-007 manifest.")
+    if set(evidence) != set(manifest.evidence_ids):
+        raise AnalysisV2ContractError("C-008 evidence membership is not exactly resolved.")
+    for item in evidence.values():
+        validate_evidence_item_v2(
+            item, manifest, resolved_bindings=resolved_bindings
+        )
     by_id = {item.binding.binding_id: item for item in resolved_bindings}
     for metric_assessment in (
         item for item in context.assessments if type(item) is OrderFlowAssessment
@@ -1064,13 +1075,18 @@ def validate_market_context_v2(
     for binding in manifest.bindings:
         if binding.binding_id not in by_id:
             raise AnalysisV2ContractError("Manifest binding was not fully resolved.")
-    for assessment in context.assessments:
+    context_assessments = (
+        context.regime,
+        *context.assessments,
+        context.confluence,
+        *context.conflicts,
+        context.adversarial,
+        *context.uncertainties,
+    )
+    for assessment in context_assessments:
         assessment_as_of = _time("assessment.as_of", assessment.as_of)
         assessment_expiry = _time("assessment.expires_at", assessment.expires_at)
-        if (
-            assessment_as_of > manifest.analysis_cutoff
-            or assessment_expiry > manifest.expires_at
-        ):
+        if assessment_as_of > manifest.analysis_cutoff or assessment_expiry > manifest.expires_at:
             raise AnalysisV2ContractError("Assessment time exceeds its manifest bounds.")
 
 
