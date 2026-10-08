@@ -111,3 +111,40 @@ producer is added, it must resolve an exact recognized assessment-policy ID
 and version and verify any `NOT_APPLICABLE` permission. Revalidate every
 receiving reader, add consumer dimension-required checks, and independently
 review/approve enabling v2 writes before rollout.
+
+## Issue #341 — C-006/C-007/C-008 schema 2 and C-104
+
+The repository owner approved the additive Option 2 direction in merged PR
+#340 for issue #338. C-006/C-007/C-008 schema `1` payloads, identities, and
+readers remain unchanged. Schema `2` is selected explicitly under the same
+contract IDs and `wire-1`; no implicit v1-to-v2 conversion is permitted.
+C-104 `OrderFlowAssessment` is the sequential additive schema-1 contract
+recorded in the domain registry. C-003 v2 remains in-memory only; this change
+does not enable its lineage writes or persistence.
+
+Canonical dependency digests for C-001 observations, C-002 snapshots, C-003
+schema-2 reports, C-091 source records, and C-092 dataset versions are
+`SHA-256(canonical_json_dumps(record).encode("utf-8"))`, using the existing
+canonical JSON v1 serializer over the complete typed record, including its
+`contract_id` and `schema_version` metadata. References separately preserve the
+exact lineage version: C-003 schema `2` resolves to lineage version `2`; the
+other referenced schema-1 records use their contract-specific lineage identity
+(the C-092 dataset version is its lineage version). No C-003 writer or store is
+used.
+
+The C-007 schema-2 manifest `content_sha256` preimage is the canonical
+`wire-1` contract envelope (`canonicalization_version`, `contract_id`,
+`schema_version`, `payload_version`, and `payload`) with only
+`payload.content_sha256` omitted. This avoids a self-referential hash and
+includes the C-007 schema version in the digest. C-008 schema-2 evidence uses
+the same typed-record canonical JSON digest as other dependency records; its
+canonical wire document includes the full evidence payload and fixed contract
+metadata in the envelope. Repeated encoding and hashing must be deterministic.
+
+C-007 bindings are ordered by modality then snapshot ID and close over the exact
+C-002 membership, C-001 observations, C-091 sources, and optional C-092
+dataset. C-008 expiry cannot exceed its referenced manifest or dependency
+expiry; C-006 and C-104 expiry cannot exceed the manifest. Unknown schemas,
+policies, missing/duplicate references, stale inputs, and digest mismatches
+fail closed. Book point-snapshot continuity may be N/A only under the exact
+resolved policy; sequence metrics require measured passing continuity.

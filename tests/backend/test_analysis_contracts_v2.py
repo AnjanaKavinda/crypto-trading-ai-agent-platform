@@ -1,0 +1,980 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from hashlib import sha256
+from uuid import UUID
+
+import pytest
+from trading_platform_api.analysis import (
+    AnalyticalDirection,
+    AnalyticalFinding,
+    AdversarialAssessment,
+    AnalysisRecordReference,
+    AnalysisSnapshotReference,
+    AnalysisV2ContractError,
+    AssessmentStatus,
+    ClaimClassification,
+    ConfluenceAssessment,
+    ConfluenceComponent,
+    ConfluenceState,
+    DomainObservation,
+    EvidenceItemV2,
+    EvidenceDependence,
+    EvidenceRelation,
+    FundamentalAssessment,
+    InputBindingV2,
+    InputModality,
+    MarketContextV2,
+    MarketRegime,
+    MethodologyCategory,
+    ObservationSourceBinding,
+    OrderFlowAssessment,
+    OrderFlowAssessmentState,
+    OrderFlowMetric,
+    OrderFlowMetricName,
+    OrderFlowMetricState,
+    RegimeDimension,
+    ResolutionStatus,
+    UncertaintyCategory,
+    AnalyticalUncertainty,
+    AgentIndependenceReference,
+    VersionReference,
+    analysis_snapshot_v2_sha256,
+    create_analysis_snapshot_v2,
+    decode_analysis_contract,
+    encode_analysis_contract,
+    resolve_analysis_snapshot_v2,
+    validate_market_context_v2,
+    validate_order_flow_assessment,
+)
+from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.market_data import (
+    AssessmentPolicyReference as QualityPolicyReference,
+    DataQualityDimension,
+    DataQualityDimensionReasonCode,
+    DataQualityDimensionResult,
+    DataQualityDimensionState,
+    DataQualityReportV2,
+    DataQualityStatus,
+    DataSourceRecord,
+    DatasetVersion,
+    MarketData,
+    MarketSnapshot,
+    MetricValue,
+    ProviderDataKind,
+    SpotQualityMetricRule,
+    SpotQualityPolicy,
+)
+
+T0 = datetime(2026, 1, 1, tzinfo=UTC)
+CUTOFF = T0 + timedelta(seconds=10)
+CREATED = CUTOFF + timedelta(seconds=1)
+EXPIRES = CUTOFF + timedelta(seconds=5)
+INSTRUMENT = "BTC-USDT-SPOT"
+VENUE = "BINANCE-SPOT"
+HASH = "a" * 64
+
+
+def _id(number: int) -> UUID:
+    return UUID(f"00000000-0000-0000-0000-{number:012d}")
+
+
+def _policy(modality: InputModality, cutoff: datetime = CUTOFF) -> SpotQualityPolicy:
+    if modality is InputModality.ORDER_BOOK:
+        policy_id = "spot-order-book-point"
+        kind = ProviderDataKind.ORDER_BOOK
+        expected = 1
+        transitions = None
+        rules = (
+            SpotQualityMetricRule("bid_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")),
+            SpotQualityMetricRule("bid_1_quantity", "BTC", Decimal("0"), Decimal("1e18")),
+            SpotQualityMetricRule("ask_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")),
+            SpotQualityMetricRule("ask_1_quantity", "BTC", Decimal("0"), Decimal("1e18")),
+        )
+    elif modality is InputModality.SPOT_TRADES:
+        policy_id = "spot-trade-quality"
+        kind = ProviderDataKind.TRADE
+        expected = 2
+        transitions = 1
+        rules = (
+            SpotQualityMetricRule("price", "USDT", Decimal("1e-18"), Decimal("1e18")),
+            SpotQualityMetricRule("quantity", "BTC", Decimal("1e-18"), Decimal("1e18")),
+        )
+    else:
+        raise AssertionError("Test helper supports trade and point-book inputs.")
+    return SpotQualityPolicy(
+        policy_id,
+        "1",
+        kind,
+        INSTRUMENT,
+        VENUE,
+        cutoff,
+        expected,
+        10,
+        rules,
+        expected_transition_count=transitions,
+    )
+
+
+def _source(source_id: UUID, event_time: datetime) -> DataSourceRecord:
+    return DataSourceRecord(
+        source_id,
+        "provider",
+        "provider-v1",
+        event_time,
+        event_time,
+        event_time,
+        "raw-v1",
+        "adapter-v1",
+        "licensed-source",
+        HASH,
+    )
+
+
+def _observation(
+    observation_id: UUID,
+    source_id: UUID,
+    modality: InputModality,
+    event_time: datetime,
+) -> MarketData:
+    kind = {
+        InputModality.SPOT_TRADES: ProviderDataKind.TRADE,
+        InputModality.ORDER_BOOK: ProviderDataKind.ORDER_BOOK,
+    }[modality]
+    metrics = (
+        (
+            MetricValue("bid_1_price", Decimal("99"), "USDT"),
+            MetricValue("bid_1_quantity", Decimal("2"), "BTC"),
+            MetricValue("ask_1_price", Decimal("101"), "USDT"),
+            MetricValue("ask_1_quantity", Decimal("3"), "BTC"),
+        )
+        if modality is InputModality.ORDER_BOOK
+        else (
+            MetricValue("price", Decimal("100"), "USDT"),
+            MetricValue("quantity", Decimal("1"), "BTC"),
+        )
+    )
+    return MarketData(
+        observation_id,
+        INSTRUMENT,
+        VENUE,
+        kind.value,
+        event_time,
+        event_time,
+        event_time,
+        event_time,
+        source_id,
+        metrics,
+    )
+
+
+def _report(
+    snapshot: MarketSnapshot,
+    policy: SpotQualityPolicy,
+    *,
+    status: DataQualityStatus = DataQualityStatus.VALID,
+    failed_dimension: DataQualityDimension | None = None,
+    anomalies: tuple[str, ...] = (),
+) -> DataQualityReportV2:
+    expected = policy.expected_record_count
+    assert expected is not None
+    denominators = {
+        DataQualityDimension.COMPLETENESS: expected * len(policy.metric_rules),
+        DataQualityDimension.FRESHNESS: expected,
+        DataQualityDimension.ACCURACY: expected,
+        DataQualityDimension.CONSISTENCY: expected,
+        DataQualityDimension.SOURCE_RELIABILITY: expected,
+        DataQualityDimension.COVERAGE: expected,
+        DataQualityDimension.CONTINUITY: policy.expected_transition_count,
+    }
+    units = {
+        DataQualityDimension.COMPLETENESS: "metric_cells",
+        DataQualityDimension.FRESHNESS: "observations",
+        DataQualityDimension.ACCURACY: "observations",
+        DataQualityDimension.CONSISTENCY: "observations",
+        DataQualityDimension.SOURCE_RELIABILITY: "source_records",
+        DataQualityDimension.COVERAGE: "observations",
+        DataQualityDimension.CONTINUITY: "sequence_transitions",
+    }
+    dimensions = []
+    for dimension in DataQualityDimension:
+        if (
+            dimension is DataQualityDimension.CONTINUITY
+            and policy.data_kind is ProviderDataKind.ORDER_BOOK
+            and policy.expected_record_count == 1
+        ):
+            dimensions.append(
+                DataQualityDimensionResult(
+                    dimension,
+                    DataQualityDimensionState.NOT_APPLICABLE,
+                    reason_code=DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT,
+                    not_applicable_policy=QualityPolicyReference(
+                        policy.assessment_policy_id, policy.resolved_policy_version
+                    ),
+                )
+            )
+            continue
+        denominator = denominators[dimension]
+        assert denominator is not None
+        if dimension is failed_dimension:
+            dimensions.append(
+                DataQualityDimensionResult(
+                    dimension,
+                    DataQualityDimensionState.UNAVAILABLE,
+                    reason_code=DataQualityDimensionReasonCode.MISSING_REQUIRED_EVIDENCE,
+                )
+            )
+        else:
+            dimensions.append(
+                DataQualityDimensionResult(
+                    dimension,
+                    DataQualityDimensionState.MEASURED,
+                    Decimal("1"),
+                    numerator=denominator,
+                    denominator=denominator,
+                    basis_unit=units[dimension],
+                )
+            )
+    return DataQualityReportV2(
+        _id(300 + int(policy.data_kind is ProviderDataKind.ORDER_BOOK)),
+        snapshot.snapshot_id,
+        CUTOFF,
+        snapshot.as_of,
+        policy.assessment_policy_id,
+        policy.resolved_policy_version,
+        tuple(dimensions),
+        status,
+        anomalies=anomalies,
+    )
+
+
+def _record_ref(contract_id: str, record: object, record_id: str, lineage: str) -> AnalysisRecordReference:
+    return AnalysisRecordReference(
+        contract_id,
+        record_id,
+        str(getattr(record, "schema_version")),
+        lineage,
+        canonical_sha256(record),
+    )
+
+
+def _case(
+    *,
+    modalities: tuple[InputModality, ...] = (
+        InputModality.SPOT_TRADES,
+        InputModality.ORDER_BOOK,
+    ),
+    failed_modality: InputModality | None = None,
+    degraded_modality: InputModality | None = None,
+    anomaly: str | None = None,
+    future_modality: InputModality | None = None,
+) -> tuple[
+    tuple[InputBindingV2, ...],
+    dict[UUID, MarketSnapshot],
+    dict[UUID, DataQualityReportV2],
+    dict[UUID, MarketData],
+    dict[UUID, DataSourceRecord],
+]:
+    bindings = []
+    snapshots = {}
+    reports = {}
+    observations = {}
+    sources = {}
+    for index, modality in enumerate(modalities):
+        policy = _policy(modality)
+        event_times = (
+            (CUTOFF - timedelta(seconds=2), CUTOFF - timedelta(seconds=1))
+            if modality is InputModality.SPOT_TRADES
+            else (CUTOFF,)
+        )
+        record_values = []
+        source_values = []
+        for offset, when in enumerate(event_times):
+            number = 10 + (index * 10) + offset
+            source = _source(_id(number + 100), when)
+            observation_time = (
+                CUTOFF + timedelta(seconds=1)
+                if modality is future_modality
+                else when
+            )
+            observation = _observation(
+                _id(number), source.source_record_id, modality, observation_time
+            )
+            record_values.append(observation)
+            source_values.append(source)
+            observations[observation.market_data_id] = observation
+            sources[source.source_record_id] = source
+        snapshot = MarketSnapshot(
+            _id(200 + index),
+            CUTOFF,
+            CUTOFF,
+            INSTRUMENT,
+            VENUE,
+            tuple(item.market_data_id for item in record_values),
+            tuple(item.source_record_id for item in source_values),
+        )
+        policy_report_status = (
+            DataQualityStatus.UNAVAILABLE
+            if modality is failed_modality
+            else DataQualityStatus.DEGRADED
+            if modality is degraded_modality
+            else DataQualityStatus.VALID
+        )
+        report = _report(
+            snapshot,
+            policy,
+            status=policy_report_status,
+            failed_dimension=(
+                DataQualityDimension.FRESHNESS
+                if modality is failed_modality
+                else None
+            ),
+            anomalies=(anomaly,) if modality is degraded_modality and anomaly else (),
+        )
+        snapshots[snapshot.snapshot_id] = snapshot
+        reports[report.report_id] = report
+        binding_id = _id(400 + index)
+        bindings.append(
+            InputBindingV2(
+                binding_id,
+                modality,
+                _record_ref("C-002", snapshot, str(snapshot.snapshot_id), "1"),
+                snapshot.as_of,
+                CUTOFF,
+                INSTRUMENT,
+                VENUE,
+                _record_ref("C-003", report, str(report.report_id), "2"),
+                QualityPolicyReference(
+                    policy.assessment_policy_id, policy.resolved_policy_version
+                ),
+                tuple(
+                    ObservationSourceBinding(
+                        _record_ref("C-001", observation, str(observation.market_data_id), "1"),
+                        _record_ref("C-091", source, str(source.source_record_id), "1"),
+                    )
+                    for observation, source in zip(record_values, source_values)
+                ),
+                tuple(
+                    _record_ref("C-091", source, str(source.source_record_id), "1")
+                    for source in source_values
+                ),
+            )
+        )
+    bindings.sort(key=lambda item: (item.modality.value, item.market_snapshot.record_id))
+    return tuple(bindings), snapshots, reports, observations, sources
+
+
+def _evidence(binding: InputBindingV2, report: DataQualityReportV2, observations: tuple[MarketData, ...], evidence_id: UUID) -> EvidenceItemV2:
+    limitations = (
+        *report.missing_fields,
+        *report.invalid_record_ids,
+        *report.duplicate_record_ids,
+        *report.anomalies,
+        *report.source_conflicts,
+    )
+    return EvidenceItemV2(
+        evidence_id,
+        (binding.binding_id,),
+        tuple(item.market_data_id for item in observations),
+        tuple(item.source_record_id for item in observations),
+        (),
+        (),
+        ClaimClassification.FACT,
+        EvidenceRelation.SUPPORTING,
+        min(item.event_time for item in observations),
+        CUTOFF,
+        EXPIRES,
+        VersionReference("order-flow-method", "1"),
+        "observed",
+        "USDT",
+        "Synthetic contract evidence.",
+        report.status,
+        Decimal("1"),
+        limitations,
+        (VersionReference("producer", "1"),),
+        report.status in {DataQualityStatus.VALID, DataQualityStatus.DEGRADED},
+    )
+
+
+def _metric(
+    name: OrderFlowMetricName,
+    binding: InputBindingV2,
+    evidence_id: UUID,
+    *,
+    value: Decimal | None = Decimal("1"),
+    state: OrderFlowMetricState = OrderFlowMetricState.AVAILABLE,
+    window_start: datetime | None = None,
+    reason: str | None = None,
+    limitations: tuple[str, ...] = (),
+) -> OrderFlowMetric:
+    point = binding.modality is InputModality.ORDER_BOOK
+    return OrderFlowMetric(
+        name,
+        state,
+        value,
+        "USDT",
+        CUTOFF,
+        CUTOFF if point else (window_start or CUTOFF - timedelta(seconds=2)),
+        CUTOFF,
+        VersionReference("order-flow-method", "1"),
+        (evidence_id,),
+        (binding.binding_id,),
+        limitations,
+        reason,
+    )
+
+
+def _manifest(
+    bindings: tuple[InputBindingV2, ...],
+    assessments: tuple[UUID, ...],
+    evidence: tuple[UUID, ...],
+):
+    return create_analysis_snapshot_v2(
+        snapshot_id=_id(500),
+        asset="BTC",
+        instrument_id=INSTRUMENT,
+        venue_id=VENUE,
+        timeframe="1m",
+        analysis_cutoff=CUTOFF,
+        created_at=CREATED,
+        expires_at=EXPIRES,
+        bindings=bindings,
+        assessment_ids=assessments,
+        evidence_ids=evidence,
+        provenance=(VersionReference("analysis", "2"),),
+    )
+
+
+def _resolved(case: tuple[object, ...]):
+    bindings, snapshots, reports, observations, sources = case
+    manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=snapshots,
+        reports=reports,
+        observations=observations,
+        sources=sources,
+    )
+    return manifest, resolved
+
+
+def test_v1_analysis_records_keep_schema_and_canonical_identity() -> None:
+    from trading_platform_api.analysis import (
+        AnalysisSnapshot,
+        EvidenceItem,
+        MarketContext,
+    )
+
+    evidence = EvidenceItem(
+        _id(1),
+        (_id(2),),
+        (),
+        (),
+        ClaimClassification.FACT,
+        EvidenceRelation.SUPPORTING,
+        T0,
+        T0 + timedelta(seconds=1),
+        T0 + timedelta(seconds=2),
+        VersionReference("method", "1"),
+        "value",
+        None,
+        "interpretation",
+        DataQualityStatus.VALID,
+        _id(3),
+        Decimal("1"),
+        (),
+        (VersionReference("producer", "1"),),
+        True,
+    )
+    snapshot = AnalysisSnapshot(
+        _id(4),
+        "BTC",
+        INSTRUMENT,
+        "1m",
+        T0,
+        T0 + timedelta(seconds=1),
+        T0 + timedelta(seconds=2),
+        _id(5),
+        _id(6),
+        (),
+        (),
+        (_id(7),),
+        (_id(8),),
+        (VersionReference("analysis", "1"),),
+        HASH,
+    )
+    evidence_id = _id(8)
+    fixed_assessment = FundamentalAssessment(
+        _id(10),
+        "BTC",
+        INSTRUMENT,
+        "1h",
+        T0,
+        T0 + timedelta(seconds=1),
+        T0 + timedelta(seconds=2),
+        AssessmentStatus.AVAILABLE,
+        Decimal("0.7"),
+        (
+            AnalyticalFinding(
+                _id(11),
+                "use-case",
+                ClaimClassification.FACT,
+                "Usage increased.",
+                (evidence_id,),
+                VersionReference("method", "1"),
+                "Usage reverses.",
+            ),
+        ),
+        (
+            DomainObservation(
+                "use-case",
+                "increased",
+                None,
+                "1h",
+                VersionReference("calculation", "1"),
+                (evidence_id,),
+            ),
+        ),
+        (evidence_id,),
+        (),
+        (),
+        _id(6),
+        (VersionReference("agent", "1"),),
+        MethodologyCategory.FUNDAMENTAL,
+    )
+    regime = MarketRegime(
+        _id(12),
+        "BTC",
+        INSTRUMENT,
+        "1h",
+        T0,
+        T0 + timedelta(seconds=2),
+        AnalyticalDirection.MIXED,
+        (RegimeDimension("volatility", "normal", (evidence_id,)),),
+        "Regime context.",
+        Decimal("0.5"),
+        (evidence_id,),
+        (),
+    )
+    confluence = ConfluenceAssessment(
+        _id(13),
+        T0,
+        T0 + timedelta(seconds=2),
+        ConfluenceState.ALIGNED,
+        (
+            ConfluenceComponent(
+                "fundamental",
+                AnalyticalDirection.BULLISH,
+                EvidenceRelation.SUPPORTING,
+                Decimal("0.6"),
+                __import__("trading_platform_api.analysis", fromlist=["EvidenceDependence"]).EvidenceDependence.INDEPENDENT,
+                (evidence_id,),
+            ),
+        ),
+        Decimal("0.5"),
+        Decimal("0.6"),
+        AgentIndependenceReference(_id(14), "1"),
+        "Independent evidence.",
+    )
+    context = MarketContext(
+        _id(9),
+        "BTC",
+        INSTRUMENT,
+        T0,
+        T0 + timedelta(seconds=2),
+        ("1m stable",),
+        regime,
+        (fixed_assessment,),
+        confluence,
+        (),
+        AdversarialAssessment(
+            _id(15),
+            T0,
+            T0 + timedelta(seconds=2),
+            "Alternative explanation.",
+            ("Liquidity effects",),
+            (evidence_id,),
+            ("Reversal",),
+            (),
+            (),
+            (),
+            Decimal("0.5"),
+        ),
+        (
+            AnalyticalUncertainty(
+                _id(16),
+                UncertaintyCategory.DATA,
+                "Data uncertainty.",
+                (_id(11),),
+                ("fundamental",),
+                Decimal("0.2"),
+                True,
+                ("additional source",),
+                T0,
+                T0 + timedelta(seconds=2),
+                ResolutionStatus.UNRESOLVED,
+            ),
+        ),
+        (evidence_id,),
+        _id(4),
+        _id(6),
+    )
+    expected_hashes = (
+        (
+            "2a3e22e7dbb9b0a512d76c539e7d8cf8aacb006b9f5e3c36b4a4b6b579281b9b",
+            "809293a9050e2727fbb0a50434ae4f6d4867cd4425834d0fab1ddfe59c53e7ad",
+        ),
+        (
+            "cf3fa2f81c510ddb6815833047b967822211d7f6e7a5a2f6b77034c59748368a",
+            "323b720e74980032d226c7948ed3e462e9391b1be4af08b776419d415808abc7",
+        ),
+        (
+            "c304e89d9f1e18080765d8d4241b888bebd4fd1a8fc9892ecb1b5bcc786478e9",
+            "5dfcd8619cdeb635381406866d61db5304995ed6f4dbe5f1e4ea42ba2f7a145e",
+        ),
+    )
+    records = (evidence, snapshot, context)
+    for record, expected in zip(records, expected_hashes):
+        encoded = encode_analysis_contract(record)
+        assert canonical_sha256(record) == expected[0]
+        assert sha256(encoded.encode("utf-8")).hexdigest() == expected[1]
+        assert decode_analysis_contract(encoded) == record
+
+
+def test_v2_manifest_mixed_bindings_and_codec_are_deterministic() -> None:
+    case = _case()
+    manifest, resolved = _resolved(case)
+    assert [item.binding.modality for item in resolved] == [
+        InputModality.ORDER_BOOK,
+        InputModality.SPOT_TRADES,
+    ]
+    assert analysis_snapshot_v2_sha256(manifest) == manifest.content_sha256
+    assert encode_analysis_contract(manifest) == encode_analysis_contract(manifest)
+    assert decode_analysis_contract(encode_analysis_contract(manifest)) == manifest
+
+
+def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
+    case = _case()
+    bindings, _, reports, observations, _ = case
+    assessment_id = _id(600)
+    evidence_by_binding = {
+        item.modality: _evidence(
+            item,
+            next(report for report in reports.values() if report.snapshot_id == UUID(item.market_snapshot.record_id)),
+            tuple(
+                observations[UUID(link.observation.record_id)]
+                for link in item.observations
+            ),
+            _id(700 + index),
+        )
+        for index, item in enumerate(bindings)
+    }
+    trades = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
+    trade_evidence = evidence_by_binding[InputModality.SPOT_TRADES]
+    book_evidence = evidence_by_binding[InputModality.ORDER_BOOK]
+    assessment = OrderFlowAssessment(
+        assessment_id,
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        OrderFlowAssessmentState.AVAILABLE,
+        (
+            _metric(OrderFlowMetricName.TRADE_VOLUME, trades, trade_evidence.evidence_id),
+            _metric(OrderFlowMetricName.SPREAD, book, book_evidence.evidence_id),
+        ),
+    )
+    manifest = _manifest(
+        bindings,
+        (assessment_id,),
+        (trade_evidence.evidence_id, book_evidence.evidence_id),
+    )
+    assert decode_analysis_contract(encode_analysis_contract(trade_evidence)) == trade_evidence
+
+    regime = MarketRegime(
+        _id(800),
+        "BTC",
+        INSTRUMENT,
+        "1m",
+        CUTOFF,
+        EXPIRES,
+        AnalyticalDirection.MIXED,
+        (RegimeDimension("volatility", "normal", (_id(801),)),),
+        "Regime context.",
+        Decimal("0.5"),
+        (_id(801),),
+        (),
+    )
+    context = MarketContextV2(
+        _id(802),
+        "BTC",
+        INSTRUMENT,
+        CUTOFF,
+        EXPIRES,
+        ("1m mixed",),
+        regime,
+        (assessment,),
+        ConfluenceAssessment(
+            _id(803),
+            CUTOFF,
+            EXPIRES,
+            ConfluenceState.ALIGNED,
+            (
+                ConfluenceComponent(
+                    "order-flow",
+                    AnalyticalDirection.MIXED,
+                    EvidenceRelation.SUPPORTING,
+                    Decimal("0.5"),
+                    EvidenceDependence.INDEPENDENT,
+                    (_id(801),),
+                ),
+            ),
+            Decimal("0.5"),
+            Decimal("0.5"),
+            AgentIndependenceReference(_id(804), "1"),
+            "Confluence context.",
+        ),
+        (),
+        AdversarialAssessment(
+            _id(805),
+            CUTOFF,
+            EXPIRES,
+            "Alternative explanation.",
+            ("Liquidity effects",),
+            (_id(801),),
+            ("Invalidation occurs",),
+            (),
+            (),
+            (),
+            Decimal("0.5"),
+        ),
+        (
+            AnalyticalUncertainty(
+                _id(806),
+                UncertaintyCategory.DATA,
+                "Coverage uncertainty.",
+                (_id(801),),
+                ("order-flow",),
+                Decimal("0.2"),
+                True,
+                ("additional source",),
+                CUTOFF,
+                EXPIRES,
+                ResolutionStatus.UNRESOLVED,
+            ),
+        ),
+        manifest.evidence_ids,
+        AnalysisSnapshotReference(manifest.snapshot_id, "2", manifest.content_sha256),
+    )
+    assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    _, resolved = _resolved(case)
+    validate_order_flow_assessment(
+        assessment,
+        manifest,
+        resolved_bindings=resolved,
+        evidence={
+            trade_evidence.evidence_id: trade_evidence,
+            book_evidence.evidence_id: book_evidence,
+        },
+    )
+    validate_market_context_v2(
+        context,
+        manifest,
+        resolved_bindings=resolved,
+        evidence={
+            trade_evidence.evidence_id: trade_evidence,
+            book_evidence.evidence_id: book_evidence,
+        },
+    )
+
+
+def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> None:
+    case = _case(
+        failed_modality=InputModality.SPOT_TRADES,
+        degraded_modality=InputModality.ORDER_BOOK,
+        anomaly="book-limit-warning",
+    )
+    bindings, _, reports, observations, sources = case
+    manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
+    resolved = resolve_analysis_snapshot_v2(
+        manifest,
+        snapshots=case[1],
+        reports=reports,
+        observations=observations,
+        sources=sources,
+    )
+    trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
+    trade_report = reports[UUID(trade.data_quality_report.record_id)]
+    book_report = reports[UUID(book.data_quality_report.record_id)]
+    trade_data = tuple(observations[UUID(link.observation.record_id)] for link in trade.observations)
+    book_data = tuple(observations[UUID(link.observation.record_id)] for link in book.observations)
+    trade_evidence = _evidence(trade, trade_report, trade_data, _id(700))
+    book_evidence = _evidence(book, book_report, book_data, _id(701))
+    assessment = OrderFlowAssessment(
+        _id(600),
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        OrderFlowAssessmentState.PARTIAL,
+        (
+            _metric(
+                OrderFlowMetricName.TRADE_VOLUME,
+                trade,
+                trade_evidence.evidence_id,
+                state=OrderFlowMetricState.UNAVAILABLE,
+                value=None,
+                reason="required freshness dimension unavailable",
+            ),
+            _metric(
+                OrderFlowMetricName.SPREAD,
+                book,
+                book_evidence.evidence_id,
+                limitations=("book-limit-warning",),
+            ),
+        ),
+    )
+    validate_order_flow_assessment(
+        assessment,
+        manifest,
+        resolved_bindings=resolved,
+        evidence={
+            trade_evidence.evidence_id: trade_evidence,
+            book_evidence.evidence_id: book_evidence,
+        },
+    )
+    bad = replace(
+        assessment,
+        metrics=(
+            replace(
+                assessment.metrics[0],
+                state=OrderFlowMetricState.AVAILABLE,
+                value=Decimal("0"),
+                unavailable_reason=None,
+            ),
+            assessment.metrics[1],
+        ),
+        state=OrderFlowAssessmentState.AVAILABLE,
+    )
+    with pytest.raises(AnalysisV2ContractError, match="failed required"):
+        validate_order_flow_assessment(
+            bad,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={
+                trade_evidence.evidence_id: trade_evidence,
+                book_evidence.evidence_id: book_evidence,
+            },
+        )
+
+
+def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations() -> None:
+    case = _case()
+    bindings, snapshots, reports, observations, sources = case
+    manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
+    altered = next(iter(observations.values()))
+    tampered = replace(altered, metrics=(MetricValue("different", Decimal("1"), "unit"),))
+    with pytest.raises(AnalysisV2ContractError, match="provenance or cutoff"):
+        resolve_analysis_snapshot_v2(
+            manifest,
+            snapshots=snapshots,
+            reports=reports,
+            observations={**observations, altered.market_data_id: tampered},
+            sources=sources,
+        )
+
+    binding = bindings[0]
+    unknown_policy = replace(
+        binding,
+        assessment_policy=QualityPolicyReference("unknown-policy", "1"),
+    )
+    changed_bindings = tuple(
+        unknown_policy if item.binding_id == binding.binding_id else item
+        for item in bindings
+    )
+    invalid_manifest = _manifest(changed_bindings, (_id(600),), (_id(700), _id(701)))
+    with pytest.raises(AnalysisV2ContractError, match="policy"):
+        resolve_analysis_snapshot_v2(
+            invalid_manifest,
+            snapshots=snapshots,
+            reports=reports,
+            observations=observations,
+            sources=sources,
+        )
+
+    future_case = _case(future_modality=InputModality.SPOT_TRADES)
+    future_bindings, future_snapshots, future_reports, future_obs, future_sources = future_case
+    future_manifest = _manifest(future_bindings, (_id(600),), (_id(700), _id(701)))
+    with pytest.raises(AnalysisV2ContractError, match="cutoff mismatch"):
+        resolve_analysis_snapshot_v2(
+            future_manifest,
+            snapshots=future_snapshots,
+            reports=future_reports,
+            observations=future_obs,
+            sources=future_sources,
+        )
+
+
+def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed() -> None:
+    case = _case()
+    bindings = case[0]
+    with pytest.raises(AnalysisV2ContractError, match="deterministic"):
+        create_analysis_snapshot_v2(
+            snapshot_id=_id(500),
+            asset="BTC",
+            instrument_id=INSTRUMENT,
+            venue_id=VENUE,
+            timeframe="1m",
+            analysis_cutoff=CUTOFF,
+            created_at=CREATED,
+            expires_at=EXPIRES,
+            bindings=tuple(reversed(bindings)),
+            assessment_ids=(_id(600),),
+            evidence_ids=(_id(700), _id(701)),
+            provenance=(VersionReference("analysis", "2"),),
+        )
+    manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
+    with pytest.raises(AnalysisV2ContractError, match="content_sha256"):
+        replace(manifest, timeframe="5m")
+    envelope = encode_analysis_contract(manifest).replace('"schema_version":"2"', '"schema_version":"3"')
+    with pytest.raises(AnalysisV2ContractError, match="schema"):
+        decode_analysis_contract(envelope)
+    duplicate = replace(bindings[0], binding_id=bindings[1].binding_id)
+    with pytest.raises(ValueError, match="duplicate"):
+        _manifest((duplicate, bindings[1]), (_id(600),), (_id(700), _id(701)))
+
+
+def test_attempted_cross_modal_metric_is_rejected_and_unavailable_needs_reason() -> None:
+    trade = next(item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES)
+    with pytest.raises(AnalysisV2ContractError, match="one modality"):
+        OrderFlowMetric(
+            OrderFlowMetricName.VOLUME_DELTA,
+            OrderFlowMetricState.AVAILABLE,
+            Decimal("0"),
+            "BTC",
+            CUTOFF,
+            CUTOFF - timedelta(seconds=2),
+            CUTOFF,
+            VersionReference("order-flow-method", "1"),
+            (_id(700),),
+            (trade.binding_id, _id(999)),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="explicit reason"):
+        OrderFlowMetric(
+            OrderFlowMetricName.TRADE_VOLUME,
+            OrderFlowMetricState.UNAVAILABLE,
+            None,
+            "BTC",
+            CUTOFF,
+            CUTOFF - timedelta(seconds=2),
+            CUTOFF,
+            VersionReference("order-flow-method", "1"),
+            (_id(700),),
+            (trade.binding_id,),
+        )

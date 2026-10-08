@@ -7,7 +7,13 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from trading_platform_api.analysis import AgentIndependenceReference
+from trading_platform_api.analysis import (
+    AgentIndependenceReference,
+    AnalysisSnapshotV2,
+    EvidenceItemV2,
+    MarketContextV2,
+    OrderFlowAssessment,
+)
 from trading_platform_api.audit import AuditEvent
 from trading_platform_api.contracts import describe_dataclass_contract
 from trading_platform_api.learning import (
@@ -44,7 +50,12 @@ REFERENCE_ONLY_TYPES = {
     ValidationReference: "C-028",
     AgentIndependenceReference: "C-093",
 }
-VERSIONED_CONTRACT_TYPES = {DataQualityReportV2: ("C-003", "2")}
+VERSIONED_CONTRACT_TYPES = {
+    DataQualityReportV2: ("C-003", "2"),
+    MarketContextV2: ("C-006", "2"),
+    AnalysisSnapshotV2: ("C-007", "2"),
+    EvidenceItemV2: ("C-008", "2"),
+}
 ALIAS_NAMES = {"CalibrationRecord", "ExperienceRecord"}
 AUTHORITY_METHOD_NAMES = {
     "approve",
@@ -123,10 +134,10 @@ def test_registry_classifies_every_canonical_contract() -> None:
     registry = _registry_rows()
     owners = _canonical_owners()
 
-    assert set(registry) == {f"C-{number:03d}" for number in range(1, 104)}
-    assert len(set(registry.values())) == 103
+    assert set(registry) == {f"C-{number:03d}" for number in range(1, 105)}
+    assert len(set(registry.values())) == 104
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 95
+    assert len(owners) == 96
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
@@ -157,6 +168,10 @@ def test_versioned_contract_models_keep_their_canonical_owner_and_schema() -> No
             contract_type, payload_version="wire-1"
         )
         assert (descriptor.contract_id, descriptor.schema_version) == expected
+    order_flow = describe_dataclass_contract(
+        OrderFlowAssessment, payload_version="wire-1"
+    )
+    assert (order_flow.contract_id, order_flow.schema_version) == ("C-104", "1")
 
 
 def test_aliases_and_reference_only_types_are_not_competing_owners() -> None:
