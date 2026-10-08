@@ -124,6 +124,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-101 | HistoricalUniverse | Data | Research, Validation | Complete, source-bound, versioned membership with separate effective and knowledge intervals; retain delisted instruments historically. |
 | C-102 | ObservationRevision | Data | Research, Validation | Immutable observation identity and explicit supersession ancestry; later availability cannot leak into earlier cutoffs. |
 | C-103 | ReconstructionManifest | Data | Research, Validation, Audit | Pins universe, selected revisions, ancestry/source hashes, dataset version and deterministic selection policy. |
+| C-104 | OrderFlowAssessment | Analysis | MarketContext, Strategy, Audit, Learning | Per-metric order-flow availability and evidence are bound to exact modality inputs; assessment cannot authorize trades. |
 
 Issue #45 additive extension: owner approval on 2026-09-28. C-101–C-103 start
 at schema `1`; C-001–C-100 retain their existing layouts and IDs.
@@ -149,6 +150,32 @@ Schema `2` is decode/read compatibility only. No producer or analysis consumer
 is migrated here, and lineage writes remain disabled until receiving consumers
 are ready. A producer must resolve and validate the exact assessment-policy
 definition before producing a v2 report; unknown policy versions fail closed.
+
+## Issue #341 — versioned order-flow analysis contracts
+
+The repository owner approved Option 2 in merged PR #340 for issue #338. C-104
+is allocated additively as the next sequential ID, with schema `1`;
+C-006/C-007/C-008 schema `1` identities and bytes remain unchanged. Their
+schema-2 forms use the existing `canonical-json-v1` / `wire-1` encoding and
+explicit schema dispatch. C-007 schema 2 is the immutable modality input
+manifest; C-008 schema 2 binds evidence to the manifest bindings actually used;
+C-006 schema 2 references that manifest and typed assessments without copying
+its binding list. C-003 v2 remains in-memory only: this allocation does not
+enable report writes, persistence, or a producer.
+
+C-104 `OrderFlowAssessment` is analysis-only. Its schema-1 metric vocabulary
+separately represents best bid/ask, midpoint, absolute spread, spread bps,
+bid/ask depth and notional, book imbalance, trade-record count, buy/sell
+aggressor volume, volume delta, and cumulative delta. Each component has an
+explicit `AVAILABLE`, `PARTIAL`, or `UNAVAILABLE` state, a typed value and unit,
+and binds to exactly one modality: book components to one point-book binding,
+trade components to one exact trade-window binding. Trade-record count is a
+non-negative integer with unit `trades`; spread bps uses unit `bps`; book
+imbalance uses `ratio`. Price and notional components use the assessment's
+explicit quote unit; depth and trade-volume/delta components use its explicit
+base unit. Validation requires those base/quote units to match the exact
+resolved C-003 modality policy. The assessment grants no signal, risk, approval,
+or execution authority.
 
 ## Canonical name / alias / supersession clarifications
 
