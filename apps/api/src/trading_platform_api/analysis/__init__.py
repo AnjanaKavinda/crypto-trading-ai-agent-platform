@@ -72,6 +72,13 @@ from trading_platform_api.analysis.moving_averages import (
     MovingAverageSeries,
     calculate_moving_average,
 )
+from trading_platform_api.analysis.order_flow import (
+    SPOT_ORDER_FLOW_METHOD,
+    SpotOrderFlowError,
+    SpotOrderFlowPolicy,
+    SpotOrderFlowResult,
+    calculate_spot_order_flow,
+)
 from trading_platform_api.analysis.price_action import (
     BASELINE_METHOD_VERSION,
     EVIDENCE_SCHEMA_VERSION,
@@ -245,6 +252,11 @@ __all__ = [
     "MovingAveragePoint",
     "MovingAverageSeries",
     "calculate_moving_average",
+    "SPOT_ORDER_FLOW_METHOD",
+    "SpotOrderFlowError",
+    "SpotOrderFlowPolicy",
+    "SpotOrderFlowResult",
+    "calculate_spot_order_flow",
     "MARKET_STRUCTURE_EVIDENCE_VERSION",
     "MARKET_STRUCTURE_INDICATOR_ID",
     "MARKET_STRUCTURE_METADATA_VERSION",
