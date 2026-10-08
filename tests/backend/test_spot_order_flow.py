@@ -521,6 +521,29 @@ def test_locked_or_crossed_point_book_is_rejected(side: str, price: Decimal) -> 
         )
 
 
+def test_malformed_book_level_numeric_type_fails_closed() -> None:
+    case = _analysis_case()
+    trade, book, snapshots, reports, manifest, assessment_id, evidence_ids = case
+    transition = book[0]
+    invalid_state = replace(
+        transition.state,
+        bids=(BookLevel(Decimal("99.00"), 2),),  # type: ignore[arg-type]
+    )
+    with pytest.raises(SpotOrderFlowError, match="Invalid or crossed"):
+        calculate_spot_order_flow(
+            manifest,
+            trade_handoff=trade[0],
+            book_handoff=(replace(transition, state=invalid_state),),
+            snapshots=snapshots,
+            reports=reports,
+            policy=METHOD_POLICY,
+            assessment_id=assessment_id,
+            evidence_ids=evidence_ids,
+            calculated_at=CUTOFF,
+            validated_at=NOW,
+        )
+
+
 def test_unverified_trade_sequence_fails_closed_for_trade_metrics() -> None:
     result = _calculate(_analysis_case(sequenced=False))
     for name in (

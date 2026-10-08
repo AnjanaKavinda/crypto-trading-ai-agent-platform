@@ -379,9 +379,7 @@ def _validate_point_book(
     ):
         raise SpotOrderFlowError("Point book requires bid and ask levels.")
     if (
-        state.bids[0].price <= 0
-        or state.asks[0].price <= state.bids[0].price
-        or any(
+        any(
             type(level.price) is not Decimal
             or type(level.quantity) is not Decimal
             or not level.price.is_finite()
@@ -390,6 +388,11 @@ def _validate_point_book(
             or level.quantity <= 0
             for level in (*state.bids, *state.asks)
         )
+    ):
+        raise SpotOrderFlowError("Invalid or crossed normalized point book.")
+    if (
+        state.bids[0].price <= 0
+        or state.asks[0].price <= state.bids[0].price
         or tuple(level.price for level in state.bids)
         != tuple(sorted((level.price for level in state.bids), reverse=True))
         or tuple(level.price for level in state.asks)
