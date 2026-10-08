@@ -185,7 +185,20 @@ def _decode_value(kind: Any, value: object) -> object:
 
 def decode_analysis_contract(document: str | bytes) -> object:
     try:
-        envelope = json.loads(document)
+        if isinstance(document, bytes):
+            try:
+                source_text = document.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise AnalysisV2ContractError(
+                    "Analysis document must be valid UTF-8."
+                ) from exc
+        elif type(document) is str:
+            source_text = document
+        else:
+            raise AnalysisV2ContractError(
+                "Analysis document must be text or UTF-8 bytes."
+            )
+        envelope = json.loads(source_text)
         if type(envelope) is not dict:
             raise AnalysisV2ContractError("Analysis document must be an object.")
         contract_id = envelope.get("contract_id")
@@ -198,7 +211,7 @@ def decode_analysis_contract(document: str | bytes) -> object:
                 "Unknown analysis contract or schema version."
             )
         parsed = parse_contract_document(
-            document,
+            source_text,
             expected_contract_id=contract_id,
             supported_canonicalization_versions=("canonical-json-v1",),
             supported_schema_versions=(schema_version,),
@@ -211,7 +224,10 @@ def decode_analysis_contract(document: str | bytes) -> object:
             if item.name in {"contract_id", "schema_version"}:
                 payload[item.name] = item.default
         decoded = _decode_value(model, payload)
-        if type(decoded) is not model or encode_analysis_contract(decoded) != document:
+        if (
+            type(decoded) is not model
+            or encode_analysis_contract(decoded) != source_text
+        ):
             raise AnalysisV2ContractError(
                 "Analysis document is not a canonical typed round trip."
             )

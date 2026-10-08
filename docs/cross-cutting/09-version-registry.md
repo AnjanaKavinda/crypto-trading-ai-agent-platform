@@ -148,3 +148,6 @@ expiry; C-006 and C-104 expiry cannot exceed the manifest. Unknown schemas,
 policies, missing/duplicate references, stale inputs, and digest mismatches
 fail closed. Book point-snapshot continuity may be N/A only under the exact
 resolved policy; sequence metrics require measured passing continuity.
+In-memory resolvers take an explicit validation time rather than consulting
+the wall clock implicitly; expired manifests, dependencies, evidence, and
+assessments reject at that time.

@@ -511,6 +511,7 @@ def _resolved(case: tuple[object, ...]):
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports=reports,
         observations=observations,
@@ -769,6 +770,12 @@ def test_v2_manifest_mixed_bindings_and_codec_are_deterministic() -> None:
     assert analysis_snapshot_v2_sha256(manifest) == manifest.content_sha256
     assert encode_analysis_contract(manifest) == encode_analysis_contract(manifest)
     assert decode_analysis_contract(encode_analysis_contract(manifest)) == manifest
+    assert (
+        decode_analysis_contract(encode_analysis_contract(manifest).encode())
+        == manifest
+    )
+    with pytest.raises(AnalysisV2ContractError, match="UTF-8"):
+        decode_analysis_contract(b"\xff")
 
 
 def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
@@ -907,6 +914,7 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
             trade_evidence.evidence_id: trade_evidence,
             book_evidence.evidence_id: book_evidence,
         },
+        now=CREATED,
     )
     validate_market_context_v2(
         context,
@@ -916,7 +924,36 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
             trade_evidence.evidence_id: trade_evidence,
             book_evidence.evidence_id: book_evidence,
         },
+        now=CREATED,
     )
+    future_evidence = replace(
+        trade_evidence, available_at=CUTOFF + timedelta(seconds=1)
+    )
+    with pytest.raises(
+        AnalysisV2ContractError, match="future observation/availability"
+    ):
+        validate_order_flow_assessment(
+            assessment,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={
+                future_evidence.evidence_id: future_evidence,
+                book_evidence.evidence_id: book_evidence,
+            },
+            now=CREATED,
+        )
+    expired_evidence = replace(trade_evidence, expires_at=CREATED)
+    with pytest.raises(AnalysisV2ContractError, match="Evidence or manifest is stale"):
+        validate_order_flow_assessment(
+            assessment,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={
+                expired_evidence.evidence_id: expired_evidence,
+                book_evidence.evidence_id: book_evidence,
+            },
+            now=CREATED,
+        )
 
 
 def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> None:
@@ -930,6 +967,7 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports=reports,
         observations=observations,
@@ -984,6 +1022,7 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
             trade_evidence.evidence_id: trade_evidence,
             book_evidence.evidence_id: book_evidence,
         },
+        now=CREATED,
     )
     bad = replace(
         assessment,
@@ -1007,6 +1046,7 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
                 trade_evidence.evidence_id: trade_evidence,
                 book_evidence.evidence_id: book_evidence,
             },
+            now=CREATED,
         )
 
 
@@ -1023,6 +1063,7 @@ def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations
     with pytest.raises(AnalysisV2ContractError, match="provenance or cutoff"):
         resolve_analysis_snapshot_v2(
             manifest,
+            now=CREATED,
             snapshots=snapshots,
             reports=reports,
             observations={**observations, altered.market_data_id: tampered},
@@ -1042,6 +1083,7 @@ def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations
     with pytest.raises(AnalysisV2ContractError, match="policy"):
         resolve_analysis_snapshot_v2(
             invalid_manifest,
+            now=CREATED,
             snapshots=snapshots,
             reports=reports,
             observations=observations,
@@ -1062,11 +1104,22 @@ def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations
     with pytest.raises(AnalysisV2ContractError, match="cutoff mismatch"):
         resolve_analysis_snapshot_v2(
             future_manifest,
+            now=CREATED,
             snapshots=future_snapshots,
             reports=future_reports,
             observations=future_obs,
             sources=future_sources,
             datasets=future_datasets,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="not currently valid"):
+        resolve_analysis_snapshot_v2(
+            manifest,
+            now=EXPIRES,
+            snapshots=snapshots,
+            reports=reports,
+            observations=observations,
+            sources=sources,
+            datasets=datasets,
         )
 
 
@@ -1164,6 +1217,7 @@ def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_cl
     ):
         resolve_analysis_snapshot_v2(
             mismatch_manifest,
+            now=CREATED,
             snapshots=snapshots,
             reports={**reports, mismatched_report.report_id: mismatched_report},
             observations=observations,
@@ -1196,6 +1250,7 @@ def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_cl
     ):
         resolve_analysis_snapshot_v2(
             unknown_policy_manifest,
+            now=CREATED,
             snapshots=snapshots,
             reports={**reports, unknown_policy_report.report_id: unknown_policy_report},
             observations=observations,
@@ -1223,6 +1278,7 @@ def test_dataset_closure_and_different_snapshot_cutoffs_are_explicit() -> None:
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports=reports,
         observations=observations,
@@ -1235,6 +1291,7 @@ def test_dataset_closure_and_different_snapshot_cutoffs_are_explicit() -> None:
     with pytest.raises(AnalysisV2ContractError, match="C-092 dataset is unresolved"):
         resolve_analysis_snapshot_v2(
             manifest,
+            now=CREATED,
             snapshots=snapshots,
             reports=reports,
             observations=observations,
@@ -1245,6 +1302,7 @@ def test_dataset_closure_and_different_snapshot_cutoffs_are_explicit() -> None:
     with pytest.raises(AnalysisV2ContractError, match="C-092 identity"):
         resolve_analysis_snapshot_v2(
             manifest,
+            now=CREATED,
             snapshots=snapshots,
             reports=reports,
             observations=observations,
@@ -1261,6 +1319,7 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
     manifest = _manifest(bindings, (_id(600),), (_id(701),))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports=reports,
         observations=observations,
@@ -1289,6 +1348,7 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
             manifest,
             resolved_bindings=resolved,
             evidence={book_evidence.evidence_id: book_evidence},
+            now=CREATED,
         )
 
     unknown_side_case = _case(
@@ -1299,6 +1359,7 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
     manifest = _manifest(bindings, (_id(601),), (_id(702),))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports=reports,
         observations=observations,
@@ -1336,6 +1397,7 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
             manifest,
             resolved_bindings=resolved,
             evidence={trade_evidence.evidence_id: trade_evidence},
+            now=CREATED,
         )
 
 
@@ -1367,6 +1429,7 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
     manifest = _manifest(changed_bindings, (_id(600),), (_id(700),))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports={**reports, n_a_report.report_id: n_a_report},
         observations=observations,
@@ -1398,6 +1461,7 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
             manifest,
             resolved_bindings=resolved,
             evidence={evidence.evidence_id: evidence},
+            now=CREATED,
         )
 
     valid_case = _case(modalities=(InputModality.SPOT_TRADES,))
@@ -1405,6 +1469,7 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
     manifest = _manifest(valid_bindings, (_id(601),), (_id(701),))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
+        now=CREATED,
         snapshots=snapshots,
         reports=reports,
         observations=observations,
@@ -1440,6 +1505,7 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
             manifest,
             resolved_bindings=resolved,
             evidence={evidence.evidence_id: evidence},
+            now=CREATED,
         )
 
 
@@ -1457,3 +1523,17 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
     assert partial.value == Decimal("1")
     with pytest.raises(AnalysisV2ContractError, match="PARTIAL metrics require"):
         replace(partial, limitations=())
+    with pytest.raises(AnalysisV2ContractError, match="cannot be negative"):
+        _metric(
+            OrderFlowMetricName.SPREAD,
+            trade,
+            _id(700),
+            value=Decimal("-1"),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="between -1 and 1"):
+        _metric(
+            OrderFlowMetricName.BOOK_IMBALANCE,
+            trade,
+            _id(700),
+            value=Decimal("1.1"),
+        )

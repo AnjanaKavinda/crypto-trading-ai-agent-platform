@@ -449,6 +449,23 @@ class OrderFlowMetric:
             raise AnalysisV2ContractError(
                 "value must be a finite Decimal when present."
             )
+        if (
+            self.value is not None
+            and self.name
+            in {
+                OrderFlowMetricName.SPREAD,
+                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.TRADE_VOLUME,
+            }
+            and self.value < 0
+        ):
+            raise AnalysisV2ContractError("This order-flow metric cannot be negative.")
+        if (
+            self.value is not None
+            and self.name is OrderFlowMetricName.BOOK_IMBALANCE
+            and (not Decimal("-1") <= self.value <= Decimal("1"))
+        ):
+            raise AnalysisV2ContractError("Book imbalance must be between -1 and 1.")
         if self.state is OrderFlowMetricState.UNAVAILABLE:
             if self.value is not None or self.unavailable_reason is None:
                 raise AnalysisV2ContractError(
@@ -685,6 +702,7 @@ class ResolvedInputBinding:
 def resolve_analysis_snapshot_v2(
     manifest: AnalysisSnapshotV2,
     *,
+    now: datetime,
     snapshots: Mapping[UUID, MarketSnapshot],
     reports: Mapping[UUID, DataQualityReportV2],
     observations: Mapping[UUID, MarketData],
@@ -693,6 +711,9 @@ def resolve_analysis_snapshot_v2(
 ) -> tuple[ResolvedInputBinding, ...]:
     if type(manifest) is not AnalysisSnapshotV2:
         raise AnalysisV2ContractError("Expected an exact AnalysisSnapshotV2.")
+    validation_time = _time("now", now)
+    if manifest.created_at > validation_time or manifest.expires_at <= validation_time:
+        raise AnalysisV2ContractError("Manifest is not currently valid.")
     resolved: list[ResolvedInputBinding] = []
     for binding in manifest.bindings:
         try:
@@ -850,11 +871,11 @@ def resolve_analysis_snapshot_v2(
                 "C-002 exact C-001/C-091 membership mismatch."
             )
         if (
-            report.assessed_at > manifest.created_at
+            report.assessed_at > manifest.analysis_cutoff
             or snapshot.created_at > manifest.created_at
         ):
             raise AnalysisV2ContractError(
-                "Input report or snapshot postdates manifest creation."
+                "Input report postdates analysis cutoff or snapshot postdates manifest."
             )
         quality_refs = {
             (
@@ -928,9 +949,13 @@ def resolve_analysis_snapshot_v2(
                 direct_inputs_pass,
             )
         )
-    if any(manifest.expires_at > item.dependency_expires_at for item in resolved):
+    if any(
+        manifest.expires_at > item.dependency_expires_at
+        or item.dependency_expires_at <= validation_time
+        for item in resolved
+    ):
         raise AnalysisV2ContractError(
-            "Manifest expires after a bound input dependency."
+            "Manifest expires after or has stale input dependencies."
         )
     return tuple(resolved)
 
@@ -991,9 +1016,19 @@ def validate_evidence_item_v2(
     manifest: AnalysisSnapshotV2,
     *,
     resolved_bindings: tuple[ResolvedInputBinding, ...],
+    now: datetime,
 ) -> None:
     if type(evidence) is not EvidenceItemV2 or type(manifest) is not AnalysisSnapshotV2:
         raise AnalysisV2ContractError("Invalid C-008 v2 evidence or C-007 manifest.")
+    validation_time = _time("now", now)
+    if (
+        manifest.created_at > validation_time
+        or manifest.expires_at <= validation_time
+        or evidence.expires_at <= validation_time
+    ):
+        raise AnalysisV2ContractError(
+            "Evidence or manifest is stale or not yet available."
+        )
     by_id = {item.binding.binding_id: item for item in resolved_bindings}
     selected = []
     for binding_id in evidence.binding_ids:
@@ -1009,6 +1044,8 @@ def validate_evidence_item_v2(
         raise AnalysisV2ContractError(
             "Evidence expires after one of its input dependencies."
         )
+    if any(item.dependency_expires_at <= validation_time for item in selected):
+        raise AnalysisV2ContractError("Evidence has a stale input dependency.")
     selected_observations = {
         observation.market_data_id: observation
         for item in selected
@@ -1037,11 +1074,13 @@ def validate_evidence_item_v2(
     }
     if set(evidence.dataset_versions) - selected_datasets:
         raise AnalysisV2ContractError("Evidence references an unbound dataset version.")
-    if evidence.observed_at > min(item.binding.analysis_cutoff for item in selected):
-        raise AnalysisV2ContractError("Evidence contains a future observation.")
-    if evidence.available_at > manifest.created_at:
+    if any(
+        timestamp > item.binding.analysis_cutoff
+        for item in selected
+        for timestamp in (evidence.observed_at, evidence.available_at)
+    ):
         raise AnalysisV2ContractError(
-            "Evidence was not available when the manifest was created."
+            "Evidence contains future observation/availability time."
         )
     if evidence.usable and any(
         item.report.status is DataQualityStatus.DEGRADED for item in selected
@@ -1069,9 +1108,17 @@ def validate_order_flow_assessment(
     *,
     resolved_bindings: tuple[ResolvedInputBinding, ...],
     evidence: Mapping[UUID, EvidenceItemV2],
+    now: datetime,
 ) -> None:
     if type(assessment) is not OrderFlowAssessment:
         raise AnalysisV2ContractError("Expected an exact C-104 OrderFlowAssessment.")
+    validation_time = _time("now", now)
+    if (
+        manifest.created_at > validation_time
+        or manifest.expires_at <= validation_time
+        or assessment.expires_at <= validation_time
+    ):
+        raise AnalysisV2ContractError("Order-flow assessment or manifest is stale.")
     if (
         assessment.asset != manifest.asset
         or assessment.instrument_id != manifest.instrument_id
@@ -1132,7 +1179,10 @@ def validate_order_flow_assessment(
                     "Metric references unresolved C-008 evidence."
                 )
             validate_evidence_item_v2(
-                item_evidence, manifest, resolved_bindings=resolved_bindings
+                item_evidence,
+                manifest,
+                resolved_bindings=resolved_bindings,
+                now=validation_time,
             )
             if item_evidence.binding_ids != (binding_id,):
                 raise AnalysisV2ContractError(
@@ -1189,9 +1239,17 @@ def validate_market_context_v2(
     *,
     resolved_bindings: tuple[ResolvedInputBinding, ...],
     evidence: Mapping[UUID, EvidenceItemV2],
+    now: datetime,
 ) -> None:
     if type(context) is not MarketContextV2 or type(manifest) is not AnalysisSnapshotV2:
         raise AnalysisV2ContractError("Expected exact C-006/C-007 schema-2 contracts.")
+    validation_time = _time("now", now)
+    if (
+        manifest.created_at > validation_time
+        or manifest.expires_at <= validation_time
+        or context.expires_at <= validation_time
+    ):
+        raise AnalysisV2ContractError("Market context or manifest is stale.")
     if (
         context.analysis_snapshot.snapshot_id != manifest.snapshot_id
         or context.analysis_snapshot.content_sha256 != manifest.content_sha256
@@ -1212,7 +1270,12 @@ def validate_market_context_v2(
             "C-008 evidence membership is not exactly resolved."
         )
     for item in evidence.values():
-        validate_evidence_item_v2(item, manifest, resolved_bindings=resolved_bindings)
+        validate_evidence_item_v2(
+            item,
+            manifest,
+            resolved_bindings=resolved_bindings,
+            now=validation_time,
+        )
     by_id = {item.binding.binding_id: item for item in resolved_bindings}
     for metric_assessment in (
         item for item in context.assessments if type(item) is OrderFlowAssessment
@@ -1222,6 +1285,7 @@ def validate_market_context_v2(
             manifest,
             resolved_bindings=resolved_bindings,
             evidence=evidence,
+            now=validation_time,
         )
     for binding in manifest.bindings:
         if binding.binding_id not in by_id:
@@ -1240,6 +1304,7 @@ def validate_market_context_v2(
         if (
             assessment_as_of > manifest.analysis_cutoff
             or assessment_expiry > manifest.expires_at
+            or assessment_expiry <= validation_time
         ):
             raise AnalysisV2ContractError(
                 "Assessment time exceeds its manifest bounds."
