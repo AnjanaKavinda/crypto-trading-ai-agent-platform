@@ -28,6 +28,7 @@ from trading_platform_api.lineage.tables import (
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
     DatasetVersion,
     DataSourceRecord,
@@ -52,6 +53,20 @@ def references(record: object) -> tuple[Reference, ...]:
     result: list[Reference] = []
     if type(record) is DataQualityReport:
         result.append(Reference(LineageKey("C-002", str(record.snapshot_id))))
+    elif type(record) is DataQualityReportV2:
+        result.append(Reference(LineageKey("C-002", str(record.snapshot_id))))
+        result.extend(
+            Reference(
+                LineageKey(
+                    item.evidence_reference.contract_id,
+                    item.evidence_reference.record_id,
+                    item.evidence_reference.version,
+                ),
+                item.evidence_reference.evidence_sha256,
+            )
+            for item in record.dimensions
+            if item.evidence_reference is not None
+        )
     if type(record) is MarketData:
         result.append(Reference(LineageKey("C-091", str(record.source_record_id))))
     if isinstance(record, (MarketSnapshot, DatasetVersion, HistoricalUniverse)):
@@ -302,6 +317,10 @@ class SqlAlchemyLineageStore:
 
     async def append(self, record: object) -> LineageKey:
         """Insert or verify an identical retry; never commit the caller's session."""
+        if type(record) is DataQualityReportV2:
+            raise LineageError(
+                "C-003 schema v2 writes are disabled pending consumer readiness."
+            )
         key = key_for(record)
         document = encode(record)
         refs = await self._check_references(record)

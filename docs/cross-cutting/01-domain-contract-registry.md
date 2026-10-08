@@ -23,7 +23,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 |---|---|---|---|---|
 | C-001 | MarketData | Data | Analysis, Research | Normalized market observations; not analysis. |
 | C-002 | MarketSnapshot | Data | Analysis, Strategy, Learning | Point-in-time market state with source references. |
-| C-003 | DataQualityReport | Data Quality | All downstream domains | Freshness, completeness, anomalies, source agreement and quality status. |
+| C-003 | DataQualityReport | Data Quality | All downstream domains | Versioned quality assessment; v1 preserves scalar scores, while v2 makes per-dimension availability, measurement basis, policy, and evidence explicit. |
 | C-004 | FeatureSet | Feature/Quant | Analysis, Validation | Versioned deterministic derived features. |
 | C-005 | MarketRegime | Regime Engine | Analysis, Strategy, Validation, Risk, UX, Learning | Contextual regime classification with evidence and validity window. |
 | C-006 | MarketContext | Analysis | Strategy | Chat 5 analytical synthesis; cannot authorize trades. |
@@ -134,6 +134,21 @@ external provider truth or that a caller omitted no history. C-101 is pinned
 explicitly, never selected from today's watchlist. C-102 keys include provider,
 venue, instrument, kind, stable observation key and event time. The only initial
 ordering policy is `explicit-supersedes-v1`; no guessed numeric/lexical ordering.
+
+## C-003 schema evolution
+
+C-003 schema `1` remains the existing `DataQualityReport` contract without
+payload or identity changes. Schema `2` is a separate representation with one
+typed result for each quality dimension, explicit measured/not-applicable/
+unavailable state, versioned assessment policy, and auditable measurement or
+evidence basis. Both use `wire-1`; the C-003 schema version selects the model.
+Schema `2` has lineage identity version `2`, while historical schema `1`
+records retain identity version `1` and their original digests.
+
+Schema `2` is decode/read compatibility only. No producer or analysis consumer
+is migrated here, and lineage writes remain disabled until receiving consumers
+are ready. A producer must resolve and validate the exact assessment-policy
+definition before producing a v2 report; unknown policy versions fail closed.
 
 ## Canonical name / alias / supersession clarifications
 

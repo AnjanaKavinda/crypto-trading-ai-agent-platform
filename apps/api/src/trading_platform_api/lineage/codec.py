@@ -16,6 +16,7 @@ from trading_platform_api.contracts.serialization import (
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DatasetVersion,
     DataSourceRecord,
     MarketData,
@@ -69,6 +70,8 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-002", str(record.snapshot_id))
     if type(record) is DataQualityReport:
         return LineageKey("C-003", str(record.report_id))
+    if type(record) is DataQualityReportV2:
+        return LineageKey("C-003", str(record.report_id), record.schema_version)
     if type(record) is DataSourceRecord:
         return LineageKey("C-091", str(record.source_record_id))
     if type(record) is DatasetVersion:
@@ -149,11 +152,21 @@ def decode(document: str) -> object:
             "payload",
         }:
             raise LineageError("Invalid lineage envelope.")
-        model = MODELS[envelope["contract_id"]]
+        contract_id = envelope["contract_id"]
+        schema_version = envelope["schema_version"]
+        if contract_id == "C-003":
+            model = {
+                "1": DataQualityReport,
+                "2": DataQualityReportV2,
+            }.get(schema_version)
+            if model is None:
+                raise LineageError("Unsupported C-003 schema version.")
+        else:
+            model = MODELS[contract_id]
         payload = dict(envelope["payload"])
         payload.update(
-            contract_id=envelope["contract_id"],
-            schema_version=envelope["schema_version"],
+            contract_id=contract_id,
+            schema_version=schema_version,
         )
         record = _decode(model, payload)
         if encode(record) != document:
