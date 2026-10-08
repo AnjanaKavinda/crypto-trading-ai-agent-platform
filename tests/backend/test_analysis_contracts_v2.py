@@ -46,10 +46,14 @@ from trading_platform_api.analysis import (
     decode_analysis_contract,
     encode_analysis_contract,
     resolve_analysis_snapshot_v2,
+    validate_evidence_item_v2,
     validate_market_context_v2,
     validate_order_flow_assessment,
 )
-from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.contracts.serialization import (
+    MAX_DOCUMENT_BYTES,
+    canonical_sha256,
+)
 from trading_platform_api.market_data import (
     AssessmentPolicyReference as QualityPolicyReference,
 )
@@ -286,6 +290,7 @@ def _case(
     future_modality: InputModality | None = None,
     stale_modality: InputModality | None = None,
     dataset_modality: InputModality | None = None,
+    delayed_availability_modality: InputModality | None = None,
     snapshot_cutoffs: dict[InputModality, datetime] | None = None,
 ) -> tuple[
     tuple[InputBindingV2, ...],
@@ -328,9 +333,13 @@ def _case(
                 else when
             )
             source = _source(_id(number + 100), observation_time)
+            if modality is delayed_availability_modality:
+                source = replace(source, availability_time=snapshot_cutoff)
             observation = _observation(
                 _id(number), source.source_record_id, modality, observation_time
             )
+            if modality is delayed_availability_modality:
+                observation = replace(observation, availability_time=snapshot_cutoff)
             record_values.append(observation)
             source_values.append(source)
             observations[observation.market_data_id] = observation
@@ -442,7 +451,7 @@ def _evidence(
         (),
         ClaimClassification.FACT,
         EvidenceRelation.SUPPORTING,
-        min(item.event_time for item in observations),
+        max(item.event_time for item in observations),
         CUTOFF,
         EXPIRES,
         VersionReference("order-flow-method", "1"),
@@ -482,6 +491,84 @@ def _metric(
         (binding.binding_id,),
         limitations,
         reason,
+    )
+
+
+def _order_flow_assessment(
+    assessment_id: UUID,
+    bindings: tuple[InputBindingV2, ...],
+    evidence_by_modality: dict[InputModality, EvidenceItemV2],
+    *,
+    overrides: dict[
+        OrderFlowMetricName,
+        tuple[OrderFlowMetricState, Decimal | None, str | None, tuple[str, ...]],
+    ]
+    | None = None,
+) -> OrderFlowAssessment:
+    binding_by_modality = {item.modality: item for item in bindings}
+    metrics = []
+    for name in OrderFlowMetricName:
+        modality = (
+            InputModality.ORDER_BOOK
+            if name
+            in {
+                OrderFlowMetricName.SPREAD,
+                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.BOOK_IMBALANCE,
+            }
+            else InputModality.SPOT_TRADES
+        )
+        binding = binding_by_modality.get(modality)
+        evidence = evidence_by_modality.get(modality)
+        if binding is None or evidence is None:
+            metrics.append(
+                OrderFlowMetric(
+                    name,
+                    OrderFlowMetricState.UNAVAILABLE,
+                    None,
+                    "USDT",
+                    CUTOFF,
+                    CUTOFF,
+                    CUTOFF,
+                    VersionReference("order-flow-method", "1"),
+                    (),
+                    (),
+                    unavailable_reason=f"No {modality.value} input is bound.",
+                )
+            )
+            continue
+        state, value, reason, limitations = (overrides or {}).get(
+            name,
+            (OrderFlowMetricState.AVAILABLE, Decimal("1"), None, ()),
+        )
+        metrics.append(
+            _metric(
+                name,
+                binding,
+                evidence.evidence_id,
+                state=state,
+                value=value,
+                reason=reason,
+                limitations=limitations,
+            )
+        )
+    states = {metric.state for metric in metrics}
+    assessment_state = (
+        OrderFlowAssessmentState.AVAILABLE
+        if states == {OrderFlowMetricState.AVAILABLE}
+        else OrderFlowAssessmentState.UNAVAILABLE
+        if states == {OrderFlowMetricState.UNAVAILABLE}
+        else OrderFlowAssessmentState.PARTIAL
+    )
+    return OrderFlowAssessment(
+        assessment_id,
+        "BTC",
+        INSTRUMENT,
+        VENUE,
+        CUTOFF,
+        EXPIRES,
+        assessment_state,
+        tuple(metrics),
     )
 
 
@@ -798,26 +885,15 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         )
         for index, item in enumerate(bindings)
     }
-    trades = next(
-        item for item in bindings if item.modality is InputModality.SPOT_TRADES
-    )
-    book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
     trade_evidence = evidence_by_binding[InputModality.SPOT_TRADES]
     book_evidence = evidence_by_binding[InputModality.ORDER_BOOK]
-    assessment = OrderFlowAssessment(
+    assessment = _order_flow_assessment(
         assessment_id,
-        "BTC",
-        INSTRUMENT,
-        VENUE,
-        CUTOFF,
-        EXPIRES,
-        OrderFlowAssessmentState.AVAILABLE,
-        (
-            _metric(
-                OrderFlowMetricName.TRADE_VOLUME, trades, trade_evidence.evidence_id
-            ),
-            _metric(OrderFlowMetricName.SPREAD, book, book_evidence.evidence_id),
-        ),
+        bindings,
+        {
+            InputModality.SPOT_TRADES: trade_evidence,
+            InputModality.ORDER_BOOK: book_evidence,
+        },
     )
     manifest = _manifest(
         bindings,
@@ -926,6 +1002,82 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         },
         now=CREATED,
     )
+    with pytest.raises(AnalysisV2ContractError, match="mapping key"):
+        validate_market_context_v2(
+            context,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={
+                trade_evidence.evidence_id: replace(
+                    trade_evidence, evidence_id=_id(799)
+                ),
+                book_evidence.evidence_id: book_evidence,
+            },
+            now=CREATED,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="not listed"):
+        validate_order_flow_assessment(
+            replace(assessment, assessment_id=_id(798)),
+            manifest,
+            resolved_bindings=resolved,
+            evidence={
+                trade_evidence.evidence_id: trade_evidence,
+                book_evidence.evidence_id: book_evidence,
+            },
+            now=CREATED,
+        )
+    early_observation = replace(
+        trade_evidence,
+        observed_at=CUTOFF - timedelta(seconds=2),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="observation time predates"):
+        validate_evidence_item_v2(
+            early_observation,
+            manifest,
+            resolved_bindings=resolved,
+            now=CREATED,
+        )
+    delayed_case = _case(
+        modalities=(InputModality.SPOT_TRADES,),
+        delayed_availability_modality=InputModality.SPOT_TRADES,
+    )
+    (
+        delayed_bindings,
+        delayed_snapshots,
+        delayed_reports,
+        delayed_observations,
+        delayed_sources,
+        delayed_datasets,
+    ) = delayed_case
+    delayed_manifest = _manifest(delayed_bindings, (_id(600),), (_id(710),))
+    delayed_resolved = resolve_analysis_snapshot_v2(
+        delayed_manifest,
+        now=CREATED,
+        snapshots=delayed_snapshots,
+        reports=delayed_reports,
+        observations=delayed_observations,
+        sources=delayed_sources,
+        datasets=delayed_datasets,
+    )
+    delayed_binding = delayed_bindings[0]
+    delayed_report = delayed_reports[
+        UUID(delayed_binding.data_quality_report.record_id)
+    ]
+    delayed_inputs = tuple(
+        delayed_observations[UUID(item.observation.record_id)]
+        for item in delayed_binding.observations
+    )
+    delayed_evidence = replace(
+        _evidence(delayed_binding, delayed_report, delayed_inputs, _id(710)),
+        available_at=CUTOFF - timedelta(seconds=1),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="availability time predates"):
+        validate_evidence_item_v2(
+            delayed_evidence,
+            delayed_manifest,
+            resolved_bindings=delayed_resolved,
+            now=CREATED,
+        )
     future_evidence = replace(
         trade_evidence, available_at=CUTOFF + timedelta(seconds=1)
     )
@@ -989,30 +1141,39 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
     )
     trade_evidence = _evidence(trade, trade_report, trade_data, _id(700))
     book_evidence = _evidence(book, book_report, book_data, _id(701))
-    assessment = OrderFlowAssessment(
+    assessment = _order_flow_assessment(
         _id(600),
-        "BTC",
-        INSTRUMENT,
-        VENUE,
-        CUTOFF,
-        EXPIRES,
-        OrderFlowAssessmentState.PARTIAL,
-        (
-            _metric(
+        bindings,
+        {
+            InputModality.SPOT_TRADES: trade_evidence,
+            InputModality.ORDER_BOOK: book_evidence,
+        },
+        overrides={
+            name: (
+                OrderFlowMetricState.UNAVAILABLE,
+                None,
+                "required freshness dimension unavailable",
+                (),
+            )
+            for name in (
                 OrderFlowMetricName.TRADE_VOLUME,
-                trade,
-                trade_evidence.evidence_id,
-                state=OrderFlowMetricState.UNAVAILABLE,
-                value=None,
-                reason="required freshness dimension unavailable",
-            ),
-            _metric(
+                OrderFlowMetricName.VOLUME_DELTA,
+                OrderFlowMetricName.CUMULATIVE_DELTA,
+            )
+        }
+        | {
+            name: (
+                OrderFlowMetricState.AVAILABLE,
+                Decimal("1"),
+                None,
+                ("book-limit-warning",),
+            )
+            for name in (
                 OrderFlowMetricName.SPREAD,
-                book,
-                book_evidence.evidence_id,
-                limitations=("book-limit-warning",),
-            ),
-        ),
+                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.BOOK_IMBALANCE,
+            )
+        },
     )
     validate_order_flow_assessment(
         assessment,
@@ -1024,18 +1185,16 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
         },
         now=CREATED,
     )
+    bad_metrics = list(assessment.metrics)
+    bad_metrics[3] = replace(
+        bad_metrics[3],
+        state=OrderFlowMetricState.AVAILABLE,
+        value=Decimal("0"),
+        unavailable_reason=None,
+    )
     bad = replace(
         assessment,
-        metrics=(
-            replace(
-                assessment.metrics[0],
-                state=OrderFlowMetricState.AVAILABLE,
-                value=Decimal("0"),
-                unavailable_reason=None,
-            ),
-            assessment.metrics[1],
-        ),
-        state=OrderFlowAssessmentState.AVAILABLE,
+        metrics=tuple(bad_metrics),
     )
     with pytest.raises(AnalysisV2ContractError, match="failed required"):
         validate_order_flow_assessment(
@@ -1151,6 +1310,11 @@ def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed()
     )
     with pytest.raises(AnalysisV2ContractError, match="schema"):
         decode_analysis_contract(envelope)
+    with pytest.raises(AnalysisV2ContractError, match="maximum size"):
+        decode_analysis_contract(" " * (MAX_DOCUMENT_BYTES + 1))
+    deeply_nested = "[" * 67 + "0" + "]" * 67
+    with pytest.raises(AnalysisV2ContractError, match="nesting depth"):
+        decode_analysis_contract(deeply_nested)
     duplicate = replace(bindings[0], binding_id=bindings[1].binding_id)
     with pytest.raises(ValueError, match="duplicate"):
         _manifest((duplicate, bindings[1]), (_id(600),), (_id(700), _id(701)))
@@ -1316,7 +1480,7 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
 ):
     stale_case = _case(stale_modality=InputModality.ORDER_BOOK)
     bindings, snapshots, reports, observations, sources, datasets = stale_case
-    manifest = _manifest(bindings, (_id(600),), (_id(701),))
+    manifest = _manifest(bindings, (_id(600),), (_id(701), _id(702)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
         now=CREATED,
@@ -1332,22 +1496,62 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
         observations[UUID(item.observation.record_id)] for item in book.observations
     )
     book_evidence = _evidence(book, book_report, book_observations, _id(701))
-    assessment = OrderFlowAssessment(
-        _id(600),
-        "BTC",
-        INSTRUMENT,
-        VENUE,
-        CUTOFF,
-        EXPIRES,
-        OrderFlowAssessmentState.AVAILABLE,
-        (_metric(OrderFlowMetricName.SPREAD, book, book_evidence.evidence_id),),
+    trade = next(
+        item for item in bindings if item.modality is InputModality.SPOT_TRADES
     )
+    trade_report = reports[UUID(trade.data_quality_report.record_id)]
+    trade_observations = tuple(
+        observations[UUID(item.observation.record_id)] for item in trade.observations
+    )
+    trade_evidence = _evidence(trade, trade_report, trade_observations, _id(702))
+    assessment = _order_flow_assessment(
+        _id(600),
+        bindings,
+        {
+            InputModality.SPOT_TRADES: trade_evidence,
+            InputModality.ORDER_BOOK: book_evidence,
+        },
+        overrides={
+            name: (
+                OrderFlowMetricState.UNAVAILABLE,
+                None,
+                "required freshness dimension unavailable",
+                (),
+            )
+            for name in (
+                OrderFlowMetricName.SPREAD,
+                OrderFlowMetricName.DISPLAYED_DEPTH,
+                OrderFlowMetricName.BOOK_IMBALANCE,
+            )
+        },
+    )
+    validate_order_flow_assessment(
+        assessment,
+        manifest,
+        resolved_bindings=resolved,
+        evidence={
+            book_evidence.evidence_id: book_evidence,
+            trade_evidence.evidence_id: trade_evidence,
+        },
+        now=CREATED,
+    )
+    invalid_metrics = list(assessment.metrics)
+    invalid_metrics[0] = replace(
+        invalid_metrics[0],
+        state=OrderFlowMetricState.AVAILABLE,
+        value=Decimal("1"),
+        unavailable_reason=None,
+    )
+    invalid_assessment = replace(assessment, metrics=tuple(invalid_metrics))
     with pytest.raises(AnalysisV2ContractError, match="failed required"):
         validate_order_flow_assessment(
-            assessment,
+            invalid_assessment,
             manifest,
             resolved_bindings=resolved,
-            evidence={book_evidence.evidence_id: book_evidence},
+            evidence={
+                book_evidence.evidence_id: book_evidence,
+                trade_evidence.evidence_id: trade_evidence,
+            },
             now=CREATED,
         )
 
@@ -1356,7 +1560,7 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
         anomaly="unknown-aggressor:event-1",
     )
     bindings, snapshots, reports, observations, sources, datasets = unknown_side_case
-    manifest = _manifest(bindings, (_id(601),), (_id(702),))
+    manifest = _manifest(bindings, (_id(601),), (_id(702), _id(703)))
     resolved = resolve_analysis_snapshot_v2(
         manifest,
         now=CREATED,
@@ -1374,29 +1578,50 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
         observations[UUID(item.observation.record_id)] for item in trade.observations
     )
     trade_evidence = _evidence(trade, trade_report, trade_observations, _id(702))
-    flow = OrderFlowAssessment(
+    book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
+    book_report = reports[UUID(book.data_quality_report.record_id)]
+    book_observations = tuple(
+        observations[UUID(item.observation.record_id)] for item in book.observations
+    )
+    book_evidence = _evidence(book, book_report, book_observations, _id(703))
+    unknown_aggressor = ("unknown-aggressor:event-1",)
+    flow = _order_flow_assessment(
         _id(601),
-        "BTC",
-        INSTRUMENT,
-        VENUE,
-        CUTOFF,
-        EXPIRES,
-        OrderFlowAssessmentState.AVAILABLE,
-        (
-            _metric(
-                OrderFlowMetricName.VOLUME_DELTA,
-                trade,
-                trade_evidence.evidence_id,
-                limitations=("unknown-aggressor:event-1",),
+        bindings,
+        {
+            InputModality.SPOT_TRADES: trade_evidence,
+            InputModality.ORDER_BOOK: book_evidence,
+        },
+        overrides={
+            OrderFlowMetricName.TRADE_VOLUME: (
+                OrderFlowMetricState.AVAILABLE,
+                Decimal("1"),
+                None,
+                unknown_aggressor,
             ),
-        ),
+            OrderFlowMetricName.VOLUME_DELTA: (
+                OrderFlowMetricState.AVAILABLE,
+                Decimal("1"),
+                None,
+                unknown_aggressor,
+            ),
+            OrderFlowMetricName.CUMULATIVE_DELTA: (
+                OrderFlowMetricState.UNAVAILABLE,
+                None,
+                "unknown aggressor side",
+                unknown_aggressor,
+            ),
+        },
     )
     with pytest.raises(AnalysisV2ContractError, match="Unknown aggressor side"):
         validate_order_flow_assessment(
             flow,
             manifest,
             resolved_bindings=resolved,
-            evidence={trade_evidence.evidence_id: trade_evidence},
+            evidence={
+                trade_evidence.evidence_id: trade_evidence,
+                book_evidence.evidence_id: book_evidence,
+            },
             now=CREATED,
         )
 
@@ -1441,19 +1666,10 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
         for item in changed_binding.observations
     )
     evidence = _evidence(changed_binding, n_a_report, trade_observations, _id(700))
-    flow = OrderFlowAssessment(
+    flow = _order_flow_assessment(
         _id(600),
-        "BTC",
-        INSTRUMENT,
-        VENUE,
-        CUTOFF,
-        EXPIRES,
-        OrderFlowAssessmentState.AVAILABLE,
-        (
-            _metric(
-                OrderFlowMetricName.TRADE_VOLUME, changed_binding, evidence.evidence_id
-            ),
-        ),
+        changed_bindings,
+        {InputModality.SPOT_TRADES: evidence},
     )
     with pytest.raises(AnalysisV2ContractError, match="failed required"):
         validate_order_flow_assessment(
@@ -1489,16 +1705,14 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
         evidence.evidence_id,
         window_start=CUTOFF - timedelta(seconds=3),
     )
-    assessment = OrderFlowAssessment(
+    assessment = _order_flow_assessment(
         _id(601),
-        "BTC",
-        INSTRUMENT,
-        VENUE,
-        CUTOFF,
-        EXPIRES,
-        OrderFlowAssessmentState.AVAILABLE,
-        (out_of_window,),
+        valid_bindings,
+        {InputModality.SPOT_TRADES: evidence},
     )
+    assessment_metrics = list(assessment.metrics)
+    assessment_metrics[3] = out_of_window
+    assessment = replace(assessment, metrics=tuple(assessment_metrics))
     with pytest.raises(AnalysisV2ContractError, match="window does not match"):
         validate_order_flow_assessment(
             assessment,
@@ -1536,4 +1750,15 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
             trade,
             _id(700),
             value=Decimal("1.1"),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="every order-flow metric"):
+        OrderFlowAssessment(
+            _id(900),
+            "BTC",
+            INSTRUMENT,
+            VENUE,
+            CUTOFF,
+            EXPIRES,
+            OrderFlowAssessmentState.AVAILABLE,
+            (_metric(OrderFlowMetricName.TRADE_VOLUME, trade, _id(700)),),
         )

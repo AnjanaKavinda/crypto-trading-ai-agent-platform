@@ -24,6 +24,7 @@ from trading_platform_api.analysis.versioned_contracts import (
 )
 from trading_platform_api.contracts.serialization import (
     MAX_DOCUMENT_BYTES,
+    MAX_NESTING_DEPTH,
     ContractSerializationError,
     UnknownFieldPolicy,
     parse_contract_document,
@@ -57,6 +58,56 @@ def _payload_fields(model: type[Any]) -> tuple[str, ...]:
         for item in fields(model)
         if item.name not in {"contract_id", "schema_version"}
     )
+
+
+def _check_analysis_document_bounds(document: str | bytes) -> str:
+    if isinstance(document, bytes):
+        if len(document) > MAX_DOCUMENT_BYTES:
+            raise AnalysisV2ContractError("Analysis document exceeds the maximum size.")
+        try:
+            source_text = document.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise AnalysisV2ContractError(
+                "Analysis document must be valid UTF-8."
+            ) from exc
+    elif type(document) is str:
+        source_text = document
+        try:
+            if len(source_text.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+                raise AnalysisV2ContractError(
+                    "Analysis document exceeds the maximum size."
+                )
+        except UnicodeEncodeError as exc:
+            raise AnalysisV2ContractError(
+                "Analysis document must be valid UTF-8."
+            ) from exc
+    else:
+        raise AnalysisV2ContractError("Analysis document must be text or UTF-8 bytes.")
+
+    depth = 0
+    in_string = False
+    escaped = False
+    maximum_depth = MAX_NESTING_DEPTH + 2
+    for character in source_text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > maximum_depth:
+                raise AnalysisV2ContractError(
+                    "Analysis document exceeds the maximum nesting depth."
+                )
+        elif character in "]}":
+            depth -= 1
+    return source_text
 
 
 def encode_analysis_contract(value: object) -> str:
@@ -185,19 +236,7 @@ def _decode_value(kind: Any, value: object) -> object:
 
 def decode_analysis_contract(document: str | bytes) -> object:
     try:
-        if isinstance(document, bytes):
-            try:
-                source_text = document.decode("utf-8", errors="strict")
-            except UnicodeDecodeError as exc:
-                raise AnalysisV2ContractError(
-                    "Analysis document must be valid UTF-8."
-                ) from exc
-        elif type(document) is str:
-            source_text = document
-        else:
-            raise AnalysisV2ContractError(
-                "Analysis document must be text or UTF-8 bytes."
-            )
+        source_text = _check_analysis_document_bounds(document)
         envelope = json.loads(source_text)
         if type(envelope) is not dict:
             raise AnalysisV2ContractError("Analysis document must be an object.")
@@ -234,7 +273,13 @@ def decode_analysis_contract(document: str | bytes) -> object:
         return decoded
     except AnalysisV2ContractError:
         raise
-    except (ContractSerializationError, TypeError, ValueError, KeyError) as exc:
+    except (
+        ContractSerializationError,
+        TypeError,
+        ValueError,
+        KeyError,
+        RecursionError,
+    ) as exc:
         raise AnalysisV2ContractError("Invalid or corrupt analysis document.") from exc
 
 

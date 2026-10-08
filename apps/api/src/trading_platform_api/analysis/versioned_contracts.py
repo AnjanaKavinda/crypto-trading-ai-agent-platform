@@ -488,11 +488,22 @@ class OrderFlowMetric:
             _text("limitation", limitation)
         if type(self.method) is not VersionReference:
             raise AnalysisV2ContractError("method must be a VersionReference.")
-        _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
-        binding_ids = _uuid_tuple("binding_ids", self.binding_ids, empty=False)
-        if len(binding_ids) != 1:
+        is_unavailable = self.state is OrderFlowMetricState.UNAVAILABLE
+        evidence_ids = _uuid_tuple(
+            "evidence_ids", self.evidence_ids, empty=is_unavailable
+        )
+        binding_ids = _uuid_tuple("binding_ids", self.binding_ids, empty=is_unavailable)
+        if is_unavailable and bool(evidence_ids) != bool(binding_ids):
+            raise AnalysisV2ContractError(
+                "Unavailable metrics must bind evidence and inputs together."
+            )
+        if not is_unavailable and len(binding_ids) != 1:
             raise AnalysisV2ContractError(
                 "This schema permits only one modality binding per metric."
+            )
+        if not is_unavailable and not evidence_ids:
+            raise AnalysisV2ContractError(
+                "Available/partial metrics require evidence references."
             )
         object.__setattr__(self, "calculated_at", calculated)
         object.__setattr__(self, "window_start", start)
@@ -527,6 +538,10 @@ class OrderFlowAssessment:
             raise AnalysisV2ContractError("state must be an OrderFlowAssessmentState.")
         metrics = _typed_tuple("metrics", self.metrics, OrderFlowMetric, empty=False)
         _unique("order-flow metric names", tuple(item.name for item in metrics))
+        if tuple(item.name for item in metrics) != tuple(OrderFlowMetricName):
+            raise AnalysisV2ContractError(
+                "C-104 schema 1 requires every order-flow metric in canonical order."
+            )
         all_available = all(
             item.state is OrderFlowMetricState.AVAILABLE for item in metrics
         )
@@ -845,12 +860,16 @@ def resolve_analysis_snapshot_v2(
                     "C-001/C-091 provenance or cutoff mismatch."
                 )
             metrics = {metric.metric_name: metric for metric in observation.metrics}
-            if any(
-                (metric := metrics.get(rule.name)) is None
-                or type(metric) is not MetricValue
-                or metric.unit != rule.unit
-                or not rule.minimum <= metric.value <= rule.maximum
-                for rule in policy.metric_rules
+            if (
+                any(
+                    (metric := metrics.get(rule.name)) is None
+                    or type(metric) is not MetricValue
+                    or metric.unit != rule.unit
+                    or not rule.minimum <= metric.value <= rule.maximum
+                    for rule in policy.metric_rules
+                )
+                or (snapshot.as_of - observation.event_time).total_seconds()
+                > policy.freshness_seconds
             ):
                 direct_inputs_pass = False
             observation_values.append(observation)
@@ -1055,6 +1074,10 @@ def validate_evidence_item_v2(
         raise AnalysisV2ContractError(
             "Evidence observation is outside its selected binding(s)."
         )
+    cited_observations = tuple(
+        selected_observations[observation_id]
+        for observation_id in evidence.observation_ids
+    )
     sources_by_observation = {
         observation.market_data_id: observation.source_record_id
         for item in selected
@@ -1066,6 +1089,38 @@ def validate_evidence_item_v2(
     }:
         raise AnalysisV2ContractError(
             "Evidence C-001/C-091 source closure is incomplete."
+        )
+    source_by_id = {
+        source.source_record_id: source for item in selected for source in item.sources
+    }
+    cited_sources = tuple(
+        source_by_id[source_id] for source_id in evidence.source_record_ids
+    )
+    if evidence.observed_at < max(
+        (
+            *(item.event_time for item in cited_observations),
+            *(item.provider_event_time for item in cited_sources),
+        )
+    ):
+        raise AnalysisV2ContractError(
+            "Evidence observation time predates a cited C-001/C-091 record."
+        )
+    if evidence.available_at < max(
+        (
+            *(item.availability_time for item in cited_observations),
+            *(
+                timestamp
+                for item in cited_sources
+                for timestamp in (
+                    item.provider_event_time,
+                    item.retrieval_time,
+                    item.availability_time,
+                )
+            ),
+        )
+    ):
+        raise AnalysisV2ContractError(
+            "Evidence availability time predates a cited C-001/C-091 record."
         )
     selected_datasets = {
         (item.dataset.dataset_id, item.dataset.version)
@@ -1119,6 +1174,8 @@ def validate_order_flow_assessment(
         or assessment.expires_at <= validation_time
     ):
         raise AnalysisV2ContractError("Order-flow assessment or manifest is stale.")
+    if assessment.assessment_id not in manifest.assessment_ids:
+        raise AnalysisV2ContractError("C-104 assessment is not listed by its manifest.")
     if (
         assessment.asset != manifest.asset
         or assessment.instrument_id != manifest.instrument_id
@@ -1131,6 +1188,8 @@ def validate_order_flow_assessment(
         )
     by_binding = {item.binding.binding_id: item for item in resolved_bindings}
     for metric in assessment.metrics:
+        if metric.state is OrderFlowMetricState.UNAVAILABLE and not metric.binding_ids:
+            continue
         binding_id = metric.binding_ids[0]
         item = by_binding.get(binding_id)
         if item is None:
@@ -1269,7 +1328,11 @@ def validate_market_context_v2(
         raise AnalysisV2ContractError(
             "C-008 evidence membership is not exactly resolved."
         )
-    for item in evidence.values():
+    for evidence_id, item in evidence.items():
+        if item.evidence_id != evidence_id:
+            raise AnalysisV2ContractError(
+                "C-008 evidence mapping key does not match its identity."
+            )
         validate_evidence_item_v2(
             item,
             manifest,
