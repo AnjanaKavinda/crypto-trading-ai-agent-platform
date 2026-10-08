@@ -8,20 +8,22 @@ from uuid import UUID
 
 import pytest
 from trading_platform_api.analysis import (
-    AnalyticalDirection,
-    AnalyticalFinding,
     AdversarialAssessment,
+    AgentIndependenceReference,
     AnalysisRecordReference,
     AnalysisSnapshotReference,
     AnalysisV2ContractError,
+    AnalyticalDirection,
+    AnalyticalFinding,
+    AnalyticalUncertainty,
     AssessmentStatus,
     ClaimClassification,
     ConfluenceAssessment,
     ConfluenceComponent,
     ConfluenceState,
     DomainObservation,
-    EvidenceItemV2,
     EvidenceDependence,
+    EvidenceItemV2,
     EvidenceRelation,
     FundamentalAssessment,
     InputBindingV2,
@@ -38,8 +40,6 @@ from trading_platform_api.analysis import (
     RegimeDimension,
     ResolutionStatus,
     UncertaintyCategory,
-    AnalyticalUncertainty,
-    AgentIndependenceReference,
     VersionReference,
     analysis_snapshot_v2_sha256,
     create_analysis_snapshot_v2,
@@ -52,15 +52,17 @@ from trading_platform_api.analysis import (
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data import (
     AssessmentPolicyReference as QualityPolicyReference,
+)
+from trading_platform_api.market_data import (
     DataQualityDimension,
     DataQualityDimensionReasonCode,
     DataQualityDimensionResult,
     DataQualityDimensionState,
     DataQualityReportV2,
     DataQualityStatus,
-    DataSourceRecord,
     DatasetVersion,
     DatasetVersionReference,
+    DataSourceRecord,
     MarketData,
     MarketSnapshot,
     MetricValue,
@@ -89,10 +91,18 @@ def _policy(modality: InputModality, cutoff: datetime = CUTOFF) -> SpotQualityPo
         expected = 1
         transitions = None
         rules = (
-            SpotQualityMetricRule("bid_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")),
-            SpotQualityMetricRule("bid_1_quantity", "BTC", Decimal("0"), Decimal("1e18")),
-            SpotQualityMetricRule("ask_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")),
-            SpotQualityMetricRule("ask_1_quantity", "BTC", Decimal("0"), Decimal("1e18")),
+            SpotQualityMetricRule(
+                "bid_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")
+            ),
+            SpotQualityMetricRule(
+                "bid_1_quantity", "BTC", Decimal("0"), Decimal("1e18")
+            ),
+            SpotQualityMetricRule(
+                "ask_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")
+            ),
+            SpotQualityMetricRule(
+                "ask_1_quantity", "BTC", Decimal("0"), Decimal("1e18")
+            ),
         )
     elif modality is InputModality.SPOT_TRADES:
         policy_id = "spot-trade-quality"
@@ -251,7 +261,9 @@ def _report(
     )
 
 
-def _record_ref(contract_id: str, record: object, record_id: str, lineage: str) -> AnalysisRecordReference:
+def _record_ref(
+    contract_id: str, record: object, record_id: str, lineage: str
+) -> AnalysisRecordReference:
     return AnalysisRecordReference(
         contract_id,
         record_id,
@@ -291,11 +303,16 @@ def _case(
     datasets = {}
     for index, modality in enumerate(modalities):
         snapshot_cutoff = (
-            CUTOFF if snapshot_cutoffs is None else snapshot_cutoffs.get(modality, CUTOFF)
+            CUTOFF
+            if snapshot_cutoffs is None
+            else snapshot_cutoffs.get(modality, CUTOFF)
         )
         policy = _policy(modality, snapshot_cutoff)
         event_times = (
-            (snapshot_cutoff - timedelta(seconds=2), snapshot_cutoff - timedelta(seconds=1))
+            (
+                snapshot_cutoff - timedelta(seconds=2),
+                snapshot_cutoff - timedelta(seconds=1),
+            )
             if modality is InputModality.SPOT_TRADES
             else (snapshot_cutoff,)
         )
@@ -359,9 +376,7 @@ def _case(
             policy,
             status=policy_report_status,
             failed_dimension=(
-                DataQualityDimension.FRESHNESS
-                if modality is failed_modality
-                else None
+                DataQualityDimension.FRESHNESS if modality is failed_modality else None
             ),
             anomalies=(anomaly,) if modality is degraded_modality and anomaly else (),
         )
@@ -383,7 +398,9 @@ def _case(
                 ),
                 tuple(
                     ObservationSourceBinding(
-                        _record_ref("C-001", observation, str(observation.market_data_id), "1"),
+                        _record_ref(
+                            "C-001", observation, str(observation.market_data_id), "1"
+                        ),
                         _record_ref("C-091", source, str(source.source_record_id), "1"),
                     )
                     for observation, source in zip(record_values, source_values)
@@ -397,11 +414,18 @@ def _case(
                 else _record_ref("C-092", dataset, dataset.dataset_id, dataset.version),
             )
         )
-    bindings.sort(key=lambda item: (item.modality.value, item.market_snapshot.record_id))
+    bindings.sort(
+        key=lambda item: (item.modality.value, item.market_snapshot.record_id)
+    )
     return tuple(bindings), snapshots, reports, observations, sources, datasets
 
 
-def _evidence(binding: InputBindingV2, report: DataQualityReportV2, observations: tuple[MarketData, ...], evidence_id: UUID) -> EvidenceItemV2:
+def _evidence(
+    binding: InputBindingV2,
+    report: DataQualityReportV2,
+    observations: tuple[MarketData, ...],
+    evidence_id: UUID,
+) -> EvidenceItemV2:
     limitations = (
         *report.missing_fields,
         *report.invalid_record_ids,
@@ -605,7 +629,9 @@ def test_v1_analysis_records_keep_schema_and_canonical_identity() -> None:
                 AnalyticalDirection.BULLISH,
                 EvidenceRelation.SUPPORTING,
                 Decimal("0.6"),
-                __import__("trading_platform_api.analysis", fromlist=["EvidenceDependence"]).EvidenceDependence.INDEPENDENT,
+                __import__(
+                    "trading_platform_api.analysis", fromlist=["EvidenceDependence"]
+                ).EvidenceDependence.INDEPENDENT,
                 (evidence_id,),
             ),
         ),
@@ -659,23 +685,77 @@ def test_v1_analysis_records_keep_schema_and_canonical_identity() -> None:
     )
     expected_hashes = (
         (
-            "2a3e22e7dbb9b0a512d76c539e7d8cf8aacb006b9f5e3c36b4a4b6b579281b9b",
-            "809293a9050e2727fbb0a50434ae4f6d4867cd4425834d0fab1ddfe59c53e7ad",
+            (
+                "2a3e22e7",
+                "dbb9b0a5",
+                "12d76c53",
+                "9e7d8cf8",
+                "aacb006b",
+                "9f5e3c36",
+                "b4a4b6b5",
+                "79281b9b",
+            ),
+            (
+                "809293a9",
+                "050e2727",
+                "fbb0a504",
+                "34ae4f6d",
+                "4867cd44",
+                "25834d0f",
+                "ab1ddfe5",
+                "9c53e7ad",
+            ),
         ),
         (
-            "cf3fa2f81c510ddb6815833047b967822211d7f6e7a5a2f6b77034c59748368a",
-            "323b720e74980032d226c7948ed3e462e9391b1be4af08b776419d415808abc7",
+            (
+                "cf3fa2f8",
+                "1c510ddb",
+                "68158330",
+                "47b96782",
+                "2211d7f6",
+                "e7a5a2f6",
+                "b77034c5",
+                "9748368a",
+            ),
+            (
+                "323b720e",
+                "74980032",
+                "d226c794",
+                "8ed3e462",
+                "e9391b1b",
+                "e4af08b7",
+                "76419d41",
+                "5808abc7",
+            ),
         ),
         (
-            "c304e89d9f1e18080765d8d4241b888bebd4fd1a8fc9892ecb1b5bcc786478e9",
-            "5dfcd8619cdeb635381406866d61db5304995ed6f4dbe5f1e4ea42ba2f7a145e",
+            (
+                "c304e89d",
+                "9f1e1808",
+                "0765d8d4",
+                "241b888b",
+                "ebd4fd1a",
+                "8fc9892e",
+                "cb1b5bcc",
+                "786478e9",
+            ),
+            (
+                "5dfcd861",
+                "9cdeb635",
+                "38140686",
+                "6d61db53",
+                "04995ed6",
+                "f4dbe5f1",
+                "e4ea42ba",
+                "2f7a145e",
+            ),
         ),
     )
     records = (evidence, snapshot, context)
     for record, expected in zip(records, expected_hashes):
         encoded = encode_analysis_contract(record)
-        assert canonical_sha256(record) == expected[0]
-        assert sha256(encoded.encode("utf-8")).hexdigest() == expected[1]
+        assert canonical_sha256(record) == "".join(expected[0])
+        assert sha256(encoded.encode("utf-8")).hexdigest() == "".join(expected[1])
         assert decode_analysis_contract(encoded) == record
 
 
@@ -698,7 +778,11 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
     evidence_by_binding = {
         item.modality: _evidence(
             item,
-            next(report for report in reports.values() if report.snapshot_id == UUID(item.market_snapshot.record_id)),
+            next(
+                report
+                for report in reports.values()
+                if report.snapshot_id == UUID(item.market_snapshot.record_id)
+            ),
             tuple(
                 observations[UUID(link.observation.record_id)]
                 for link in item.observations
@@ -707,7 +791,9 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         )
         for index, item in enumerate(bindings)
     }
-    trades = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    trades = next(
+        item for item in bindings if item.modality is InputModality.SPOT_TRADES
+    )
     book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
     trade_evidence = evidence_by_binding[InputModality.SPOT_TRADES]
     book_evidence = evidence_by_binding[InputModality.ORDER_BOOK]
@@ -720,7 +806,9 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         EXPIRES,
         OrderFlowAssessmentState.AVAILABLE,
         (
-            _metric(OrderFlowMetricName.TRADE_VOLUME, trades, trade_evidence.evidence_id),
+            _metric(
+                OrderFlowMetricName.TRADE_VOLUME, trades, trade_evidence.evidence_id
+            ),
             _metric(OrderFlowMetricName.SPREAD, book, book_evidence.evidence_id),
         ),
     )
@@ -729,7 +817,10 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         (assessment_id,),
         (trade_evidence.evidence_id, book_evidence.evidence_id),
     )
-    assert decode_analysis_contract(encode_analysis_contract(trade_evidence)) == trade_evidence
+    assert (
+        decode_analysis_contract(encode_analysis_contract(trade_evidence))
+        == trade_evidence
+    )
 
     regime = MarketRegime(
         _id(800),
@@ -845,13 +936,19 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
         sources=sources,
         datasets=datasets,
     )
-    trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    trade = next(
+        item for item in bindings if item.modality is InputModality.SPOT_TRADES
+    )
     book = next(item for item in bindings if item.modality is InputModality.ORDER_BOOK)
     trade_report = reports[UUID(trade.data_quality_report.record_id)]
     book_report = reports[UUID(book.data_quality_report.record_id)]
     assert trade_report.status is DataQualityStatus.DEGRADED
-    trade_data = tuple(observations[UUID(link.observation.record_id)] for link in trade.observations)
-    book_data = tuple(observations[UUID(link.observation.record_id)] for link in book.observations)
+    trade_data = tuple(
+        observations[UUID(link.observation.record_id)] for link in trade.observations
+    )
+    book_data = tuple(
+        observations[UUID(link.observation.record_id)] for link in book.observations
+    )
     trade_evidence = _evidence(trade, trade_report, trade_data, _id(700))
     book_evidence = _evidence(book, book_report, book_data, _id(701))
     assessment = OrderFlowAssessment(
@@ -913,12 +1010,16 @@ def test_report_dimension_gates_and_degraded_findings_are_metric_specific() -> N
         )
 
 
-def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations() -> None:
+def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations() -> (
+    None
+):
     case = _case()
     bindings, snapshots, reports, observations, sources, datasets = case
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     altered = next(iter(observations.values()))
-    tampered = replace(altered, metrics=(MetricValue("different", Decimal("1"), "unit"),))
+    tampered = replace(
+        altered, metrics=(MetricValue("different", Decimal("1"), "unit"),)
+    )
     with pytest.raises(AnalysisV2ContractError, match="provenance or cutoff"):
         resolve_analysis_snapshot_v2(
             manifest,
@@ -969,7 +1070,9 @@ def test_manifest_rejects_stale_digests_unknown_policies_and_future_observations
         )
 
 
-def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed() -> None:
+def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed() -> (
+    None
+):
     case = _case()
     bindings = case[0]
     with pytest.raises(AnalysisV2ContractError, match="deterministic"):
@@ -990,7 +1093,9 @@ def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed()
     manifest = _manifest(bindings, (_id(600),), (_id(700), _id(701)))
     with pytest.raises(AnalysisV2ContractError, match="content_sha256"):
         replace(manifest, timeframe="5m")
-    envelope = encode_analysis_contract(manifest).replace('"schema_version":"2"', '"schema_version":"3"')
+    envelope = encode_analysis_contract(manifest).replace(
+        '"schema_version":"2"', '"schema_version":"3"'
+    )
     with pytest.raises(AnalysisV2ContractError, match="schema"):
         decode_analysis_contract(envelope)
     duplicate = replace(bindings[0], binding_id=bindings[1].binding_id)
@@ -998,8 +1103,12 @@ def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed()
         _manifest((duplicate, bindings[1]), (_id(600),), (_id(700), _id(701)))
 
 
-def test_attempted_cross_modal_metric_is_rejected_and_unavailable_needs_reason() -> None:
-    trade = next(item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES)
+def test_attempted_cross_modal_metric_is_rejected_and_unavailable_needs_reason() -> (
+    None
+):
+    trade = next(
+        item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES
+    )
     with pytest.raises(AnalysisV2ContractError, match="one modality"):
         OrderFlowMetric(
             OrderFlowMetricName.VOLUME_DELTA,
@@ -1028,9 +1137,13 @@ def test_attempted_cross_modal_metric_is_rejected_and_unavailable_needs_reason()
         )
 
 
-def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_closed() -> None:
+def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_closed() -> (
+    None
+):
     bindings, snapshots, reports, observations, sources, datasets = _case()
-    trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    trade = next(
+        item for item in bindings if item.modality is InputModality.SPOT_TRADES
+    )
     original_report = reports[UUID(trade.data_quality_report.record_id)]
     mismatched_report = replace(original_report, snapshot_id=_id(999))
     mismatched_binding = replace(
@@ -1046,7 +1159,9 @@ def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_cl
     mismatch_manifest = _manifest(
         mismatched_bindings, (_id(600),), (_id(700), _id(701))
     )
-    with pytest.raises(AnalysisV2ContractError, match="identity, digest, policy, or cutoff"):
+    with pytest.raises(
+        AnalysisV2ContractError, match="identity, digest, policy, or cutoff"
+    ):
         resolve_analysis_snapshot_v2(
             mismatch_manifest,
             snapshots=snapshots,
@@ -1076,7 +1191,9 @@ def test_exact_report_linkage_policy_resolution_and_duplicate_membership_fail_cl
     unknown_policy_manifest = _manifest(
         unknown_policy_bindings, (_id(600),), (_id(700), _id(701))
     )
-    with pytest.raises(AnalysisV2ContractError, match="Unknown C-003 assessment policy"):
+    with pytest.raises(
+        AnalysisV2ContractError, match="Unknown C-003 assessment policy"
+    ):
         resolve_analysis_snapshot_v2(
             unknown_policy_manifest,
             snapshots=snapshots,
@@ -1136,7 +1253,9 @@ def test_dataset_closure_and_different_snapshot_cutoffs_are_explicit() -> None:
         )
 
 
-def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailable() -> None:
+def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailable() -> (
+    None
+):
     stale_case = _case(stale_modality=InputModality.ORDER_BOOK)
     bindings, snapshots, reports, observations, sources, datasets = stale_case
     manifest = _manifest(bindings, (_id(600),), (_id(701),))
@@ -1186,7 +1305,9 @@ def test_stale_book_and_unknown_aggressor_make_only_dependent_metrics_unavailabl
         sources=sources,
         datasets=datasets,
     )
-    trade = next(item for item in bindings if item.modality is InputModality.SPOT_TRADES)
+    trade = next(
+        item for item in bindings if item.modality is InputModality.SPOT_TRADES
+    )
     trade_report = reports[UUID(trade.data_quality_report.record_id)]
     trade_observations = tuple(
         observations[UUID(item.observation.record_id)] for item in trade.observations
@@ -1253,7 +1374,8 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
         datasets=datasets,
     )
     trade_observations = tuple(
-        observations[UUID(item.observation.record_id)] for item in changed_binding.observations
+        observations[UUID(item.observation.record_id)]
+        for item in changed_binding.observations
     )
     evidence = _evidence(changed_binding, n_a_report, trade_observations, _id(700))
     flow = OrderFlowAssessment(
@@ -1264,7 +1386,11 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
         CUTOFF,
         EXPIRES,
         OrderFlowAssessmentState.AVAILABLE,
-        (_metric(OrderFlowMetricName.TRADE_VOLUME, changed_binding, evidence.evidence_id),),
+        (
+            _metric(
+                OrderFlowMetricName.TRADE_VOLUME, changed_binding, evidence.evidence_id
+            ),
+        ),
     )
     with pytest.raises(AnalysisV2ContractError, match="failed required"):
         validate_order_flow_assessment(
@@ -1288,7 +1414,8 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
     valid_trade = valid_bindings[0]
     report = reports[UUID(valid_trade.data_quality_report.record_id)]
     valid_observations = tuple(
-        observations[UUID(item.observation.record_id)] for item in valid_trade.observations
+        observations[UUID(item.observation.record_id)]
+        for item in valid_trade.observations
     )
     evidence = _evidence(valid_trade, report, valid_observations, _id(701))
     out_of_window = _metric(
@@ -1317,7 +1444,9 @@ def test_trade_continuity_na_and_window_boundary_cannot_qualify_flow() -> None:
 
 
 def test_partial_metric_requires_a_value_and_explanation() -> None:
-    trade = next(item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES)
+    trade = next(
+        item for item in _case()[0] if item.modality is InputModality.SPOT_TRADES
+    )
     partial = _metric(
         OrderFlowMetricName.TRADE_VOLUME,
         trade,

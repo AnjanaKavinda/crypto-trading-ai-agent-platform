@@ -9,31 +9,6 @@ from hashlib import sha256
 from typing import ClassVar, Mapping, TypeAlias, get_args
 from uuid import UUID
 
-from trading_platform_api.contracts.serialization import (
-    CANONICAL_JSON_VERSION,
-    canonical_json_dumps,
-    canonical_sha256,
-)
-from trading_platform_api.market_data.contracts import (
-    AssessmentPolicyReference,
-    DataQualityDimension,
-    DataQualityDimensionReasonCode,
-    DataQualityDimensionResult,
-    DataQualityDimensionState,
-    DataQualityReportV2,
-    DataQualityStatus,
-    DataSourceRecord,
-    DatasetVersion,
-    MarketData,
-    MarketSnapshot,
-    MetricValue,
-)
-from trading_platform_api.market_data.providers import ProviderDataKind
-from trading_platform_api.market_data.quality import (
-    DataQualityAssessmentError,
-    SpotQualityPolicy,
-)
-
 from trading_platform_api.analysis.contracts import (
     AdversarialAssessment,
     AnalyticalUncertainty,
@@ -50,6 +25,29 @@ from trading_platform_api.analysis.contracts import (
     _unique,
     _uuid,
     _uuid_tuple,
+)
+from trading_platform_api.contracts.serialization import (
+    CANONICAL_JSON_VERSION,
+    canonical_json_dumps,
+    canonical_sha256,
+)
+from trading_platform_api.market_data.contracts import (
+    AssessmentPolicyReference,
+    DataQualityDimension,
+    DataQualityDimensionReasonCode,
+    DataQualityDimensionState,
+    DataQualityReportV2,
+    DataQualityStatus,
+    DatasetVersion,
+    DataSourceRecord,
+    MarketData,
+    MarketSnapshot,
+    MetricValue,
+)
+from trading_platform_api.market_data.providers import ProviderDataKind
+from trading_platform_api.market_data.quality import (
+    DataQualityAssessmentError,
+    SpotQualityPolicy,
 )
 
 ANALYSIS_V2_SCHEMA_VERSION = "2"
@@ -107,12 +105,19 @@ class AnalysisRecordReference:
             "C-003": ("2", "2"),
             "C-091": ("1", "1"),
         }
-        if self.contract_id in expected and (schema, lineage) != expected[self.contract_id]:
-            raise AnalysisV2ContractError("Dependency schema or lineage version mismatch.")
+        if (
+            self.contract_id in expected
+            and (schema, lineage) != expected[self.contract_id]
+        ):
+            raise AnalysisV2ContractError(
+                "Dependency schema or lineage version mismatch."
+            )
         if self.contract_id == "C-092" and schema != "1":
             raise AnalysisV2ContractError("C-092 schema version must be 1.")
         if _SHA256.fullmatch(_text("content_sha256", self.content_sha256)) is None:
-            raise AnalysisV2ContractError("content_sha256 must be a lowercase SHA-256 digest.")
+            raise AnalysisV2ContractError(
+                "content_sha256 must be a lowercase SHA-256 digest."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,12 +132,16 @@ class ObservationSourceBinding:
             or type(self.source) is not AnalysisRecordReference
             or self.source.contract_id != "C-091"
         ):
-            raise AnalysisV2ContractError("Observation/source references have invalid types.")
+            raise AnalysisV2ContractError(
+                "Observation/source references have invalid types."
+            )
         try:
             UUID(self.observation.record_id)
             UUID(self.source.record_id)
         except ValueError as exc:
-            raise AnalysisV2ContractError("C-001/C-091 record IDs must be UUIDs.") from exc
+            raise AnalysisV2ContractError(
+                "C-001/C-091 record IDs must be UUIDs."
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,20 +167,28 @@ class InputBindingV2:
             type(self.market_snapshot) is not AnalysisRecordReference
             or self.market_snapshot.contract_id != "C-002"
         ):
-            raise AnalysisV2ContractError("market_snapshot must reference C-002 schema 1.")
+            raise AnalysisV2ContractError(
+                "market_snapshot must reference C-002 schema 1."
+            )
         if (
             type(self.data_quality_report) is not AnalysisRecordReference
             or self.data_quality_report.contract_id != "C-003"
         ):
-            raise AnalysisV2ContractError("data_quality_report must reference C-003 schema 2.")
+            raise AnalysisV2ContractError(
+                "data_quality_report must reference C-003 schema 2."
+            )
         if type(self.assessment_policy) is not AssessmentPolicyReference:
-            raise AnalysisV2ContractError("assessment_policy must be an exact policy reference.")
+            raise AnalysisV2ContractError(
+                "assessment_policy must be an exact policy reference."
+            )
         for name in ("instrument_id", "venue_id"):
             _text(name, getattr(self, name))
         snapshot_time = _time("snapshot_as_of", self.snapshot_as_of)
         analysis_time = _time("analysis_cutoff", self.analysis_cutoff)
         if snapshot_time > analysis_time:
-            raise AnalysisV2ContractError("snapshot_as_of must not be after analysis_cutoff.")
+            raise AnalysisV2ContractError(
+                "snapshot_as_of must not be after analysis_cutoff."
+            )
         observations = _typed_tuple(
             "observations", self.observations, ObservationSourceBinding, empty=False
         )
@@ -181,13 +198,17 @@ class InputBindingV2:
             "source_records", self.source_records, AnalysisRecordReference, empty=False
         )
         if any(item.contract_id != "C-091" for item in sources):
-            raise AnalysisV2ContractError("source_records must contain only C-091 references.")
+            raise AnalysisV2ContractError(
+                "source_records must contain only C-091 references."
+            )
         _unique("source-record references", tuple(item.record_id for item in sources))
         if self.dataset_version is not None and (
             type(self.dataset_version) is not AnalysisRecordReference
             or self.dataset_version.contract_id != "C-092"
         ):
-            raise AnalysisV2ContractError("dataset_version must reference C-092 when present.")
+            raise AnalysisV2ContractError(
+                "dataset_version must reference C-092 when present."
+            )
         object.__setattr__(self, "snapshot_as_of", snapshot_time)
         object.__setattr__(self, "analysis_cutoff", analysis_time)
 
@@ -207,7 +228,9 @@ def _manifest_preimage(manifest: AnalysisSnapshotV2) -> dict[str, object]:
 
 
 def analysis_snapshot_v2_sha256(manifest: AnalysisSnapshotV2) -> str:
-    return sha256(canonical_json_dumps(_manifest_preimage(manifest)).encode("utf-8")).hexdigest()
+    return sha256(
+        canonical_json_dumps(_manifest_preimage(manifest)).encode("utf-8")
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +259,9 @@ class AnalysisSnapshotV2:
         created = _time("created_at", self.created_at)
         expires = _time("expires_at", self.expires_at)
         if cutoff > created or created > expires:
-            raise AnalysisV2ContractError("Invalid manifest analysis/creation/expiry order.")
+            raise AnalysisV2ContractError(
+                "Invalid manifest analysis/creation/expiry order."
+            )
         bindings = _typed_tuple("bindings", self.bindings, InputBindingV2, empty=False)
         if bindings != tuple(
             sorted(
@@ -244,7 +269,9 @@ class AnalysisSnapshotV2:
                 key=lambda item: (item.modality.value, item.market_snapshot.record_id),
             )
         ):
-            raise AnalysisV2ContractError("bindings must use deterministic modality/snapshot order.")
+            raise AnalysisV2ContractError(
+                "bindings must use deterministic modality/snapshot order."
+            )
         _unique("binding IDs", tuple(item.binding_id for item in bindings))
         _unique(
             "bound snapshots",
@@ -259,21 +286,27 @@ class AnalysisSnapshotV2:
             != (cutoff, self.instrument_id, self.venue_id)
             for item in bindings
         ):
-            raise AnalysisV2ContractError("Every binding must match the manifest context.")
-        assessments = _uuid_tuple("assessment_ids", self.assessment_ids, empty=False)
-        evidence = _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
+            raise AnalysisV2ContractError(
+                "Every binding must match the manifest context."
+            )
+        _uuid_tuple("assessment_ids", self.assessment_ids, empty=False)
+        _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
         provenance = _typed_tuple(
             "provenance", self.provenance, VersionReference, empty=False
         )
         _unique("provenance", provenance)
         digest = _text("content_sha256", self.content_sha256)
         if _SHA256.fullmatch(digest) is None:
-            raise AnalysisV2ContractError("content_sha256 must be a lowercase SHA-256 digest.")
+            raise AnalysisV2ContractError(
+                "content_sha256 must be a lowercase SHA-256 digest."
+            )
         object.__setattr__(self, "analysis_cutoff", cutoff)
         object.__setattr__(self, "created_at", created)
         object.__setattr__(self, "expires_at", expires)
         if analysis_snapshot_v2_sha256(self) != digest:
-            raise AnalysisV2ContractError("manifest content_sha256 does not match its canonical content.")
+            raise AnalysisV2ContractError(
+                "manifest content_sha256 does not match its canonical content."
+            )
 
 
 def create_analysis_snapshot_v2(**values: object) -> AnalysisSnapshotV2:
@@ -323,16 +356,24 @@ class EvidenceItemV2:
         datasets: list[tuple[str, str]] = []
         for value in self.dataset_versions:
             if type(value) is not tuple or len(value) != 2:
-                raise AnalysisV2ContractError("dataset_versions must contain identity pairs.")
-            datasets.append((_text("dataset_id", value[0]), _text("dataset_version", value[1])))
+                raise AnalysisV2ContractError(
+                    "dataset_versions must contain identity pairs."
+                )
+            datasets.append(
+                (_text("dataset_id", value[0]), _text("dataset_version", value[1]))
+            )
         _unique("dataset_versions", tuple(datasets))
         if type(self.feature_ids) is not tuple or any(
             not isinstance(item, str) or not item.strip() for item in self.feature_ids
         ):
-            raise AnalysisV2ContractError("feature_ids must be a tuple of nonblank strings.")
+            raise AnalysisV2ContractError(
+                "feature_ids must be a tuple of nonblank strings."
+            )
         _unique("feature_ids", self.feature_ids)
         if type(self.classification) is not ClaimClassification:
-            raise AnalysisV2ContractError("classification must be a ClaimClassification.")
+            raise AnalysisV2ContractError(
+                "classification must be a ClaimClassification."
+            )
         if type(self.relation) is not EvidenceRelation:
             raise AnalysisV2ContractError("relation must be an EvidenceRelation.")
         observed = _time("observed_at", self.observed_at)
@@ -353,7 +394,9 @@ class EvidenceItemV2:
             or not self.reliability.is_finite()
             or not Decimal("0") <= self.reliability <= Decimal("1")
         ):
-            raise AnalysisV2ContractError("reliability must be a finite score between 0 and 1.")
+            raise AnalysisV2ContractError(
+                "reliability must be a finite score between 0 and 1."
+            )
         if type(self.limitations) is not tuple:
             raise AnalysisV2ContractError("limitations must be a tuple.")
         for item in self.limitations:
@@ -403,7 +446,9 @@ class OrderFlowMetric:
         if self.value is not None and (
             type(self.value) is not Decimal or not self.value.is_finite()
         ):
-            raise AnalysisV2ContractError("value must be a finite Decimal when present.")
+            raise AnalysisV2ContractError(
+                "value must be a finite Decimal when present."
+            )
         if self.state is OrderFlowMetricState.UNAVAILABLE:
             if self.value is not None or self.unavailable_reason is None:
                 raise AnalysisV2ContractError(
@@ -417,7 +462,9 @@ class OrderFlowMetric:
                 "Available/partial metrics cannot carry an unavailable reason."
             )
         if self.state is OrderFlowMetricState.PARTIAL and not self.limitations:
-            raise AnalysisV2ContractError("PARTIAL metrics require explicit limitations.")
+            raise AnalysisV2ContractError(
+                "PARTIAL metrics require explicit limitations."
+            )
         if type(self.limitations) is not tuple:
             raise AnalysisV2ContractError("limitations must be a tuple.")
         for limitation in self.limitations:
@@ -463,8 +510,12 @@ class OrderFlowAssessment:
             raise AnalysisV2ContractError("state must be an OrderFlowAssessmentState.")
         metrics = _typed_tuple("metrics", self.metrics, OrderFlowMetric, empty=False)
         _unique("order-flow metric names", tuple(item.name for item in metrics))
-        all_available = all(item.state is OrderFlowMetricState.AVAILABLE for item in metrics)
-        all_unavailable = all(item.state is OrderFlowMetricState.UNAVAILABLE for item in metrics)
+        all_available = all(
+            item.state is OrderFlowMetricState.AVAILABLE for item in metrics
+        )
+        all_unavailable = all(
+            item.state is OrderFlowMetricState.UNAVAILABLE for item in metrics
+        )
         expected = (
             OrderFlowAssessmentState.AVAILABLE
             if all_available
@@ -473,7 +524,9 @@ class OrderFlowAssessment:
             else OrderFlowAssessmentState.PARTIAL
         )
         if self.state is not expected:
-            raise AnalysisV2ContractError("Assessment state does not match metric states.")
+            raise AnalysisV2ContractError(
+                "Assessment state does not match metric states."
+            )
         object.__setattr__(self, "as_of", as_of)
         object.__setattr__(self, "expires_at", expires)
 
@@ -492,7 +545,9 @@ class AnalysisSnapshotReference:
         if _text("schema_version", self.schema_version) != ANALYSIS_V2_SCHEMA_VERSION:
             raise AnalysisV2ContractError("C-006 v2 must reference C-007 schema 2.")
         if _SHA256.fullmatch(_text("content_sha256", self.content_sha256)) is None:
-            raise AnalysisV2ContractError("content_sha256 must be a lowercase SHA-256 digest.")
+            raise AnalysisV2ContractError(
+                "content_sha256 must be a lowercase SHA-256 digest."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,19 +577,27 @@ class MarketContextV2:
         expires = _time("expires_at", self.expires_at)
         if as_of > expires:
             raise AnalysisV2ContractError("as_of must not be after expires_at.")
-        if type(self.multi_timeframe_state) is not tuple or not self.multi_timeframe_state:
+        if (
+            type(self.multi_timeframe_state) is not tuple
+            or not self.multi_timeframe_state
+        ):
             raise AnalysisV2ContractError("multi_timeframe_state must not be empty.")
         for item in self.multi_timeframe_state:
             _text("multi_timeframe_state item", item)
         if type(self.regime) is not MarketRegime:
             raise AnalysisV2ContractError("regime must be a MarketRegime.")
         assessments = self.assessments
-        if type(assessments) is not tuple or not assessments or any(
-            type(item) not in {
-                *get_args(Assessment),
-                OrderFlowAssessment,
-            }
-            for item in assessments
+        if (
+            type(assessments) is not tuple
+            or not assessments
+            or any(
+                type(item)
+                not in {
+                    *get_args(Assessment),
+                    OrderFlowAssessment,
+                }
+                for item in assessments
+            )
         ):
             raise AnalysisV2ContractError("assessments contains an invalid type.")
         _unique(
@@ -549,8 +612,12 @@ class MarketContextV2:
             raise AnalysisV2ContractError("conflicts contains an invalid type.")
         if type(self.adversarial) is not AdversarialAssessment:
             raise AnalysisV2ContractError("adversarial has an invalid type.")
-        if type(self.uncertainties) is not tuple or not self.uncertainties or any(
-            type(item) is not AnalyticalUncertainty for item in self.uncertainties
+        if (
+            type(self.uncertainties) is not tuple
+            or not self.uncertainties
+            or any(
+                type(item) is not AnalyticalUncertainty for item in self.uncertainties
+            )
         ):
             raise AnalysisV2ContractError("uncertainties contains an invalid type.")
         _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
@@ -634,7 +701,9 @@ def resolve_analysis_snapshot_v2(
             snapshot = snapshots[snapshot_id]
             report = reports[report_id]
         except (ValueError, KeyError, TypeError) as exc:
-            raise AnalysisV2ContractError("Missing exact C-002 or C-003 dependency.") from exc
+            raise AnalysisV2ContractError(
+                "Missing exact C-002 or C-003 dependency."
+            ) from exc
         if (
             type(snapshot) is not MarketSnapshot
             or type(report) is not DataQualityReportV2
@@ -652,13 +721,17 @@ def resolve_analysis_snapshot_v2(
             or snapshot.instrument_id != manifest.instrument_id
             or snapshot.venue_id != manifest.venue_id
         ):
-            raise AnalysisV2ContractError("C-002/C-003 identity, digest, policy, or cutoff mismatch.")
+            raise AnalysisV2ContractError(
+                "C-002/C-003 identity, digest, policy, or cutoff mismatch."
+            )
         try:
             policy = SpotQualityPolicy.resolve_reference(
                 report.assessment_policy_id, report.assessment_policy_version
             )
         except (DataQualityAssessmentError, ValueError, TypeError) as exc:
-            raise AnalysisV2ContractError("Unknown C-003 assessment policy/version.") from exc
+            raise AnalysisV2ContractError(
+                "Unknown C-003 assessment policy/version."
+            ) from exc
         expected_kind = {
             InputModality.SPOT_TRADES: ProviderDataKind.TRADE,
             InputModality.SPOT_TICKS: ProviderDataKind.TICK,
@@ -672,7 +745,9 @@ def resolve_analysis_snapshot_v2(
             or policy.assessment_policy_id != report.assessment_policy_id
             or policy.resolved_policy_version != report.assessment_policy_version
         ):
-            raise AnalysisV2ContractError("C-003 policy scope does not match its binding.")
+            raise AnalysisV2ContractError(
+                "C-003 policy scope does not match its binding."
+            )
         if snapshot.dataset_version is None:
             if binding.dataset_version is not None:
                 raise AnalysisV2ContractError("Unexpected C-092 reference.")
@@ -680,9 +755,16 @@ def resolve_analysis_snapshot_v2(
         else:
             dataset_ref = binding.dataset_version
             if dataset_ref is None or datasets is None:
-                raise AnalysisV2ContractError("Required exact C-092 dataset is unresolved.")
+                raise AnalysisV2ContractError(
+                    "Required exact C-092 dataset is unresolved."
+                )
             try:
-                dataset = datasets[(snapshot.dataset_version.dataset_id, snapshot.dataset_version.version)]
+                dataset = datasets[
+                    (
+                        snapshot.dataset_version.dataset_id,
+                        snapshot.dataset_version.version,
+                    )
+                ]
             except KeyError as exc:
                 raise AnalysisV2ContractError("Missing exact C-092 dataset.") from exc
             if (
@@ -696,7 +778,9 @@ def resolve_analysis_snapshot_v2(
                 or dataset.source_record_ids != snapshot.source_record_ids
                 or dataset.point_in_time_cutoff > snapshot.as_of
             ):
-                raise AnalysisV2ContractError("C-092 identity, digest, or membership mismatch.")
+                raise AnalysisV2ContractError(
+                    "C-092 identity, digest, or membership mismatch."
+                )
         observation_values: list[MarketData] = []
         source_values: list[DataSourceRecord] = []
         direct_inputs_pass = True
@@ -705,7 +789,9 @@ def resolve_analysis_snapshot_v2(
                 observation = observations[UUID(ref.observation.record_id)]
                 source = sources[UUID(ref.source.record_id)]
             except (ValueError, KeyError, TypeError) as exc:
-                raise AnalysisV2ContractError("Missing exact C-001/C-091 dependency.") from exc
+                raise AnalysisV2ContractError(
+                    "Missing exact C-001/C-091 dependency."
+                ) from exc
             if (
                 type(observation) is not MarketData
                 or type(source) is not DataSourceRecord
@@ -734,7 +820,9 @@ def resolve_analysis_snapshot_v2(
                 or source.retrieval_time > observation.ingestion_time
                 or source.availability_time > observation.availability_time
             ):
-                raise AnalysisV2ContractError("C-001/C-091 provenance or cutoff mismatch.")
+                raise AnalysisV2ContractError(
+                    "C-001/C-091 provenance or cutoff mismatch."
+                )
             metrics = {metric.metric_name: metric for metric in observation.metrics}
             if any(
                 (metric := metrics.get(rule.name)) is None
@@ -758,36 +846,71 @@ def resolve_analysis_snapshot_v2(
             or tuple(item.source_record_id for item in observation_values)
             != tuple(item.source_record_id for item in source_values)
         ):
-            raise AnalysisV2ContractError("C-002 exact C-001/C-091 membership mismatch.")
-        if report.assessed_at > manifest.created_at or snapshot.created_at > manifest.created_at:
-            raise AnalysisV2ContractError("Input report or snapshot postdates manifest creation.")
+            raise AnalysisV2ContractError(
+                "C-002 exact C-001/C-091 membership mismatch."
+            )
+        if (
+            report.assessed_at > manifest.created_at
+            or snapshot.created_at > manifest.created_at
+        ):
+            raise AnalysisV2ContractError(
+                "Input report or snapshot postdates manifest creation."
+            )
         quality_refs = {
-            ("C-002", str(snapshot.snapshot_id), snapshot.schema_version, canonical_sha256(snapshot)),
+            (
+                "C-002",
+                str(snapshot.snapshot_id),
+                snapshot.schema_version,
+                canonical_sha256(snapshot),
+            ),
             *(
-                ("C-001", str(item.market_data_id), item.schema_version, canonical_sha256(item))
+                (
+                    "C-001",
+                    str(item.market_data_id),
+                    item.schema_version,
+                    canonical_sha256(item),
+                )
                 for item in observation_values
             ),
             *(
-                ("C-091", str(item.source_record_id), item.schema_version, canonical_sha256(item))
+                (
+                    "C-091",
+                    str(item.source_record_id),
+                    item.schema_version,
+                    canonical_sha256(item),
+                )
                 for item in source_values
             ),
         }
         if dataset is not None:
             quality_refs.add(
-                ("C-092", dataset.dataset_id, dataset.version, canonical_sha256(dataset))
+                (
+                    "C-092",
+                    dataset.dataset_id,
+                    dataset.version,
+                    canonical_sha256(dataset),
+                )
             )
         for dimension in report.dimensions:
-            ref = dimension.evidence_reference
-            if ref is not None and (
-                ref.contract_id,
-                ref.record_id,
-                ref.version,
-                ref.evidence_sha256,
-            ) not in quality_refs:
-                raise AnalysisV2ContractError("C-003 quality evidence is outside exact input closure.")
+            evidence_ref = dimension.evidence_reference
+            if (
+                evidence_ref is not None
+                and (
+                    evidence_ref.contract_id,
+                    evidence_ref.record_id,
+                    evidence_ref.version,
+                    evidence_ref.evidence_sha256,
+                )
+                not in quality_refs
+            ):
+                raise AnalysisV2ContractError(
+                    "C-003 quality evidence is outside exact input closure."
+                )
         freshness = policy.freshness_seconds
         if any(
-            not timedelta(0) <= snapshot.as_of - item.event_time <= timedelta(seconds=freshness)
+            not timedelta(0)
+            <= snapshot.as_of - item.event_time
+            <= timedelta(seconds=freshness)
             for item in observation_values
         ):
             direct_inputs_pass = False
@@ -806,11 +929,15 @@ def resolve_analysis_snapshot_v2(
             )
         )
     if any(manifest.expires_at > item.dependency_expires_at for item in resolved):
-        raise AnalysisV2ContractError("Manifest expires after a bound input dependency.")
+        raise AnalysisV2ContractError(
+            "Manifest expires after a bound input dependency."
+        )
     return tuple(resolved)
 
 
-def _required_dimensions(item: ResolvedInputBinding) -> tuple[DataQualityDimension, ...]:
+def _required_dimensions(
+    item: ResolvedInputBinding,
+) -> tuple[DataQualityDimension, ...]:
     base = (
         DataQualityDimension.COMPLETENESS,
         DataQualityDimension.FRESHNESS,
@@ -819,8 +946,9 @@ def _required_dimensions(item: ResolvedInputBinding) -> tuple[DataQualityDimensi
         DataQualityDimension.SOURCE_RELIABILITY,
         DataQualityDimension.COVERAGE,
     )
-    if item.binding.modality is InputModality.ORDER_BOOK and item.policy.assessment_policy_id.startswith(
-        "spot-order-book-point"
+    if (
+        item.binding.modality is InputModality.ORDER_BOOK
+        and item.policy.assessment_policy_id.startswith("spot-order-book-point")
     ):
         return base
     return (*base, DataQualityDimension.CONTINUITY)
@@ -845,8 +973,7 @@ def _quality_eligible(item: ResolvedInputBinding) -> bool:
         continuity = dimensions[DataQualityDimension.CONTINUITY]
         if (
             continuity.state is not DataQualityDimensionState.NOT_APPLICABLE
-            or
-            continuity.reason_code
+            or continuity.reason_code
             is not DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT
             or continuity.not_applicable_policy
             != AssessmentPolicyReference(
@@ -872,28 +999,37 @@ def validate_evidence_item_v2(
     for binding_id in evidence.binding_ids:
         item = by_id.get(binding_id)
         if item is None:
-            raise AnalysisV2ContractError("Evidence references an unknown manifest binding.")
+            raise AnalysisV2ContractError(
+                "Evidence references an unknown manifest binding."
+            )
         selected.append(item)
     if evidence.expires_at > min(
         manifest.expires_at, *(item.dependency_expires_at for item in selected)
     ):
-        raise AnalysisV2ContractError("Evidence expires after one of its input dependencies.")
+        raise AnalysisV2ContractError(
+            "Evidence expires after one of its input dependencies."
+        )
     selected_observations = {
         observation.market_data_id: observation
         for item in selected
         for observation in item.observations
     }
     if not set(evidence.observation_ids).issubset(selected_observations):
-        raise AnalysisV2ContractError("Evidence observation is outside its selected binding(s).")
+        raise AnalysisV2ContractError(
+            "Evidence observation is outside its selected binding(s)."
+        )
     sources_by_observation = {
         observation.market_data_id: observation.source_record_id
         for item in selected
         for observation in item.observations
     }
     if set(evidence.source_record_ids) != {
-        sources_by_observation[observation_id] for observation_id in evidence.observation_ids
+        sources_by_observation[observation_id]
+        for observation_id in evidence.observation_ids
     }:
-        raise AnalysisV2ContractError("Evidence C-001/C-091 source closure is incomplete.")
+        raise AnalysisV2ContractError(
+            "Evidence C-001/C-091 source closure is incomplete."
+        )
     selected_datasets = {
         (item.dataset.dataset_id, item.dataset.version)
         for item in selected
@@ -904,7 +1040,9 @@ def validate_evidence_item_v2(
     if evidence.observed_at > min(item.binding.analysis_cutoff for item in selected):
         raise AnalysisV2ContractError("Evidence contains a future observation.")
     if evidence.available_at > manifest.created_at:
-        raise AnalysisV2ContractError("Evidence was not available when the manifest was created.")
+        raise AnalysisV2ContractError(
+            "Evidence was not available when the manifest was created."
+        )
     if evidence.usable and any(
         item.report.status is DataQualityStatus.DEGRADED for item in selected
     ):
@@ -920,7 +1058,9 @@ def validate_evidence_item_v2(
             )
         }
         if not required_limitations.issubset(set(evidence.limitations)):
-            raise AnalysisV2ContractError("DEGRADED report findings must remain limitations.")
+            raise AnalysisV2ContractError(
+                "DEGRADED report findings must remain limitations."
+            )
 
 
 def validate_order_flow_assessment(
@@ -939,7 +1079,9 @@ def validate_order_flow_assessment(
         or assessment.as_of != manifest.analysis_cutoff
         or assessment.expires_at > manifest.expires_at
     ):
-        raise AnalysisV2ContractError("C-104 assessment does not match its C-007 manifest.")
+        raise AnalysisV2ContractError(
+            "C-104 assessment does not match its C-007 manifest."
+        )
     by_binding = {item.binding.binding_id: item for item in resolved_bindings}
     for metric in assessment.metrics:
         binding_id = metric.binding_ids[0]
@@ -965,7 +1107,9 @@ def validate_order_flow_assessment(
                 or metric.window_end != item.snapshot.as_of
                 or len(item.observations) != 1
             ):
-                raise AnalysisV2ContractError("Book metrics require one exact point snapshot.")
+                raise AnalysisV2ContractError(
+                    "Book metrics require one exact point snapshot."
+                )
         elif (
             metric.window_end != item.snapshot.as_of
             or metric.window_start >= metric.window_end
@@ -977,17 +1121,23 @@ def validate_order_flow_assessment(
                 for observation in item.observations
             )
         ):
-            raise AnalysisV2ContractError("Trade metric window does not match its bound snapshot.")
+            raise AnalysisV2ContractError(
+                "Trade metric window does not match its bound snapshot."
+            )
         selected_evidence: list[EvidenceItemV2] = []
         for evidence_id in metric.evidence_ids:
             item_evidence = evidence.get(evidence_id)
             if item_evidence is None or evidence_id not in manifest.evidence_ids:
-                raise AnalysisV2ContractError("Metric references unresolved C-008 evidence.")
+                raise AnalysisV2ContractError(
+                    "Metric references unresolved C-008 evidence."
+                )
             validate_evidence_item_v2(
                 item_evidence, manifest, resolved_bindings=resolved_bindings
             )
             if item_evidence.binding_ids != (binding_id,):
-                raise AnalysisV2ContractError("Metric evidence must bind only its used input.")
+                raise AnalysisV2ContractError(
+                    "Metric evidence must bind only its used input."
+                )
             selected_evidence.append(item_evidence)
         evidence_observation_ids = {
             observation_id
@@ -1009,19 +1159,18 @@ def validate_order_flow_assessment(
             continue
         if any(not value.usable for value in selected_evidence):
             raise AnalysisV2ContractError("Available metrics require usable evidence.")
-        if (
-            item.report.status is DataQualityStatus.DEGRADED
-            and not set(
-                (
-                    *item.report.missing_fields,
-                    *item.report.invalid_record_ids,
-                    *item.report.duplicate_record_ids,
-                    *item.report.anomalies,
-                    *item.report.source_conflicts,
-                )
-            ).issubset(set(metric.limitations))
-        ):
-            raise AnalysisV2ContractError("DEGRADED report findings must remain limitations.")
+        if item.report.status is DataQualityStatus.DEGRADED and not set(
+            (
+                *item.report.missing_fields,
+                *item.report.invalid_record_ids,
+                *item.report.duplicate_record_ids,
+                *item.report.anomalies,
+                *item.report.source_conflicts,
+            )
+        ).issubset(set(metric.limitations)):
+            raise AnalysisV2ContractError(
+                "DEGRADED report findings must remain limitations."
+            )
         if metric.name in {
             OrderFlowMetricName.VOLUME_DELTA,
             OrderFlowMetricName.CUMULATIVE_DELTA,
@@ -1055,13 +1204,15 @@ def validate_market_context_v2(
         or tuple(str(item.assessment_id) for item in context.assessments)
         != tuple(str(item) for item in manifest.assessment_ids)
     ):
-        raise AnalysisV2ContractError("C-006 v2 does not resolve to the exact C-007 manifest.")
-    if set(evidence) != set(manifest.evidence_ids):
-        raise AnalysisV2ContractError("C-008 evidence membership is not exactly resolved.")
-    for item in evidence.values():
-        validate_evidence_item_v2(
-            item, manifest, resolved_bindings=resolved_bindings
+        raise AnalysisV2ContractError(
+            "C-006 v2 does not resolve to the exact C-007 manifest."
         )
+    if set(evidence) != set(manifest.evidence_ids):
+        raise AnalysisV2ContractError(
+            "C-008 evidence membership is not exactly resolved."
+        )
+    for item in evidence.values():
+        validate_evidence_item_v2(item, manifest, resolved_bindings=resolved_bindings)
     by_id = {item.binding.binding_id: item for item in resolved_bindings}
     for metric_assessment in (
         item for item in context.assessments if type(item) is OrderFlowAssessment
@@ -1086,8 +1237,13 @@ def validate_market_context_v2(
     for assessment in context_assessments:
         assessment_as_of = _time("assessment.as_of", assessment.as_of)
         assessment_expiry = _time("assessment.expires_at", assessment.expires_at)
-        if assessment_as_of > manifest.analysis_cutoff or assessment_expiry > manifest.expires_at:
-            raise AnalysisV2ContractError("Assessment time exceeds its manifest bounds.")
+        if (
+            assessment_as_of > manifest.analysis_cutoff
+            or assessment_expiry > manifest.expires_at
+        ):
+            raise AnalysisV2ContractError(
+                "Assessment time exceeds its manifest bounds."
+            )
 
 
 __all__ = [

@@ -10,18 +10,10 @@ from enum import Enum
 from typing import Any, get_args, get_origin, get_type_hints
 from uuid import UUID
 
-from trading_platform_api.contracts.serialization import (
-    MAX_DOCUMENT_BYTES,
-    ContractSerializationError,
-    UnknownFieldPolicy,
-    parse_contract_document,
-    serialize_contract,
-)
-
 from trading_platform_api.analysis.contracts import (
+    AnalysisSnapshot,
     EvidenceItem,
     MarketContext,
-    AnalysisSnapshot,
 )
 from trading_platform_api.analysis.versioned_contracts import (
     AnalysisSnapshotV2,
@@ -30,8 +22,15 @@ from trading_platform_api.analysis.versioned_contracts import (
     MarketContextV2,
     OrderFlowAssessment,
 )
+from trading_platform_api.contracts.serialization import (
+    MAX_DOCUMENT_BYTES,
+    ContractSerializationError,
+    UnknownFieldPolicy,
+    parse_contract_document,
+    serialize_contract,
+)
 
-_MODELS = {
+_MODELS: dict[tuple[str, str], type[Any]] = {
     ("C-006", "1"): MarketContext,
     ("C-006", "2"): MarketContextV2,
     ("C-007", "1"): AnalysisSnapshot,
@@ -42,7 +41,7 @@ _MODELS = {
 }
 
 
-def _fixed_contract_id(model: type[object]) -> str | None:
+def _fixed_contract_id(model: type[Any]) -> str | None:
     class_value = getattr(model, "contract_id", None)
     if isinstance(class_value, str):
         return class_value
@@ -52,7 +51,7 @@ def _fixed_contract_id(model: type[object]) -> str | None:
     return None
 
 
-def _payload_fields(model: type[object]) -> tuple[str, ...]:
+def _payload_fields(model: type[Any]) -> tuple[str, ...]:
     return tuple(
         item.name
         for item in fields(model)
@@ -61,15 +60,23 @@ def _payload_fields(model: type[object]) -> tuple[str, ...]:
 
 
 def encode_analysis_contract(value: object) -> str:
-    model = _MODELS.get((getattr(value, "contract_id", None), getattr(value, "schema_version", None)))
+    contract_id = getattr(value, "contract_id", None)
+    schema_version = getattr(value, "schema_version", None)
+    if not isinstance(contract_id, str) or not isinstance(schema_version, str):
+        raise AnalysisV2ContractError("Unsupported analysis contract type or schema.")
+    model = _MODELS.get((contract_id, schema_version))
     if model is None or type(value) is not model:
         raise AnalysisV2ContractError("Unsupported analysis contract type or schema.")
     try:
         encoded = serialize_contract(value, payload_version="wire-1")
     except ContractSerializationError as exc:
-        raise AnalysisV2ContractError("Analysis contract cannot be canonically encoded.") from exc
+        raise AnalysisV2ContractError(
+            "Analysis contract cannot be canonically encoded."
+        ) from exc
     if len(encoded.encode("utf-8")) > MAX_DOCUMENT_BYTES:
-        raise AnalysisV2ContractError("Analysis contract exceeds the document size limit.")
+        raise AnalysisV2ContractError(
+            "Analysis contract exceeds the document size limit."
+        )
     return encoded
 
 
@@ -120,7 +127,9 @@ def _decode_value(kind: Any, value: object) -> object:
             return tuple(_decode_value(args[0], item) for item in value)
         if len(value) != len(args):
             raise AnalysisV2ContractError("Fixed tuple payload has the wrong length.")
-        return tuple(_decode_value(item_type, item) for item_type, item in zip(args, value))
+        return tuple(
+            _decode_value(item_type, item) for item_type, item in zip(args, value)
+        )
     if kind in (str, int, bool):
         if type(value) is not kind:
             raise AnalysisV2ContractError("Invalid canonical analysis scalar.")
@@ -144,18 +153,26 @@ def _decode_value(kind: Any, value: object) -> object:
             raise AnalysisV2ContractError("Expected a typed analysis object.")
         expected = {item.name for item in fields(kind)}
         if set(value) != expected:
-            raise AnalysisV2ContractError("Analysis object fields do not match its schema.")
+            raise AnalysisV2ContractError(
+                "Analysis object fields do not match its schema."
+            )
         hints = get_type_hints(kind)
         for name in ("contract_id", "schema_version"):
-            field_info = next((item for item in fields(kind) if item.name == name), None)
+            field_info = next(
+                (item for item in fields(kind) if item.name == name), None
+            )
             if (
                 field_info is not None
                 and not field_info.init
                 and value[name] != field_info.default
             ):
-                raise AnalysisV2ContractError("Nested analysis schema metadata mismatch.")
+                raise AnalysisV2ContractError(
+                    "Nested analysis schema metadata mismatch."
+                )
         values = {
-            field_info.name: _decode_value(hints[field_info.name], value[field_info.name])
+            field_info.name: _decode_value(
+                hints[field_info.name], value[field_info.name]
+            )
             for field_info in fields(kind)
             if field_info.init
         }
@@ -173,9 +190,13 @@ def decode_analysis_contract(document: str | bytes) -> object:
             raise AnalysisV2ContractError("Analysis document must be an object.")
         contract_id = envelope.get("contract_id")
         schema_version = envelope.get("schema_version")
+        if type(contract_id) is not str or type(schema_version) is not str:
+            raise AnalysisV2ContractError("Analysis document identity is invalid.")
         model = _MODELS.get((contract_id, schema_version))
         if model is None:
-            raise AnalysisV2ContractError("Unknown analysis contract or schema version.")
+            raise AnalysisV2ContractError(
+                "Unknown analysis contract or schema version."
+            )
         parsed = parse_contract_document(
             document,
             expected_contract_id=contract_id,
@@ -191,7 +212,9 @@ def decode_analysis_contract(document: str | bytes) -> object:
                 payload[item.name] = item.default
         decoded = _decode_value(model, payload)
         if type(decoded) is not model or encode_analysis_contract(decoded) != document:
-            raise AnalysisV2ContractError("Analysis document is not a canonical typed round trip.")
+            raise AnalysisV2ContractError(
+                "Analysis document is not a canonical typed round trip."
+            )
         return decoded
     except AnalysisV2ContractError:
         raise
