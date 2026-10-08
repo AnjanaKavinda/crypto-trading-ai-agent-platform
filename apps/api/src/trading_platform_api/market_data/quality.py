@@ -6,11 +6,9 @@ response, provider success, or absence of findings is an implicit verdict.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal
-from hashlib import sha256
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
@@ -712,37 +710,111 @@ class SpotQualityPolicy:
             )
         object.__setattr__(self, "required_data_cutoff", cutoff)
 
+    @classmethod
+    def resolve_reference(
+        cls,
+        assessment_policy_id: str,
+        assessment_policy_version: str,
+    ) -> SpotQualityPolicy:
+        """Reconstruct an effective policy from a C-003 v2 report reference."""
+        if (
+            type(assessment_policy_id) is not str
+            or type(assessment_policy_version) is not str
+            or len(assessment_policy_version) > 128
+        ):
+            raise DataQualityAssessmentError("Unknown Spot policy reference.")
+        parts = assessment_policy_version.split(":")
+        if len(parts) != 5 or not all(parts):
+            raise DataQualityAssessmentError("Unknown Spot policy reference.")
+        definition = _SPOT_POLICY_DEFINITIONS.get((assessment_policy_id, parts[0]))
+        if definition is None:
+            raise DataQualityAssessmentError("Unknown Spot policy reference.")
+        instrument_id = parts[1]
+        instrument = _SPOT_INSTRUMENT_PROFILES.get(instrument_id)
+        if instrument is None:
+            raise DataQualityAssessmentError("Unknown Spot instrument reference.")
+        try:
+            cutoff_token = parts[4]
+            if (
+                len(cutoff_token) != 22
+                or cutoff_token[8] != "T"
+                or cutoff_token[21] != "Z"
+                or not (cutoff_token[:8] + cutoff_token[9:21]).isascii()
+                or not (cutoff_token[:8] + cutoff_token[9:21]).isdecimal()
+            ):
+                raise ValueError
+            cutoff = datetime(
+                int(cutoff_token[:4]),
+                int(cutoff_token[4:6]),
+                int(cutoff_token[6:8]),
+                int(cutoff_token[9:11]),
+                int(cutoff_token[11:13]),
+                int(cutoff_token[13:15]),
+                int(cutoff_token[15:21]),
+                tzinfo=UTC,
+            )
+        except ValueError as exc:
+            raise DataQualityAssessmentError("Malformed Spot policy cutoff.") from exc
+
+        def decode_count(value: str) -> int | None:
+            if value == "-":
+                return None
+            if not value.isascii() or not value.isdecimal():
+                raise DataQualityAssessmentError("Malformed Spot policy population.")
+            count = int(value)
+            if str(count) != value:
+                raise DataQualityAssessmentError("Malformed Spot policy population.")
+            return count
+
+        expected_record_count = decode_count(parts[2])
+        expected_transition_count = decode_count(parts[3])
+        rules = tuple(
+            SpotQualityMetricRule(
+                name,
+                instrument[2] if name.endswith("quantity") else instrument[1],
+                minimum,
+                maximum,
+            )
+            for name, minimum, maximum in definition.metric_rules
+        )
+        return cls(
+            assessment_policy_id,
+            parts[0],
+            definition.data_kind,
+            instrument_id,
+            instrument[0],
+            cutoff,
+            expected_record_count,
+            definition.freshness_seconds,
+            rules,
+            expected_transition_count=expected_transition_count,
+            maximum_missing_records=definition.maximum_missing_records,
+            require_independent_comparison=definition.require_independent_comparison,
+            require_checksum=definition.require_checksum,
+        )
+
     @property
     def resolved_policy_version(self) -> str:
-        definition = _SPOT_POLICY_DEFINITIONS[
-            (self.assessment_policy_id, self.assessment_policy_version)
-        ]
-        configuration = json.dumps(
-            {
-                "policy_id": self.assessment_policy_id,
-                "version": self.assessment_policy_version,
-                "policy_mode": definition.mode,
-                "dimension_profile_version": definition.dimension_profile_version,
-                "data_kind": self.data_kind.value,
-                "instrument_id": self.instrument_id,
-                "venue_id": self.venue_id,
-                "required_data_cutoff": self.required_data_cutoff.isoformat(),
-                "expected_record_count": self.expected_record_count,
-                "freshness_seconds": self.freshness_seconds,
-                "metric_rules": [
-                    [rule.name, rule.unit, str(rule.minimum), str(rule.maximum)]
-                    for rule in self.metric_rules
-                ],
-                "expected_transition_count": self.expected_transition_count,
-                "maximum_missing_records": self.maximum_missing_records,
-                "require_independent_comparison": self.require_independent_comparison,
-                "require_checksum": self.require_checksum,
-            },
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
+        expected = (
+            "-"
+            if self.expected_record_count is None
+            else str(self.expected_record_count)
         )
-        return f"{self.assessment_policy_version}:{sha256(configuration.encode()).hexdigest()}"
+        transitions = (
+            "-"
+            if self.expected_transition_count is None
+            else str(self.expected_transition_count)
+        )
+        cutoff = self.required_data_cutoff
+        cutoff_token = (
+            f"{cutoff.year:04d}{cutoff.month:02d}{cutoff.day:02d}T"
+            f"{cutoff.hour:02d}{cutoff.minute:02d}{cutoff.second:02d}"
+            f"{cutoff.microsecond:06d}Z"
+        )
+        return (
+            f"{self.assessment_policy_version}:{self.instrument_id}:"
+            f"{expected}:{transitions}:{cutoff_token}"
+        )
 
 
 def _spot_dimension(

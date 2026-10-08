@@ -274,6 +274,13 @@ def test_trade_assessment_measures_all_seven_dimensions_from_exact_evidence() ->
     assert all(item.evidence_reference is None for item in report.dimensions)
     assert report.assessment_policy_id == "spot-trade-quality"
     assert report.assessment_policy_version == trade_policy().resolved_policy_version
+    assert (
+        SpotQualityPolicy.resolve_reference(
+            report.assessment_policy_id,
+            report.assessment_policy_version,
+        )
+        == trade_policy()
+    )
 
 
 def test_tick_requires_only_explicit_metric_cells_and_does_not_infer_side() -> None:
@@ -570,6 +577,13 @@ def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
             (PRICE_RULE, QUANTITY_RULE),
             expected_transition_count=1,
         )
+    with pytest.raises(
+        DataQualityAssessmentError, match="Malformed Spot policy population"
+    ):
+        SpotQualityPolicy.resolve_reference(
+            "spot-trade-quality",
+            "1:BTC-USDT-SPOT:02:1:20260101T000010000000Z",
+        )
     with pytest.raises(DataQualityAssessmentError, match="Unknown"):
         SpotQualityPolicy(
             "spot-trade-quality",
@@ -817,6 +831,13 @@ def test_order_book_point_snapshot_marks_only_continuity_not_applicable() -> Non
     )
     continuity = report.dimensions[-1]
     assert report.status is DataQualityStatus.VALID
+    assert (
+        SpotQualityPolicy.resolve_reference(
+            report.assessment_policy_id,
+            report.assessment_policy_version,
+        )
+        == book_quality_policy()
+    )
     assert continuity.state is DataQualityDimensionState.NOT_APPLICABLE
     assert (
         continuity.reason_code is DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT
