@@ -966,14 +966,14 @@ def calculate_spot_order_flow(
         modality = (
             InputModality.ORDER_BOOK if name in _BOOK_METRICS else InputModality.SPOT_TRADES
         )
-        item = by_modality.get(modality)
+        metric_item = by_modality.get(modality)
         evidence = evidence_by_modality.get(modality)
         selected = metric_values.get(name)
-        if selected is not None and item is not None and evidence is not None:
+        if selected is not None and metric_item is not None and evidence is not None:
             value, evidence_id, calculation_limit = selected
             metric_limitations = (
                 *limitations_by_modality[modality],
-                _quality_trace(item),
+                _quality_trace(metric_item),
                 *((calculation_limit,) if calculation_limit else ()),
             )
             definitions = {
@@ -1024,7 +1024,7 @@ def calculate_spot_order_flow(
             if name is OrderFlowMetricName.CUMULATIVE_DELTA:
                 continuity = next(
                     value
-                    for value in item.report.dimensions
+                    for value in metric_item.report.dimensions
                     if value.dimension is DataQualityDimension.CONTINUITY
                 )
                 metric_limitations = (
@@ -1033,6 +1033,13 @@ def calculate_spot_order_flow(
                     f"{continuity.numerator}/{continuity.denominator} "
                     f"{continuity.basis_unit}",
                 )
+            metric_window_start = (
+                metric_item.snapshot.as_of
+                if modality is InputModality.ORDER_BOOK
+                else trade_start
+            )
+            if metric_window_start is None:
+                raise SpotOrderFlowError("Available trade metric has no input window.")
             metrics.append(
                 OrderFlowMetric(
                     name=name,
@@ -1040,21 +1047,17 @@ def calculate_spot_order_flow(
                     value=value,
                     unit=_unit(name, policy),
                     calculated_at=calculation_time,
-                    window_start=(
-                        item.snapshot.as_of
-                        if modality is InputModality.ORDER_BOOK
-                        else trade_start
-                    ),
-                    window_end=item.snapshot.as_of,
+                    window_start=metric_window_start,
+                    window_end=metric_item.snapshot.as_of,
                     method=SPOT_ORDER_FLOW_METHOD,
                     evidence_ids=(evidence_id,),
-                    binding_ids=(item.binding.binding_id,),
+                    binding_ids=(metric_item.binding.binding_id,),
                     limitations=metric_limitations,
                 )
             )
             continue
         reasons = []
-        if item is None:
+        if metric_item is None:
             reasons.append(f"No {modality.value} input is bound.")
         elif not base_pass.get(modality, False):
             required = (
@@ -1062,7 +1065,7 @@ def calculate_spot_order_flow(
                 if name in _DIRECTIONAL_METRICS
                 else _BASE_DIMENSIONS
             )
-            reasons.append(_quality_failure_reason(item, required))
+            reasons.append(_quality_failure_reason(metric_item, required))
         elif modality is InputModality.ORDER_BOOK and name in {
             OrderFlowMetricName.BID_DEPTH,
             OrderFlowMetricName.ASK_DEPTH,
@@ -1082,7 +1085,7 @@ def calculate_spot_order_flow(
         else:
             reasons.append("Required evidence or calculation inputs are unavailable.")
         can_bind = (
-            item is not None
+            metric_item is not None
             and evidence is not None
             and (
                 modality is InputModality.ORDER_BOOK
@@ -1097,25 +1100,29 @@ def calculate_spot_order_flow(
                 unit=_unit(name, policy),
                 calculated_at=calculation_time,
                 window_start=(
-                    item.snapshot.as_of
-                    if item is not None and modality is InputModality.ORDER_BOOK
+                    metric_item.snapshot.as_of
+                    if metric_item is not None and modality is InputModality.ORDER_BOOK
                     else trade_start
                     if trade_start is not None and positive_trade_window
-                    else item.snapshot.as_of
-                    if item is not None
+                    else metric_item.snapshot.as_of
+                    if metric_item is not None
                     else manifest.analysis_cutoff
                 ),
                 window_end=(
-                    item.snapshot.as_of
-                    if item is not None
+                    metric_item.snapshot.as_of
+                    if metric_item is not None
                     else manifest.analysis_cutoff
                 ),
                 method=SPOT_ORDER_FLOW_METHOD,
                 evidence_ids=(evidence_ids[modality],) if can_bind else (),
-                binding_ids=(item.binding.binding_id,) if can_bind and item else (),
+                binding_ids=(
+                    (metric_item.binding.binding_id,)
+                    if can_bind and metric_item is not None
+                    else ()
+                ),
                 limitations=(
                     *limitations_by_modality.get(modality, ()),
-                    *((_quality_trace(item),) if item is not None else ()),
+                    *((_quality_trace(metric_item),) if metric_item is not None else ()),
                 ),
                 unavailable_reason=" ".join(reasons),
             )
