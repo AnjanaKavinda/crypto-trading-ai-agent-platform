@@ -185,23 +185,19 @@ def book_quality_policy(
         (1 if point else 2) if expected is None else expected,
         freshness,
         book_metric_rules(),
-        expected_transition_count=transitions if point else (
-            1 if transitions is None else transitions
-        ),
+        expected_transition_count=transitions
+        if point
+        else (1 if transitions is None else transitions),
         require_checksum=bool(policy_id and policy_id.endswith("-checksum")),
     )
 
 
 def snapshot_for_books(transitions: tuple[BookTransition, ...]) -> MarketSnapshot:
     observations = tuple(
-        item.market_data
-        for item in transitions
-        if item.market_data is not None
+        item.market_data for item in transitions if item.market_data is not None
     )
     sources = tuple(
-        item.source_record
-        for item in transitions
-        if item.source_record is not None
+        item.source_record for item in transitions if item.source_record is not None
     )
     return MarketSnapshot(
         uuid4(),
@@ -240,6 +236,7 @@ def test_trade_assessment_measures_all_seven_dimensions_from_exact_evidence() ->
     assert report.dimensions[0].denominator == 4
     assert all(item.evidence_reference is None for item in report.dimensions)
     assert report.assessment_policy_id == "spot-trade-quality"
+    assert report.assessment_policy_version == trade_policy().resolved_policy_version
 
 
 def test_tick_requires_only_explicit_metric_cells_and_does_not_infer_side() -> None:
@@ -256,7 +253,10 @@ def test_tick_requires_only_explicit_metric_cells_and_does_not_infer_side() -> N
     assert report.status is DataQualityStatus.DEGRADED
     assert report.dimensions[0].numerator == 2
     assert report.dimensions[0].denominator == 2
-    assert report.anomalies == ("unknown-aggressor:event-0", "unknown-aggressor:event-1")
+    assert report.anomalies == (
+        "unknown-aggressor:event-0",
+        "unknown-aggressor:event-1",
+    )
     assert all(
         metric.metric_name != "aggressor_sign"
         for item in normalized.market_data
@@ -381,9 +381,7 @@ def test_expected_coverage_bounds_and_deterministic_status_precedence() -> None:
 
 
 def test_trade_empty_duplicates_missing_fields_and_invalid_bounds_fail_closed() -> None:
-    empty = normalize_trade_ticks(
-        (), trade_normalization_policy(maximum_records=1)
-    )
+    empty = normalize_trade_ticks((), trade_normalization_policy(maximum_records=1))
     _, populated_snapshot = trade_batch()
     with pytest.raises(DataQualityAssessmentError, match="empty normalized batch"):
         assess_normalized_spot_trades(
@@ -396,9 +394,7 @@ def test_trade_empty_duplicates_missing_fields_and_invalid_bounds_fail_closed() 
     normalized, snapshot = trade_batch()
     duplicate = replace(
         normalized,
-        quality=replace(
-            normalized.quality, duplicate_event_ids=("event-0",)
-        ),
+        quality=replace(normalized.quality, duplicate_event_ids=("event-0",)),
     )
     assert (
         assess_normalized_spot_trades(
@@ -470,13 +466,47 @@ def test_measured_zero_has_only_the_contract_required_immutable_evidence() -> No
     )
     assert report.status is DataQualityStatus.INVALID
     assert report.dimensions[0].score == Decimal("0")
-    assert report.dimensions[0].evidence_reference.record_id == str(snapshot.snapshot_id)
+    assert report.dimensions[0].evidence_reference.record_id == str(
+        snapshot.snapshot_id
+    )
     assert report.dimensions[2].score == Decimal("0")
-    assert report.dimensions[2].evidence_reference.record_id == str(snapshot.snapshot_id)
+    assert report.dimensions[2].evidence_reference.record_id == str(
+        snapshot.snapshot_id
+    )
 
 
 def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
     normalized, snapshot = trade_batch()
+    selected_policy = trade_policy()
+    assert (
+        selected_policy.resolved_policy_version
+        == trade_policy().resolved_policy_version
+    )
+    assert (
+        selected_policy.resolved_policy_version
+        != trade_policy(freshness=9).resolved_policy_version
+    )
+    assert (
+        selected_policy.resolved_policy_version
+        != trade_policy(expected=3, transitions=2).resolved_policy_version
+    )
+    assert (
+        selected_policy.resolved_policy_version
+        != trade_policy(cutoff=CUTOFF + timedelta(seconds=1)).resolved_policy_version
+    )
+    changed_bounds = replace(
+        selected_policy,
+        metric_rules=(
+            SpotQualityMetricRule(
+                "price", "synthetic-quote", Decimal("2"), Decimal("1000")
+            ),
+            QUANTITY_RULE,
+        ),
+    )
+    assert (
+        selected_policy.resolved_policy_version
+        != changed_bounds.resolved_policy_version
+    )
     with pytest.raises(DataQualityAssessmentError, match="Unknown"):
         SpotQualityPolicy(
             "caller-policy",
@@ -520,6 +550,13 @@ def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
             trade_policy(cutoff=CUTOFF + timedelta(seconds=1)),
             assessed_at=CUTOFF + timedelta(seconds=1),
         )
+    with pytest.raises(DataQualityAssessmentError, match="cutoff"):
+        assess_normalized_spot_trades(
+            replace(snapshot, created_at=CUTOFF + timedelta(seconds=1)),
+            normalized,
+            trade_policy(),
+            assessed_at=CUTOFF,
+        )
     with pytest.raises(DataQualityAssessmentError, match="ordered"):
         assess_normalized_spot_trades(
             replace(snapshot, market_data_ids=snapshot.market_data_ids[:1]),
@@ -542,9 +579,7 @@ def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
             snapshot, wrong_input, trade_policy(), assessed_at=CUTOFF
         )
 
-    wrong_source = replace(
-        normalized.source_records[0], source_record_id=uuid4()
-    )
+    wrong_source = replace(normalized.source_records[0], source_record_id=uuid4())
     wrong_source_batch = replace(
         normalized, source_records=(wrong_source, normalized.source_records[1])
     )
@@ -644,7 +679,9 @@ def test_trade_tick_out_of_order_and_gapped_sequence_do_not_receive_a_score() ->
         normalized,
         identities=(
             normalized.identities[0],
-            replace(normalized.identities[1], sequence=normalized.identities[1].sequence + 1),
+            replace(
+                normalized.identities[1], sequence=normalized.identities[1].sequence + 1
+            ),
         ),
     )
     with pytest.raises(DataQualityAssessmentError, match="sequence"):
@@ -721,9 +758,12 @@ def test_order_book_point_snapshot_marks_only_continuity_not_applicable() -> Non
     continuity = report.dimensions[-1]
     assert report.status is DataQualityStatus.VALID
     assert continuity.state is DataQualityDimensionState.NOT_APPLICABLE
-    assert continuity.reason_code is DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT
+    assert (
+        continuity.reason_code is DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT
+    )
     assert continuity.not_applicable_policy == AssessmentPolicyReference(
-        "spot-order-book-point", "1"
+        "spot-order-book-point",
+        book_quality_policy().resolved_policy_version,
     )
     assert continuity.score is continuity.numerator is continuity.denominator is None
     assert transition.quality.checksum is ChecksumStatus.NOT_AVAILABLE

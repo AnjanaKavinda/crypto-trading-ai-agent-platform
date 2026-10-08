@@ -6,9 +6,11 @@ response, provider success, or absence of findings is an implicit verdict.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal
+from hashlib import sha256
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
@@ -191,7 +193,6 @@ def assess_data_quality(
     if (
         snapshot.instrument_id != policy.instrument_id
         or snapshot.venue_id != policy.venue_id
-        or snapshot.created_at > now
     ):
         raise DataQualityAssessmentError("Snapshot identity does not match policy.")
     if (
@@ -477,6 +478,7 @@ class SpotQualityMetricRule:
             raise DataQualityAssessmentError("Invalid explicit Spot metric rule.")
 
 
+_SPOT_DIMENSION_PROFILE_VERSION = "spot-dimensions-v1"
 _SPOT_POLICY_MODES = MappingProxyType(
     {
         ("spot-trade-quality", "1"): (
@@ -484,60 +486,70 @@ _SPOT_POLICY_MODES = MappingProxyType(
             "sequence",
             False,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-tick-quality", "1"): (
             ProviderDataKind.TICK,
             "sequence",
             False,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-order-book-point", "1"): (
             ProviderDataKind.ORDER_BOOK,
             "point",
             False,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-order-book-delta", "1"): (
             ProviderDataKind.ORDER_BOOK,
             "delta",
             False,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-trade-quality-independent", "1"): (
             ProviderDataKind.TRADE,
             "sequence",
             True,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-tick-quality-independent", "1"): (
             ProviderDataKind.TICK,
             "sequence",
             True,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-order-book-point-independent", "1"): (
             ProviderDataKind.ORDER_BOOK,
             "point",
             True,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-order-book-delta-independent", "1"): (
             ProviderDataKind.ORDER_BOOK,
             "delta",
             True,
             False,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-order-book-point-checksum", "1"): (
             ProviderDataKind.ORDER_BOOK,
             "point",
             False,
             True,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
         ("spot-order-book-delta-checksum", "1"): (
             ProviderDataKind.ORDER_BOOK,
             "delta",
             False,
             True,
+            _SPOT_DIMENSION_PROFILE_VERSION,
         ),
     }
 )
@@ -546,6 +558,11 @@ _MAX_SPOT_RECORDS = 10_000
 
 @dataclass(frozen=True, slots=True)
 class SpotQualityPolicy:
+    """Resolve immutable settings to a profile version and configuration digest.
+
+    Scoring-semantic changes require a new registry entry/version.
+    """
+
     assessment_policy_id: str
     assessment_policy_version: str
     data_kind: ProviderDataKind
@@ -579,7 +596,13 @@ class SpotQualityPolicy:
         profile = _SPOT_POLICY_MODES.get(reference)
         if profile is None or type(self.data_kind) is not ProviderDataKind:
             raise DataQualityAssessmentError("Unknown Spot assessment policy/version.")
-        expected_kind, mode, requires_comparison, requires_checksum = profile
+        (
+            expected_kind,
+            mode,
+            requires_comparison,
+            requires_checksum,
+            _,
+        ) = profile
         if (
             self.data_kind is not expected_kind
             or self.require_independent_comparison is not requires_comparison
@@ -603,8 +626,7 @@ class SpotQualityPolicy:
                 and self.maximum_missing_records > self.expected_record_count
             )
             or (
-                self.expected_record_count is None
-                and self.maximum_missing_records != 0
+                self.expected_record_count is None and self.maximum_missing_records != 0
             )
             or type(self.require_independent_comparison) is not bool
             or type(self.require_checksum) is not bool
@@ -615,10 +637,14 @@ class SpotQualityPolicy:
             type(self.metric_rules) is not tuple
             or not self.metric_rules
             or len(self.metric_rules) > 1000
-            or not all(type(rule) is SpotQualityMetricRule for rule in self.metric_rules)
+            or not all(
+                type(rule) is SpotQualityMetricRule for rule in self.metric_rules
+            )
             or len({rule.name for rule in self.metric_rules}) != len(self.metric_rules)
         ):
-            raise DataQualityAssessmentError("Explicit unique metric rules are required.")
+            raise DataQualityAssessmentError(
+                "Explicit unique metric rules are required."
+            )
         names = {rule.name for rule in self.metric_rules}
         if self.data_kind is ProviderDataKind.TRADE and not {
             "price",
@@ -665,8 +691,42 @@ class SpotQualityPolicy:
                 "Point-snapshot policy requires one record and no transition count."
             )
         if mode == "delta" and self.expected_record_count == 1:
-            raise DataQualityAssessmentError("Delta policy requires a multi-record window.")
+            raise DataQualityAssessmentError(
+                "Delta policy requires a multi-record window."
+            )
         object.__setattr__(self, "required_data_cutoff", cutoff)
+
+    @property
+    def resolved_policy_version(self) -> str:
+        profile = _SPOT_POLICY_MODES[
+            (self.assessment_policy_id, self.assessment_policy_version)
+        ]
+        configuration = json.dumps(
+            {
+                "policy_id": self.assessment_policy_id,
+                "version": self.assessment_policy_version,
+                "policy_mode": profile[1],
+                "dimension_profile_version": profile[4],
+                "data_kind": self.data_kind.value,
+                "instrument_id": self.instrument_id,
+                "venue_id": self.venue_id,
+                "required_data_cutoff": self.required_data_cutoff.isoformat(),
+                "expected_record_count": self.expected_record_count,
+                "freshness_seconds": self.freshness_seconds,
+                "metric_rules": [
+                    [rule.name, rule.unit, str(rule.minimum), str(rule.maximum)]
+                    for rule in self.metric_rules
+                ],
+                "expected_transition_count": self.expected_transition_count,
+                "maximum_missing_records": self.maximum_missing_records,
+                "require_independent_comparison": self.require_independent_comparison,
+                "require_checksum": self.require_checksum,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return f"{self.assessment_policy_version}:{sha256(configuration.encode()).hexdigest()}"
 
 
 def _spot_dimension(
@@ -723,7 +783,7 @@ def _spot_quality_report(
 ) -> DataQualityReportV2:
     now = _utc("assessed_at", assessed_at)
     cutoff = policy.required_data_cutoff
-    if now < cutoff or snapshot.as_of != cutoff:
+    if now < cutoff or snapshot.as_of != cutoff or snapshot.created_at > now:
         raise DataQualityAssessmentError("Assessment/snapshot cutoff mismatch.")
     if (
         snapshot.instrument_id != policy.instrument_id
@@ -756,7 +816,9 @@ def _spot_quality_report(
         )
     if dataset is None:
         if snapshot.dataset_version is not None:
-            raise DataQualityAssessmentError("Referenced C-092 dataset evidence is required.")
+            raise DataQualityAssessmentError(
+                "Referenced C-092 dataset evidence is required."
+            )
     else:
         _validate_spot_dataset(snapshot, sources, dataset, policy)
     source_by_id = {item.source_record_id: item for item in sources}
@@ -836,9 +898,7 @@ def _spot_quality_report(
         raise DataQualityAssessmentError(
             "Observed records exceed the policy's exact expected population."
         )
-    expected_cells = (
-        None if expected is None else expected * len(policy.metric_rules)
-    )
+    expected_cells = None if expected is None else expected * len(policy.metric_rules)
     fresh_count = sum(
         1
         for item in observations
@@ -846,9 +906,13 @@ def _spot_quality_report(
         <= cutoff - item.event_time
         <= timedelta(seconds=policy.freshness_seconds)
     )
-    latest_stale = stale_state or not observations or (
-        cutoff - observations[-1].event_time
-        > timedelta(seconds=policy.freshness_seconds)
+    latest_stale = (
+        stale_state
+        or not observations
+        or (
+            cutoff - observations[-1].event_time
+            > timedelta(seconds=policy.freshness_seconds)
+        )
     )
     transition_count = policy.expected_transition_count
     if point_snapshot:
@@ -857,7 +921,7 @@ def _spot_quality_report(
             DataQualityDimensionState.NOT_APPLICABLE,
             reason_code=DataQualityDimensionReasonCode.SINGLE_POINT_SNAPSHOT,
             not_applicable_policy=AssessmentPolicyReference(
-                policy.assessment_policy_id, policy.assessment_policy_version
+                policy.assessment_policy_id, policy.resolved_policy_version
             ),
         )
     elif not sequence_verified or not sequence_scope_valid:
@@ -1004,7 +1068,7 @@ def _spot_quality_report(
         assessed_at=now,
         required_data_cutoff=cutoff,
         assessment_policy_id=policy.assessment_policy_id,
-        assessment_policy_version=policy.assessment_policy_version,
+        assessment_policy_version=policy.resolved_policy_version,
         dimensions=dimensions,
         status=status,
         missing_fields=all_missing,
@@ -1034,7 +1098,10 @@ def assess_normalized_spot_trades(
     Continuity is verified adjacent transitions / the positive policy transition
     denominator; absent sequence or sequence scope is UNAVAILABLE.
     """
-    if type(policy) is not SpotQualityPolicy or policy.data_kind is not ProviderDataKind.TRADE:
+    if (
+        type(policy) is not SpotQualityPolicy
+        or policy.data_kind is not ProviderDataKind.TRADE
+    ):
         raise DataQualityAssessmentError("TRADE assessment policy is required.")
     return _assess_trade_tick_as_kind(
         snapshot, normalized, policy, assessed_at=assessed_at, dataset=dataset
@@ -1089,7 +1156,9 @@ def _assess_trade_tick_as_kind(
         or type(normalized.quality.sequence_verified) is not bool
         or not all(type(item) is TradeTickIdentity for item in normalized.identities)
     ):
-        raise DataQualityAssessmentError("Exact normalized trade/tick handoff required.")
+        raise DataQualityAssessmentError(
+            "Exact normalized trade/tick handoff required."
+        )
     if normalized.quality.empty:
         raise DataQualityAssessmentError(
             "An empty normalized batch has no exact C-002 market-data membership."
@@ -1114,7 +1183,9 @@ def _assess_trade_tick_as_kind(
         or identity.source_record_id != item.source_record_id
         for identity, item in zip(normalized.identities, normalized.market_data)
     ):
-        raise DataQualityAssessmentError("Trade/tick identity does not match C-001/C-091.")
+        raise DataQualityAssessmentError(
+            "Trade/tick identity does not match C-001/C-091."
+        )
     for identity, item in zip(normalized.identities, normalized.market_data):
         if (
             type(identity.market_data_id) is not UUID
@@ -1169,12 +1240,16 @@ def _assess_trade_tick_as_kind(
             for current, following in zip(sequence_values, sequence_values[1:])
         )
     ):
-        raise DataQualityAssessmentError("Unverified or conflicting trade/tick sequence.")
+        raise DataQualityAssessmentError(
+            "Unverified or conflicting trade/tick sequence."
+        )
     if not sequence_verified and any(
         sequence is not None or scope is not None
         for sequence, scope in zip(sequence_values, scopes)
     ):
-        raise DataQualityAssessmentError("Trade/tick sequence verification is inconsistent.")
+        raise DataQualityAssessmentError(
+            "Trade/tick sequence verification is inconsistent."
+        )
     if any(
         type(identity.reported_side) is not ReportedSide
         or type(identity.side_semantics) is not SideSemantics
@@ -1191,7 +1266,9 @@ def _assess_trade_tick_as_kind(
         )
         for identity in normalized.identities
     ):
-        raise DataQualityAssessmentError("Trade/tick aggressor handoff is inconsistent.")
+        raise DataQualityAssessmentError(
+            "Trade/tick aggressor handoff is inconsistent."
+        )
     return _spot_quality_report(
         snapshot,
         policy,
@@ -1216,15 +1293,18 @@ def _validate_spot_dataset(
     if (
         type(dataset) is not DatasetVersion
         or reference is None
-        or (dataset.dataset_id, dataset.version) != (reference.dataset_id, reference.version)
+        or (dataset.dataset_id, dataset.version)
+        != (reference.dataset_id, reference.version)
         or dataset.point_in_time_cutoff > policy.required_data_cutoff
         or dataset.canonical_schema_version != CONTRACT_SCHEMA_VERSION
         or dataset.created_at > snapshot.created_at
-        or dataset.coverage_start > min(
+        or dataset.coverage_start
+        > min(
             (item.provider_event_time for item in sources),
             default=policy.required_data_cutoff,
         )
-        or dataset.coverage_end < max(
+        or dataset.coverage_end
+        < max(
             (item.provider_event_time for item in sources),
             default=policy.required_data_cutoff,
         )
@@ -1232,7 +1312,9 @@ def _validate_spot_dataset(
         or tuple(item.source_record_id for item in sources)
         != snapshot.source_record_ids
     ):
-        raise DataQualityAssessmentError("Dataset identity or source membership mismatch.")
+        raise DataQualityAssessmentError(
+            "Dataset identity or source membership mismatch."
+        )
 
 
 def assess_normalized_spot_order_book(
@@ -1261,7 +1343,9 @@ def assess_normalized_spot_order_book(
         or len(transitions) > _MAX_SPOT_RECORDS
         or not all(type(item) is BookTransition for item in transitions)
     ):
-        raise DataQualityAssessmentError("Exact normalized order-book handoff required.")
+        raise DataQualityAssessmentError(
+            "Exact normalized order-book handoff required."
+        )
     profile = _SPOT_POLICY_MODES.get(
         (policy.assessment_policy_id, policy.assessment_policy_version)
     )
@@ -1270,7 +1354,9 @@ def assess_normalized_spot_order_book(
     mode = profile[1]
     point_policy = mode == "point"
     if point_policy and len(transitions) != 1:
-        raise DataQualityAssessmentError("Point-snapshot policy requires one transition.")
+        raise DataQualityAssessmentError(
+            "Point-snapshot policy requires one transition."
+        )
     if mode == "delta" and policy.expected_transition_count is None:
         raise DataQualityAssessmentError("Unknown order-book policy.")
     observations: list[MarketData] = []
@@ -1290,7 +1376,9 @@ def assess_normalized_spot_order_book(
             or state.policy.instrument_id != policy.instrument_id
             or type(transition.quality) is not BookQuality
         ):
-            raise DataQualityAssessmentError("Book state does not match assessment policy.")
+            raise DataQualityAssessmentError(
+                "Book state does not match assessment policy."
+            )
         if (
             state.venue_id != policy.venue_id
             or state.instrument_id != policy.instrument_id
@@ -1318,7 +1406,9 @@ def assess_normalized_spot_order_book(
                     )
                 )
             ):
-                raise DataQualityAssessmentError("Invalid book transition handoff mismatch.")
+                raise DataQualityAssessmentError(
+                    "Invalid book transition handoff mismatch."
+                )
             terminal_invalid = True
             anomalies.append(f"book-failure:{state.failure.value}")
             if state.failure is BookFailure.STALE:
@@ -1327,7 +1417,11 @@ def assess_normalized_spot_order_book(
                 invalid_ids.append(f"book-failure:{state.failure.value}")
             previous_state = state
             continue
-        if terminal_invalid or state.status is not BookStatus.VALID or state.failure is not None:
+        if (
+            terminal_invalid
+            or state.status is not BookStatus.VALID
+            or state.failure is not None
+        ):
             raise DataQualityAssessmentError("Invalid order-book state sequence.")
         if transition.quality.duplicate:
             if (
@@ -1337,9 +1431,13 @@ def assess_normalized_spot_order_book(
                 or transition.market_data is not None
                 or transition.quality.checksum is not ChecksumStatus.NOT_AVAILABLE
             ):
-                raise DataQualityAssessmentError("Duplicate transition changed book state.")
+                raise DataQualityAssessmentError(
+                    "Duplicate transition changed book state."
+                )
             duplicate_ids.append(
-                state.fingerprints[-1].event_id if state.fingerprints else "duplicate-book"
+                state.fingerprints[-1].event_id
+                if state.fingerprints
+                else "duplicate-book"
             )
             previous_state = state
             continue
@@ -1377,7 +1475,9 @@ def assess_normalized_spot_order_book(
             or state.fingerprints[-1].event_time != observation.event_time
             or state.provider_identity != source_identity
         ):
-            raise DataQualityAssessmentError("Book source lineage does not match snapshot.")
+            raise DataQualityAssessmentError(
+                "Book source lineage does not match snapshot."
+            )
         if previous_state is not None and (
             state.source_lineage[: len(previous_state.source_lineage)]
             != previous_state.source_lineage
@@ -1386,7 +1486,9 @@ def assess_normalized_spot_order_book(
             or len(state.source_lineage) != len(previous_state.source_lineage) + 1
             or len(state.market_data_ids) != len(previous_state.market_data_ids) + 1
         ):
-            raise DataQualityAssessmentError("Book transition lineage is not sequential.")
+            raise DataQualityAssessmentError(
+                "Book transition lineage is not sequential."
+            )
         if len(state.fingerprints) != len(state.source_lineage):
             raise DataQualityAssessmentError("Book fingerprint lineage is incomplete.")
         if (
@@ -1459,13 +1561,17 @@ def assess_normalized_spot_order_book(
             sequence_verified = False
             sequence_scope_valid = False
         if len(previous_state.source_lineage) != len(observations):
-            raise DataQualityAssessmentError("Book state and snapshot membership differ.")
+            raise DataQualityAssessmentError(
+                "Book state and snapshot membership differ."
+            )
     if tuple(item.market_data_id for item in observations) != snapshot.market_data_ids:
         raise DataQualityAssessmentError("Book C-001 membership differs from C-002.")
     if tuple(item.source_record_id for item in sources) != snapshot.source_record_ids:
         raise DataQualityAssessmentError("Book C-091 membership differs from C-002.")
     if dataset is None and snapshot.dataset_version is not None:
-        raise DataQualityAssessmentError("Referenced C-092 dataset evidence is required.")
+        raise DataQualityAssessmentError(
+            "Referenced C-092 dataset evidence is required."
+        )
     if dataset is not None:
         _validate_spot_dataset(snapshot, tuple(sources), dataset, policy)
     point_applicable = point_policy and len(observations) == 1 and not terminal_invalid
