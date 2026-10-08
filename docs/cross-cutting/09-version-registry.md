@@ -132,6 +132,12 @@ integer with `trades` unit; spread bps uses `bps`. This completes the proposed
 unreleased schema-1 allocation and does not introduce a cross-modal metric or
 calculation/runtime behavior.
 
+C-104 declares distinct base and quote units. Price and notional metrics use
+the quote unit; depth and trade-volume/delta metrics use the base unit;
+imbalance uses `ratio`; spread bps uses `bps`; and trade-record count uses
+`trades`. Assessment validation checks the declared base/quote units against
+the exact resolved C-003 policy for each used modality.
+
 Canonical dependency digests for C-001 observations, C-002 snapshots, C-003
 schema-2 reports, C-091 source records, and C-092 dataset versions are
 `SHA-256(canonical_json_dumps(record).encode("utf-8"))`, using the existing

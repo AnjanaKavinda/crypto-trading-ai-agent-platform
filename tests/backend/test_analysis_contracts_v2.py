@@ -476,6 +476,8 @@ def _metric(
     window_start: datetime | None = None,
     reason: str | None = None,
     limitations: tuple[str, ...] = (),
+    base_unit: str = "BTC",
+    quote_unit: str = "USDT",
 ) -> OrderFlowMetric:
     point = binding.modality is InputModality.ORDER_BOOK
     if name is OrderFlowMetricName.TRADE_RECORD_COUNT and value == Decimal("1"):
@@ -484,7 +486,7 @@ def _metric(
         name,
         state,
         value,
-        _metric_unit(name),
+        _metric_unit(name, base_unit=base_unit, quote_unit=quote_unit),
         CUTOFF,
         CUTOFF if point else (window_start or CUTOFF - timedelta(seconds=2)),
         CUTOFF,
@@ -496,23 +498,25 @@ def _metric(
     )
 
 
-def _metric_unit(name: OrderFlowMetricName) -> str:
+def _metric_unit(
+    name: OrderFlowMetricName, *, base_unit: str = "BTC", quote_unit: str = "USDT"
+) -> str:
     return {
-        OrderFlowMetricName.BEST_BID_PRICE: "USDT",
-        OrderFlowMetricName.BEST_ASK_PRICE: "USDT",
-        OrderFlowMetricName.MIDPOINT_PRICE: "USDT",
-        OrderFlowMetricName.ABSOLUTE_SPREAD: "USDT",
+        OrderFlowMetricName.BEST_BID_PRICE: quote_unit,
+        OrderFlowMetricName.BEST_ASK_PRICE: quote_unit,
+        OrderFlowMetricName.MIDPOINT_PRICE: quote_unit,
+        OrderFlowMetricName.ABSOLUTE_SPREAD: quote_unit,
         OrderFlowMetricName.SPREAD_BPS: "bps",
-        OrderFlowMetricName.BID_DEPTH: "BTC",
-        OrderFlowMetricName.ASK_DEPTH: "BTC",
-        OrderFlowMetricName.BID_NOTIONAL: "USDT",
-        OrderFlowMetricName.ASK_NOTIONAL: "USDT",
+        OrderFlowMetricName.BID_DEPTH: base_unit,
+        OrderFlowMetricName.ASK_DEPTH: base_unit,
+        OrderFlowMetricName.BID_NOTIONAL: quote_unit,
+        OrderFlowMetricName.ASK_NOTIONAL: quote_unit,
         OrderFlowMetricName.BOOK_IMBALANCE: "ratio",
         OrderFlowMetricName.TRADE_RECORD_COUNT: "trades",
-        OrderFlowMetricName.BUY_AGGRESSOR_VOLUME: "BTC",
-        OrderFlowMetricName.SELL_AGGRESSOR_VOLUME: "BTC",
-        OrderFlowMetricName.VOLUME_DELTA: "BTC",
-        OrderFlowMetricName.CUMULATIVE_DELTA: "BTC",
+        OrderFlowMetricName.BUY_AGGRESSOR_VOLUME: base_unit,
+        OrderFlowMetricName.SELL_AGGRESSOR_VOLUME: base_unit,
+        OrderFlowMetricName.VOLUME_DELTA: base_unit,
+        OrderFlowMetricName.CUMULATIVE_DELTA: base_unit,
     }[name]
 
 
@@ -521,6 +525,8 @@ def _order_flow_assessment(
     bindings: tuple[InputBindingV2, ...],
     evidence_by_modality: dict[InputModality, EvidenceItemV2],
     *,
+    base_unit: str = "BTC",
+    quote_unit: str = "USDT",
     overrides: dict[
         OrderFlowMetricName,
         tuple[OrderFlowMetricState, Decimal | None, str | None, tuple[str, ...]],
@@ -555,7 +561,7 @@ def _order_flow_assessment(
                     name,
                     OrderFlowMetricState.UNAVAILABLE,
                     None,
-                    _metric_unit(name),
+                    _metric_unit(name, base_unit=base_unit, quote_unit=quote_unit),
                     CUTOFF,
                     CUTOFF,
                     CUTOFF,
@@ -586,6 +592,8 @@ def _order_flow_assessment(
                 value=value,
                 reason=reason,
                 limitations=limitations,
+                base_unit=base_unit,
+                quote_unit=quote_unit,
             )
         )
     states = {metric.state for metric in metrics}
@@ -601,6 +609,8 @@ def _order_flow_assessment(
         "BTC",
         INSTRUMENT,
         VENUE,
+        base_unit,
+        quote_unit,
         CUTOFF,
         EXPIRES,
         assessment_state,
@@ -961,6 +971,9 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
     assert {metric.name: metric.unit for metric in assessment.metrics}[
         OrderFlowMetricName.SPREAD_BPS
     ] == "bps"
+    assert {metric.name: metric.unit for metric in assessment.metrics} == {
+        name: _metric_unit(name) for name in expected_metric_names
+    }
     trade_count = next(
         metric
         for metric in assessment.metrics
@@ -977,6 +990,22 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
             unit="BTC",
             unavailable_reason="count unavailable",
         )
+    for metric_name, invalid_unit in (
+        (OrderFlowMetricName.BEST_BID_PRICE, "BTC"),
+        (OrderFlowMetricName.BID_DEPTH, "USDT"),
+        (OrderFlowMetricName.BID_NOTIONAL, "BTC"),
+        (OrderFlowMetricName.BOOK_IMBALANCE, "USDT"),
+        (OrderFlowMetricName.BUY_AGGRESSOR_VOLUME, "USDT"),
+        (OrderFlowMetricName.VOLUME_DELTA, "USDT"),
+    ):
+        with pytest.raises(AnalysisV2ContractError, match="unit|canonical dimension"):
+            invalid_metrics = tuple(
+                replace(metric, unit=invalid_unit)
+                if metric.name is metric_name
+                else metric
+                for metric in assessment.metrics
+            )
+            replace(assessment, metrics=invalid_metrics)
     assert decode_analysis_contract(encode_analysis_contract(assessment)) == assessment
     manifest = _manifest(
         bindings,
@@ -1075,6 +1104,30 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         },
         now=CREATED,
     )
+    for wrong_units in (
+        {"base_unit": "ETH"},
+        {"quote_unit": "USD"},
+    ):
+        mismatched_assessment = _order_flow_assessment(
+            assessment_id,
+            bindings,
+            {
+                InputModality.SPOT_TRADES: trade_evidence,
+                InputModality.ORDER_BOOK: book_evidence,
+            },
+            **wrong_units,
+        )
+        with pytest.raises(AnalysisV2ContractError, match="bound C-003 policy"):
+            validate_order_flow_assessment(
+                mismatched_assessment,
+                manifest,
+                resolved_bindings=resolved,
+                evidence={
+                    trade_evidence.evidence_id: trade_evidence,
+                    book_evidence.evidence_id: book_evidence,
+                },
+                now=CREATED,
+            )
     validate_market_context_v2(
         context,
         manifest,
@@ -1890,6 +1943,8 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
             "BTC",
             INSTRUMENT,
             VENUE,
+            "BTC",
+            "USDT",
             CUTOFF,
             EXPIRES,
             OrderFlowAssessmentState.AVAILABLE,

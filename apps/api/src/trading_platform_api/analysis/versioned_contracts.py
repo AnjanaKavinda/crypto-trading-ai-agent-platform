@@ -94,6 +94,36 @@ class OrderFlowAssessmentState(StrEnum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+def _order_flow_metric_unit(
+    name: OrderFlowMetricName, *, base_unit: str, quote_unit: str
+) -> str:
+    if name in {
+        OrderFlowMetricName.BEST_BID_PRICE,
+        OrderFlowMetricName.BEST_ASK_PRICE,
+        OrderFlowMetricName.MIDPOINT_PRICE,
+        OrderFlowMetricName.ABSOLUTE_SPREAD,
+        OrderFlowMetricName.BID_NOTIONAL,
+        OrderFlowMetricName.ASK_NOTIONAL,
+    }:
+        return quote_unit
+    if name in {
+        OrderFlowMetricName.BID_DEPTH,
+        OrderFlowMetricName.ASK_DEPTH,
+        OrderFlowMetricName.BUY_AGGRESSOR_VOLUME,
+        OrderFlowMetricName.SELL_AGGRESSOR_VOLUME,
+        OrderFlowMetricName.VOLUME_DELTA,
+        OrderFlowMetricName.CUMULATIVE_DELTA,
+    }:
+        return base_unit
+    if name is OrderFlowMetricName.SPREAD_BPS:
+        return "bps"
+    if name is OrderFlowMetricName.BOOK_IMBALANCE:
+        return "ratio"
+    if name is OrderFlowMetricName.TRADE_RECORD_COUNT:
+        return "trades"
+    raise AnalysisV2ContractError("Unknown order-flow metric unit dimension.")
+
+
 @dataclass(frozen=True, slots=True)
 class AnalysisRecordReference:
     contract_id: str
@@ -498,6 +528,8 @@ class OrderFlowMetric:
             raise AnalysisV2ContractError(
                 "Spread basis-point values require 'bps' unit."
             )
+        if self.name is OrderFlowMetricName.BOOK_IMBALANCE and self.unit != "ratio":
+            raise AnalysisV2ContractError("Book imbalance requires 'ratio' unit.")
         if (
             self.value is not None
             and self.name
@@ -568,6 +600,8 @@ class OrderFlowAssessment:
     asset: str
     instrument_id: str
     venue_id: str
+    base_unit: str
+    quote_unit: str
     as_of: datetime
     expires_at: datetime
     state: OrderFlowAssessmentState
@@ -582,6 +616,10 @@ class OrderFlowAssessment:
         _uuid("assessment_id", self.assessment_id)
         for name in ("asset", "instrument_id", "venue_id"):
             _text(name, getattr(self, name))
+        base_unit = _text("base_unit", self.base_unit)
+        quote_unit = _text("quote_unit", self.quote_unit)
+        if base_unit == quote_unit:
+            raise AnalysisV2ContractError("base_unit and quote_unit must be distinct.")
         as_of = _time("as_of", self.as_of)
         expires = _time("expires_at", self.expires_at)
         if as_of > expires:
@@ -593,6 +631,16 @@ class OrderFlowAssessment:
         if tuple(item.name for item in metrics) != tuple(OrderFlowMetricName):
             raise AnalysisV2ContractError(
                 "C-104 schema 1 requires every order-flow metric in canonical order."
+            )
+        if any(
+            item.unit
+            != _order_flow_metric_unit(
+                item.name, base_unit=base_unit, quote_unit=quote_unit
+            )
+            for item in metrics
+        ):
+            raise AnalysisV2ContractError(
+                "Order-flow metric unit does not match its canonical dimension."
             )
         all_available = all(
             item.state is OrderFlowMetricState.AVAILABLE for item in metrics
@@ -1264,6 +1312,27 @@ def validate_order_flow_assessment(
             not book_metric and item.binding.modality is not InputModality.SPOT_TRADES
         ):
             raise AnalysisV2ContractError("Metric cannot use an incompatible modality.")
+        rule_units = {rule.name: rule.unit for rule in item.policy.metric_rules}
+        if item.binding.modality is InputModality.ORDER_BOOK:
+            policy_base_unit = rule_units.get("bid_1_quantity")
+            policy_quote_unit = rule_units.get("bid_1_price")
+            matching_units = policy_base_unit == rule_units.get(
+                "ask_1_quantity"
+            ) and policy_quote_unit == rule_units.get("ask_1_price")
+        else:
+            policy_base_unit = rule_units.get("quantity")
+            policy_quote_unit = rule_units.get("price")
+            matching_units = (
+                policy_base_unit is not None and policy_quote_unit is not None
+            )
+        if (
+            not matching_units
+            or assessment.base_unit != policy_base_unit
+            or assessment.quote_unit != policy_quote_unit
+        ):
+            raise AnalysisV2ContractError(
+                "C-104 base/quote units do not match the bound C-003 policy."
+            )
         if not item.snapshot.as_of <= metric.calculated_at <= manifest.analysis_cutoff:
             raise AnalysisV2ContractError(
                 "Metric calculation must follow its input cutoff and precede the analysis cutoff."

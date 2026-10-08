@@ -170,8 +170,12 @@ aggressor volume, volume delta, and cumulative delta. Each component has an
 explicit `AVAILABLE`, `PARTIAL`, or `UNAVAILABLE` state, a typed value and unit,
 and binds to exactly one modality: book components to one point-book binding,
 trade components to one exact trade-window binding. Trade-record count is a
-non-negative integer with unit `trades`; spread bps uses unit `bps`. The
-assessment grants no signal, risk, approval, or execution authority.
+non-negative integer with unit `trades`; spread bps uses unit `bps`; book
+imbalance uses `ratio`. Price and notional components use the assessment's
+explicit quote unit; depth and trade-volume/delta components use its explicit
+base unit. Validation requires those base/quote units to match the exact
+resolved C-003 modality policy. The assessment grants no signal, risk, approval,
+or execution authority.
 
 ## Canonical name / alias / supersession clarifications
 
