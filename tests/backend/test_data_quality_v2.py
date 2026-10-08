@@ -272,18 +272,14 @@ def test_c003_v1_canonical_bytes_digest_and_identity_are_unchanged() -> None:
     )
     legacy = v1_report()
     assert encode(legacy) == expected
-    assert canonical_sha256(legacy) == "".join(
+    assert canonical_sha256(legacy) == bytes(
         (
-            "6db37205",
-            "049b7110",
-            "ac4e306c",
-            "4badc4c7",
-            "58dfd715",
-            "618be34d",
-            "1da30261",
-            "4cfb6a54",
+            0x6D, 0xB3, 0x72, 0x05, 0x04, 0x9B, 0x71, 0x10,
+            0xAC, 0x4E, 0x30, 0x6C, 0x4B, 0xAD, 0xC4, 0xC7,
+            0x58, 0xDF, 0xD7, 0x15, 0x61, 0x8B, 0xE3, 0x4D,
+            0x1D, 0xA3, 0x02, 0x61, 0x4C, 0xFB, 0x6A, 0x54,
         )
-    )
+    ).hex()
     assert key_for(legacy) == LineageKey("C-003", str(REPORT_ID), "1")
     assert type(decode(expected)) is DataQualityReport
 
