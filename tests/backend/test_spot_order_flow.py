@@ -37,6 +37,7 @@ from trading_platform_api.analysis import (
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data import (
     AssessmentPolicyReference,
+    BookLevel,
     DataQualityDimension,
     DataQualityDimensionReasonCode,
     DataQualityDimensionResult,
@@ -314,6 +315,20 @@ def test_spot_order_flow_calculates_deterministic_book_and_trade_metrics() -> No
         item.method == VersionReference("spot-order-flow", "1")
         for item in result.assessment.metrics
     )
+    book_imbalance = _metric(result, OrderFlowMetricName.BOOK_IMBALANCE)
+    assert any(
+        "bid depth − ask depth" in limitation
+        and "denominator" in limitation
+        for limitation in book_imbalance.limitations
+    )
+    trade_delta = _metric(result, OrderFlowMetricName.CUMULATIVE_DELTA)
+    assert any(
+        "anchored at the first event" in limitation
+        for limitation in trade_delta.limitations
+    )
+    assert any("C-003 schema 2 report" in item for item in trade_delta.limitations)
+    assert any("policy spot-trade-quality@" in item for item in trade_delta.limitations)
+    assert any("continuity=1/1 sequence_transitions" in item for item in trade_delta.limitations)
 
     trade, book, snapshots, reports, manifest, _, _ = case
     observations = {
@@ -374,6 +389,7 @@ def test_displayed_depth_uses_exact_configured_top_n_without_truncation() -> Non
         OrderFlowMetricName.SPREAD_BPS,
     ):
         assert _metric(result, name).state is OrderFlowMetricState.AVAILABLE
+    assert _metric(result, OrderFlowMetricName.SPREAD_BPS).value == Decimal("200")
     for name in (
         OrderFlowMetricName.BID_DEPTH,
         OrderFlowMetricName.ASK_DEPTH,
@@ -385,6 +401,35 @@ def test_displayed_depth_uses_exact_configured_top_n_without_truncation() -> Non
         assert metric.state is OrderFlowMetricState.UNAVAILABLE
         assert metric.value is None
         assert "top 3 levels" in metric.unavailable_reason
+
+
+@pytest.mark.parametrize(
+    ("side", "price"),
+    (("bid", Decimal("101.00")), ("ask", Decimal("99.00"))),
+)
+def test_locked_or_crossed_point_book_is_rejected(side: str, price: Decimal) -> None:
+    case = _analysis_case()
+    trade, book, snapshots, reports, manifest, assessment_id, evidence_ids = case
+    transition = book[0]
+    state = transition.state
+    invalid_state = (
+        replace(state, bids=(BookLevel(price, Decimal("2.000")),))
+        if side == "bid"
+        else replace(state, asks=(BookLevel(price, Decimal("3.000")),))
+    )
+    with pytest.raises(SpotOrderFlowError, match="crossed"):
+        calculate_spot_order_flow(
+            manifest,
+            trade_handoff=trade[0],
+            book_handoff=(replace(transition, state=invalid_state),),
+            snapshots=snapshots,
+            reports=reports,
+            policy=METHOD_POLICY,
+            assessment_id=assessment_id,
+            evidence_ids=evidence_ids,
+            calculated_at=CUTOFF,
+            validated_at=NOW,
+        )
 
 
 def test_unverified_trade_sequence_fails_closed_for_trade_metrics() -> None:

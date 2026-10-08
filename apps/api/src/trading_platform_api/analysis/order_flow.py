@@ -429,6 +429,27 @@ def _limitations(item: ResolvedInputBinding, depth_levels: int) -> tuple[str, ..
     return findings
 
 
+def _quality_trace(item: ResolvedInputBinding) -> str:
+    dimensions = []
+    for result in item.report.dimensions:
+        measurement = (
+            f"{result.numerator}/{result.denominator} {result.basis_unit}"
+            if result.numerator is not None
+            and result.denominator is not None
+            and result.basis_unit is not None
+            else result.state.value
+        )
+        dimensions.append(f"{result.dimension.value}={measurement}")
+    return (
+        f"C-003 schema 2 report {item.report.report_id}; "
+        f"policy {item.report.assessment_policy_id}@"
+        f"{item.report.assessment_policy_version}; "
+        f"snapshot {item.snapshot.snapshot_id} cutoff "
+        f"{item.snapshot.as_of.isoformat()}; quality basis: "
+        + ", ".join(dimensions)
+    )
+
+
 def _quality_failure_reason(
     item: ResolvedInputBinding, required: tuple[DataQualityDimension, ...]
 ) -> str:
@@ -778,6 +799,10 @@ def calculate_spot_order_flow(
             context.prec = 80
             midpoint = (bid + ask) / Decimal("2")
             spread = ask - bid
+            with localcontext() as ratio_context:
+                ratio_context.prec = 28
+                ratio_context.rounding = ROUND_HALF_EVEN
+                spread_bps = Decimal("20000") * spread / (ask + bid)
             bid_levels = bids[: policy.depth_levels]
             ask_levels = asks[: policy.depth_levels]
             depth_available = (
@@ -796,7 +821,6 @@ def calculate_spot_order_flow(
                 with localcontext() as ratio_context:
                     ratio_context.prec = 28
                     ratio_context.rounding = ROUND_HALF_EVEN
-                    spread_bps = Decimal("20000") * spread / (ask + bid)
                     imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)
                 metric_values.update(
                     {
@@ -815,15 +839,15 @@ def calculate_spot_order_flow(
                         OrderFlowMetricName.BOOK_IMBALANCE: (
                             imbalance,
                             evidence_id,
-                            "displayed-book quantity imbalance only; not execution likelihood or hidden liquidity",
-                        ),
-                        OrderFlowMetricName.SPREAD_BPS: (
-                            spread_bps,
-                            evidence_id,
-                            "spread bps = 20,000 × (ask − bid) / (ask + bid)",
+                            "book imbalance = (bid depth − ask depth) / (bid depth + ask depth); numerator and denominator use the configured top-N base-unit quantities; denominator must be positive; not execution likelihood or hidden liquidity",
                         ),
                     }
                 )
+            metric_values[OrderFlowMetricName.SPREAD_BPS] = (
+                spread_bps,
+                evidence_id,
+                "spread bps = 20,000 × (ask − bid) / (ask + bid); denominator is the sum of best ask and best bid prices",
+            )
         metric_values.update(
             {
                 OrderFlowMetricName.BEST_BID_PRICE: (bid, evidence_id, ""),
@@ -949,8 +973,66 @@ def calculate_spot_order_flow(
             value, evidence_id, calculation_limit = selected
             metric_limitations = (
                 *limitations_by_modality[modality],
+                _quality_trace(item),
                 *((calculation_limit,) if calculation_limit else ()),
             )
+            definitions = {
+                OrderFlowMetricName.BEST_BID_PRICE: "best bid is the highest displayed bid price",
+                OrderFlowMetricName.BEST_ASK_PRICE: "best ask is the lowest displayed ask price",
+                OrderFlowMetricName.MIDPOINT_PRICE: (
+                    "midpoint = (best bid + best ask) / 2"
+                ),
+                OrderFlowMetricName.ABSOLUTE_SPREAD: (
+                    "absolute spread = best ask − best bid"
+                ),
+                OrderFlowMetricName.BUY_AGGRESSOR_VOLUME: (
+                    "buy aggressor volume = sum of quantities for explicitly "
+                    "identified BUY aggressor events in the complete window"
+                ),
+                OrderFlowMetricName.SELL_AGGRESSOR_VOLUME: (
+                    "sell aggressor volume = sum of quantities for explicitly "
+                    "identified SELL aggressor events in the complete window"
+                ),
+                OrderFlowMetricName.VOLUME_DELTA: (
+                    "volume delta = buy aggressor volume − sell aggressor volume"
+                ),
+                OrderFlowMetricName.CUMULATIVE_DELTA: (
+                    "cumulative delta = sum of signed aggressor quantities over "
+                    "the complete ordered window; anchored at the first event "
+                    "with no carry-in"
+                ),
+                OrderFlowMetricName.BID_DEPTH: (
+                    f"bid depth = sum of displayed bid quantities across top "
+                    f"{policy.depth_levels} levels"
+                ),
+                OrderFlowMetricName.ASK_DEPTH: (
+                    f"ask depth = sum of displayed ask quantities across top "
+                    f"{policy.depth_levels} levels"
+                ),
+                OrderFlowMetricName.BID_NOTIONAL: (
+                    f"bid notional = sum(price × quantity) across top "
+                    f"{policy.depth_levels} displayed bid levels"
+                ),
+                OrderFlowMetricName.ASK_NOTIONAL: (
+                    f"ask notional = sum(price × quantity) across top "
+                    f"{policy.depth_levels} displayed ask levels"
+                ),
+            }
+            definition = definitions.get(name)
+            if definition is not None:
+                metric_limitations = (*metric_limitations, definition)
+            if name is OrderFlowMetricName.CUMULATIVE_DELTA:
+                continuity = next(
+                    value
+                    for value in item.report.dimensions
+                    if value.dimension is DataQualityDimension.CONTINUITY
+                )
+                metric_limitations = (
+                    *metric_limitations,
+                    "sequence transition population = "
+                    f"{continuity.numerator}/{continuity.denominator} "
+                    f"{continuity.basis_unit}",
+                )
             metrics.append(
                 OrderFlowMetric(
                     name=name,
@@ -1031,7 +1113,10 @@ def calculate_spot_order_flow(
                 method=SPOT_ORDER_FLOW_METHOD,
                 evidence_ids=(evidence_ids[modality],) if can_bind else (),
                 binding_ids=(item.binding.binding_id,) if can_bind and item else (),
-                limitations=limitations_by_modality.get(modality, ()),
+                limitations=(
+                    *limitations_by_modality.get(modality, ()),
+                    *((_quality_trace(item),) if item is not None else ()),
+                ),
                 unavailable_reason=" ".join(reasons),
             )
         )
