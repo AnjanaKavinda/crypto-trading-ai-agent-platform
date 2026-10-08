@@ -479,88 +479,113 @@ class SpotQualityMetricRule:
 
 
 _SPOT_DIMENSION_PROFILE_VERSION = "spot-dimensions-v1"
-_SPOT_POLICY_MODES = MappingProxyType(
+_MAX_SPOT_RECORDS = 10_000
+_SPOT_METRIC_MINIMUM = Decimal("1e-18")
+_SPOT_METRIC_MAXIMUM = Decimal("1e18")
+_SPOT_INSTRUMENT_PROFILES = MappingProxyType(
     {
-        ("spot-trade-quality", "1"): (
-            ProviderDataKind.TRADE,
-            "sequence",
-            False,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        "BTC-USDT-SPOT": ("BINANCE-SPOT", "USDT", "BTC"),
+        "ETH-USDT-SPOT": ("BINANCE-SPOT", "USDT", "ETH"),
+        "BNB-USDT-SPOT": ("BINANCE-SPOT", "USDT", "BNB"),
+        "SOL-USDT-SPOT": ("BINANCE-SPOT", "USDT", "SOL"),
+        "XRP-USDT-SPOT": ("BINANCE-SPOT", "USDT", "XRP"),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _SpotPolicyDefinition:
+    data_kind: ProviderDataKind
+    mode: str
+    require_independent_comparison: bool
+    require_checksum: bool
+    freshness_seconds: int
+    maximum_missing_records: int
+    metric_rules: tuple[tuple[str, Decimal, Decimal], ...]
+    dimension_profile_version: str = _SPOT_DIMENSION_PROFILE_VERSION
+
+
+def _spot_policy_definition(
+    data_kind: ProviderDataKind,
+    mode: str,
+    *,
+    independent: bool = False,
+    checksum: bool = False,
+    maximum_missing_records: int = 0,
+) -> _SpotPolicyDefinition:
+    if data_kind is ProviderDataKind.TRADE:
+        names: tuple[str, ...] = ("price", "quantity")
+    elif data_kind is ProviderDataKind.TICK:
+        names = ("price",)
+    else:
+        names = ("bid_1_price", "bid_1_quantity", "ask_1_price", "ask_1_quantity")
+    return _SpotPolicyDefinition(
+        data_kind,
+        mode,
+        independent,
+        checksum,
+        freshness_seconds=10,
+        maximum_missing_records=maximum_missing_records,
+        metric_rules=tuple(
+            (
+                name,
+                Decimal("0")
+                if name.endswith("quantity")
+                and data_kind is ProviderDataKind.ORDER_BOOK
+                else _SPOT_METRIC_MINIMUM,
+                _SPOT_METRIC_MAXIMUM,
+            )
+            for name in names
         ),
-        ("spot-tick-quality", "1"): (
-            ProviderDataKind.TICK,
-            "sequence",
-            False,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+    )
+
+
+_SPOT_POLICY_DEFINITIONS = MappingProxyType(
+    {
+        ("spot-trade-quality", "1"): _spot_policy_definition(
+            ProviderDataKind.TRADE, "sequence"
         ),
-        ("spot-order-book-point", "1"): (
-            ProviderDataKind.ORDER_BOOK,
-            "point",
-            False,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-tick-quality", "1"): _spot_policy_definition(
+            ProviderDataKind.TICK, "sequence"
         ),
-        ("spot-order-book-delta", "1"): (
-            ProviderDataKind.ORDER_BOOK,
-            "delta",
-            False,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-order-book-point", "1"): _spot_policy_definition(
+            ProviderDataKind.ORDER_BOOK, "point"
         ),
-        ("spot-trade-quality-independent", "1"): (
-            ProviderDataKind.TRADE,
-            "sequence",
-            True,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-order-book-delta", "1"): _spot_policy_definition(
+            ProviderDataKind.ORDER_BOOK, "delta"
         ),
-        ("spot-tick-quality-independent", "1"): (
-            ProviderDataKind.TICK,
-            "sequence",
-            True,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-trade-quality-independent", "1"): _spot_policy_definition(
+            ProviderDataKind.TRADE, "sequence", independent=True
         ),
-        ("spot-order-book-point-independent", "1"): (
-            ProviderDataKind.ORDER_BOOK,
-            "point",
-            True,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-tick-quality-independent", "1"): _spot_policy_definition(
+            ProviderDataKind.TICK, "sequence", independent=True
         ),
-        ("spot-order-book-delta-independent", "1"): (
-            ProviderDataKind.ORDER_BOOK,
-            "delta",
-            True,
-            False,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-order-book-point-independent", "1"): _spot_policy_definition(
+            ProviderDataKind.ORDER_BOOK, "point", independent=True
         ),
-        ("spot-order-book-point-checksum", "1"): (
-            ProviderDataKind.ORDER_BOOK,
-            "point",
-            False,
-            True,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-order-book-delta-independent", "1"): _spot_policy_definition(
+            ProviderDataKind.ORDER_BOOK, "delta", independent=True
         ),
-        ("spot-order-book-delta-checksum", "1"): (
-            ProviderDataKind.ORDER_BOOK,
-            "delta",
-            False,
-            True,
-            _SPOT_DIMENSION_PROFILE_VERSION,
+        ("spot-order-book-point-checksum", "1"): _spot_policy_definition(
+            ProviderDataKind.ORDER_BOOK, "point", checksum=True
+        ),
+        ("spot-order-book-delta-checksum", "1"): _spot_policy_definition(
+            ProviderDataKind.ORDER_BOOK, "delta", checksum=True
+        ),
+        ("spot-trade-quality-one-missing", "1"): _spot_policy_definition(
+            ProviderDataKind.TRADE, "sequence", maximum_missing_records=1
         ),
     }
 )
-_MAX_SPOT_RECORDS = 10_000
 
 
 @dataclass(frozen=True, slots=True)
 class SpotQualityPolicy:
-    """Resolve immutable settings to a profile version and configuration digest.
+    """Bind explicit instrument/snapshot scope to a recognized immutable policy.
 
-    Scoring-semantic changes require a new registry entry/version.
+    Metric names, bounds, freshness, missing-record tolerance, and modality
+    semantics are fixed by the local policy definition. Units and population
+    counts are explicit scope inputs and are included in the report reference.
     """
 
     assessment_policy_id: str
@@ -593,22 +618,21 @@ class SpotQualityPolicy:
             ):
                 raise DataQualityAssessmentError(f"{name} must be explicit.")
         reference = (self.assessment_policy_id, self.assessment_policy_version)
-        profile = _SPOT_POLICY_MODES.get(reference)
-        if profile is None or type(self.data_kind) is not ProviderDataKind:
+        definition = _SPOT_POLICY_DEFINITIONS.get(reference)
+        if definition is None or type(self.data_kind) is not ProviderDataKind:
             raise DataQualityAssessmentError("Unknown Spot assessment policy/version.")
-        (
-            expected_kind,
-            mode,
-            requires_comparison,
-            requires_checksum,
-            _,
-        ) = profile
         if (
-            self.data_kind is not expected_kind
-            or self.require_independent_comparison is not requires_comparison
-            or self.require_checksum is not requires_checksum
+            self.data_kind is not definition.data_kind
+            or self.require_independent_comparison
+            is not definition.require_independent_comparison
+            or self.require_checksum is not definition.require_checksum
         ):
             raise DataQualityAssessmentError("Policy and data kind do not match.")
+        instrument = _SPOT_INSTRUMENT_PROFILES.get(self.instrument_id)
+        if instrument is None or self.venue_id != instrument[0]:
+            raise DataQualityAssessmentError(
+                "Instrument and venue are outside the recognized Spot scope."
+            )
         if (
             (
                 self.expected_record_count is not None
@@ -618,9 +642,9 @@ class SpotQualityPolicy:
                 )
             )
             or type(self.freshness_seconds) is not int
-            or not 1 <= self.freshness_seconds <= 31_536_000
+            or self.freshness_seconds != definition.freshness_seconds
             or type(self.maximum_missing_records) is not int
-            or self.maximum_missing_records < 0
+            or self.maximum_missing_records != definition.maximum_missing_records
             or (
                 self.expected_record_count is not None
                 and self.maximum_missing_records > self.expected_record_count
@@ -635,35 +659,25 @@ class SpotQualityPolicy:
         cutoff = _utc("required_data_cutoff", self.required_data_cutoff)
         if (
             type(self.metric_rules) is not tuple
-            or not self.metric_rules
-            or len(self.metric_rules) > 1000
+            or len(self.metric_rules) != len(definition.metric_rules)
             or not all(
                 type(rule) is SpotQualityMetricRule for rule in self.metric_rules
             )
-            or len({rule.name for rule in self.metric_rules}) != len(self.metric_rules)
-        ):
-            raise DataQualityAssessmentError(
-                "Explicit unique metric rules are required."
+            or any(
+                (rule.name, rule.minimum, rule.maximum) != approved
+                for rule, approved in zip(self.metric_rules, definition.metric_rules)
             )
-        names = {rule.name for rule in self.metric_rules}
-        if self.data_kind is ProviderDataKind.TRADE and not {
-            "price",
-            "quantity",
-        }.issubset(names):
-            raise DataQualityAssessmentError("TRADE requires price and quantity rules.")
-        if self.data_kind is ProviderDataKind.TICK and "price" not in names:
-            raise DataQualityAssessmentError("TICK requires a price rule.")
-        if self.data_kind in (ProviderDataKind.TRADE, ProviderDataKind.TICK) and not (
-            names.issubset({"price", "quantity"})
-        ):
-            raise DataQualityAssessmentError("Unsupported trade/tick metric rule.")
-        if any(
-            rule.minimum <= 0
-            for rule in self.metric_rules
-            if rule.name in {"price", "quantity"}
         ):
             raise DataQualityAssessmentError(
-                "Spot trade/tick prices and quantities require positive bounds."
+                "Metric rules must match the recognized Spot policy definition."
+            )
+        if any(
+            rule.unit
+            != (instrument[2] if rule.name.endswith("quantity") else instrument[1])
+            for rule in self.metric_rules
+        ):
+            raise DataQualityAssessmentError(
+                "Metric units must match the recognized instrument profile."
             )
         if self.expected_transition_count is not None and (
             type(self.expected_transition_count) is not int
@@ -674,23 +688,25 @@ class SpotQualityPolicy:
             )
         ):
             raise DataQualityAssessmentError("Invalid expected transition count.")
-        if (
-            self.expected_record_count is not None
-            and mode != "point"
-            and self.expected_transition_count is not None
-            and self.expected_transition_count != self.expected_record_count - 1
+        if definition.mode != "point" and (
+            (self.expected_record_count is None)
+            != (self.expected_transition_count is None)
+            or (
+                self.expected_record_count is not None
+                and self.expected_transition_count != self.expected_record_count - 1
+            )
         ):
             raise DataQualityAssessmentError(
                 "Transition denominator must match the expected adjacent-record count."
             )
-        if mode == "point" and (
-            self.expected_record_count not in (None, 1)
+        if definition.mode == "point" and (
+            self.expected_record_count != 1
             or self.expected_transition_count is not None
         ):
             raise DataQualityAssessmentError(
                 "Point-snapshot policy requires one record and no transition count."
             )
-        if mode == "delta" and self.expected_record_count == 1:
+        if definition.mode == "delta" and self.expected_record_count == 1:
             raise DataQualityAssessmentError(
                 "Delta policy requires a multi-record window."
             )
@@ -698,15 +714,15 @@ class SpotQualityPolicy:
 
     @property
     def resolved_policy_version(self) -> str:
-        profile = _SPOT_POLICY_MODES[
+        definition = _SPOT_POLICY_DEFINITIONS[
             (self.assessment_policy_id, self.assessment_policy_version)
         ]
         configuration = json.dumps(
             {
                 "policy_id": self.assessment_policy_id,
                 "version": self.assessment_policy_version,
-                "policy_mode": profile[1],
-                "dimension_profile_version": profile[4],
+                "policy_mode": definition.mode,
+                "dimension_profile_version": definition.dimension_profile_version,
                 "data_kind": self.data_kind.value,
                 "instrument_id": self.instrument_id,
                 "venue_id": self.venue_id,
@@ -1346,12 +1362,12 @@ def assess_normalized_spot_order_book(
         raise DataQualityAssessmentError(
             "Exact normalized order-book handoff required."
         )
-    profile = _SPOT_POLICY_MODES.get(
+    definition = _SPOT_POLICY_DEFINITIONS.get(
         (policy.assessment_policy_id, policy.assessment_policy_version)
     )
-    if profile is None:
+    if definition is None:
         raise DataQualityAssessmentError("Unknown order-book policy.")
-    mode = profile[1]
+    mode = definition.mode
     point_policy = mode == "point"
     if point_policy and len(transitions) != 1:
         raise DataQualityAssessmentError(

@@ -15,10 +15,7 @@ from test_order_book_normalization import (
     contiguous,
 )
 from test_order_book_normalization import (
-    delta as book_delta,
-)
-from test_order_book_normalization import (
-    initial as normalize_initial_book,
+    delta as raw_book_delta,
 )
 from test_order_book_normalization import (
     policy as book_normalization_policy,
@@ -66,12 +63,12 @@ from trading_platform_api.market_data import (
 )
 
 CUTOFF = T0 + timedelta(seconds=10)
-PRICE_RULE = SpotQualityMetricRule(
-    "price", "synthetic-quote", Decimal("1"), Decimal("1000")
-)
+PRICE_RULE = SpotQualityMetricRule("price", "USDT", Decimal("1e-18"), Decimal("1e18"))
 QUANTITY_RULE = SpotQualityMetricRule(
-    "quantity", "synthetic-base", Decimal("0.001"), Decimal("100")
+    "quantity", "BTC", Decimal("1e-18"), Decimal("1e18")
 )
+INSTRUMENT_ID = "BTC-USDT-SPOT"
+VENUE_ID = "BINANCE-SPOT"
 
 
 def trade_batch(
@@ -92,19 +89,30 @@ def trade_batch(
             sequence_scope="trade-stream" if sequenced else None,
             reported_side=ReportedSide.BUY,
             side_semantics=side_semantics,
+            instrument_id=INSTRUMENT_ID,
+            venue_id=VENUE_ID,
+            price_unit="USDT",
+            quantity_unit="BTC",
         )
         for index in range(count)
     )
     normalized = normalize_trade_ticks(
         events,
-        trade_normalization_policy(data_kind=kind, maximum_records=max(count, 1)),
+        trade_normalization_policy(
+            data_kind=kind,
+            maximum_records=max(count, 1),
+            instrument_id=INSTRUMENT_ID,
+            venue_id=VENUE_ID,
+            price_unit="USDT",
+            quantity_unit="BTC",
+        ),
     )
     return normalized, MarketSnapshot(
         uuid4(),
         cutoff,
         cutoff,
-        "synthetic-instrument",
-        "synthetic-venue",
+        INSTRUMENT_ID,
+        VENUE_ID,
         tuple(item.market_data_id for item in normalized.market_data),
         tuple(item.source_record_id for item in normalized.source_records),
     )
@@ -122,7 +130,11 @@ def trade_policy(
     require_comparison: bool = False,
 ) -> SpotQualityPolicy:
     if kind is ProviderDataKind.TRADE:
-        profile = policy_id or "spot-trade-quality"
+        profile = policy_id or (
+            "spot-trade-quality-one-missing"
+            if maximum_missing == 1
+            else "spot-trade-quality"
+        )
         rules = (PRICE_RULE, QUANTITY_RULE)
     else:
         profile = policy_id or "spot-tick-quality"
@@ -131,8 +143,8 @@ def trade_policy(
         profile,
         "1",
         kind,
-        "synthetic-instrument",
-        "synthetic-venue",
+        INSTRUMENT_ID,
+        VENUE_ID,
         cutoff,
         expected,
         freshness,
@@ -145,26 +157,46 @@ def trade_policy(
 
 def book_metric_rules() -> tuple[SpotQualityMetricRule, ...]:
     return (
-        SpotQualityMetricRule(
-            "bid_1_price", "synthetic-quote", Decimal("1"), Decimal("1000")
-        ),
-        SpotQualityMetricRule(
-            "bid_1_quantity", "synthetic-base", Decimal("0"), Decimal("100")
-        ),
-        SpotQualityMetricRule(
-            "ask_1_price", "synthetic-quote", Decimal("1"), Decimal("1000")
-        ),
-        SpotQualityMetricRule(
-            "ask_1_quantity", "synthetic-base", Decimal("0"), Decimal("100")
+        SpotQualityMetricRule("bid_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")),
+        SpotQualityMetricRule("bid_1_quantity", "BTC", Decimal("0"), Decimal("1e18")),
+        SpotQualityMetricRule("ask_1_price", "USDT", Decimal("1e-18"), Decimal("1e18")),
+        SpotQualityMetricRule("ask_1_quantity", "BTC", Decimal("0"), Decimal("1e18")),
+    )
+
+
+def book_delta(*args: object, **kwargs: object):
+    transition = raw_book_delta(*args, **kwargs)
+    return replace(
+        transition,
+        source=replace(
+            transition.source, instrument_id=INSTRUMENT_ID, venue_id=VENUE_ID
         ),
     )
 
 
-BOOK_POLICY = book_normalization_policy(extreme_spread_bps=None)
+BOOK_POLICY = book_normalization_policy(
+    extreme_spread_bps=None,
+    instrument_id=INSTRUMENT_ID,
+    venue_id=VENUE_ID,
+    price_unit="USDT",
+    quantity_unit="BTC",
+)
+
+
+def spot_raw_book_snapshot(**changes: object):
+    raw = raw_book_snapshot(**changes)
+    return replace(
+        raw,
+        source=replace(raw.source, instrument_id=INSTRUMENT_ID, venue_id=VENUE_ID),
+    )
 
 
 def initial_book() -> BookTransition:
-    return normalize_initial_book(selected_policy=BOOK_POLICY)
+    return normalize_book_snapshot(
+        spot_raw_book_snapshot(),
+        BOOK_POLICY,
+        as_of=BOOK_T0 + timedelta(seconds=3),
+    )
 
 
 def book_quality_policy(
@@ -174,14 +206,15 @@ def book_quality_policy(
     transitions: int | None = None,
     freshness: int = 10,
     policy_id: str | None = None,
+    cutoff: datetime = BOOK_T0 + timedelta(seconds=10),
 ) -> SpotQualityPolicy:
     return SpotQualityPolicy(
         policy_id or ("spot-order-book-point" if point else "spot-order-book-delta"),
         "1",
         ProviderDataKind.ORDER_BOOK,
-        "synthetic-instrument",
-        "synthetic-venue",
-        BOOK_T0 + timedelta(seconds=10),
+        INSTRUMENT_ID,
+        VENUE_ID,
+        cutoff,
         (1 if point else 2) if expected is None else expected,
         freshness,
         book_metric_rules(),
@@ -192,7 +225,11 @@ def book_quality_policy(
     )
 
 
-def snapshot_for_books(transitions: tuple[BookTransition, ...]) -> MarketSnapshot:
+def snapshot_for_books(
+    transitions: tuple[BookTransition, ...],
+    *,
+    cutoff: datetime = BOOK_T0 + timedelta(seconds=10),
+) -> MarketSnapshot:
     observations = tuple(
         item.market_data for item in transitions if item.market_data is not None
     )
@@ -201,10 +238,10 @@ def snapshot_for_books(transitions: tuple[BookTransition, ...]) -> MarketSnapsho
     )
     return MarketSnapshot(
         uuid4(),
-        BOOK_T0 + timedelta(seconds=10),
-        BOOK_T0 + timedelta(seconds=10),
-        "synthetic-instrument",
-        "synthetic-venue",
+        cutoff,
+        cutoff,
+        INSTRUMENT_ID,
+        VENUE_ID,
         tuple(item.market_data_id for item in observations),
         tuple(item.source_record_id for item in sources),
     )
@@ -318,7 +355,7 @@ def test_expected_coverage_bounds_and_deterministic_status_precedence() -> None:
     degraded = assess_normalized_spot_trades(
         partial_snapshot,
         partial,
-        trade_policy(expected=3, transitions=2, maximum_missing=2),
+        trade_policy(expected=3, transitions=2, maximum_missing=1),
         assessed_at=CUTOFF,
     )
     assert degraded.status is DataQualityStatus.DEGRADED
@@ -363,7 +400,7 @@ def test_expected_coverage_bounds_and_deterministic_status_precedence() -> None:
     bad_metric = replace(
         unsequenced.market_data[0],
         metrics=(
-            replace(unsequenced.market_data[0].metrics[0], value=Decimal("1001")),
+            replace(unsequenced.market_data[0].metrics[0], value=Decimal("1e19")),
             *unsequenced.market_data[0].metrics[1:],
         ),
     )
@@ -449,20 +486,23 @@ def test_trade_empty_duplicates_missing_fields_and_invalid_bounds_fail_closed() 
 
 def test_measured_zero_has_only_the_contract_required_immutable_evidence() -> None:
     normalized, snapshot = trade_batch()
-    zero_policy = trade_policy()
-    zero_policy = replace(
-        zero_policy,
-        metric_rules=(
-            SpotQualityMetricRule(
-                "price", "synthetic-quote", Decimal("1000"), Decimal("2000")
-            ),
-            SpotQualityMetricRule(
-                "quantity", "synthetic-base", Decimal("1000"), Decimal("2000")
-            ),
+    out_of_range = replace(
+        normalized,
+        market_data=tuple(
+            replace(
+                observation,
+                metrics=tuple(
+                    replace(metric, value=Decimal("1e19"))
+                    if metric.metric_name in {"price", "quantity"}
+                    else metric
+                    for metric in observation.metrics
+                ),
+            )
+            for observation in normalized.market_data
         ),
     )
     report = assess_normalized_spot_trades(
-        snapshot, normalized, zero_policy, assessed_at=CUTOFF
+        snapshot, out_of_range, trade_policy(), assessed_at=CUTOFF
     )
     assert report.status is DataQualityStatus.INVALID
     assert report.dimensions[0].score == Decimal("0")
@@ -482,10 +522,8 @@ def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
         selected_policy.resolved_policy_version
         == trade_policy().resolved_policy_version
     )
-    assert (
-        selected_policy.resolved_policy_version
-        != trade_policy(freshness=9).resolved_policy_version
-    )
+    with pytest.raises(DataQualityAssessmentError, match="bounded Spot policy"):
+        trade_policy(freshness=9)
     assert (
         selected_policy.resolved_policy_version
         != trade_policy(expected=3, transitions=2).resolved_policy_version
@@ -494,26 +532,38 @@ def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
         selected_policy.resolved_policy_version
         != trade_policy(cutoff=CUTOFF + timedelta(seconds=1)).resolved_policy_version
     )
-    changed_bounds = replace(
-        selected_policy,
-        metric_rules=(
-            SpotQualityMetricRule(
-                "price", "synthetic-quote", Decimal("2"), Decimal("1000")
+    with pytest.raises(DataQualityAssessmentError, match="recognized Spot policy"):
+        replace(
+            selected_policy,
+            metric_rules=(
+                SpotQualityMetricRule("price", "USDT", Decimal("2"), Decimal("1e18")),
+                QUANTITY_RULE,
             ),
-            QUANTITY_RULE,
-        ),
+        )
+    with pytest.raises(DataQualityAssessmentError, match="bounded Spot policy"):
+        trade_policy(maximum_missing=2)
+    with pytest.raises(DataQualityAssessmentError, match="bounded Spot policy"):
+        trade_policy(expected=10_001, transitions=10_000)
+    with pytest.raises(DataQualityAssessmentError, match="recognized Spot scope"):
+        replace(selected_policy, instrument_id="UNREGISTERED-SPOT")
+    eth_policy = replace(
+        selected_policy,
+        instrument_id="ETH-USDT-SPOT",
+        metric_rules=(PRICE_RULE, replace(QUANTITY_RULE, unit="ETH")),
     )
-    assert (
-        selected_policy.resolved_policy_version
-        != changed_bounds.resolved_policy_version
-    )
+    assert selected_policy.resolved_policy_version != eth_policy.resolved_policy_version
+    with pytest.raises(DataQualityAssessmentError, match="recognized instrument"):
+        replace(
+            selected_policy,
+            metric_rules=(replace(PRICE_RULE, unit="EUR"), QUANTITY_RULE),
+        )
     with pytest.raises(DataQualityAssessmentError, match="Unknown"):
         SpotQualityPolicy(
             "caller-policy",
             "1",
             ProviderDataKind.TRADE,
-            "synthetic-instrument",
-            "synthetic-venue",
+            INSTRUMENT_ID,
+            VENUE_ID,
             CUTOFF,
             2,
             10,
@@ -525,8 +575,8 @@ def test_policy_snapshot_cutoff_source_and_dataset_identity_are_exact() -> None:
             "spot-trade-quality",
             "2",
             ProviderDataKind.TRADE,
-            "synthetic-instrument",
-            "synthetic-venue",
+            INSTRUMENT_ID,
+            VENUE_ID,
             CUTOFF,
             2,
             10,
@@ -724,19 +774,29 @@ def test_trade_tick_out_of_order_and_gapped_sequence_do_not_receive_a_score() ->
             sequence_scope="trade-stream",
             reported_side=ReportedSide.BUY,
             side_semantics=SideSemantics.AGGRESSOR,
+            instrument_id=INSTRUMENT_ID,
+            venue_id=VENUE_ID,
+            price_unit="USDT",
+            quantity_unit="BTC",
         )
         for index in range(2)
     )
     future = normalize_trade_ticks(
         future_events,
-        trade_normalization_policy(maximum_records=2),
+        trade_normalization_policy(
+            maximum_records=2,
+            instrument_id=INSTRUMENT_ID,
+            venue_id=VENUE_ID,
+            price_unit="USDT",
+            quantity_unit="BTC",
+        ),
     )
     future_snapshot = MarketSnapshot(
         uuid4(),
         CUTOFF,
         CUTOFF,
-        "synthetic-instrument",
-        "synthetic-venue",
+        INSTRUMENT_ID,
+        VENUE_ID,
         tuple(item.market_data_id for item in future.market_data),
         tuple(item.source_record_id for item in future.source_records),
     )
@@ -882,12 +942,13 @@ def test_order_book_duplicate_failed_state_checksum_and_staleness_findings() -> 
         assert invalid_report.status is DataQualityStatus.INVALID
         assert f"book-failure:{expected_failure.value}" in invalid_report.anomalies
 
-    stale_policy = book_quality_policy(freshness=2)
+    stale_cutoff = BOOK_T0 + timedelta(seconds=21)
+    stale_policy = book_quality_policy(cutoff=stale_cutoff)
     stale = assess_normalized_spot_order_book(
-        snapshot_for_books((initial,)),
+        snapshot_for_books((initial,), cutoff=stale_cutoff),
         (initial,),
         stale_policy,
-        assessed_at=BOOK_T0 + timedelta(seconds=10),
+        assessed_at=stale_cutoff,
     )
     assert stale.status is DataQualityStatus.STALE
 
@@ -910,7 +971,7 @@ def test_order_book_rejects_unbound_failure_and_source_lineage() -> None:
 
 def test_order_book_mismatched_declared_checksum_is_invalid() -> None:
     checked = normalize_book_snapshot(
-        raw_book_snapshot(checksum="synthetic-checksum"),
+        spot_raw_book_snapshot(checksum="synthetic-checksum"),
         BOOK_POLICY,
         as_of=BOOK_T0 + timedelta(seconds=3),
         checksum_verifier=lambda bids, asks, checksum: True,
@@ -937,7 +998,7 @@ def test_order_book_mismatched_declared_checksum_is_invalid() -> None:
 def test_order_book_checksum_required_policy_and_verification_boundary() -> None:
     normalized_policy = BOOK_POLICY
     verified = normalize_book_snapshot(
-        raw_book_snapshot(checksum="synthetic-checksum"),
+        spot_raw_book_snapshot(checksum="synthetic-checksum"),
         normalized_policy,
         as_of=BOOK_T0 + timedelta(seconds=3),
         checksum_verifier=lambda bids, asks, checksum: checksum == "synthetic-checksum",
@@ -966,7 +1027,7 @@ def test_order_book_checksum_required_policy_and_verification_boundary() -> None
 
     with pytest.raises(OrderBookError, match="verifier"):
         normalize_book_snapshot(
-            raw_book_snapshot(checksum="synthetic-checksum"),
+            spot_raw_book_snapshot(checksum="synthetic-checksum"),
             normalized_policy,
             as_of=BOOK_T0 + timedelta(seconds=3),
         )
