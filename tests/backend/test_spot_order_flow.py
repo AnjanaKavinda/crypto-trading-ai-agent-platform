@@ -403,7 +403,9 @@ def test_unknown_aggressor_side_never_becomes_directional_flow() -> None:
     assert "unknown-aggressor" in " ".join(trade_evidence.limitations)
 
 
-def test_degraded_book_findings_remain_visible_without_discarding_valid_metrics() -> None:
+def test_degraded_book_findings_remain_visible_without_discarding_valid_metrics() -> (
+    None
+):
     result = _calculate(_analysis_case(degraded_book=True))
     book_metrics = tuple(
         item
@@ -422,7 +424,9 @@ def test_degraded_book_findings_remain_visible_without_discarding_valid_metrics(
             OrderFlowMetricName.BOOK_IMBALANCE,
         }
     )
-    assert all(metric.state is OrderFlowMetricState.AVAILABLE for metric in book_metrics)
+    assert all(
+        metric.state is OrderFlowMetricState.AVAILABLE for metric in book_metrics
+    )
     assert all(
         any("status DEGRADED" in item for item in metric.limitations)
         and "extreme-spread-warning" in metric.limitations
