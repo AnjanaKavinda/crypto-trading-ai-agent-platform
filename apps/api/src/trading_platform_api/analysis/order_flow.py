@@ -209,6 +209,7 @@ def _validate_trade_handoff(
 
     identities = normalized.identities
     unknown_ids: list[str] = []
+    provider_event_ids: set[str] = set()
     has_sequence: bool | None = None
     previous_sequence: int | None = None
     sequence_scope: str | None = None
@@ -236,6 +237,9 @@ def _validate_trade_handoff(
             )
         ):
             raise SpotOrderFlowError("TRADE identity does not match normalized data.")
+        if identity.provider_event_id in provider_event_ids:
+            raise SpotOrderFlowError("Duplicate TRADE provider event identity.")
+        provider_event_ids.add(identity.provider_event_id)
         metrics = _metric_map(observation)
         price = metrics.get("price")
         quantity = metrics.get("quantity")
@@ -441,6 +445,7 @@ def _quality_trace(item: ResolvedInputBinding) -> str:
         dimensions.append(f"{result.dimension.value}={measurement}")
     return (
         f"C-003 schema 2 report {item.report.report_id}; "
+        f"status {item.report.status.value}; "
         f"policy {item.report.assessment_policy_id}@"
         f"{item.report.assessment_policy_version}; "
         f"snapshot {item.snapshot.snapshot_id} cutoff "

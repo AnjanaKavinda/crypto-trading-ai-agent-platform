@@ -144,6 +144,7 @@ def _analysis_case(
     unknown_side: bool = False,
     sequenced: bool = True,
     failed_trade_accuracy: bool = False,
+    degraded_book: bool = False,
     include_trade: bool = True,
     include_book: bool = True,
 ):
@@ -172,6 +173,17 @@ def _analysis_case(
             ),
         )
     book = _book_inputs() if include_book else None
+    if book is not None and degraded_book:
+        transition, snapshot, report = book
+        book = (
+            transition,
+            snapshot,
+            replace(
+                report,
+                status=DataQualityStatus.DEGRADED,
+                anomalies=("extreme-spread-warning",),
+            ),
+        )
     bindings = []
     snapshots: dict[UUID, MarketSnapshot] = {}
     reports: dict[UUID, DataQualityReportV2] = {}
@@ -389,6 +401,65 @@ def test_unknown_aggressor_side_never_becomes_directional_flow() -> None:
         item for item in result.evidence if item.binding_ids[0] == _id(101)
     )
     assert "unknown-aggressor" in " ".join(trade_evidence.limitations)
+
+
+def test_degraded_book_findings_remain_visible_without_discarding_valid_metrics() -> None:
+    result = _calculate(_analysis_case(degraded_book=True))
+    book_metrics = tuple(
+        item
+        for item in result.assessment.metrics
+        if item.name
+        in {
+            OrderFlowMetricName.BEST_BID_PRICE,
+            OrderFlowMetricName.BEST_ASK_PRICE,
+            OrderFlowMetricName.MIDPOINT_PRICE,
+            OrderFlowMetricName.ABSOLUTE_SPREAD,
+            OrderFlowMetricName.SPREAD_BPS,
+            OrderFlowMetricName.BID_DEPTH,
+            OrderFlowMetricName.ASK_DEPTH,
+            OrderFlowMetricName.BID_NOTIONAL,
+            OrderFlowMetricName.ASK_NOTIONAL,
+            OrderFlowMetricName.BOOK_IMBALANCE,
+        }
+    )
+    assert all(metric.state is OrderFlowMetricState.AVAILABLE for metric in book_metrics)
+    assert all(
+        any("status DEGRADED" in item for item in metric.limitations)
+        and "extreme-spread-warning" in metric.limitations
+        for metric in book_metrics
+    )
+    book_evidence = next(
+        item for item in result.evidence if item.binding_ids[0] == _id(102)
+    )
+    assert book_evidence.quality_status is DataQualityStatus.DEGRADED
+    assert "extreme-spread-warning" in book_evidence.limitations
+
+
+def test_duplicate_provider_event_identity_cannot_inflate_trade_metrics() -> None:
+    case = _analysis_case()
+    trade, book, snapshots, reports, manifest, assessment_id, evidence_ids = case
+    normalized = trade[0]
+    duplicate_identity = replace(
+        normalized.identities[1],
+        provider_event_id=normalized.identities[0].provider_event_id,
+    )
+    duplicate_handoff = replace(
+        normalized,
+        identities=(normalized.identities[0], duplicate_identity),
+    )
+    with pytest.raises(SpotOrderFlowError, match="Duplicate TRADE provider event"):
+        calculate_spot_order_flow(
+            manifest,
+            trade_handoff=duplicate_handoff,
+            book_handoff=(book[0],),
+            snapshots=snapshots,
+            reports=reports,
+            policy=METHOD_POLICY,
+            assessment_id=assessment_id,
+            evidence_ids=evidence_ids,
+            calculated_at=CUTOFF,
+            validated_at=NOW,
+        )
 
 
 def test_displayed_depth_uses_exact_configured_top_n_without_truncation() -> None:
