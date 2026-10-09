@@ -1,6 +1,6 @@
 # trading_platform_api package skeleton
 
-This package provides the minimal FastAPI bootstrap entrypoint for the backend repository skeleton plus the bounded PostgreSQL async persistence and migration foundation approved for Issue 016.
+This package provides the FastAPI backend foundation, bounded PostgreSQL persistence, and the local-only personal Spot research API.
 
 ## Scope in this issue
 
@@ -27,7 +27,7 @@ This package provides the minimal FastAPI bootstrap entrypoint for the backend r
 - **PostgreSQL async driver:** `asyncpg`
 - **Schema migrations:** Alembic
 
-These components provide configuration parsing, engine/session factories, a narrow async transaction scope, and an empty migration baseline only. They do **not** introduce domain tables, CRUD repositories, startup database connections, additional health probes, or any live-trading behavior.
+These components provide configuration parsing, engine/session factories, and a narrow async transaction scope. The Spot research path adds only immutable canonical lineage records and an append-only API read-model index; it does not add startup database connections or live-trading behavior.
 
 ## Configuration
 
@@ -449,4 +449,91 @@ historical percentile/regime analysis remain out of scope.
 
 ```bash
 PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_volatility.py
+```
+
+## Local Spot research API (Issue #344)
+
+The API exposes `GET /api/research/spot/symbols`, bounded
+`GET /api/research/spot/{instrument_id}/candles`, and explicit
+`POST /api/research/spot/{instrument_id}/refresh` operations for the five
+approved Binance Spot instruments. Reads select the newest persisted snapshot
+at or before the optional `as_of` cutoff for the requested timeframe. `limit`
+is a maximum candle count; snapshots are never silently truncated because
+quality and indicators are bound to the exact C-002 observation set. Results
+include exact C-091 source records, C-001/C-002/C-003 identities, the complete
+versioned C-003 v1 policy and digest, calculation versions, and explicit
+`AVAILABLE`, `WARMUP`, or `UNAVAILABLE` indicator states. C-104 order flow
+remains explicitly unavailable because this API does not collect trade/book
+inputs. No endpoint creates a signal, trade, or order.
+
+Run the API using the loopback-only launcher:
+
+```bash
+PYTHONPATH=apps/api/src python -m trading_platform_api
+```
+
+The launcher accepts only a literal loopback `--host` (`127.0.0.1` by default
+or `::1`) and rejects LAN/public binds. Configure one exact loopback frontend
+origin with `TRADING_PLATFORM_FRONTEND_ORIGIN`; wildcard and non-local origins
+are rejected. The API also validates local Host and Origin headers and returns
+`Cache-Control: no-store`.
+
+Collection is off unless `TRADING_PLATFORM_BINANCE_SPOT_ENABLED=true` and all
+three non-secret review references are configured:
+`TRADING_PLATFORM_BINANCE_SPOT_TERMS_REVIEW_REFERENCE`,
+`TRADING_PLATFORM_BINANCE_SPOT_REGION_REVIEW_REFERENCE`, and
+`TRADING_PLATFORM_BINANCE_SPOT_INTEGRATION_REFERENCE`. The adapter checks
+`exchangeInfo` eligibility separately on every symbol refresh. This opt-in does
+not establish customer display or redistribution rights.
+
+The immutable owner-approved `personal-binance-spot-ohlcv-v1` profile requires
+finalized OHLCV, `open`/`high`/`low`/`close`/`volume`, zero missing intervals for
+`VALID`, one timeframe interval of freshness, OHLC bounds `[1e-18, 1e18]`, and
+volume bounds `[0, 1e18]`. Independent comparison is explicitly
+`NOT_ASSESSED_SINGLE_SOURCE`; there is no arbitrary environment or request
+override. Refresh requests supply timeframe and an aligned half-open coverage
+window; the exact resolved policy and hash are stored with the matching C-002
+snapshot and C-003 report.
+
+Set `DATABASE_URL` and apply the existing Alembic migrations through
+`0006_spot_research_read_model` before requesting refresh or historical reads.
+Downgrading this append-only history index is intentionally prohibited.
+The optional `TRADING_PLATFORM_LOCAL_MARKET_ARCHIVE_ROOT` enables exact lineage
+reads for archived payloads. Without it, unavailable cold payloads fail closed.
+The provider is only constructed for an explicit refresh; application import,
+startup, symbol listing, and ordinary reads do not contact Binance. Local
+refresh calls are serialized, capped at 501 closed candles, cancellable on
+client disconnect, and subject to a process-local request throttle.
+Reads likewise cap history at 501; the existing provider REST pager fetches
+within that explicit record budget. Serving evaluates the last closed candle
+against the current or requested as-of cutoff without modifying the stored C-003
+report. Stale snapshots retain their original report but are served as `STALE`
+with current indicators unavailable. Explicit earlier cutoffs are labeled
+`HISTORICAL`.
+
+### Frontend handoff for Issues #145/#146
+
+- List the allowlisted instrument IDs from `GET /api/research/spot/symbols`;
+  treat that response as supported scope, not proof of current exchange
+  eligibility.
+- POST an explicit `{ "timeframe", "coverage_start", "coverage_end", "limit" }`
+  JSON body to the selected instrument's `/refresh` route. Render sanitized
+  problem responses and the returned quality status; a non-`VALID` report is
+  never indicator authority or a trade signal.
+- For a persisted result, GET the instrument's `/candles` route with the same
+  `timeframe`, a `limit` at least as large as the snapshot (maximum 501), and optional
+  `as_of`. Render the server's candle timestamps, exact as-of/snapshot/source/
+  report/policy identifiers, and indicator calculation versions. Do not
+  recalculate indicators in the browser or represent warm-up nulls as zero.
+- Show historical data as personal research only. Customer redistribution and
+  customer-facing derived analytics are not authorized by this API.
+
+The only unresolved owner decision is approval of the versioned Binance Spot
+OHLCV C-003 v1 policy profile listed above. The existing C-003 v1 assessor
+remains authoritative; no thresholds are inferred or accepted from API requests
+or arbitrary environment values. Until an approved profile is added, refresh
+remains unavailable.
+
+```bash
+PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_spot_research_api.py
 ```
