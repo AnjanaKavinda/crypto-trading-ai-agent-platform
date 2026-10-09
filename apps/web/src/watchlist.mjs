@@ -133,6 +133,7 @@ async function bootstrap() {
       );
     } catch (loadError) {
       if (requestSequence !== sequence) return;
+      if (!symbols.length) symbolsPromise = undefined;
       rows.replaceChildren();
       status.dataset.state = "error";
       status.replaceChildren(

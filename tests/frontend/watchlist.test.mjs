@@ -226,6 +226,7 @@ test("overview navigation and controls cannot issue refresh or external requests
   assert.match(page, /<th scope="col">Quality \/ temporal status<\/th>/);
   assert.match(page, /href="\.\/index\.html"/);
   assert.match(page, /<label>Timeframe\s*<select/);
+  assert.match(script, /if \(!symbols\.length\) symbolsPromise = undefined/);
   assert.doesNotMatch(script, /refreshSnapshot|addEventListener\(["']focus|setInterval|WebSocket/);
   const styles = await readFile(new URL("../../apps/web/styles.css", import.meta.url), "utf8");
   assert.match(styles, /:focus-visible/);
