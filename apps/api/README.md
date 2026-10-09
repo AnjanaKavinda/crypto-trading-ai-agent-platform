@@ -492,11 +492,13 @@ finalized OHLCV, `open`/`high`/`low`/`close`/`volume`, zero missing intervals fo
 volume bounds `[0, 1e18]`. Independent comparison is explicitly
 `NOT_ASSESSED_SINGLE_SOURCE`; there is no arbitrary environment or request
 override. Refresh requests supply timeframe, a 2–501 candle bound, and an aligned
-half-open coverage window that must not extend into the future; there is no
-additional calendar-span limit in the Spot API validator. The Binance adapter
-still enforces its separate 90-day historical-request capability limit. The
-exact resolved policy and hash are stored with the matching C-002 snapshot and
-C-003 report.
+half-open coverage window that must not extend into the future or exceed the
+provider's 90-day OHLCV capability. The effective refresh limit is
+`min(501, floor(90 days / timeframe interval))`: 90 daily candles and 501
+four-hour candles are allowed; reads remain independently bounded at 501.
+The service rejects over-window requests before provider access. The exact
+resolved policy and hash are stored with the matching C-002 snapshot and C-003
+report.
 
 Set `DATABASE_URL` and apply the existing Alembic migrations through
 `0006_spot_research_read_model` before requesting refresh or historical reads.

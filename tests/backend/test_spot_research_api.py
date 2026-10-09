@@ -251,7 +251,11 @@ def service(
 
 def refresh_body(*, limit: int = 21, timeframe: str = "1m") -> dict[str, object]:
     step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
-    end = NOW.replace(hour=0, minute=0) if timeframe == "1d" else NOW
+    interval_seconds = TIMEFRAME_SECONDS[timeframe]
+    end = datetime.fromtimestamp(
+        (int(NOW.timestamp()) // interval_seconds) * interval_seconds,
+        tz=UTC,
+    )
     return {
         "timeframe": timeframe,
         "coverage_start": (end - limit * step).isoformat(),
@@ -588,13 +592,26 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
     assert calls == []
 
 
-def test_501_daily_refresh_window_over_90_days_passes_request_validation() -> None:
+@pytest.mark.parametrize(
+    ("timeframe", "limit", "expected_status"),
+    [
+        ("1d", 90, 200),
+        ("1d", 91, 422),
+        ("4h", 501, 200),
+    ],
+)
+def test_refresh_respects_provider_window_and_candle_bounds(
+    timeframe: str, limit: int, expected_status: int
+) -> None:
     research, calls, _ = service(quality_policy=policy_template())
-    body = refresh_body(limit=501, timeframe="1d")
-    assert (
-        datetime.fromisoformat(body["coverage_end"])
-        - datetime.fromisoformat(body["coverage_start"])
-    ) > timedelta(days=90)
+    body = refresh_body(limit=limit, timeframe=timeframe)
+    window = datetime.fromisoformat(body["coverage_end"]) - datetime.fromisoformat(
+        body["coverage_start"]
+    )
+    if expected_status == 200:
+        assert window <= timedelta(days=90)
+    else:
+        assert window > timedelta(days=90)
 
     with client_for(research) as client:
         response = client.post(
@@ -602,9 +619,13 @@ def test_501_daily_refresh_window_over_90_days_passes_request_validation() -> No
             json=body,
         )
 
-    assert response.status_code == 200
-    assert len(response.json()["candles"]) == 501
-    assert calls == [1]
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert len(response.json()["candles"]) == limit
+        assert calls == [1]
+    else:
+        assert response.json()["code"] == "REFRESH_RANGE_INVALID"
+        assert calls == []
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 const API_ORIGIN = "http://127.0.0.1:8000";
 const API_PATH = "/api/research/spot";
 export const MAX_CANDLES = 501;
+export const MAX_REFRESH_SECONDS = 90 * 24 * 60 * 60;
 export const TIMEFRAME_SECONDS = Object.freeze({
   "1m": 60,
   "5m": 300,
@@ -58,8 +59,10 @@ export function readSnapshot(fetcher, { instrumentId, timeframe, limit, asOf }) 
 }
 
 export function refreshRequestWithinBounds(timeframe, limit, { historical = false } = {}) {
-  return !historical && Boolean(TIMEFRAME_SECONDS[timeframe]) &&
-    Number.isInteger(limit) && limit >= 2 && limit <= MAX_CANDLES;
+  const seconds = TIMEFRAME_SECONDS[timeframe];
+  return !historical && Boolean(seconds) && Number.isInteger(limit) &&
+    limit >= 2 && limit <= MAX_CANDLES &&
+    limit * seconds <= MAX_REFRESH_SECONDS;
 }
 
 export function refreshSnapshot(fetcher, {
@@ -69,6 +72,10 @@ export function refreshSnapshot(fetcher, {
   if (!seconds) throw new Error("Unsupported API timeframe.");
   if (!Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLES) throw new Error("Refresh bound is outside the API limit.");
   if (asOf) throw new Error("Historical cutoffs cannot be refreshed.");
+  if (!refreshRequestWithinBounds(timeframe, limit)) {
+    const maximum = Math.min(MAX_CANDLES, Math.floor(MAX_REFRESH_SECONDS / seconds));
+    throw new Error(`Refresh exceeds the API window limit; select ${maximum} or fewer candles for ${timeframe}.`);
+  }
   const intervalMs = seconds * 1000;
   const endMs = Math.floor(now / intervalMs) * intervalMs;
   const startMs = endMs - limit * intervalMs;

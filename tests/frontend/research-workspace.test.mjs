@@ -95,26 +95,47 @@ test("refresh and read selectors reject unbounded or unsupported inputs before f
   assert.equal(client.calls.length, 0);
 });
 
-test("501-candle daily refresh is accepted and 502 candles are rejected before fetch", async () => {
-  const client = fakeFetch([{ ok: true, json: async () => ({}) }]);
+test("refresh limits match the API's 90-day provider window and 501-candle bound", async () => {
+  const client = fakeFetch([
+    { ok: true, json: async () => ({}) },
+    { ok: true, json: async () => ({}) },
+  ]);
   const now = Date.parse("2026-10-09T15:19:36.042Z");
   await refreshSnapshot(client.fetcher, {
-    instrumentId, timeframe: "1d", limit: 501, now,
+    instrumentId, timeframe: "1d", limit: 90, now,
   });
-  const body = JSON.parse(client.calls[0].options.body);
-  assert.equal(body.limit, 501);
-  assert.equal(body.timeframe, "1d");
+  const dailyBody = JSON.parse(client.calls[0].options.body);
+  assert.equal(dailyBody.limit, 90);
+  assert.equal(dailyBody.timeframe, "1d");
   assert.equal(
-    Date.parse(body.coverage_end) - Date.parse(body.coverage_start),
-    501 * 24 * 60 * 60 * 1000,
+    Date.parse(dailyBody.coverage_end) - Date.parse(dailyBody.coverage_start),
+    90 * 24 * 60 * 60 * 1000,
   );
-  assert.equal(refreshRequestWithinBounds("1d", 501), true);
+  assert.equal(refreshRequestWithinBounds("1d", 90), true);
+  assert.equal(refreshRequestWithinBounds("1d", 91), false);
   assert.throws(
-    () => refreshSnapshot(client.fetcher, { instrumentId, timeframe: "1d", limit: 502 }),
+    () => refreshSnapshot(client.fetcher, {
+      instrumentId, timeframe: "1d", limit: 91, now,
+    }),
+    /select 90 or fewer candles for 1d/,
+  );
+  await refreshSnapshot(client.fetcher, {
+    instrumentId, timeframe: "4h", limit: 501, now,
+  });
+  const fourHourBody = JSON.parse(client.calls[1].options.body);
+  assert.equal(fourHourBody.limit, 501);
+  assert.equal(fourHourBody.timeframe, "4h");
+  assert.ok(
+    Date.parse(fourHourBody.coverage_end) - Date.parse(fourHourBody.coverage_start)
+      <= 90 * 24 * 60 * 60 * 1000,
+  );
+  assert.equal(refreshRequestWithinBounds("4h", 501), true);
+  assert.throws(
+    () => refreshSnapshot(client.fetcher, { instrumentId, timeframe: "4h", limit: 502 }),
     /outside the API limit/,
   );
-  assert.equal(refreshRequestWithinBounds("1d", 502), false);
-  assert.equal(client.calls.length, 1);
+  assert.equal(refreshRequestWithinBounds("4h", 502), false);
+  assert.equal(client.calls.length, 2);
 });
 
 test("historical cutoffs prevent refresh before fetch", async () => {
@@ -405,5 +426,6 @@ test("workspace source contains no polling or external provider path", async () 
   assert.ok(refreshStart < staleGuard && staleGuard < responseAssignment);
   assert.match(source, /refreshInFlight \|\| !instrument\.value \|\| cutoff\.value/);
   assert.match(source, /Historical cutoffs are read-only/);
-  assert.doesNotMatch(source, /90-day|MAX_REFRESH_SECONDS/);
+  assert.match(source, /MAX_REFRESH_SECONDS/);
+  assert.match(source, /Refresh allows 2–\$\{maxRefreshCandles\} candles/);
 });
