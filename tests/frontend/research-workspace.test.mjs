@@ -416,7 +416,9 @@ test("preferences are display-only, reset to beginner defaults, and scope by ins
 
 test("workspace source contains no polling or external provider path", async () => {
   const source = await readFile(new URL("../../apps/web/src/app.mjs", import.meta.url), "utf8");
+  const html = await readFile(new URL("../../apps/web/index.html", import.meta.url), "utf8");
   assert.doesNotMatch(source, /setInterval|WebSocket|binance\.com|api\.binance/i);
+  assert.match(html, /<option value="90">90 candles<\/option>/);
   assert.match(source, /refreshButton\.addEventListener\("click"/);
   assert.equal((source.match(/refreshSnapshot\(/g) ?? []).length, 1);
   assert.match(source, /snapshot = null;\s*updateRefreshAvailability\(\)/);

@@ -104,7 +104,7 @@ const EDUCATION = Object.freeze({
 });
 
 const TIMEFRAMES = Object.keys(TIMEFRAME_SECONDS);
-const HISTORY_LIMITS = new Set([50, 100, 250, 501]);
+const HISTORY_LIMITS = new Set([50, 90, 100, 250, 501]);
 const $ = (selector) => document.querySelector(selector);
 const element = (tag, text, className) => {
   const node = document.createElement(tag);
