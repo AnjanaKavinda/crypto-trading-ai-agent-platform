@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -25,10 +27,18 @@ from trading_platform_api.config import (
     DeploymentEnvironment,
     OperatingMode,
 )
+from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.lineage.codec import encode, key_for
+from trading_platform_api.lineage.store import (
+    SqlAlchemyLineageStore,
+    append_validated_market_snapshot,
+    references,
+)
 from trading_platform_api.main import create_app
 from trading_platform_api.market_data.binance_spot import BinanceSpotSettings
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityStatus,
     DataSourceRecord,
     MarketData,
     MarketSnapshot,
@@ -42,20 +52,24 @@ from trading_platform_api.market_data.providers import (
 )
 from trading_platform_api.market_data.quality import (
     DataQualityPolicy,
-    MetricBound,
+    assess_complete_binance_spot_batch,
 )
 from trading_platform_api.spot_research import (
     QualityPolicyTemplate,
     SpotResearchService,
     _indicator_envelope,
+    approved_quality_policy_template,
     validate_local_origin,
     validate_loopback_host,
 )
 from trading_platform_api.spot_research_store import (
+    APPROVED_POLICY_VERSION,
     SpotResearchSnapshotNotFound,
     StoredSpotSnapshot,
+    decode_policy,
     policy_digest,
     policy_document,
+    validate_approved_quality_policy,
 )
 
 NOW = datetime(2026, 10, 9, 5, 0, tzinfo=UTC)
@@ -69,17 +83,7 @@ SOURCE_SETTINGS = BinanceSpotSettings(
 
 
 def policy_template() -> QualityPolicyTemplate:
-    metric_names = ("open", "high", "low", "close", "volume")
-    return QualityPolicyTemplate(
-        policy_version="test-policy-v1",
-        freshness_seconds=60,
-        maximum_missing_intervals=0,
-        required_metrics=metric_names,
-        metric_bounds=tuple(
-            MetricBound(name, Decimal("0"), Decimal("1000")) for name in metric_names
-        ),
-        require_independent_comparison=False,
-    )
+    return approved_quality_policy_template()
 
 
 def complete_batch(request: MarketDataRequest, *, candles: int = 21) -> ProviderBatch:
@@ -363,13 +367,17 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
     assert repository.persist_calls == 1
     assert payload["persisted"] is True
     assert payload["data_quality"]["status"] == "VALID"
-    assert payload["data_quality"]["policy_version"] == "test-policy-v1"
+    assert payload["data_quality"]["policy_version"] == APPROVED_POLICY_VERSION
     assert len(payload["candles"]) == 21
     assert payload["candles"][0]["finalization"] == "FINAL"
     assert payload["lineage"]["adapter_version"] == "binance-spot-adapter-v1"
     assert len(payload["lineage"]["sources"]) == 21
     assert payload["indicators"]["ema-20"]["status"] == "AVAILABLE"
     assert payload["indicators"]["ema-50"]["status"] == "WARMUP"
+    assert payload["data_quality"]["report_status"] == "VALID"
+    assert payload["data_quality"]["comparison_assessment"] == (
+        "NOT_ASSESSED_SINGLE_SOURCE"
+    )
     assert payload["indicators"]["atr-14"]["status"] == "AVAILABLE"
     assert payload["indicators"]["bollinger-bands-20"]["status"] == "AVAILABLE"
     assert payload["indicators"]["realized-volatility-20"]["status"] == "AVAILABLE"
@@ -471,6 +479,58 @@ def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot
     assert repository.read_calls == 1
 
 
+def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
+    research, _, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
+        )
+        research.clock = lambda: NOW + timedelta(minutes=2)
+        stale = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": "1m", "limit": 21},
+        )
+
+    assert refreshed.status_code == 200
+    payload = stale.json()
+    assert stale.status_code == 200
+    assert payload["data_quality"]["status"] == "STALE"
+    assert payload["data_quality"]["report_status"] == "VALID"
+    assert payload["data_quality"]["report"]["status"] == "VALID"
+    assert payload["indicators"]["ema-20"]["status"] == "UNAVAILABLE"
+    assert payload["indicators"]["ema-20"]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"
+    assert payload["temporal_context"] == "CURRENT"
+    assert repository.stored is not None
+    assert repository.stored.quality.status is DataQualityStatus.VALID
+
+
+def test_historical_as_of_is_labeled_and_uses_cutoff_freshness_boundary() -> None:
+    research, _, _ = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        assert (
+            client.post(
+                f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
+            ).status_code
+            == 200
+        )
+        research.clock = lambda: NOW + timedelta(minutes=2)
+        historical = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={
+                "timeframe": "1m",
+                "limit": 21,
+                "as_of": (NOW + timedelta(minutes=1)).isoformat(),
+            },
+        )
+
+    payload = historical.json()
+    assert historical.status_code == 200
+    assert payload["temporal_context"] == "HISTORICAL"
+    assert payload["data_quality"]["status"] == "VALID"
+    assert payload["data_quality"]["report_status"] == "VALID"
+    assert payload["indicators"]["ema-20"]["status"] == "AVAILABLE"
+
+
 def test_read_rejects_timezone_naive_as_of_without_store_access() -> None:
     research, _, repository = service(quality_policy=policy_template())
     with client_for(research) as client:
@@ -504,7 +564,7 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
     with client_for(research) as client:
         response = client.post(
             f"/api/research/spot/{INSTRUMENT}/refresh",
-            json=refresh_body(limit=101),
+            json=refresh_body(limit=502),
         )
 
     assert response.status_code == 422
@@ -660,7 +720,253 @@ def test_environment_policy_cannot_enable_unapproved_ohlcv_refresh(
         )
     )
     research: SpotResearchService = app.state.spot_research_service
-    assert research.quality_policy is None
+    assert research.quality_policy is not None
+    assert research.quality_policy.policy_version == APPROVED_POLICY_VERSION
+
+
+def test_approved_policy_serialization_hash_and_exact_profile() -> None:
+    template = approved_quality_policy_template()
+    policy = template.for_request(
+        instrument_id=INSTRUMENT,
+        timeframe="1m",
+        cutoff=NOW,
+        coverage_start=NOW - timedelta(minutes=21),
+        coverage_end=NOW,
+    )
+    document = policy_document(policy)
+    digest = policy_digest(document)
+    decoded = decode_policy(document)
+
+    assert validate_approved_quality_policy(policy, timeframe="1m")
+    assert decoded == policy
+    assert policy_digest(policy_document(decoded)) == digest
+    assert policy.policy_version == "personal-binance-spot-ohlcv-v1"
+    assert policy.freshness_seconds == 60
+    assert policy.maximum_missing_intervals == 0
+    assert policy.require_independent_comparison is False
+    assert {
+        item.name: (item.minimum, item.maximum) for item in policy.metric_bounds
+    } == {
+        "open": (Decimal("1e-18"), Decimal("1e18")),
+        "high": (Decimal("1e-18"), Decimal("1e18")),
+        "low": (Decimal("1e-18"), Decimal("1e18")),
+        "close": (Decimal("1e-18"), Decimal("1e18")),
+        "volume": (Decimal("0"), Decimal("1e18")),
+    }
+    changed = dict(document)
+    changed["freshness_seconds"] = 120
+    assert policy_digest(changed) != digest
+    assert not validate_approved_quality_policy(
+        replace(policy, freshness_seconds=120), timeframe="1m", raise_on_error=False
+    )
+
+
+def test_approved_quality_policy_zero_gap_and_one_interval_freshness() -> None:
+    template = approved_quality_policy_template()
+    fresh_end = NOW - timedelta(minutes=1)
+    fresh_request = MarketDataRequest(
+        request_id=uuid4(),
+        correlation_id="test",
+        data_kind=ProviderDataKind.OHLCV,
+        instrument_id=INSTRUMENT,
+        venue_id="BINANCE-SPOT",
+        requested_at=NOW,
+        as_of=NOW,
+        maximum_records=21,
+        range_start=fresh_end - timedelta(minutes=21),
+        range_end=fresh_end,
+    )
+    fresh_batch = complete_batch(fresh_request)
+    fresh_policy = template.for_request(
+        instrument_id=INSTRUMENT,
+        timeframe="1m",
+        cutoff=NOW,
+        coverage_start=fresh_request.range_start,
+        coverage_end=fresh_end,
+    )
+    fresh_report = assess_complete_binance_spot_batch(
+        fresh_batch, fresh_policy, assessed_at=NOW
+    )
+    assert fresh_report.status is DataQualityStatus.VALID
+
+    missing_index = 10
+    gapped_batch = replace(
+        fresh_batch,
+        market_data=(
+            fresh_batch.market_data[:missing_index]
+            + fresh_batch.market_data[missing_index + 1 :]
+        ),
+        source_records=(
+            fresh_batch.source_records[:missing_index]
+            + fresh_batch.source_records[missing_index + 1 :]
+        ),
+        snapshots=(
+            replace(
+                fresh_batch.snapshots[0],
+                market_data_ids=(
+                    fresh_batch.snapshots[0].market_data_ids[:missing_index]
+                    + fresh_batch.snapshots[0].market_data_ids[missing_index + 1 :]
+                ),
+                source_record_ids=(
+                    fresh_batch.snapshots[0].source_record_ids[:missing_index]
+                    + fresh_batch.snapshots[0].source_record_ids[missing_index + 1 :]
+                ),
+            ),
+        ),
+    )
+    gapped_report = assess_complete_binance_spot_batch(
+        gapped_batch, fresh_policy, assessed_at=NOW
+    )
+    assert gapped_report.status is DataQualityStatus.INCOMPLETE
+
+    stale_end = NOW - timedelta(minutes=2)
+    stale_request = replace(
+        fresh_request,
+        request_id=uuid4(),
+        range_start=stale_end - timedelta(minutes=21),
+        range_end=stale_end,
+    )
+    stale_batch = complete_batch(stale_request)
+    stale_policy = template.for_request(
+        instrument_id=INSTRUMENT,
+        timeframe="1m",
+        cutoff=NOW,
+        coverage_start=stale_request.range_start,
+        coverage_end=stale_end,
+    )
+    stale_report = assess_complete_binance_spot_batch(
+        stale_batch, stale_policy, assessed_at=NOW
+    )
+    assert stale_report.status is DataQualityStatus.STALE
+
+
+def test_501_candles_complete_ema_500_warmup_and_pagination_budget() -> None:
+    observed_settings: list[BinanceSpotSettings] = []
+
+    def provider_factory(settings: BinanceSpotSettings) -> FakeProvider:
+        observed_settings.append(settings)
+        return FakeProvider(settings, [])
+
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=FakeRepository(),
+        provider_factory=provider_factory,
+        clock=lambda: NOW,
+        monotonic=lambda: 100.0,
+    )
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=501),
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert len(payload["candles"]) == 501
+    assert observed_settings[0].page_size >= 501
+    assert payload["indicators"]["ema-500"]["status"] == "AVAILABLE"
+    assert len(payload["indicators"]["ema-500"]["result"]["points"]) == 501
+    assert payload["indicators"]["ema-500"]["result"]["points"][498]["value"] is None
+    assert (
+        payload["indicators"]["ema-500"]["result"]["points"][499]["value"] is not None
+    )
+
+
+def test_lineage_append_and_dependency_resolution_budget_support_501_candles() -> None:
+    request = MarketDataRequest(
+        request_id=uuid4(),
+        correlation_id="test",
+        data_kind=ProviderDataKind.OHLCV,
+        instrument_id=INSTRUMENT,
+        venue_id="BINANCE-SPOT",
+        requested_at=NOW,
+        as_of=NOW,
+        maximum_records=501,
+        range_start=NOW - timedelta(minutes=501),
+        range_end=NOW,
+    )
+    batch = complete_batch(request, candles=501)
+    template = approved_quality_policy_template()
+    policy = template.for_request(
+        instrument_id=INSTRUMENT,
+        timeframe="1m",
+        cutoff=NOW,
+        coverage_start=request.range_start,
+        coverage_end=NOW,
+    )
+    report = assess_complete_binance_spot_batch(batch, policy, assessed_at=NOW)
+    appended: list[object] = []
+
+    class RecordingLineageStore(SqlAlchemyLineageStore):
+        async def append(self, record: object):
+            appended.append(record)
+            return key_for(record)
+
+    lineage = RecordingLineageStore(None)  # type: ignore[arg-type]
+
+    async def persist() -> tuple:
+        return await append_validated_market_snapshot(
+            lineage,
+            sources=batch.source_records,
+            observations=batch.market_data,
+            snapshot=batch.snapshots[0],
+            quality=report,
+        )
+
+    keys = asyncio.run(persist())
+    snapshot = batch.snapshots[0]
+    snapshot_references = references(snapshot)
+    assert len(snapshot_references) == 1002
+    assert len(appended) == 1004
+    assert len(keys) == 1004
+
+    document = encode(snapshot)
+    record_row = {
+        "document": document,
+        "document_sha256": sha256(document.encode("utf-8")).hexdigest(),
+        "evidence_sha256": canonical_sha256(snapshot),
+    }
+    edge_rows = [
+        {
+            "target_contract_id": reference.key.contract_id,
+            "target_record_id": reference.key.record_id,
+            "target_version": reference.key.version,
+        }
+        for reference in snapshot_references
+    ]
+
+    class FakeResult:
+        def __init__(self, one: object | None, all_rows: list[dict[str, str]]) -> None:
+            self.one = one
+            self.all_rows = all_rows
+
+        def mappings(self) -> FakeResult:
+            return self
+
+        def one_or_none(self) -> object | None:
+            return self.one
+
+        def all(self) -> list[dict[str, str]]:
+            return self.all_rows
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, statement: object) -> FakeResult:
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return FakeResult(record_row, [])
+            return FakeResult(None, edge_rows)
+
+    fake_session = FakeSession()
+    stored_snapshot = asyncio.run(
+        SqlAlchemyLineageStore(fake_session).get(key_for(snapshot))  # type: ignore[arg-type]
+    )
+    edge_limit = getattr(fake_session.statements[1], "_limit_clause").value
+    assert stored_snapshot == snapshot
+    assert edge_limit == 2001
 
 
 def test_indicator_envelope_distinguishes_undefined_from_warmup() -> None:

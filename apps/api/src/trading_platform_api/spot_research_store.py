@@ -36,11 +36,12 @@ from trading_platform_api.market_data.contracts import (
     MarketData,
     MarketSnapshot,
 )
-from trading_platform_api.market_data.providers import ProviderBatch
+from trading_platform_api.market_data.providers import ProviderBatch, ProviderDataKind
 from trading_platform_api.market_data.quality import DataQualityPolicy, MetricBound
 from trading_platform_api.persistence.session import transactional_session
 
-MAX_READ_CANDLES = 100
+MAX_READ_CANDLES = 501
+APPROVED_POLICY_VERSION = "personal-binance-spot-ohlcv-v1"
 SUPPORTED_INSTRUMENTS = frozenset(
     {
         "BTC-USDT-SPOT",
@@ -105,7 +106,8 @@ spot_research_snapshots = Table(
         name="ck_spot_research_complete_batch",
     ),
     CheckConstraint(
-        "length(btrim(policy_version)) > 0 AND policy_sha256 ~ '^[0-9a-f]{64}$'",
+        "policy_version = 'personal-binance-spot-ohlcv-v1' "
+        "AND policy_sha256 ~ '^[0-9a-f]{64}$'",
         name="ck_spot_research_policy_identity",
     ),
     ForeignKeyConstraint(
@@ -130,6 +132,42 @@ _TIMEFRAME_SECONDS = {
     "4h": 14400,
     "1d": 86400,
 }
+_APPROVED_POLICY_BOUNDS = {
+    "open": (Decimal("1e-18"), Decimal("1e18")),
+    "high": (Decimal("1e-18"), Decimal("1e18")),
+    "low": (Decimal("1e-18"), Decimal("1e18")),
+    "close": (Decimal("1e-18"), Decimal("1e18")),
+    "volume": (Decimal("0"), Decimal("1e18")),
+}
+
+
+def validate_approved_quality_policy(
+    policy: DataQualityPolicy,
+    *,
+    timeframe: str,
+    raise_on_error: bool = True,
+) -> bool:
+    if type(policy) is not DataQualityPolicy or timeframe not in _TIMEFRAME_SECONDS:
+        valid = False
+    else:
+        bounds = {
+            item.name: (item.minimum, item.maximum) for item in policy.metric_bounds
+        }
+        valid = (
+            policy.policy_version == APPROVED_POLICY_VERSION
+            and policy.data_kind is ProviderDataKind.OHLCV
+            and policy.interval_seconds == _TIMEFRAME_SECONDS[timeframe]
+            and policy.freshness_seconds == _TIMEFRAME_SECONDS[timeframe]
+            and policy.maximum_missing_intervals == 0
+            and policy.required_metrics == ("open", "high", "low", "close", "volume")
+            and bounds == _APPROVED_POLICY_BOUNDS
+            and policy.require_independent_comparison is False
+        )
+    if not valid and raise_on_error:
+        raise SpotResearchStoreError(
+            "Quality policy differs from the approved immutable Spot profile."
+        )
+    return valid
 
 
 class SpotResearchStoreError(RuntimeError):
@@ -284,6 +322,7 @@ class SqlAlchemySpotResearchStore:
             )
         ):
             raise SpotResearchStoreError("Snapshot failed persistence eligibility.")
+        validate_approved_quality_policy(policy, timeframe=timeframe)
 
         policy_data = policy_document(policy)
         digest = policy_digest(policy_data)
@@ -375,6 +414,9 @@ class SqlAlchemySpotResearchStore:
             if (
                 digest != row["policy_sha256"]
                 or policy.policy_version != row["policy_version"]
+                or not validate_approved_quality_policy(
+                    policy, timeframe=timeframe, raise_on_error=False
+                )
                 or policy.interval_seconds != _TIMEFRAME_SECONDS[timeframe]
                 or policy.instrument_id != instrument_id
                 or policy.venue_id != row["venue_id"]

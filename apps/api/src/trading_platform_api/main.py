@@ -35,6 +35,7 @@ from trading_platform_api.problems import (
 from trading_platform_api.spot_research import (
     SpotResearchError,
     SpotResearchService,
+    approved_quality_policy_template,
     create_research_router,
     load_binance_spot_settings,
     validate_local_origin,
@@ -158,7 +159,7 @@ def _make_default_research_service(
         )
     return SpotResearchService(
         provider_settings=provider_settings,
-        quality_policy=None,
+        quality_policy=approved_quality_policy_template(),
         repository=repository,
     )
 

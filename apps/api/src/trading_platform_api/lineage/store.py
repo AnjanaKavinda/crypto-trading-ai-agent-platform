@@ -121,7 +121,7 @@ def references(record: object) -> tuple[Reference, ...]:
                 lineage_sha256=record.dataset_lineage_sha256,
             )
         )
-    if len(result) > 1000:
+    if len(result) > 2000:
         raise LineageError("Lineage references exceed the bounded read budget.")
     return tuple(result)
 
@@ -144,11 +144,11 @@ async def append_validated_market_snapshot(
         not isinstance(store, SqlAlchemyLineageStore)
         or type(sources) is not tuple
         or not sources
-        or len(sources) > 100
+        or len(sources) > 501
         or not all(type(item) is DataSourceRecord for item in sources)
         or type(observations) is not tuple
         or not observations
-        or len(observations) > 998
+        or len(observations) > 501
         or not all(type(item) is MarketData for item in observations)
         or type(snapshot) is not MarketSnapshot
         or type(quality) is not DataQualityReport
@@ -250,13 +250,13 @@ class SqlAlchemyLineageStore:
         actual = (
             (
                 await self._session.execute(
-                    select(links).where(_where(key, links)).limit(1001)
+                    select(links).where(_where(key, links)).limit(2001)
                 )
             )
             .mappings()
             .all()
         )
-        if len(actual) > 1000:
+        if len(actual) > 2000:
             raise LineageError("Stored lineage edges exceed the read budget.")
         actual_keys = {
             LineageKey(
@@ -391,14 +391,14 @@ class SqlAlchemyLineageStore:
         return key
 
     async def resolve(
-        self, keys: tuple[LineageKey, ...], *, maximum_records: int = 1000
+        self, keys: tuple[LineageKey, ...], *, maximum_records: int = 2000
     ) -> dict[LineageKey, object]:
         """Resolve an exact bounded dependency graph and revalidate reference hashes."""
         if type(keys) is not tuple or not all(type(key) is LineageKey for key in keys):
             raise LineageError("Exact immutable keys are required.")
         if (
             type(maximum_records) is not int
-            or not 1 <= maximum_records <= 1000
+            or not 1 <= maximum_records <= 2000
             or len(keys) > maximum_records
         ):
             raise LineageError("Invalid resolution budget.")

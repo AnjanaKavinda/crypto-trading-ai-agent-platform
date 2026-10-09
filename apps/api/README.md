@@ -486,14 +486,14 @@ three non-secret review references are configured:
 `exchangeInfo` eligibility separately on every symbol refresh. This opt-in does
 not establish customer display or redistribution rights.
 
-No runtime OHLCV C-003 v1 policy profile has been approved. There is no
-environment-variable override: refresh fails closed before contacting Binance
-until an owner-approved, versioned policy profile is added. The remaining owner
-decision is approval of that profile's coverage/interval scope, freshness,
-allowed missing intervals, required metrics and bounds, and
-independent-comparison requirement. Refresh requests supply timeframe and an
-aligned half-open coverage window; the exact approved policy and report are
-immutably stored with each accepted snapshot.
+The immutable owner-approved `personal-binance-spot-ohlcv-v1` profile requires
+finalized OHLCV, `open`/`high`/`low`/`close`/`volume`, zero missing intervals for
+`VALID`, one timeframe interval of freshness, OHLC bounds `[1e-18, 1e18]`, and
+volume bounds `[0, 1e18]`. Independent comparison is explicitly
+`NOT_ASSESSED_SINGLE_SOURCE`; there is no arbitrary environment or request
+override. Refresh requests supply timeframe and an aligned half-open coverage
+window; the exact resolved policy and hash are stored with the matching C-002
+snapshot and C-003 report.
 
 Set `DATABASE_URL` and apply the existing Alembic migrations through
 `0006_spot_research_read_model` before requesting refresh or historical reads.
@@ -502,8 +502,14 @@ The optional `TRADING_PLATFORM_LOCAL_MARKET_ARCHIVE_ROOT` enables exact lineage
 reads for archived payloads. Without it, unavailable cold payloads fail closed.
 The provider is only constructed for an explicit refresh; application import,
 startup, symbol listing, and ordinary reads do not contact Binance. Local
-refresh calls are serialized, capped at 100 closed candles, cancellable on
+refresh calls are serialized, capped at 501 closed candles, cancellable on
 client disconnect, and subject to a process-local request throttle.
+Reads likewise cap history at 501; the existing provider REST pager fetches
+within that explicit record budget. Serving evaluates the last closed candle
+against the current or requested as-of cutoff without modifying the stored C-003
+report. Stale snapshots retain their original report but are served as `STALE`
+with current indicators unavailable. Explicit earlier cutoffs are labeled
+`HISTORICAL`.
 
 ### Frontend handoff for Issues #145/#146
 
@@ -515,7 +521,7 @@ client disconnect, and subject to a process-local request throttle.
   problem responses and the returned quality status; a non-`VALID` report is
   never indicator authority or a trade signal.
 - For a persisted result, GET the instrument's `/candles` route with the same
-  `timeframe`, a `limit` at least as large as the snapshot, and optional
+  `timeframe`, a `limit` at least as large as the snapshot (maximum 501), and optional
   `as_of`. Render the server's candle timestamps, exact as-of/snapshot/source/
   report/policy identifiers, and indicator calculation versions. Do not
   recalculate indicators in the browser or represent warm-up nulls as zero.

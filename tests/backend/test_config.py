@@ -129,7 +129,7 @@ def test_direct_app_settings_construction_remains_backward_compatible() -> None:
 def test_enabling_flag_changes_only_typed_configuration_and_not_routes() -> None:
     settings = load_app_settings({"ENABLE_LIVE_TRADING": "true"})
     created_app = create_app(settings=settings)
-    route_paths = {route.path for route in created_app.routes}
+    route_paths = set(created_app.openapi()["paths"])
 
     assert created_app.state.settings.feature_flags.enable_live_trading is True
     assert created_app.state.settings.mode is OperatingMode.RESEARCH

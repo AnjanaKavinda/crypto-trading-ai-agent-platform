@@ -46,7 +46,7 @@ def upgrade() -> None:
             name="ck_spot_research_timeframe",
         ),
         sa.CheckConstraint(
-            "candle_count >= 2 AND candle_count <= 100",
+            "candle_count >= 2 AND candle_count <= 501",
             name="ck_spot_research_candle_count",
         ),
         sa.CheckConstraint(
@@ -63,7 +63,8 @@ def upgrade() -> None:
             name="ck_spot_research_complete_batch",
         ),
         sa.CheckConstraint(
-            "length(btrim(policy_version)) > 0 AND policy_sha256 ~ '^[0-9a-f]{64}$'",
+            "policy_version = 'personal-binance-spot-ohlcv-v1' "
+            "AND policy_sha256 ~ '^[0-9a-f]{64}$'",
             name="ck_spot_research_policy_identity",
         ),
         sa.ForeignKeyConstraint(

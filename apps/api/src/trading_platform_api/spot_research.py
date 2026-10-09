@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -65,6 +65,7 @@ from trading_platform_api.spot_research_store import (
     StoredSpotSnapshot,
     policy_digest,
     policy_document,
+    validate_approved_quality_policy,
 )
 
 MAX_REFRESH_CANDLES = MAX_READ_CANDLES
@@ -171,8 +172,12 @@ class SpotQualityView(BaseModel):
     status: Literal[
         "VALID", "DEGRADED", "STALE", "INCOMPLETE", "INVALID", "UNAVAILABLE"
     ]
+    report_status: Literal[
+        "VALID", "DEGRADED", "STALE", "INCOMPLETE", "INVALID", "UNAVAILABLE"
+    ]
     policy_version: str
     policy_sha256: str
+    comparison_assessment: Literal["NOT_ASSESSED_SINGLE_SOURCE"]
     policy: dict[str, Any]
     report: dict[str, Any]
 
@@ -210,6 +215,8 @@ class SpotResearchResponse(BaseModel):
     venue_id: Literal["BINANCE-SPOT"]
     timeframe: Timeframe
     as_of: datetime
+    freshness_cutoff: datetime
+    temporal_context: Literal["CURRENT", "HISTORICAL"]
     request_started_at: datetime | None = None
     requested_as_of: datetime | None = None
     snapshot_id: str
@@ -285,25 +292,17 @@ class RefreshRequest(BaseModel):
         return self
 
 
+@dataclass(frozen=True, slots=True)
 class QualityPolicyTemplate:
-    """Explicit operator-supplied OHLCV rules; no default thresholds exist."""
+    """Immutable explicit OHLCV rules resolved to one request window."""
 
-    def __init__(
-        self,
-        *,
-        policy_version: str,
-        freshness_seconds: int,
-        maximum_missing_intervals: int,
-        required_metrics: tuple[str, ...],
-        metric_bounds: tuple[MetricBound, ...],
-        require_independent_comparison: bool,
-    ) -> None:
-        self.policy_version = policy_version
-        self.freshness_seconds = freshness_seconds
-        self.maximum_missing_intervals = maximum_missing_intervals
-        self.required_metrics = required_metrics
-        self.metric_bounds = metric_bounds
-        self.require_independent_comparison = require_independent_comparison
+    policy_version: str
+    maximum_missing_intervals: int
+    required_metrics: tuple[str, ...]
+    metric_bounds: tuple[MetricBound, ...]
+    require_independent_comparison: bool
+
+    def __post_init__(self) -> None:
         self._validate()
 
     def _validate(self) -> None:
@@ -312,8 +311,6 @@ class QualityPolicyTemplate:
             or not self.policy_version
             or self.policy_version != self.policy_version.strip()
             or len(self.policy_version) > 128
-            or type(self.freshness_seconds) is not int
-            or self.freshness_seconds <= 0
             or type(self.maximum_missing_intervals) is not int
             or self.maximum_missing_intervals < 0
             or type(self.require_independent_comparison) is not bool
@@ -344,12 +341,29 @@ class QualityPolicyTemplate:
             coverage_start=coverage_start,
             coverage_end=coverage_end,
             interval_seconds=_TIMEFRAME_SECONDS[timeframe],
-            freshness_seconds=self.freshness_seconds,
+            freshness_seconds=_TIMEFRAME_SECONDS[timeframe],
             maximum_missing_intervals=self.maximum_missing_intervals,
             required_metrics=self.required_metrics,
             metric_bounds=self.metric_bounds,
             require_independent_comparison=self.require_independent_comparison,
         )
+
+
+def approved_quality_policy_template() -> QualityPolicyTemplate:
+    """Return the owner-approved immutable single-source Spot C-003 v1 profile."""
+    return QualityPolicyTemplate(
+        policy_version="personal-binance-spot-ohlcv-v1",
+        maximum_missing_intervals=0,
+        required_metrics=("open", "high", "low", "close", "volume"),
+        metric_bounds=(
+            MetricBound("open", Decimal("1e-18"), Decimal("1e18")),
+            MetricBound("high", Decimal("1e-18"), Decimal("1e18")),
+            MetricBound("low", Decimal("1e-18"), Decimal("1e18")),
+            MetricBound("close", Decimal("1e-18"), Decimal("1e18")),
+            MetricBound("volume", Decimal("0"), Decimal("1e18")),
+        ),
+        require_independent_comparison=False,
+    )
 
 
 def load_binance_spot_settings(
@@ -521,17 +535,20 @@ def _calculate_indicators(
     observations: tuple[MarketData, ...],
     quality: DataQualityReport,
     timeframe: str,
+    stale: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    if quality.status is not DataQualityStatus.VALID:
+    if quality.status is not DataQualityStatus.VALID or stale:
+        reason = "STALE_FOR_SERVING_CUTOFF" if stale else "QUALITY_NOT_VALID"
         return {
             name: {
                 "status": "UNAVAILABLE",
-                "reason_code": "QUALITY_NOT_VALID",
+                "reason_code": reason,
                 "result": None,
             }
             for name in (
                 "ema-20",
                 "ema-50",
+                "ema-500",
                 "atr-14",
                 "bollinger-bands-20",
                 "realized-volatility-20",
@@ -561,6 +578,17 @@ def _calculate_indicators(
                 quality=quality,
                 kind=MovingAverageKind.EMA,
                 period=50,
+                timeframe=timeframe,
+            ),
+        ),
+        (
+            "ema-500",
+            lambda: calculate_moving_average(
+                snapshot=snapshot,
+                observations=observations,
+                quality=quality,
+                kind=MovingAverageKind.EMA,
+                period=500,
                 timeframe=timeframe,
             ),
         ),
@@ -661,6 +689,8 @@ def _response(
     timeframe: str,
     adapter_version: str,
     persisted: bool,
+    freshness_cutoff: datetime,
+    temporal_context: str,
 ) -> dict[str, Any]:
     source_ids = {item.source_record_id for item in sources}
     symbol = _SYMBOLS.get(cast(Instrument, snapshot.instrument_id))
@@ -695,18 +725,31 @@ def _response(
                 "metrics": metrics,
             }
         )
+    last_candle_close = observations[-1].event_time + timedelta(
+        seconds=_TIMEFRAME_SECONDS[timeframe]
+    )
+    stale = (
+        quality.status is DataQualityStatus.VALID
+        and freshness_cutoff - last_candle_close
+        > timedelta(seconds=policy.freshness_seconds)
+    )
+    served_status = "STALE" if stale else quality.status.value
     return {
         "instrument_id": snapshot.instrument_id,
         "symbol": symbol,
         "venue_id": snapshot.venue_id,
         "timeframe": timeframe,
         "as_of": _json_value(snapshot.as_of),
+        "freshness_cutoff": _json_value(freshness_cutoff),
+        "temporal_context": temporal_context,
         "snapshot_id": str(snapshot.snapshot_id),
         "data_quality": {
             "report_id": str(quality.report_id),
-            "status": quality.status.value,
+            "status": served_status,
+            "report_status": quality.status.value,
             "policy_version": policy.policy_version,
             "policy_sha256": policy_sha256,
+            "comparison_assessment": "NOT_ASSESSED_SINGLE_SOURCE",
             "policy": policy_document(policy),
             "report": _json_value(quality),
         },
@@ -723,6 +766,7 @@ def _response(
             observations=observations,
             quality=quality,
             timeframe=timeframe,
+            stale=stale,
         ),
         "order_flow": {
             "status": "UNAVAILABLE",
@@ -843,7 +887,7 @@ class SpotResearchService:
                 rest_origin=settings.rest_origin,
                 stream_origin=settings.stream_origin,
                 maximum_pages=settings.maximum_pages,
-                page_size=settings.page_size,
+                page_size=max(settings.page_size, body.limit),
                 timeout_seconds=settings.timeout_seconds,
                 idle_timeout_seconds=settings.idle_timeout_seconds,
             )
@@ -886,6 +930,15 @@ class SpotResearchService:
                 coverage_start=body.coverage_start,
                 coverage_end=body.coverage_end,
             )
+            try:
+                validate_approved_quality_policy(policy, timeframe=body.timeframe)
+            except SpotResearchStoreError as exc:
+                raise SpotResearchError(
+                    status=503,
+                    code="OHLCV_POLICY_INVALID",
+                    title="OHLCV quality policy unavailable",
+                    detail="The resolved quality policy does not match the approved immutable profile.",
+                ) from exc
             try:
                 quality = assess_complete_binance_spot_batch(
                     batch,
@@ -938,6 +991,8 @@ class SpotResearchService:
                 timeframe=body.timeframe,
                 adapter_version="binance-spot-adapter-v1",
                 persisted=persisted,
+                freshness_cutoff=self.clock().astimezone(UTC),
+                temporal_context="CURRENT",
             )
             response["request_started_at"] = _json_value(now)
             return response
@@ -1001,6 +1056,15 @@ class SpotResearchService:
                 title="Snapshot selector is invalid",
                 detail="The as_of cutoff must include an explicit timezone.",
             )
+        now = self.clock().astimezone(UTC)
+        freshness_cutoff = as_of.astimezone(UTC) if as_of is not None else now
+        if freshness_cutoff > now:
+            raise SpotResearchError(
+                status=422,
+                code="SPOT_SELECTOR_INVALID",
+                title="Snapshot selector is invalid",
+                detail="The as_of cutoff cannot be in the future.",
+            )
         if self.repository is None:
             raise SpotResearchError(
                 status=503,
@@ -1045,6 +1109,12 @@ class SpotResearchService:
             timeframe=stored.timeframe,
             adapter_version=stored.adapter_version,
             persisted=True,
+            freshness_cutoff=freshness_cutoff,
+            temporal_context=(
+                "HISTORICAL"
+                if as_of is not None and freshness_cutoff < now
+                else "CURRENT"
+            ),
         )
         response["requested_as_of"] = _json_value(as_of) if as_of is not None else None
         return response
@@ -1060,6 +1130,9 @@ class SpotResearchService:
             or stored.policy.instrument_id != instrument_id
             or stored.policy.venue_id != stored.snapshot.venue_id
             or stored.policy.required_data_cutoff != stored.snapshot.as_of
+            or not validate_approved_quality_policy(
+                stored.policy, timeframe=timeframe, raise_on_error=False
+            )
             or stored.quality.status is not DataQualityStatus.VALID
             or stored.quality.snapshot_id != stored.snapshot.snapshot_id
             or stored.quality.required_data_cutoff != stored.snapshot.as_of
