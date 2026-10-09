@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-09 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
+| Human approver | AnjanaKavinda |
 | GitHub issue / PR | [#350](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/350) |
 | Open decision ID | — |
 | Related ADRs | ADR-0003, ADR-0007 |
@@ -61,7 +61,7 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed: select Option C**, subject to explicit approval by the human repository owner.
+**Select Option C.** The human repository owner approved this bounded local Docker decision on 2026-10-10. This acceptance applies only to native local and Docker-local deployment; cloud deployment requires a separate architecture decision.
 
 The local Compose runtime will publish only the static web/reverse-proxy service on a configurable loopback host address, defaulting to `127.0.0.1:5173`. API and PostgreSQL have no published host ports. The API and database communicate only over private Compose networking; the web service proxies same-origin `/api` requests to the API.
 
@@ -90,7 +90,7 @@ The exception is limited to the Docker launcher. Applying proxy trust to the nat
 - The local proxy secret must be generated per checkout and kept in the ignored `.env`; secret rotation requires restarting the proxy and API together.
 - Missing or invalid secret, unexpected Host/Origin, disabled research mode, or enabled trading/execution fails closed.
 - The Compose deployment uses local PostgreSQL storage. Normal `docker compose down` preserves its named volume; `docker compose down -v` deletes that local research data.
-- Implementation, tests, and CI coverage belong to issue #350 and may proceed only after this ADR is accepted.
+- Implementation, tests, and CI coverage belong to issue #350 and may proceed under this accepted boundary.
 - This ADR does not authorize a weakening of the native request guard or a public/LAN deployment.
 
 ## Contract and traceability impact
@@ -111,4 +111,4 @@ No credentials for exchange trading are introduced. Binance collection remains d
 
 ## Approval record
 
-Pending human repository-owner review. This ADR is proposed and does not authorize implementation until accepted.
+Accepted by `AnjanaKavinda`, human repository owner, on 2026-10-10 for local Docker deployment as bounded above. Cloud deployment, public/LAN exposure, and any changes to trading/execution behavior are not approved by this ADR.
