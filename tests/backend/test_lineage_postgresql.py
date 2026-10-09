@@ -1,4 +1,9 @@
-"""Real PostgreSQL integration on an explicitly disposable local database."""
+"""Real PostgreSQL integration on an explicitly disposable local database.
+
+The fixture leaves the schema at Alembic head because the Spot read model is
+intentionally irreversible. Use a fresh disposable `lineage_test` database
+when a clean run is required.
+"""
 
 import asyncio
 import base64
@@ -65,11 +70,12 @@ def database_url():
     previous = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = value
     config = Config("apps/api/alembic.ini")
-    command.upgrade(config, "head")
     try:
+        command.upgrade(config, "head")
         yield value
     finally:
-        command.downgrade(config, "0002_audit_event_foundation")
+        # Migration 0006 protects immutable Spot history from destructive downgrade.
+        # This fixture uses a dedicated disposable database and leaves it at head.
         if previous is None:
             os.environ.pop("DATABASE_URL", None)
         else:
