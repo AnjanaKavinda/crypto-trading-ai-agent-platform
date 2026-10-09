@@ -18,6 +18,7 @@ import {
   snapshotCandles,
   snapshotLabels,
   validateSnapshot,
+  workspaceSelection,
 } from "./workspace-state.mjs";
 
 const EDUCATION = Object.freeze({
@@ -690,7 +691,10 @@ async function bootstrap() {
         instrument.append(option);
       }
       instrument.disabled = false;
-        updateRefreshAvailability();
+      const selection = workspaceSelection(window.location.search, symbols, TIMEFRAMES);
+      instrument.value = selection.instrumentId;
+      timeframe.value = selection.timeframe;
+      updateRefreshAvailability();
       loadSelectedPreferences();
       await loadSnapshot();
     } catch {

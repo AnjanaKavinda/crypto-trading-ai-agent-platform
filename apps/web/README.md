@@ -21,7 +21,14 @@ In a second terminal, serve this directory on loopback:
 python -m http.server 5173 --bind 127.0.0.1 --directory apps/web
 ```
 
-Open `http://127.0.0.1:5173`. The workspace makes read-only requests to
+Open `http://127.0.0.1:5173` for the read-only asset workspace, or
+`http://127.0.0.1:5173/watchlist.html` for the Spot market overview. The
+overview reads the API-supported approved instruments and their stored
+timeframe snapshots only; each row links to the workspace with validated
+instrument and timeframe parameters. Changing its timeframe performs bounded
+snapshot reads but never triggers collection or refresh.
+
+The workspace makes read-only requests to
 `http://127.0.0.1:8000/api/research/spot`. Initial load, navigation, view
 changes and history selection do not call refresh. Refresh is a separate,
 explicit user action and remains subject to the API's local configuration,

@@ -47,6 +47,21 @@ export function savePreferences(storage, instrumentId, timeframe, preferences) {
   return true;
 }
 
+export function workspaceSelection(search, symbols, timeframes) {
+  const parameters = new URLSearchParams(search);
+  const instruments = parameters.getAll("instrument");
+  const selectedTimeframes = parameters.getAll("timeframe");
+  const instrumentId = instruments.length === 1 &&
+      symbols.some((item) => item.instrument_id === instruments[0])
+    ? instruments[0]
+    : symbols[0]?.instrument_id;
+  const timeframe = selectedTimeframes.length === 1 &&
+      timeframes.includes(selectedTimeframes[0])
+    ? selectedTimeframes[0]
+    : timeframes[0];
+  return { instrumentId, timeframe };
+}
+
 export function snapshotLabels(snapshot) {
   if (!snapshot) return { temporal: "NO SNAPSHOT", quality: "UNAVAILABLE", severity: "error" };
   const quality = snapshot.data_quality?.status;
