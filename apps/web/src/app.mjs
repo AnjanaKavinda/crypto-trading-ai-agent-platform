@@ -489,6 +489,7 @@ function renderMetadata(snapshot) {
     ["Timeframe", snapshot.timeframe],
     ["As of", isoText(snapshot.as_of)],
     ["Freshness cutoff", isoText(snapshot.freshness_cutoff)],
+    ["Requested as-of cutoff", snapshot.requested_as_of ? isoText(snapshot.requested_as_of) : "None · current read"],
     ["Temporal context", snapshot.temporal_context === "HISTORICAL" ? "HISTORICAL — NOT CURRENT" : snapshot.temporal_context],
     ["Snapshot ID", snapshot.snapshot_id],
     ["Quality report ID", snapshot.data_quality?.report_id],
@@ -550,6 +551,7 @@ async function bootstrap() {
   let symbols = [];
   let snapshot = null;
   let requestSequence = 0;
+  let refreshInFlight = false;
   let preferences = { mode: "beginner", visible: [...DEFAULT_VISIBILITY] };
 
   const selectedHistory = () => {
@@ -563,7 +565,7 @@ async function bootstrap() {
       ? Math.floor(MAX_REFRESH_SECONDS / timeframeSeconds)
       : 0;
     const overCoverage = !refreshLimitWithinCoverage(timeframe.value, limit);
-    refreshButton.disabled = Boolean(cutoff.value) || overCoverage ||
+    refreshButton.disabled = refreshInFlight || Boolean(cutoff.value) || overCoverage ||
       !symbols.some((item) => item.instrument_id === instrument.value);
     $("#refresh-note").textContent = cutoff.value
       ? "Historical cutoffs are read-only. Clear the cutoff before requesting a current explicit refresh."
@@ -645,7 +647,11 @@ async function bootstrap() {
         instrumentId, timeframe: selectedTimeframe, limit, asOf,
       });
       if (sequence !== requestSequence) return;
-      const validationError = validateSnapshot(response, { instrumentId, timeframe: selectedTimeframe });
+      const validationError = validateSnapshot(response, {
+        instrumentId,
+        timeframe: selectedTimeframe,
+        requestedAsOf: asOf,
+      });
       if (validationError) throw new Error(validationError);
       snapshot = response;
       setStatus(snapshot);
@@ -702,10 +708,13 @@ async function bootstrap() {
   $("#pro-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "pro" }));
   $("#reset-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
   refreshButton.addEventListener("click", async () => {
-    if (!instrument.value || cutoff.value || !symbols.some((item) => item.instrument_id === instrument.value)) return;
+    if (refreshInFlight || !instrument.value || cutoff.value ||
+        !symbols.some((item) => item.instrument_id === instrument.value)) return;
     const sequence = ++requestSequence;
     const instrumentId = instrument.value;
     const selectedTimeframe = timeframe.value;
+    refreshInFlight = true;
+    updateRefreshAvailability();
     refreshButton.disabled = true;
     refreshButton.textContent = "Bounded refresh in progress…";
     controlError.hidden = true;
@@ -729,6 +738,7 @@ async function bootstrap() {
     } catch (error) {
       showFailure(error, sequence);
     } finally {
+      refreshInFlight = false;
       refreshButton.textContent = "Explicitly refresh from provider";
       updateRefreshAvailability();
     }

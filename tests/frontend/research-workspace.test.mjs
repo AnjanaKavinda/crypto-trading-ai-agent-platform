@@ -204,6 +204,11 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
       report_status: "VALID",
       policy_version: "personal-binance-spot-ohlcv-v1",
       policy_sha256: "a".repeat(64),
+      report: {
+        report_id: "report-1",
+        snapshot_id: "snapshot-1",
+        status: "VALID",
+      },
     },
     lineage: {
       source_record_ids: ["source-1"],
@@ -221,6 +226,29 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     ...snapshot,
     data_quality: { ...snapshot.data_quality, report_status: "STALE" },
   }, { instrumentId, timeframe }), /required snapshot identity or provenance/);
+  assert.equal(validateSnapshot({
+    ...snapshot,
+    temporal_context: "HISTORICAL",
+    requested_as_of: "2026-10-09T15:02:00Z",
+  }, {
+    instrumentId,
+    timeframe,
+    requestedAsOf: "2026-10-09T15:02:00.000Z",
+  }), null);
+  assert.match(validateSnapshot({
+    ...snapshot,
+    temporal_context: "CURRENT",
+    requested_as_of: "2026-10-09T15:02:00Z",
+  }, {
+    instrumentId,
+    timeframe,
+    requestedAsOf: "2026-10-09T15:02:00Z",
+  }), /does not match the requested historical cutoff/);
+  const validServedStale = {
+    ...snapshot,
+    data_quality: { ...snapshot.data_quality, status: "STALE" },
+  };
+  assert.equal(validateSnapshot(validServedStale, { instrumentId, timeframe }), null);
   assert.match(validateSnapshot({
     ...snapshot,
     candles: [{ ...candle, market_data_id: "unbound-market" }],
@@ -252,6 +280,25 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
   assert.equal(indicatorBindingError(snapshot, "rsi-14", {
     ...rsi,
     result: { ...result, snapshot_id: "different-snapshot" },
+  }), "INDICATOR_PROVENANCE_MISMATCH");
+  const bollinger = {
+    status: "AVAILABLE",
+    result: {
+      ...result,
+      indicator_id: "bollinger-bands",
+      parameters: undefined,
+      period: 20,
+      standard_deviation_multiplier: "2",
+    },
+  };
+  assert.equal(indicatorBindingError(snapshot, "bollinger-bands-20", bollinger), null);
+  assert.equal(indicatorBindingError(snapshot, "bollinger-bands-20", {
+    ...bollinger,
+    result: { ...bollinger.result, standard_deviation_multiplier: "3" },
+  }), "INDICATOR_PROVENANCE_MISMATCH");
+  assert.equal(indicatorBindingError(snapshot, "rsi-14", {
+    ...rsi,
+    result: { ...result, parameters: [["period", 14], ["period", 50]] },
   }), "INDICATOR_PROVENANCE_MISMATCH");
   assert.equal(indicatorBindingError(snapshot, "rsi-14", {
     ...rsi,
@@ -316,4 +363,6 @@ test("workspace source contains no polling or external provider path", async () 
   const staleGuard = source.indexOf("if (sequence !== requestSequence) return;", refreshStart);
   const responseAssignment = source.indexOf("snapshot = response;", refreshStart);
   assert.ok(refreshStart < staleGuard && staleGuard < responseAssignment);
+  assert.match(source, /refreshInFlight \|\| !instrument\.value/);
+  assert.match(source, /This request would exceed the API's 90-day refresh maximum/);
 });

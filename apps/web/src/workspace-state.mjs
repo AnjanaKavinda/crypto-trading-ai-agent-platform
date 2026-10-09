@@ -57,7 +57,7 @@ export function snapshotLabels(snapshot) {
   return { temporal, quality: typeof quality === "string" ? quality : "UNAVAILABLE", severity };
 }
 
-export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
+export function validateSnapshot(snapshot, { instrumentId, timeframe, requestedAsOf }) {
   const qualityStatuses = ["VALID", "DEGRADED", "STALE", "INCOMPLETE", "INVALID", "UNAVAILABLE"];
   const awareTimestamp = (value) => typeof value === "string" &&
     /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
@@ -71,6 +71,12 @@ export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
       !qualityStatuses.includes(snapshot.data_quality.report_status) ||
       (snapshot.data_quality.status === "VALID" && snapshot.data_quality.report_status !== "VALID") ||
       typeof snapshot.data_quality.policy_version !== "string" ||
+      !snapshot.data_quality.report || typeof snapshot.data_quality.report !== "object" ||
+      snapshot.data_quality.report.report_id !== snapshot.data_quality.report_id ||
+      snapshot.data_quality.report.snapshot_id !== snapshot.snapshot_id ||
+      snapshot.data_quality.report.status !== snapshot.data_quality.report_status ||
+      (snapshot.data_quality.status !== snapshot.data_quality.report_status &&
+        !(snapshot.data_quality.status === "STALE" && snapshot.data_quality.report_status === "VALID")) ||
       !/^[0-9a-f]{64}$/.test(snapshot.data_quality.policy_sha256) ||
       !snapshot.lineage || typeof snapshot.lineage.adapter_version !== "string" ||
       !Array.isArray(snapshot.lineage.market_data_ids) ||
@@ -83,6 +89,19 @@ export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
       typeof snapshot.order_flow.reason_code !== "string" ||
       !awareTimestamp(snapshot.as_of) || !awareTimestamp(snapshot.freshness_cutoff)) {
     return "The API response lacks required snapshot identity or provenance; no values are shown.";
+  }
+  const returnedCutoff = snapshot.requested_as_of;
+  if (requestedAsOf) {
+    if (!awareTimestamp(returnedCutoff) ||
+        Date.parse(returnedCutoff) !== Date.parse(requestedAsOf) ||
+        snapshot.temporal_context !== "HISTORICAL" ||
+        Date.parse(snapshot.freshness_cutoff) !== Date.parse(requestedAsOf) ||
+        Date.parse(snapshot.as_of) > Date.parse(requestedAsOf)) {
+      return "The API response does not match the requested historical cutoff; no values are shown.";
+    }
+  } else if ((returnedCutoff !== undefined && returnedCutoff !== null) ||
+      snapshot.temporal_context !== "CURRENT") {
+    return "The API response temporal context does not match the current snapshot request; no values are shown.";
   }
   if (snapshot.candles.length !== snapshot.lineage.market_data_ids.length ||
       snapshot.lineage.market_data_ids.some((id) => typeof id !== "string" || !id) ||
@@ -110,7 +129,7 @@ const INDICATOR_BINDINGS = Object.freeze({
   "ema-50": { indicatorId: "ema", parameters: { period: 50 } },
   "ema-500": { indicatorId: "ema", parameters: { period: 500 } },
   "atr-14": { indicatorId: "atr-14", parameters: { period: 14 } },
-  "bollinger-bands-20": { indicatorId: "bollinger-bands", parameters: { period: 20 } },
+  "bollinger-bands-20": { indicatorId: "bollinger-bands", parameters: { period: 20, standard_deviation_multiplier: "2" } },
   "realized-volatility-20": { indicatorId: "realized-volatility", parameters: { period: 20 } },
   "rsi-14": { indicatorId: "rsi", parameters: { period: 14 } },
   "macd-12-26-9": { indicatorId: "macd", parameters: { "fast-period": 12, "slow-period": 26, "signal-period": 9 } },
@@ -129,13 +148,25 @@ export function indicatorBindingError(snapshot, indicatorId, indicator) {
     return indicator.status === "UNAVAILABLE" ? null : "INDICATOR_RESULT_MISSING";
   }
   const expected = INDICATOR_BINDINGS[indicatorId];
-  const actualParameters = Array.isArray(result.parameters)
-    ? Object.fromEntries(result.parameters.filter((item) => Array.isArray(item) && item.length === 2))
-    : { period: result.period };
-  if (typeof result !== "object" ||
-      !expected ||
+  if (typeof result !== "object") return "INDICATOR_PROVENANCE_MISMATCH";
+  const parameterEntries = Array.isArray(result.parameters)
+    ? result.parameters
+    : ["period", "standard_deviation_multiplier"]
+        .filter((key) => result[key] !== undefined)
+        .map((key) => [key, result[key]]);
+  if (!Array.isArray(parameterEntries) ||
+      parameterEntries.some((item) => !Array.isArray(item) || item.length !== 2 ||
+        typeof item[0] !== "string") ||
+      new Set(parameterEntries.map(([name]) => name)).size !== parameterEntries.length) {
+    return "INDICATOR_PROVENANCE_MISMATCH";
+  }
+  const actualParameters = Object.fromEntries(parameterEntries);
+  if (!expected ||
+      parameterEntries.length !== Object.keys(actualParameters).length ||
+      Object.keys(actualParameters).length !== Object.keys(expected.parameters).length ||
       result.indicator_id !== expected.indicatorId ||
-      Object.entries(expected.parameters).some(([name, value]) => actualParameters[name] !== value) ||
+      Object.entries(expected.parameters).some(([name, value]) =>
+        typeof actualParameters[name] !== typeof value || actualParameters[name] !== value) ||
       result.snapshot_id !== snapshot.snapshot_id ||
       result.quality_report_id !== snapshot.data_quality.report_id ||
       result.instrument_id !== snapshot.instrument_id ||
