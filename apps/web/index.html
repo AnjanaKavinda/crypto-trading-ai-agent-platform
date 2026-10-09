@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Local Spot Research Workspace</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./src/app.mjs"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">LOCAL RESEARCH — READ ONLY</p>
+        <h1>Asset analysis workspace</h1>
+        <p class="muted">Trading and execution are unavailable in this phase.</p>
+      </div>
+      <div class="mode-pill" role="status">LOCAL RESEARCH · READ ONLY</div>
+    </header>
+
+    <main>
+      <section class="panel controls" aria-labelledby="selection-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">RESEARCH SELECTOR</p>
+            <h2 id="selection-heading">Asset and time context</h2>
+          </div>
+          <button id="refresh-button" class="primary" type="button" disabled>
+            Explicitly refresh from provider
+          </button>
+        </div>
+        <p id="refresh-note" class="muted">Refresh is never automatic. This action requests a bounded public Spot update.</p>
+        <div class="control-grid">
+          <label>Supported instrument
+            <select id="instrument-select" disabled aria-describedby="instrument-note"></select>
+          </label>
+          <label>Timeframe
+            <select id="timeframe-select">
+              <option value="1m">1 minute</option>
+              <option value="5m">5 minutes</option>
+              <option value="15m">15 minutes</option>
+              <option value="1h">1 hour</option>
+              <option value="4h">4 hours</option>
+              <option value="1d">1 day</option>
+            </select>
+          </label>
+          <label>Maximum requested history
+            <select id="history-select">
+              <option value="50">50 candles</option>
+              <option value="90">90 candles</option>
+              <option value="100">100 candles</option>
+              <option value="250" selected>250 candles</option>
+              <option value="501">501 candles (API maximum)</option>
+            </select>
+          </label>
+          <label>Historical as-of cutoff (optional, local time)
+            <input id="as-of-input" type="datetime-local" step="1">
+          </label>
+        </div>
+        <p id="instrument-note" class="muted">Instrument options come only from the local research API allowlist.</p>
+        <p id="control-error" class="error-text" role="alert" hidden></p>
+      </section>
+
+      <section id="snapshot-status" class="status-panel" aria-live="polite" aria-atomic="true">
+        <strong>No snapshot loaded.</strong>
+        <span>Only read-only local API requests run on initial load and selector changes.</span>
+      </section>
+
+      <section class="panel chart-panel" aria-labelledby="chart-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">EXACT API CANDLES</p>
+            <h2 id="chart-heading">Price and volume</h2>
+          </div>
+          <div id="view-mode" class="mode-pill">Beginner view</div>
+        </div>
+        <p id="chart-note" class="muted">Chart geometry is display-only. Values and indicators come from the exact response.</p>
+        <div id="chart-container" class="chart-container">
+          <p class="empty-state">Waiting for a local Spot research snapshot.</p>
+        </div>
+        <details class="data-table">
+          <summary>Inspect exact OHLCV values returned by the API</summary>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr><th scope="col">Open time</th><th scope="col">Open</th><th scope="col">High</th><th scope="col">Low</th><th scope="col">Close</th><th scope="col">Volume</th><th scope="col">Market data ID</th></tr>
+              </thead>
+              <tbody id="candle-rows"><tr><td colspan="7">No candle response.</td></tr></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel" aria-labelledby="indicator-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">BACKEND CALCULATIONS ONLY</p>
+            <h2 id="indicator-heading">Indicators and display preferences</h2>
+          </div>
+          <div class="button-row">
+            <button id="beginner-button" type="button" aria-pressed="true">Beginner</button>
+            <button id="pro-button" type="button" aria-pressed="false">Pro</button>
+            <button id="reset-button" type="button">Reset to beginner defaults</button>
+          </div>
+        </div>
+        <p class="education-note"><strong>Educational context — not validated statistical evidence.</strong> Indicator displays are descriptive research outputs, not probabilities, guarantees, signals, or trade instructions.</p>
+        <div id="indicator-controls" class="indicator-controls" aria-label="Indicator visibility"></div>
+        <div id="indicator-groups" class="indicator-groups">
+          <p class="empty-state">Indicator results are supplied by the API with the snapshot.</p>
+        </div>
+        <section class="unavailable-panel" aria-labelledby="order-flow-heading">
+          <h3 id="order-flow-heading">Order flow and advanced layers — unavailable</h3>
+          <p id="order-flow-reason">Trade and book inputs are not available from this API. Footprint, bid/ask delta, CVD, depth and liquidity are never inferred from OHLCV candles.</p>
+        </section>
+      </section>
+
+      <section class="panel" aria-labelledby="provenance-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">PROVENANCE AND FRESHNESS</p>
+            <h2 id="provenance-heading">Snapshot identity</h2>
+          </div>
+        </div>
+        <dl id="snapshot-metadata" class="metadata-grid">
+          <div><dt>Instrument / venue</dt><dd>Not yet available</dd></div>
+        </dl>
+        <div id="source-list" class="source-list"></div>
+      </section>
+    </main>
+
+    <footer>
+      <strong>LOCAL RESEARCH — READ ONLY</strong>
+      <span>No account, approval, risk, order, execution, exchange-health, or trading-readiness capability is provided here.</span>
+    </footer>
+  </body>
+</html>
