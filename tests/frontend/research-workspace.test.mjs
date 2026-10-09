@@ -219,10 +219,16 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
   assert.equal(validateSnapshot(snapshot, { instrumentId, timeframe }), null);
   assert.match(validateSnapshot({
     ...snapshot,
+    data_quality: { ...snapshot.data_quality, report_status: "STALE" },
+  }, { instrumentId, timeframe }), /required snapshot identity or provenance/);
+  assert.match(validateSnapshot({
+    ...snapshot,
     candles: [{ ...candle, market_data_id: "unbound-market" }],
   }, { instrumentId, timeframe }), /exact snapshot lineage/);
 
   const result = {
+    indicator_id: "rsi",
+    parameters: [["period", 14]],
     snapshot_id: snapshot.snapshot_id,
     quality_report_id: snapshot.data_quality.report_id,
     instrument_id: snapshot.instrument_id,
@@ -238,14 +244,18 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     }],
   };
   const rsi = { status: "AVAILABLE", reason_code: null, result };
-  assert.equal(indicatorBindingError(snapshot, rsi), null);
+  assert.equal(indicatorBindingError(snapshot, "rsi-14", rsi), null);
   assert.equal(indicatorBindingError({
     ...snapshot,
     data_quality: { ...snapshot.data_quality, status: "STALE" },
-  }, rsi), "QUALITY_NOT_VALID");
-  assert.equal(indicatorBindingError(snapshot, {
+  }, "rsi-14", rsi), "QUALITY_NOT_VALID");
+  assert.equal(indicatorBindingError(snapshot, "rsi-14", {
     ...rsi,
     result: { ...result, snapshot_id: "different-snapshot" },
+  }), "INDICATOR_PROVENANCE_MISMATCH");
+  assert.equal(indicatorBindingError(snapshot, "rsi-14", {
+    ...rsi,
+    result: { ...result, indicator_id: "cci" },
   }), "INDICATOR_PROVENANCE_MISMATCH");
   assert.deepEqual(latestIndicatorValues(result), {
     values: [["value", "42.5"]],
@@ -302,4 +312,8 @@ test("workspace source contains no polling or external provider path", async () 
   assert.match(source, /refreshButton\.addEventListener\("click"/);
   assert.equal((source.match(/refreshSnapshot\(/g) ?? []).length, 1);
   assert.match(source, /snapshot = null;\s*updateRefreshAvailability\(\)/);
+  const refreshStart = source.indexOf("const response = await refreshSnapshot(");
+  const staleGuard = source.indexOf("if (sequence !== requestSequence) return;", refreshStart);
+  const responseAssignment = source.indexOf("snapshot = response;", refreshStart);
+  assert.ok(refreshStart < staleGuard && staleGuard < responseAssignment);
 });

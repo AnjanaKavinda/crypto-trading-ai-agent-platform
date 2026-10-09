@@ -69,6 +69,7 @@ export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
       !snapshot.data_quality.report_id ||
       !qualityStatuses.includes(snapshot.data_quality.status) ||
       !qualityStatuses.includes(snapshot.data_quality.report_status) ||
+      (snapshot.data_quality.status === "VALID" && snapshot.data_quality.report_status !== "VALID") ||
       typeof snapshot.data_quality.policy_version !== "string" ||
       !/^[0-9a-f]{64}$/.test(snapshot.data_quality.policy_sha256) ||
       !snapshot.lineage || typeof snapshot.lineage.adapter_version !== "string" ||
@@ -104,8 +105,22 @@ export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
   return null;
 }
 
-export function indicatorBindingError(snapshot, indicator) {
-  if (snapshot?.data_quality?.status !== "VALID") return "QUALITY_NOT_VALID";
+const INDICATOR_BINDINGS = Object.freeze({
+  "ema-20": { indicatorId: "ema", parameters: { period: 20 } },
+  "ema-50": { indicatorId: "ema", parameters: { period: 50 } },
+  "ema-500": { indicatorId: "ema", parameters: { period: 500 } },
+  "atr-14": { indicatorId: "atr-14", parameters: { period: 14 } },
+  "bollinger-bands-20": { indicatorId: "bollinger-bands", parameters: { period: 20 } },
+  "realized-volatility-20": { indicatorId: "realized-volatility", parameters: { period: 20 } },
+  "rsi-14": { indicatorId: "rsi", parameters: { period: 14 } },
+  "macd-12-26-9": { indicatorId: "macd", parameters: { "fast-period": 12, "slow-period": 26, "signal-period": 9 } },
+  "stochastic-14-3": { indicatorId: "stochastic", parameters: { "k-period": 14, "d-period": 3 } },
+  "cci-20": { indicatorId: "cci", parameters: { period: 20 } },
+});
+
+export function indicatorBindingError(snapshot, indicatorId, indicator) {
+  if (snapshot?.data_quality?.status !== "VALID" ||
+      snapshot?.data_quality?.report_status !== "VALID") return "QUALITY_NOT_VALID";
   if (!indicator || !["AVAILABLE", "WARMUP", "UNAVAILABLE"].includes(indicator.status)) {
     return "INDICATOR_STATUS_UNAVAILABLE";
   }
@@ -113,7 +128,14 @@ export function indicatorBindingError(snapshot, indicator) {
   if (result == null) {
     return indicator.status === "UNAVAILABLE" ? null : "INDICATOR_RESULT_MISSING";
   }
+  const expected = INDICATOR_BINDINGS[indicatorId];
+  const actualParameters = Array.isArray(result.parameters)
+    ? Object.fromEntries(result.parameters.filter((item) => Array.isArray(item) && item.length === 2))
+    : { period: result.period };
   if (typeof result !== "object" ||
+      !expected ||
+      result.indicator_id !== expected.indicatorId ||
+      Object.entries(expected.parameters).some(([name, value]) => actualParameters[name] !== value) ||
       result.snapshot_id !== snapshot.snapshot_id ||
       result.quality_report_id !== snapshot.data_quality.report_id ||
       result.instrument_id !== snapshot.instrument_id ||

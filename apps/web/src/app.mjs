@@ -197,7 +197,7 @@ function renderIndicatorControls(snapshot, preferences, updatePreferences) {
 function addIndicatorCard(container, id, snapshot) {
   const descriptor = EDUCATION[id];
   const indicator = snapshot?.indicators?.[id];
-  const bindingError = indicatorBindingError(snapshot, indicator);
+  const bindingError = indicatorBindingError(snapshot, id, indicator);
   const status = bindingError
     ? "UNAVAILABLE"
     : indicator.status;
@@ -352,7 +352,7 @@ function renderChart(snapshot, preferences) {
   for (const id of enabled) {
     const result = snapshot.indicators?.[id]?.result;
     if (snapshot.indicators?.[id]?.status !== "AVAILABLE" ||
-        indicatorBindingError(snapshot, snapshot.indicators?.[id]) ||
+        indicatorBindingError(snapshot, id, snapshot.indicators?.[id]) ||
         !result) continue;
     if (id === "ema-20" || id === "ema-50") {
       emaSeries.push([id, plotValues(result)]);
@@ -704,18 +704,21 @@ async function bootstrap() {
   refreshButton.addEventListener("click", async () => {
     if (!instrument.value || cutoff.value || !symbols.some((item) => item.instrument_id === instrument.value)) return;
     const sequence = ++requestSequence;
+    const instrumentId = instrument.value;
+    const selectedTimeframe = timeframe.value;
     refreshButton.disabled = true;
     refreshButton.textContent = "Bounded refresh in progress…";
     controlError.hidden = true;
     try {
-      snapshot = await refreshSnapshot(globalThis.fetch, {
-        instrumentId: instrument.value,
-        timeframe: timeframe.value,
+      const response = await refreshSnapshot(globalThis.fetch, {
+        instrumentId,
+        timeframe: selectedTimeframe,
         limit: selectedHistory(),
       });
       if (sequence !== requestSequence) return;
-      const validationError = validateSnapshot(snapshot, { instrumentId: instrument.value, timeframe: timeframe.value });
+      const validationError = validateSnapshot(response, { instrumentId, timeframe: selectedTimeframe });
       if (validationError) throw new Error(validationError);
+      snapshot = response;
       setStatus(snapshot);
       renderChart(snapshot, preferences);
       renderCandles(snapshot);
