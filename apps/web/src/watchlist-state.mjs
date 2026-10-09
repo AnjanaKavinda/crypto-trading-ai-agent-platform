@@ -21,8 +21,8 @@ export function supportedWatchlistSymbols(response) {
   const symbols = [];
   const seen = new Set();
   for (const item of response.instruments) {
+    if (!Object.hasOwn(APPROVED_INSTRUMENTS, item?.instrument_id)) continue;
     const approvedSymbol = APPROVED_INSTRUMENTS[item?.instrument_id];
-    if (approvedSymbol === undefined) continue;
     if (seen.has(item.instrument_id)) {
       throw new Error("The local API returned duplicate approved instruments.");
     }

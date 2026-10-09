@@ -113,6 +113,7 @@ test("supported-symbol response shows only the five exact approved instruments",
     instruments: [
       ...symbolResponse.instruments,
       { instrument_id: "DOGE-USDT-SPOT", symbol: "DOGEUSDT", venue_id: "BINANCE-SPOT", eligibility: "CHECKED_ON_EACH_REFRESH" },
+      { instrument_id: "constructor", symbol: "constructor", venue_id: "BINANCE-SPOT", eligibility: "CHECKED_ON_EACH_REFRESH" },
     ],
   });
   assert.deepEqual(allowed.map((item) => item.symbol), ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]);
