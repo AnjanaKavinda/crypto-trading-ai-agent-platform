@@ -5,11 +5,14 @@ import { readFile } from "node:fs/promises";
 import {
   listSupportedSymbols,
   readSnapshot,
+  refreshLimitWithinCoverage,
   refreshSnapshot,
 } from "../../apps/web/src/research-api.mjs";
 import {
   DEFAULT_VISIBILITY,
   displayCandle,
+  indicatorBindingError,
+  latestIndicatorValues,
   loadPreferences,
   plotValues,
   preferenceKey,
@@ -99,6 +102,8 @@ test("daily refresh respects the API's 90-day coverage limit", async () => {
     /90-day coverage limit/,
   );
   assert.equal(client.calls.length, 0);
+  assert.equal(refreshLimitWithinCoverage("1d", 90), true);
+  assert.equal(refreshLimitWithinCoverage("1d", 100), false);
 });
 
 test("API failure output is sanitized and does not expose server problem details", async () => {
@@ -216,6 +221,43 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     ...snapshot,
     candles: [{ ...candle, market_data_id: "unbound-market" }],
   }, { instrumentId, timeframe }), /exact snapshot lineage/);
+
+  const result = {
+    snapshot_id: snapshot.snapshot_id,
+    quality_report_id: snapshot.data_quality.report_id,
+    instrument_id: snapshot.instrument_id,
+    venue_id: snapshot.venue_id,
+    timeframe: snapshot.timeframe,
+    as_of: snapshot.as_of,
+    metadata_version: "1",
+    calculation_version: "fixture-v1",
+    input_market_data_ids: ["market-1"],
+    points: [{
+      candle_end: candle.close_time,
+      value: { value: "42.5", status: "READY", reason: null },
+    }],
+  };
+  const rsi = { status: "AVAILABLE", reason_code: null, result };
+  assert.equal(indicatorBindingError(snapshot, rsi), null);
+  assert.equal(indicatorBindingError({
+    ...snapshot,
+    data_quality: { ...snapshot.data_quality, status: "STALE" },
+  }, rsi), "QUALITY_NOT_VALID");
+  assert.equal(indicatorBindingError(snapshot, {
+    ...rsi,
+    result: { ...result, snapshot_id: "different-snapshot" },
+  }), "INDICATOR_PROVENANCE_MISMATCH");
+  assert.deepEqual(latestIndicatorValues(result), {
+    values: [["value", "42.5"]],
+    unavailable: [],
+  });
+  assert.deepEqual(latestIndicatorValues({ points: [{
+    line: { value: null, status: "WARMUP", reason: "WARMUP" },
+    signal: { value: null, status: "UNDEFINED", reason: "ZERO_RANGE" },
+  }] }), {
+    values: [],
+    unavailable: ["line: WARMUP (WARMUP)", "signal: UNDEFINED (ZERO_RANGE)"],
+  });
 });
 
 test("indicator charts use only returned, non-null backend points", () => {
@@ -259,4 +301,5 @@ test("workspace source contains no polling or external provider path", async () 
   assert.doesNotMatch(source, /setInterval|WebSocket|binance\.com|api\.binance/i);
   assert.match(source, /refreshButton\.addEventListener\("click"/);
   assert.equal((source.match(/refreshSnapshot\(/g) ?? []).length, 1);
+  assert.match(source, /snapshot = null;\s*updateRefreshAvailability\(\)/);
 });

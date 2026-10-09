@@ -19,7 +19,7 @@ function apiError(status) {
       : status >= 500
         ? "The local research API or its configured provider/storage is unavailable."
         : status === 422
-          ? "The local API rejected the selector or history bound. The snapshot was not truncated; increase the bound or adjust the cutoff."
+          ? "The local API rejected the selector or history bound. The snapshot was not truncated; adjust the instrument, timeframe, bound, or cutoff."
         : "The local research API rejected this request.";
   const error = new Error(message);
   error.status = status;
@@ -58,11 +58,17 @@ export function readSnapshot(fetcher, { instrumentId, timeframe, limit, asOf }) 
   return request(fetcher, `/${encodeURIComponent(instrumentId)}/candles?${query}`);
 }
 
+export function refreshLimitWithinCoverage(timeframe, limit) {
+  const seconds = TIMEFRAME_SECONDS[timeframe];
+  return Boolean(seconds) && Number.isInteger(limit) && limit >= 2 &&
+    limit <= MAX_CANDLES && limit * seconds <= MAX_REFRESH_SECONDS;
+}
+
 export function refreshSnapshot(fetcher, { instrumentId, timeframe, limit, now = Date.now() }) {
   const seconds = TIMEFRAME_SECONDS[timeframe];
   if (!seconds) throw new Error("Unsupported API timeframe.");
   if (!Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLES) throw new Error("Refresh bound is outside the API limit.");
-  if (limit * seconds > MAX_REFRESH_SECONDS) {
+  if (!refreshLimitWithinCoverage(timeframe, limit)) {
     throw new Error("Refresh exceeds the API's 90-day coverage limit; select a smaller candle bound.");
   }
   const intervalMs = seconds * 1000;

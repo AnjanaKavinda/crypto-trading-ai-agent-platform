@@ -2,11 +2,15 @@ import {
   listSupportedSymbols,
   readSnapshot,
   refreshSnapshot,
+  MAX_REFRESH_SECONDS,
+  refreshLimitWithinCoverage,
   TIMEFRAME_SECONDS,
 } from "./research-api.mjs";
 import {
   DEFAULT_VISIBILITY,
   INDICATOR_IDS,
+  indicatorBindingError,
+  latestIndicatorValues,
   loadPreferences,
   plotValues,
   savePreferences,
@@ -146,19 +150,6 @@ function setStatus(snapshot, errorMessage) {
   }
 }
 
-function latestValues(result) {
-  if (!Array.isArray(result?.points)) return [];
-  const fields = ["value", "middle", "upper", "lower", "bandwidth", "line", "signal", "histogram", "k", "d"];
-  for (let index = result.points.length - 1; index >= 0; index -= 1) {
-    const point = result.points[index];
-    const values = fields.flatMap((field) => typeof point?.[field] === "string"
-      ? [[field, point[field]]]
-      : []);
-    if (values.length) return values;
-  }
-  return [];
-}
-
 function renderIndicatorControls(snapshot, preferences, updatePreferences) {
   const controls = $("#indicator-controls");
   controls.hidden = preferences.mode !== "pro";
@@ -206,7 +197,10 @@ function renderIndicatorControls(snapshot, preferences, updatePreferences) {
 function addIndicatorCard(container, id, snapshot) {
   const descriptor = EDUCATION[id];
   const indicator = snapshot?.indicators?.[id];
-  const status = ["AVAILABLE", "WARMUP", "UNAVAILABLE"].includes(indicator?.status) ? indicator.status : "UNAVAILABLE";
+  const bindingError = indicatorBindingError(snapshot, indicator);
+  const status = bindingError
+    ? "UNAVAILABLE"
+    : indicator.status;
   const card = element("article", undefined, "indicator-card");
   const heading = element("h4", descriptor.title);
   const badge = element("span", status, "state-badge");
@@ -214,31 +208,37 @@ function addIndicatorCard(container, id, snapshot) {
   heading.append(badge);
   card.append(heading);
   if (status === "AVAILABLE") {
-    const values = latestValues(indicator.result);
-    if (values.length) {
-      for (const [name, value] of values) {
+    const latest = latestIndicatorValues(indicator.result);
+    if (latest.values.length) {
+      for (const [name, value] of latest.values) {
         const output = element("p", undefined, "indicator-value");
         output.append(element("span", `${name}: `), element("strong", value));
         card.append(output);
       }
     } else {
-      card.append(element("p", "The backend reports AVAILABLE but returned no plottable value; no default is substituted."));
+      card.append(element("p", "The backend reports an available series, but its latest point has no available value; no earlier or default value is substituted."));
     }
+    for (const state of latest.unavailable) card.append(element("p", `Latest point state: ${state}`));
   } else {
     card.append(element("p", status === "WARMUP"
       ? "The backend has not returned a warmed-up value for this indicator."
       : "No usable value is available from this response."));
   }
-  if (indicator?.reason_code) card.append(element("p", `Backend reason: ${indicator.reason_code}`));
+  if (bindingError) card.append(element("p", `Display withheld: ${bindingError}.`));
+  else if (indicator?.reason_code) card.append(element("p", `Backend reason: ${indicator.reason_code}`));
   const result = indicator?.result;
-  if (result && typeof result === "object") {
+  if (!bindingError && result && typeof result === "object") {
+    const parameterEntries = Array.isArray(result.parameters)
+      ? result.parameters.flatMap((item) => Array.isArray(item) && item.length === 2 ? [`${item[0]}=${stringValue(item[1])}`] : [])
+      : ["period", "fast_period", "slow_period", "signal_period", "k_period", "d_period", "standard_deviation_multiplier"]
+        .filter((key) => result[key] !== undefined)
+        .map((key) => `${key}=${stringValue(result[key])}`);
     const details = [
       ["Method version", result.calculation_version],
       ["Metadata version", result.metadata_version],
-      ["Parameters", ["period", "fast_period", "slow_period", "signal_period", "k_period", "d_period", "standard_deviation_multiplier"]
-        .filter((key) => result[key] !== undefined)
-        .map((key) => `${key}=${stringValue(result[key])}`).join(", ") || undefined],
-      ["Unit", result.price_unit ?? result.unit],
+      ["Parameters", parameterEntries.join(", ") || undefined],
+      ["Output unit", result.unit],
+      ["Price unit", result.price_unit],
       ["Timeframe", result.timeframe],
       ["Result as-of", result.as_of],
       ["Snapshot binding", result.snapshot_id],
@@ -351,7 +351,9 @@ function renderChart(snapshot, preferences) {
   const atrSeries = [];
   for (const id of enabled) {
     const result = snapshot.indicators?.[id]?.result;
-    if (snapshot.indicators?.[id]?.status !== "AVAILABLE" || !result) continue;
+    if (snapshot.indicators?.[id]?.status !== "AVAILABLE" ||
+        indicatorBindingError(snapshot, snapshot.indicators?.[id]) ||
+        !result) continue;
     if (id === "ema-20" || id === "ema-50") {
       emaSeries.push([id, plotValues(result)]);
     } else if (id === "bollinger-bands-20") {
@@ -554,6 +556,21 @@ async function bootstrap() {
     const limit = Number(history.value);
     return HISTORY_LIMITS.has(limit) ? limit : 250;
   };
+  const updateRefreshAvailability = () => {
+    const limit = selectedHistory();
+    const timeframeSeconds = TIMEFRAME_SECONDS[timeframe.value];
+    const maxRefreshCandles = timeframeSeconds
+      ? Math.floor(MAX_REFRESH_SECONDS / timeframeSeconds)
+      : 0;
+    const overCoverage = !refreshLimitWithinCoverage(timeframe.value, limit);
+    refreshButton.disabled = Boolean(cutoff.value) || overCoverage ||
+      !symbols.some((item) => item.instrument_id === instrument.value);
+    $("#refresh-note").textContent = cutoff.value
+      ? "Historical cutoffs are read-only. Clear the cutoff before requesting a current explicit refresh."
+      : overCoverage
+        ? `This request would exceed the API's 90-day refresh maximum. Select ${maxRefreshCandles} or fewer candles for ${timeframe.value}; reads remain available at the selected bound.`
+        : "Refresh is never automatic. This action requests a bounded public Spot update.";
+  };
   const renderPreferences = () => {
     $("#view-mode").textContent = preferences.mode === "pro" ? "Pro view" : "Beginner view";
     $("#beginner-button").setAttribute("aria-pressed", String(preferences.mode === "beginner"));
@@ -587,7 +604,20 @@ async function bootstrap() {
   const loadSnapshot = async () => {
     const sequence = ++requestSequence;
     controlError.hidden = true;
-    refreshButton.disabled = Boolean(cutoff.value);
+    snapshot = null;
+    updateRefreshAvailability();
+    const statusPanel = $("#snapshot-status");
+    statusPanel.dataset.state = "warning";
+    statusPanel.replaceChildren(
+      element("strong", `Loading ${instrument.value} · ${timeframe.value}.`),
+      element("span", "Previous snapshot cleared; this read cannot trigger provider collection."),
+    );
+    $("#chart-container").replaceChildren(element("p", "Loading exact API candle data…", "empty-state"));
+    renderCandles(null);
+    renderMetadata(null);
+    renderIndicatorControls(null, preferences, setPreferences);
+    $("#indicator-groups").replaceChildren(element("p", "Loading backend indicator results…", "empty-state"));
+    renderOrderFlow(null);
     const instrumentId = instrument.value;
     const selectedTimeframe = timeframe.value;
     const limit = selectedHistory();
@@ -609,10 +639,7 @@ async function bootstrap() {
       }
       asOf = instant.toISOString();
     }
-    refreshButton.disabled = Boolean(asOf);
-    $("#refresh-note").textContent = asOf
-      ? "Historical cutoffs are read-only. Clear the cutoff before requesting a current explicit refresh."
-      : "Refresh is never automatic. This action requests a bounded public Spot update.";
+    updateRefreshAvailability();
     try {
       const response = await readSnapshot(globalThis.fetch, {
         instrumentId, timeframe: selectedTimeframe, limit, asOf,
@@ -654,6 +681,7 @@ async function bootstrap() {
         instrument.append(option);
       }
       instrument.disabled = false;
+        updateRefreshAvailability();
       loadSelectedPreferences();
       await loadSnapshot();
     } catch {
@@ -666,8 +694,8 @@ async function bootstrap() {
     }
   };
 
-  instrument.addEventListener("change", () => { loadSelectedPreferences(); void loadSnapshot(); });
-  timeframe.addEventListener("change", () => { loadSelectedPreferences(); void loadSnapshot(); });
+  instrument.addEventListener("change", () => { snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
+  timeframe.addEventListener("change", () => { snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });
   $("#beginner-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
@@ -699,7 +727,7 @@ async function bootstrap() {
       showFailure(error, sequence);
     } finally {
       refreshButton.textContent = "Explicitly refresh from provider";
-      refreshButton.disabled = Boolean(cutoff.value);
+      updateRefreshAvailability();
     }
   });
   await loadSymbols();

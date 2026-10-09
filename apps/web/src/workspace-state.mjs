@@ -104,6 +104,60 @@ export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
   return null;
 }
 
+export function indicatorBindingError(snapshot, indicator) {
+  if (snapshot?.data_quality?.status !== "VALID") return "QUALITY_NOT_VALID";
+  if (!indicator || !["AVAILABLE", "WARMUP", "UNAVAILABLE"].includes(indicator.status)) {
+    return "INDICATOR_STATUS_UNAVAILABLE";
+  }
+  const result = indicator.result;
+  if (result == null) {
+    return indicator.status === "UNAVAILABLE" ? null : "INDICATOR_RESULT_MISSING";
+  }
+  if (typeof result !== "object" ||
+      result.snapshot_id !== snapshot.snapshot_id ||
+      result.quality_report_id !== snapshot.data_quality.report_id ||
+      result.instrument_id !== snapshot.instrument_id ||
+      result.venue_id !== snapshot.venue_id ||
+      result.timeframe !== snapshot.timeframe ||
+      result.as_of !== snapshot.as_of ||
+      typeof result.metadata_version !== "string" ||
+      typeof result.calculation_version !== "string" ||
+      !Array.isArray(result.input_market_data_ids) ||
+      result.input_market_data_ids.length !== snapshot.lineage.market_data_ids.length ||
+      result.input_market_data_ids.some((id, index) => id !== snapshot.lineage.market_data_ids[index]) ||
+      !Array.isArray(result.points) ||
+      result.points.length !== snapshot.candles.length ||
+      result.points.some((point, index) => point?.candle_end !== snapshot.candles[index].close_time)) {
+    return "INDICATOR_PROVENANCE_MISMATCH";
+  }
+  return null;
+}
+
+export function latestIndicatorValues(result) {
+  const point = Array.isArray(result?.points) ? result.points.at(-1) : null;
+  if (!point) return { values: [], unavailable: [] };
+  const fields = ["value", "middle", "upper", "lower", "bandwidth", "line", "signal", "histogram", "k", "d"];
+  const values = [];
+  const unavailable = [];
+  for (const field of fields) {
+    const raw = point[field];
+    if (typeof raw === "string" &&
+        /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw) &&
+        Number.isFinite(Number(raw))) {
+      values.push([field, raw]);
+    } else if (raw && typeof raw === "object") {
+      if (raw.status === "READY" && typeof raw.value === "string" &&
+          /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw.value) &&
+          Number.isFinite(Number(raw.value))) {
+        values.push([field, raw.value]);
+      } else if (raw.status === "WARMUP" || raw.status === "UNDEFINED") {
+        unavailable.push(`${field}: ${raw.status}${raw.reason ? ` (${raw.reason})` : ""}`);
+      }
+    }
+  }
+  return { values, unavailable };
+}
+
 export function plotValues(result, field = "value") {
   if (!Array.isArray(result?.points)) return [];
   return result.points.flatMap((point) => {
