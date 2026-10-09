@@ -1,0 +1,144 @@
+export const DEFAULT_VISIBILITY = Object.freeze(["ema-20", "ema-50", "atr-14"]);
+export const INDICATOR_IDS = Object.freeze([
+  "ema-20",
+  "ema-50",
+  "ema-500",
+  "atr-14",
+  "bollinger-bands-20",
+  "realized-volatility-20",
+  "rsi-14",
+  "macd-12-26-9",
+  "stochastic-14-3",
+  "cci-20",
+]);
+
+const STORAGE_PREFIX = "spot-research.presentation.v1";
+
+export function preferenceKey(instrumentId, timeframe) {
+  return `${STORAGE_PREFIX}:${instrumentId}:${timeframe}`;
+}
+
+export function loadPreferences(storage, instrumentId, timeframe) {
+  const defaults = { mode: "beginner", visible: [...DEFAULT_VISIBILITY] };
+  try {
+    const saved = JSON.parse(storage.getItem(preferenceKey(instrumentId, timeframe)));
+    if (!saved || typeof saved !== "object") return defaults;
+    return {
+      mode: saved.mode === "pro" ? "pro" : "beginner",
+      visible: Array.isArray(saved.visible)
+        ? [...new Set(saved.visible.filter((id) => INDICATOR_IDS.includes(id)))]
+        : [...DEFAULT_VISIBILITY],
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+export function savePreferences(storage, instrumentId, timeframe, preferences) {
+  const safe = {
+    mode: preferences.mode === "pro" ? "pro" : "beginner",
+    visible: [...new Set((preferences.visible ?? []).filter((id) => INDICATOR_IDS.includes(id)))],
+  };
+  try {
+    storage.setItem(preferenceKey(instrumentId, timeframe), JSON.stringify(safe));
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+export function snapshotLabels(snapshot) {
+  if (!snapshot) return { temporal: "NO SNAPSHOT", quality: "UNAVAILABLE", severity: "error" };
+  const quality = snapshot.data_quality?.status;
+  const temporal = snapshot.temporal_context === "HISTORICAL"
+    ? "HISTORICAL — NOT CURRENT"
+    : snapshot.temporal_context === "CURRENT" ? "CURRENT CONTEXT" : "UNKNOWN TEMPORAL CONTEXT";
+  const severity = quality === "VALID" ? "valid" : quality === "STALE" ? "warning" : "error";
+  return { temporal, quality: typeof quality === "string" ? quality : "UNAVAILABLE", severity };
+}
+
+export function validateSnapshot(snapshot, { instrumentId, timeframe }) {
+  const qualityStatuses = ["VALID", "DEGRADED", "STALE", "INCOMPLETE", "INVALID", "UNAVAILABLE"];
+  const awareTimestamp = (value) => typeof value === "string" &&
+    /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
+  if (!snapshot || snapshot.instrument_id !== instrumentId || snapshot.timeframe !== timeframe ||
+      typeof snapshot.symbol !== "string" || snapshot.venue_id !== "BINANCE-SPOT" ||
+      !["CURRENT", "HISTORICAL"].includes(snapshot.temporal_context) ||
+      typeof snapshot.snapshot_id !== "string" || !snapshot.snapshot_id ||
+      !snapshot.data_quality || typeof snapshot.data_quality.report_id !== "string" ||
+      !snapshot.data_quality.report_id ||
+      !qualityStatuses.includes(snapshot.data_quality.status) ||
+      !qualityStatuses.includes(snapshot.data_quality.report_status) ||
+      typeof snapshot.data_quality.policy_version !== "string" ||
+      !/^[0-9a-f]{64}$/.test(snapshot.data_quality.policy_sha256) ||
+      !snapshot.lineage || typeof snapshot.lineage.adapter_version !== "string" ||
+      !Array.isArray(snapshot.lineage.market_data_ids) ||
+      !Array.isArray(snapshot.lineage.source_record_ids) ||
+      !Array.isArray(snapshot.lineage.sources) ||
+      !Array.isArray(snapshot.candles) || !snapshot.candles.length ||
+      !snapshot.indicators || typeof snapshot.indicators !== "object" ||
+      typeof snapshot.persisted !== "boolean" ||
+      !snapshot.order_flow || typeof snapshot.order_flow.status !== "string" ||
+      typeof snapshot.order_flow.reason_code !== "string" ||
+      !awareTimestamp(snapshot.as_of) || !awareTimestamp(snapshot.freshness_cutoff)) {
+    return "The API response lacks required snapshot identity or provenance; no values are shown.";
+  }
+  if (snapshot.candles.length !== snapshot.lineage.market_data_ids.length ||
+      snapshot.lineage.market_data_ids.some((id) => typeof id !== "string" || !id) ||
+      snapshot.lineage.source_record_ids.some((id) => typeof id !== "string" || !id) ||
+      new Set(snapshot.lineage.market_data_ids).size !== snapshot.lineage.market_data_ids.length ||
+      new Set(snapshot.lineage.source_record_ids).size !== snapshot.lineage.source_record_ids.length ||
+      snapshot.candles.some((candle, index) =>
+        candle.market_data_id !== snapshot.lineage.market_data_ids[index] ||
+        !snapshot.lineage.source_record_ids.includes(candle.source_record_id) ||
+        !awareTimestamp(candle.open_time) ||
+        !awareTimestamp(candle.close_time) ||
+        Date.parse(candle.close_time) <= Date.parse(candle.open_time) ||
+        displayCandle(candle) === null,
+      ) ||
+      snapshot.lineage.source_record_ids.some((id) =>
+        !snapshot.lineage.sources.some((source) => source?.source_record_id === id),
+      )) {
+    return "Candle values do not match the exact snapshot lineage; no chart values are shown.";
+  }
+  return null;
+}
+
+export function plotValues(result, field = "value") {
+  if (!Array.isArray(result?.points)) return [];
+  return result.points.flatMap((point) => {
+    const value = point?.[field];
+    if (typeof point?.candle_end !== "string" || typeof value !== "string") return [];
+    if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) return [];
+    return [{ candleEnd: point.candle_end, value }];
+  });
+}
+
+export function displayCandle(candle) {
+  if (!candle || candle.finalization !== "FINAL" || !candle.metrics ||
+      typeof candle.metrics !== "object" || Array.isArray(candle.metrics)) return null;
+  const values = {};
+  for (const key of ["open", "high", "low", "close", "volume"]) {
+    const metric = candle.metrics[key];
+    if (typeof metric?.value !== "string" ||
+        typeof metric?.unit !== "string" || !metric.unit ||
+        !/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(metric.value)) return null;
+    const numeric = Number(metric.value);
+    if (!Number.isFinite(numeric)) return null;
+    values[key] = { exact: metric.value, numeric, unit: metric.unit };
+  }
+  if (["open", "high", "low", "close"].some((key) => values[key].numeric <= 0) ||
+      values.high.numeric < Math.max(values.open.numeric, values.close.numeric) ||
+      values.low.numeric > Math.min(values.open.numeric, values.close.numeric) ||
+      values.low.numeric > values.high.numeric || values.volume.numeric < 0) return null;
+  return values;
+}
+
+export function snapshotCandles(snapshot) {
+  if (!Array.isArray(snapshot?.candles) || snapshot.candles.length === 0) return { candles: [], error: "No candle observations were returned." };
+  const candles = snapshot.candles.map((candle) => ({ source: candle, values: displayCandle(candle) }));
+  if (candles.some(({ values }) => values === null)) {
+    return { candles: [], error: "The candle response is incomplete or invalid; no chart values are shown." };
+  }
+  return { candles, error: null };
+}
