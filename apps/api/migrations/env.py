@@ -10,6 +10,7 @@ from trading_platform_api.persistence import (
     create_async_engine_instance,
     load_database_settings,
 )
+from trading_platform_api.spot_research_store import spot_research_snapshots
 
 config = context.config
 
@@ -17,6 +18,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = [AuditBase.metadata, lineage_metadata]
+assert spot_research_snapshots.metadata is lineage_metadata
 
 
 def run_migrations_offline() -> None:

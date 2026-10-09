@@ -38,7 +38,11 @@ CANONICAL_TRADING_READINESS_STATUSES = {
 
 
 def _create_client(settings: AppSettings | None = None) -> TestClient:
-    return TestClient(create_app(settings=settings))
+    return TestClient(
+        create_app(settings=settings),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+    )
 
 
 def _health_routes(app) -> list[APIRoute]:
