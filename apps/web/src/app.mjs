@@ -2,8 +2,7 @@ import {
   listSupportedSymbols,
   readSnapshot,
   refreshSnapshot,
-  MAX_REFRESH_SECONDS,
-  refreshLimitWithinCoverage,
+  refreshRequestWithinBounds,
   TIMEFRAME_SECONDS,
 } from "./research-api.mjs";
 import {
@@ -560,17 +559,13 @@ async function bootstrap() {
   };
   const updateRefreshAvailability = () => {
     const limit = selectedHistory();
-    const timeframeSeconds = TIMEFRAME_SECONDS[timeframe.value];
-    const maxRefreshCandles = timeframeSeconds
-      ? Math.floor(MAX_REFRESH_SECONDS / timeframeSeconds)
-      : 0;
-    const overCoverage = !refreshLimitWithinCoverage(timeframe.value, limit);
-    refreshButton.disabled = refreshInFlight || Boolean(cutoff.value) || overCoverage ||
+    const outsideBounds = !refreshRequestWithinBounds(timeframe.value, limit);
+    refreshButton.disabled = refreshInFlight || Boolean(cutoff.value) || outsideBounds ||
       !symbols.some((item) => item.instrument_id === instrument.value);
     $("#refresh-note").textContent = cutoff.value
       ? "Historical cutoffs are read-only. Clear the cutoff before requesting a current explicit refresh."
-      : overCoverage
-        ? `This request would exceed the API's 90-day refresh maximum. Select ${maxRefreshCandles} or fewer candles for ${timeframe.value}; reads remain available at the selected bound.`
+      : outsideBounds
+        ? "Select a supported timeframe and a history bound from 2 to 501 candles."
         : "Refresh is never automatic. This action requests a bounded public Spot update.";
   };
   const renderPreferences = () => {

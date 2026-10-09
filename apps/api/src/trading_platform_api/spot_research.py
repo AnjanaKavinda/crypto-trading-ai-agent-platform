@@ -848,7 +848,6 @@ class SpotResearchService:
             slots < 2
             or slots > body.limit
             or body.coverage_end > now
-            or body.coverage_end - body.coverage_start > timedelta(days=90)
             or body.limit > MAX_REFRESH_CANDLES
         ):
             raise SpotResearchError(

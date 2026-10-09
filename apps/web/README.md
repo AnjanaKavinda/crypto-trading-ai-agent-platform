@@ -32,6 +32,10 @@ Historical cutoffs are read-only and presented as historical. Candle counts
 are request bounds; the API response is never sliced in the browser. If the
 bound is too small for an exact stored snapshot, the API error is shown instead
 of presenting a truncated snapshot.
+Explicit refresh requests accept 2–501 aligned closed candles without a
+frontend calendar-span cap. The Binance adapter has a separate 90-day
+historical-request capability limit, so a longer request may return a sanitized
+provider error; refresh remains explicit and never retries automatically.
 
 Presentation visibility and Beginner/Pro preferences are saved in this
 browser's local storage under instrument/timeframe-specific keys. These

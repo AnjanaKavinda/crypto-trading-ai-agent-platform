@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import {
   listSupportedSymbols,
   readSnapshot,
-  refreshLimitWithinCoverage,
+  refreshRequestWithinBounds,
   refreshSnapshot,
 } from "../../apps/web/src/research-api.mjs";
 import {
@@ -95,15 +95,44 @@ test("refresh and read selectors reject unbounded or unsupported inputs before f
   assert.equal(client.calls.length, 0);
 });
 
-test("daily refresh respects the API's 90-day coverage limit", async () => {
-  const client = fakeFetch();
+test("501-candle daily refresh is accepted and 502 candles are rejected before fetch", async () => {
+  const client = fakeFetch([{ ok: true, json: async () => ({}) }]);
+  const now = Date.parse("2026-10-09T15:19:36.042Z");
+  await refreshSnapshot(client.fetcher, {
+    instrumentId, timeframe: "1d", limit: 501, now,
+  });
+  const body = JSON.parse(client.calls[0].options.body);
+  assert.equal(body.limit, 501);
+  assert.equal(body.timeframe, "1d");
+  assert.equal(
+    Date.parse(body.coverage_end) - Date.parse(body.coverage_start),
+    501 * 24 * 60 * 60 * 1000,
+  );
+  assert.equal(refreshRequestWithinBounds("1d", 501), true);
   assert.throws(
-    () => refreshSnapshot(client.fetcher, { instrumentId, timeframe: "1d", limit: 100 }),
-    /90-day coverage limit/,
+    () => refreshSnapshot(client.fetcher, { instrumentId, timeframe: "1d", limit: 502 }),
+    /outside the API limit/,
+  );
+  assert.equal(refreshRequestWithinBounds("1d", 502), false);
+  assert.equal(client.calls.length, 1);
+});
+
+test("historical cutoffs prevent refresh before fetch", async () => {
+  const client = fakeFetch();
+  assert.equal(
+    refreshRequestWithinBounds("1d", 501, { historical: true }),
+    false,
+  );
+  assert.throws(
+    () => refreshSnapshot(client.fetcher, {
+      instrumentId,
+      timeframe: "1d",
+      limit: 501,
+      asOf: "2026-10-01T00:00:00Z",
+    }),
+    /Historical cutoffs cannot be refreshed/,
   );
   assert.equal(client.calls.length, 0);
-  assert.equal(refreshLimitWithinCoverage("1d", 90), true);
-  assert.equal(refreshLimitWithinCoverage("1d", 100), false);
 });
 
 test("API failure output is sanitized and does not expose server problem details", async () => {
@@ -374,6 +403,7 @@ test("workspace source contains no polling or external provider path", async () 
   const staleGuard = source.indexOf("if (sequence !== requestSequence) return;", refreshStart);
   const responseAssignment = source.indexOf("snapshot = response;", refreshStart);
   assert.ok(refreshStart < staleGuard && staleGuard < responseAssignment);
-  assert.match(source, /refreshInFlight \|\| !instrument\.value/);
-  assert.match(source, /This request would exceed the API's 90-day refresh maximum/);
+  assert.match(source, /refreshInFlight \|\| !instrument\.value \|\| cutoff\.value/);
+  assert.match(source, /Historical cutoffs are read-only/);
+  assert.doesNotMatch(source, /90-day|MAX_REFRESH_SECONDS/);
 });

@@ -74,6 +74,14 @@ from trading_platform_api.spot_research_store import (
 
 NOW = datetime(2026, 10, 9, 5, 0, tzinfo=UTC)
 INSTRUMENT = "BTC-USDT-SPOT"
+TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+}
 SOURCE_SETTINGS = BinanceSpotSettings(
     enabled=True,
     terms_review_reference="terms-review-1",
@@ -86,8 +94,10 @@ def policy_template() -> QualityPolicyTemplate:
     return approved_quality_policy_template()
 
 
-def complete_batch(request: MarketDataRequest, *, candles: int = 21) -> ProviderBatch:
-    step = timedelta(minutes=1)
+def complete_batch(
+    request: MarketDataRequest, *, candles: int = 21, timeframe: str = "1m"
+) -> ProviderBatch:
+    step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
     coverage_start = request.range_start
     assert coverage_start is not None
     snapshot_id = uuid4()
@@ -161,7 +171,11 @@ class FakeProvider:
 
     async def fetch(self, request: MarketDataRequest) -> ProviderBatch:
         self.counter.append(1)
-        return complete_batch(request, candles=request.maximum_records)
+        return complete_batch(
+            request,
+            candles=request.maximum_records,
+            timeframe=self.settings.timeframe,
+        )
 
 
 class FakeRepository:
@@ -235,11 +249,13 @@ def service(
     )
 
 
-def refresh_body(*, limit: int = 21) -> dict[str, object]:
+def refresh_body(*, limit: int = 21, timeframe: str = "1m") -> dict[str, object]:
+    step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
+    end = NOW.replace(hour=0, minute=0) if timeframe == "1d" else NOW
     return {
-        "timeframe": "1m",
-        "coverage_start": (NOW - timedelta(minutes=limit)).isoformat(),
-        "coverage_end": NOW.isoformat(),
+        "timeframe": timeframe,
+        "coverage_start": (end - limit * step).isoformat(),
+        "coverage_end": end.isoformat(),
         "limit": limit,
     }
 
@@ -569,6 +585,62 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
 
     assert response.status_code == 422
     assert response.json()["code"] == "REQUEST_VALIDATION_FAILED"
+    assert calls == []
+
+
+def test_501_daily_refresh_window_over_90_days_passes_request_validation() -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+    body = refresh_body(limit=501, timeframe="1d")
+    assert (
+        datetime.fromisoformat(body["coverage_end"])
+        - datetime.fromisoformat(body["coverage_start"])
+    ) > timedelta(days=90)
+
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=body,
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["candles"]) == 501
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_code"),
+    [
+        (
+            {
+                **refresh_body(limit=2),
+                "coverage_start": (NOW - timedelta(minutes=2, seconds=1)).isoformat(),
+            },
+            "REQUEST_VALIDATION_FAILED",
+        ),
+        (
+            {
+                "timeframe": "1d",
+                "coverage_start": "2026-10-10T00:00:00+00:00",
+                "coverage_end": "2026-10-12T00:00:00+00:00",
+                "limit": 2,
+            },
+            "REFRESH_RANGE_INVALID",
+        ),
+    ],
+)
+def test_misaligned_or_future_refresh_is_rejected_before_provider_fetch(
+    body: dict[str, object], expected_code: str
+) -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=body,
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == expected_code
     assert calls == []
 
 
