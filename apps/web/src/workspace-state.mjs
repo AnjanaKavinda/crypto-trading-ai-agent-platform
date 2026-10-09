@@ -85,8 +85,10 @@ export function validateSnapshot(snapshot, { instrumentId, timeframe, requestedA
       !Array.isArray(snapshot.candles) || !snapshot.candles.length ||
       !snapshot.indicators || typeof snapshot.indicators !== "object" ||
       typeof snapshot.persisted !== "boolean" ||
-      !snapshot.order_flow || typeof snapshot.order_flow.status !== "string" ||
-      typeof snapshot.order_flow.reason_code !== "string" ||
+      !snapshot.order_flow ||
+      snapshot.order_flow.status !== "UNAVAILABLE" ||
+      snapshot.order_flow.reason_code !== "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE" ||
+      snapshot.order_flow.result !== null ||
       !awareTimestamp(snapshot.as_of) || !awareTimestamp(snapshot.freshness_cutoff)) {
     return "The API response lacks required snapshot identity or provenance; no values are shown.";
   }

@@ -219,9 +219,17 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     persisted: true,
     candles: [candle],
     indicators: {},
-    order_flow: { status: "UNAVAILABLE", reason_code: "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE" },
+    order_flow: {
+      status: "UNAVAILABLE",
+      reason_code: "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE",
+      result: null,
+    },
   };
   assert.equal(validateSnapshot(snapshot, { instrumentId, timeframe }), null);
+  assert.match(validateSnapshot({
+    ...snapshot,
+    order_flow: { status: "AVAILABLE", reason_code: "UNVALIDATED", result: {} },
+  }, { instrumentId, timeframe }), /required snapshot identity or provenance/);
   assert.match(validateSnapshot({
     ...snapshot,
     data_quality: { ...snapshot.data_quality, report_status: "STALE" },
