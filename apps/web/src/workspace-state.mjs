@@ -57,12 +57,12 @@ export function snapshotLabels(snapshot) {
   return { temporal, quality: typeof quality === "string" ? quality : "UNAVAILABLE", severity };
 }
 
-export function validateSnapshot(snapshot, { instrumentId, timeframe, requestedAsOf }) {
+export function validateSnapshot(snapshot, { instrumentId, symbol, timeframe, requestedAsOf }) {
   const qualityStatuses = ["VALID", "DEGRADED", "STALE", "INCOMPLETE", "INVALID", "UNAVAILABLE"];
   const awareTimestamp = (value) => typeof value === "string" &&
     /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value));
   if (!snapshot || snapshot.instrument_id !== instrumentId || snapshot.timeframe !== timeframe ||
-      typeof snapshot.symbol !== "string" || snapshot.venue_id !== "BINANCE-SPOT" ||
+      typeof symbol !== "string" || snapshot.symbol !== symbol || snapshot.venue_id !== "BINANCE-SPOT" ||
       !["CURRENT", "HISTORICAL"].includes(snapshot.temporal_context) ||
       typeof snapshot.snapshot_id !== "string" || !snapshot.snapshot_id ||
       !snapshot.data_quality || typeof snapshot.data_quality.report_id !== "string" ||

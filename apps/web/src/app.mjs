@@ -627,6 +627,7 @@ async function bootstrap() {
       showFailure(new Error("Select an instrument returned by the local API allowlist."), sequence);
       return;
     }
+    const selectedSymbol = symbols.find((item) => item.instrument_id === instrumentId).symbol;
     if (!TIMEFRAMES.includes(selectedTimeframe)) {
       showFailure(new Error("This timeframe is not supported by the local research API."), sequence);
       return;
@@ -649,6 +650,7 @@ async function bootstrap() {
       if (sequence !== requestSequence) return;
       const validationError = validateSnapshot(response, {
         instrumentId,
+        symbol: selectedSymbol,
         timeframe: selectedTimeframe,
         requestedAsOf: asOf,
       });
@@ -708,10 +710,12 @@ async function bootstrap() {
   $("#pro-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "pro" }));
   $("#reset-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
   refreshButton.addEventListener("click", async () => {
-    if (refreshInFlight || !instrument.value || cutoff.value ||
-        !symbols.some((item) => item.instrument_id === instrument.value)) return;
+    if (refreshInFlight || !instrument.value || cutoff.value) return;
+    const selectedInstrument = symbols.find((item) => item.instrument_id === instrument.value);
+    if (!selectedInstrument) return;
     const sequence = ++requestSequence;
     const instrumentId = instrument.value;
+    const symbol = selectedInstrument.symbol;
     const selectedTimeframe = timeframe.value;
     refreshInFlight = true;
     updateRefreshAvailability();
@@ -725,7 +729,7 @@ async function bootstrap() {
         limit: selectedHistory(),
       });
       if (sequence !== requestSequence) return;
-      const validationError = validateSnapshot(response, { instrumentId, timeframe: selectedTimeframe });
+      const validationError = validateSnapshot(response, { instrumentId, symbol, timeframe: selectedTimeframe });
       if (validationError) throw new Error(validationError);
       snapshot = response;
       setStatus(snapshot);

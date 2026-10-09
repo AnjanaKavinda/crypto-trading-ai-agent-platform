@@ -225,21 +225,23 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
       result: null,
     },
   };
-  assert.equal(validateSnapshot(snapshot, { instrumentId, timeframe }), null);
+  assert.equal(validateSnapshot(snapshot, { instrumentId, symbol: "BTCUSDT", timeframe }), null);
+  assert.match(validateSnapshot(snapshot, { instrumentId, symbol: "ETHUSDT", timeframe }), /required snapshot identity or provenance/);
   assert.match(validateSnapshot({
     ...snapshot,
     order_flow: { status: "AVAILABLE", reason_code: "UNVALIDATED", result: {} },
-  }, { instrumentId, timeframe }), /required snapshot identity or provenance/);
+  }, { instrumentId, symbol: "BTCUSDT", timeframe }), /required snapshot identity or provenance/);
   assert.match(validateSnapshot({
     ...snapshot,
     data_quality: { ...snapshot.data_quality, report_status: "STALE" },
-  }, { instrumentId, timeframe }), /required snapshot identity or provenance/);
+  }, { instrumentId, symbol: "BTCUSDT", timeframe }), /required snapshot identity or provenance/);
   assert.equal(validateSnapshot({
     ...snapshot,
     temporal_context: "HISTORICAL",
     requested_as_of: "2026-10-09T15:02:00Z",
   }, {
     instrumentId,
+    symbol: "BTCUSDT",
     timeframe,
     requestedAsOf: "2026-10-09T15:02:00.000Z",
   }), null);
@@ -249,6 +251,7 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     requested_as_of: "2026-10-09T15:02:00Z",
   }, {
     instrumentId,
+    symbol: "BTCUSDT",
     timeframe,
     requestedAsOf: "2026-10-09T15:02:00Z",
   }), /does not match the requested historical cutoff/);
@@ -256,11 +259,11 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     ...snapshot,
     data_quality: { ...snapshot.data_quality, status: "STALE" },
   };
-  assert.equal(validateSnapshot(validServedStale, { instrumentId, timeframe }), null);
+  assert.equal(validateSnapshot(validServedStale, { instrumentId, symbol: "BTCUSDT", timeframe }), null);
   assert.match(validateSnapshot({
     ...snapshot,
     candles: [{ ...candle, market_data_id: "unbound-market" }],
-  }, { instrumentId, timeframe }), /exact snapshot lineage/);
+  }, { instrumentId, symbol: "BTCUSDT", timeframe }), /exact snapshot lineage/);
 
   const result = {
     indicator_id: "rsi",
