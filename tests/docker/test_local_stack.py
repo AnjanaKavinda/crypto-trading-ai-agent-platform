@@ -45,7 +45,7 @@ class LocalStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(set(config["services"]), {"web", "api", "migrate", "postgres"})
         web_env = config["services"]["web"]["environment"]
         host, port = web_env["LOCAL_WEB_HOST"], web_env["LOCAL_WEB_PORT"]
-        origin = f"http://{host}:{port}"
+        origin = f"http://{host}" if port == "80" else f"http://{host}:{port}"
         secret = web_env["LOCAL_PROXY_SECRET"]
         self.assertEqual(
             config["services"]["api"]["environment"][
@@ -85,6 +85,8 @@ class LocalStackAcceptanceTests(unittest.TestCase):
             "/watchlist.html",
             "/src/research-api.mjs",
             "/src/runtime-config.mjs",
+            "/src/app.mjs",
+            "/src/watchlist.mjs",
         ):
             content = get(path)
             self.assertTrue(content)

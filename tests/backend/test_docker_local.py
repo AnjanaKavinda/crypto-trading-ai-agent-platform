@@ -68,6 +68,21 @@ def test_authenticated_proxy_reads_without_origin(docker_environment):
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_default_http_port_uses_browser_canonical_authority(
+    docker_environment, monkeypatch
+):
+    origin = "http://127.0.0.1"
+    monkeypatch.setenv("LOCAL_WEB_PORT", "80")
+    monkeypatch.setenv("TRADING_PLATFORM_FRONTEND_ORIGIN", origin)
+    headers = {PROXY_HEADER: docker_environment["LOCAL_PROXY_SECRET"], "origin": origin}
+    with TestClient(create_app(_docker_local=True), base_url=origin) as api:
+        assert api.get("/health", headers=headers).status_code == 200
+        assert api.get("/health", headers=headers | {"host": HOST}).status_code == 421
+    monkeypatch.setenv("TRADING_PLATFORM_FRONTEND_ORIGIN", origin + ":80")
+    with pytest.raises(ValueError, match="exactly match"):
+        create_app(_docker_local=True)
+
+
 @pytest.mark.parametrize(
     "headers",
     [

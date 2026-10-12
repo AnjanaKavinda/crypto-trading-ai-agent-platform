@@ -82,7 +82,8 @@ def load_docker_local_settings(settings: AppSettings) -> DockerLocalSettings:
         raise ValueError("LOCAL_WEB_HOST must be a loopback IP literal.") from None
     if not address.is_loopback or not valid_port or port != str(int(port)):
         raise ValueError("Local web publication requires a loopback IP and valid port.")
-    authority = f"[{host}]:{port}" if address.version == 6 else f"{host}:{port}"
+    hostname = f"[{host}]" if address.version == 6 else host
+    authority = hostname if port == "80" else f"{hostname}:{port}"
     origin = os.environ.get("TRADING_PLATFORM_FRONTEND_ORIGIN", "")
     if origin != f"http://{authority}" or urlsplit(origin).netloc != authority:
         raise ValueError("Frontend origin must exactly match the loopback web binding.")

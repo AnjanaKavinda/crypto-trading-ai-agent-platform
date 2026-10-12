@@ -21,11 +21,15 @@ case "$LOCAL_PROXY_SECRET" in
   *[!0-9a-f]*) echo "LOCAL_PROXY_SECRET must be lowercase hex." >&2; exit 1 ;;
 esac
 umask 077
+authority="${LOCAL_WEB_HOST}:${LOCAL_WEB_PORT}"
+if [ "$LOCAL_WEB_PORT" -eq 80 ]; then
+  authority="$LOCAL_WEB_HOST"
+fi
 cat > /etc/nginx/conf.d/local.conf <<EOF
 server {
     listen 8080 default_server;
     server_name _;
-    if (\$http_host != "${LOCAL_WEB_HOST}:${LOCAL_WEB_PORT}") { return 421; }
+    if (\$http_host != "${authority}") { return 421; }
     root /usr/share/nginx/html;
     access_log off;
     server_tokens off;

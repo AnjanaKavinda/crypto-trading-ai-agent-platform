@@ -91,7 +91,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null --header=\"Host: $${LOCAL_WEB_HOST}:$${LOCAL_WEB_PORT}\" http://127.0.0.1:8080/"]
+      test: ["CMD-SHELL", "authority=\"$${LOCAL_WEB_HOST}:$${LOCAL_WEB_PORT}\"; if [ \"$${LOCAL_WEB_PORT}\" -eq 80 ]; then authority=\"$${LOCAL_WEB_HOST}\"; fi; wget -q -O /dev/null --header=\"Host: $${authority}\" http://127.0.0.1:8080/"]
       interval: 5s
       timeout: 5s
       retries: 20

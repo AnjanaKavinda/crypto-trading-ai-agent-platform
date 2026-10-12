@@ -77,7 +77,8 @@ Keep `TRADING_PLATFORM_MODE=research`, `ENABLE_LIVE_TRADING=false`, and
 `ENABLE_AUTO_EXECUTION=false`. Only canonical IPv4 loopback addresses are
 supported for `LOCAL_WEB_HOST` (default `127.0.0.1`). If changing the address or
 `LOCAL_WEB_PORT`, also set `TRADING_PLATFORM_FRONTEND_ORIGIN` to that exact
-`http://host:port`. Non-loopback settings fail closed; never publish to the LAN.
+`http://host:port` (omit `:80` for the default HTTP port). Non-loopback settings
+fail closed; never publish to the LAN.
 After rotating `LOCAL_PROXY_SECRET`, restart API and web together with
 `docker compose up --build --force-recreate`.
 Do not share `docker compose config` output, container environment inspection,
