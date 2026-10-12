@@ -37,6 +37,9 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
             "python -m mypy apps/api/src/trading_platform_api",
             "python -m pytest -q tests/backend",
             "python .github/scripts/test_product_ci.py",
+            "docker compose config --quiet",
+            "docker compose up --build --wait --wait-timeout 180",
+            "python tests/docker/test_local_stack.py",
             "detect-secrets-hook --baseline .secrets.baseline",
         )
         for command in mandatory_commands:
@@ -44,6 +47,13 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
 
         self.assertNotIn("continue-on-error", self.workflow)
         self.assertNotIn("${{ secrets.", self.workflow)
+
+    def test_docker_ci_is_disposable_and_offline(self) -> None:
+        self.assertIn('Path(".env.example").read_text()', self.workflow)
+        self.assertIn("secrets.token_hex(32)", self.workflow)
+        self.assertIn("if: always()", self.workflow)
+        self.assertIn("docker compose down -v", self.workflow)
+        self.assertIn("rm -f .env", self.workflow)
 
 
 if __name__ == "__main__":

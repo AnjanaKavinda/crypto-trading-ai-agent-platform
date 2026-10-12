@@ -1,4 +1,4 @@
-const API_ORIGIN = "http://127.0.0.1:8000";
+import { API_ORIGIN } from "./runtime-config.mjs";
 const API_PATH = "/api/research/spot";
 export const MAX_CANDLES = 501;
 export const MAX_REFRESH_SECONDS = 90 * 24 * 60 * 60;

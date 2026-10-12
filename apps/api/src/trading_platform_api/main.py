@@ -19,6 +19,10 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from trading_platform_api.config import AppSettings, load_app_settings
+from trading_platform_api.docker_local import (
+    DockerLocalSettings,
+    load_docker_local_settings,
+)
 from trading_platform_api.health import create_router as create_health_router
 from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
 from trading_platform_api.persistence import (
@@ -77,22 +81,27 @@ class LocalRequestGuard(BaseHTTPMiddleware):
         *,
         allowed_origin: str | None,
         allow_test_host: bool,
+        docker_local: DockerLocalSettings | None = None,
     ) -> None:
         super().__init__(app)
         self.allowed_origin = allowed_origin
         self.allow_test_host = allow_test_host
+        self.docker_local = docker_local
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         host_header = request.headers.get("host", "")
-        hostname = urlsplit(f"//{host_header}").hostname
+        try:
+            hostname = urlsplit(f"//{host_header}").hostname
+        except ValueError:
+            hostname = None
         peer_host = request.client.host if request.client is not None else None
         loopback_peer = peer_host is not None and (
             _is_loopback_host(peer_host)
             or (self.allow_test_host and peer_host == "testclient")
         )
-        if not (
+        local_request = (
             loopback_peer
             and hostname is not None
             and (
@@ -100,7 +109,13 @@ class LocalRequestGuard(BaseHTTPMiddleware):
                 or _is_loopback_host(hostname)
                 or (self.allow_test_host and hostname == "testserver")
             )
-        ):
+        )
+        accepted = (
+            self.docker_local.accepts(request)
+            if self.docker_local is not None
+            else local_request
+        )
+        if not accepted:
             response: Response = _problem(
                 request,
                 status=421,
@@ -169,8 +184,12 @@ def create_app(
     *,
     research_service: SpotResearchService | None = None,
     allowed_origin: str | None = None,
+    _docker_local: bool = False,
 ) -> FastAPI:
     app_settings = settings if settings is not None else load_app_settings()
+    docker_settings = (
+        load_docker_local_settings(app_settings) if _docker_local else None
+    )
     engine_holder: dict[str, AsyncEngine | None] = {"engine": None}
 
     @asynccontextmanager
@@ -191,7 +210,9 @@ def create_app(
         if research_service is not None
         else _make_default_research_service(engine_holder=engine_holder)
     )
-    if allowed_origin is None:
+    if docker_settings is not None:
+        allowed_origin = docker_settings.origin
+    elif allowed_origin is None:
         allowed_origin = os.environ.get("TRADING_PLATFORM_FRONTEND_ORIGIN")
     allowed_origin = validate_local_origin(allowed_origin)
     app.state.allowed_origin = allowed_origin
@@ -208,6 +229,7 @@ def create_app(
         LocalRequestGuard,
         allowed_origin=allowed_origin,
         allow_test_host=app_settings.environment.value == "test",
+        docker_local=docker_settings,
     )
     app.include_router(create_health_router())
     app.include_router(create_research_router())
