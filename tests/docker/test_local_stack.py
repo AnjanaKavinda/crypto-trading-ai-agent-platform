@@ -74,6 +74,10 @@ class LocalStackAcceptanceTests(unittest.TestCase):
             with urlopen(
                 Request(origin + path, headers=headers or {}), timeout=10
             ) as response:
+                if path.endswith(".mjs"):
+                    self.assertEqual(
+                        response.headers.get_content_type(), "application/javascript"
+                    )
                 return response.read()
 
         for path in (
