@@ -122,9 +122,11 @@ class LocalStackAcceptanceTests(unittest.TestCase):
             json.loads(disabled.exception.read())["code"], "COLLECTION_NOT_ENABLED"
         )
         # The proxy must overwrite a spoofed browser credential.
+        spoofed_headers = {
+            "X-Local-Proxy-Secret": "wrong"  # pragma: allowlist secret
+        }
         self.assertEqual(
-            json.loads(get("/api/health", {"X-Local-Proxy-Secret": "wrong"}))["status"],
-            "HEALTHY",
+            json.loads(get("/api/health", spoofed_headers))["status"], "HEALTHY"
         )
         for headers in (
             {"Host": "evil.invalid"},
