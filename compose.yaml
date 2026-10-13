@@ -1,0 +1,106 @@
+name: spot-research
+
+x-api-environment: &api-environment
+  TRADING_PLATFORM_DOCKER_LOCAL: "true"
+  TRADING_PLATFORM_ENVIRONMENT: ${TRADING_PLATFORM_ENVIRONMENT:-dev}
+  TRADING_PLATFORM_MODE: ${TRADING_PLATFORM_MODE:?Set explicit research mode in .env}
+  ENABLE_LIVE_TRADING: ${ENABLE_LIVE_TRADING:?Set false in .env}
+  ENABLE_AUTO_EXECUTION: ${ENABLE_AUTO_EXECUTION:?Set false in .env}
+  LOCAL_WEB_HOST: ${LOCAL_WEB_HOST:-127.0.0.1}
+  LOCAL_WEB_PORT: ${LOCAL_WEB_PORT:-5173}
+  TRADING_PLATFORM_FRONTEND_ORIGIN: ${TRADING_PLATFORM_FRONTEND_ORIGIN:?Set exact loopback UI origin}
+  LOCAL_PROXY_SECRET: ${LOCAL_PROXY_SECRET:?Generate a local proxy secret in .env}
+  POSTGRES_USER: ${POSTGRES_USER:?Set local PostgreSQL user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set local PostgreSQL password}
+  POSTGRES_DB: ${POSTGRES_DB:?Set local PostgreSQL database}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set local PostgreSQL user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set local PostgreSQL password}
+      POSTGRES_DB: ${POSTGRES_DB:?Set local PostgreSQL database}
+    volumes:
+      - research-data:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      TRADING_PLATFORM_DOCKER_LOCAL: "true"
+      TRADING_PLATFORM_ENVIRONMENT: ${TRADING_PLATFORM_ENVIRONMENT:-dev}
+      TRADING_PLATFORM_MODE: ${TRADING_PLATFORM_MODE:?Set explicit research mode in .env}
+      ENABLE_LIVE_TRADING: ${ENABLE_LIVE_TRADING:?Set false in .env}
+      ENABLE_AUTO_EXECUTION: ${ENABLE_AUTO_EXECUTION:?Set false in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set local PostgreSQL user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set local PostgreSQL password}
+      POSTGRES_DB: ${POSTGRES_DB:?Set local PostgreSQL database}
+    command: ["migrate"]
+    networks: [database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      <<: *api-environment
+      TRADING_PLATFORM_BINANCE_SPOT_ENABLED: ${TRADING_PLATFORM_BINANCE_SPOT_ENABLED:-false}
+      TRADING_PLATFORM_BINANCE_SPOT_TERMS_REVIEW_REFERENCE: ${TRADING_PLATFORM_BINANCE_SPOT_TERMS_REVIEW_REFERENCE:-}
+      TRADING_PLATFORM_BINANCE_SPOT_REGION_REVIEW_REFERENCE: ${TRADING_PLATFORM_BINANCE_SPOT_REGION_REVIEW_REFERENCE:-}
+      TRADING_PLATFORM_BINANCE_SPOT_INTEGRATION_REFERENCE: ${TRADING_PLATFORM_BINANCE_SPOT_INTEGRATION_REFERENCE:-}
+    networks: [proxy, database]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/health', headers={'Host': os.environ['TRADING_PLATFORM_FRONTEND_ORIGIN'].removeprefix('http://'), 'X-Local-Proxy-Secret': os.environ['LOCAL_PROXY_SECRET']}); urllib.request.urlopen(r, timeout=3).read()"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      LOCAL_WEB_HOST: ${LOCAL_WEB_HOST:-127.0.0.1}
+      LOCAL_WEB_PORT: ${LOCAL_WEB_PORT:-5173}
+      LOCAL_PROXY_SECRET: ${LOCAL_PROXY_SECRET:?Generate a local proxy secret in .env}
+    ports:
+      - target: 8080
+        published: "${LOCAL_WEB_PORT:-5173}"
+        host_ip: "${LOCAL_WEB_HOST:-127.0.0.1}"
+    networks: [proxy]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "authority=\"$${LOCAL_WEB_HOST}:$${LOCAL_WEB_PORT}\"; if [ \"$${LOCAL_WEB_PORT}\" -eq 80 ]; then authority=\"$${LOCAL_WEB_HOST}\"; fi; wget -q -O /dev/null --header=\"Host: $${authority}\" http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  proxy:
+    driver: bridge
+  database:
+    driver: bridge
+
+volumes:
+  research-data:

@@ -8,6 +8,108 @@ Live trading is not the starting objective.
 
 The initial objective is to establish a safe, testable, auditable, contract-driven software foundation.
 
+## Run the implemented Spot research application locally
+
+Issue #350 implements the accepted [ADR-0009](docs/adr/ADR-0009-container-local-docker-runtime-proxy.md)
+boundary: static web UI, existing research API, one-shot Alembic migration, and
+local PostgreSQL only. There are no workers, AI orchestration, cloud services,
+subscriptions, or trading/execution services in this stack.
+
+### Windows PowerShell
+
+Install Docker Desktop with the WSL 2 backend, enable **Linux containers**, and
+start Docker Desktop. Use a current Docker Compose v2 supporting dependency
+conditions and `--wait`. Run these commands from the repository root:
+
+```powershell
+docker version
+docker compose version
+Copy-Item .env.example .env
+# Generate a fresh 256-bit proxy credential; do not paste it into PRs or logs.
+$bytes = New-Object byte[] 32
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+$rng.Dispose()
+$proxySecret = ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+(Get-Content .env) -replace '^LOCAL_PROXY_SECRET=$', "LOCAL_PROXY_SECRET=$proxySecret" | Set-Content -Encoding ascii .env
+Remove-Variable proxySecret, bytes
+notepad .env
+```
+
+Set `POSTGRES_PASSWORD` to a fresh **local-only** password. The example supplies
+the local database/user names. Keep `.env` private and untracked; it is already
+ignored. Do not add exchange API keys or reuse production credentials.
+Compose reads the root `.env` natively; Python dotenv is not required.
+Use single-quoted values in `.env` for passwords containing `$` to avoid Compose
+interpolation. Database URL construction safely encodes reserved characters.
+
+```powershell
+docker compose config --quiet
+docker compose up --build
+```
+
+Open **http://127.0.0.1:5173** (watchlist: `/watchlist.html`).
+`/api/health` and `/api/research/spot/symbols` use the same web origin.
+In another PowerShell window:
+
+```powershell
+docker compose ps --all
+docker compose logs --tail 100 web api migrate postgres
+docker compose down
+```
+
+Only web is host-published. API and PostgreSQL have no published ports; the web
+and database networks are separate. PostgreSQL must become healthy, migrations
+must exit successfully, and API must become healthy before web starts.
+`migrate` is intentionally **Exited (0)**, not a continuously healthy service.
+Startup errors for missing settings, unsafe modes, invalid credentials, or
+migration failures block dependent services. Logs/status above identify failures.
+
+Ordinary `docker compose down` preserves the named `research-data` volume.
+Restart with `docker compose up --build`; migrations run before API startup.
+**`docker compose down -v` permanently deletes local PostgreSQL research data.**
+It is only appropriate for deliberately disposable stacks. Changing database
+credentials in `.env` does not change credentials in an already initialized
+volume: retain the originals or perform an explicit PostgreSQL credential change.
+The volume is local storage, not a backup.
+
+Keep `TRADING_PLATFORM_MODE=research`, `ENABLE_LIVE_TRADING=false`, and
+`ENABLE_AUTO_EXECUTION=false`. Only canonical IPv4 loopback addresses are
+supported for `LOCAL_WEB_HOST` (default `127.0.0.1`). If changing the address or
+`LOCAL_WEB_PORT`, also set `TRADING_PLATFORM_FRONTEND_ORIGIN` to that exact
+`http://host:port` (omit `:80` for the default HTTP port). Non-loopback settings
+fail closed; never publish to the LAN.
+After rotating `LOCAL_PROXY_SECRET`, restart API and web together with
+`docker compose up --build --force-recreate`.
+Do not share `docker compose config` output, container environment inspection,
+or generated nginx configuration: they contain local credentials. Use
+`docker compose config --quiet` for safe validation.
+The secret authenticates the internal proxy hop, not user identity or trading
+approval. It never reaches browser JavaScript or image layers. This local
+boundary does not protect against a host/Docker administrator.
+
+### Collection remains explicit and disabled by default
+
+Empty research data is expected on a fresh volume. Reads and startup never
+contact Binance. Enable explicit refresh only after owner-reviewed non-secret
+references are available, by setting `TRADING_PLATFORM_BINANCE_SPOT_ENABLED=true`
+and all three existing variables:
+`TRADING_PLATFORM_BINANCE_SPOT_TERMS_REVIEW_REFERENCE`,
+`TRADING_PLATFORM_BINANCE_SPOT_REGION_REVIEW_REFERENCE`, and
+`TRADING_PLATFORM_BINANCE_SPOT_INTEGRATION_REFERENCE`.
+See [API research documentation](apps/api/README.md) for bounded refresh and
+quality requirements. There is no scheduler or continuous collector.
+After this PR is merged, the owner-authorized five-pair API→database→UI smoke test
+in #299 must precede the narrowed UI follow-up #147. CI smoke checks are offline
+infrastructure checks, not that market-data acceptance evidence.
+
+### Native developer path
+
+The existing native loopback-only launcher and separate web server remain
+unchanged; see [API setup](apps/api/README.md) and [web setup](apps/web/README.md).
+Native web requests still target `http://127.0.0.1:8000`; only the Docker image
+supplies a same-origin, non-secret client configuration.
+
 ---
 
 ## 1. Core System Principle
