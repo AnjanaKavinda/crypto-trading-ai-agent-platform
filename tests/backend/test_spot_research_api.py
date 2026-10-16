@@ -65,6 +65,7 @@ from trading_platform_api.spot_research import (
 from trading_platform_api.spot_research_store import (
     APPROVED_POLICY_VERSION,
     SpotResearchSnapshotNotFound,
+    SpotResearchStoreError,
     StoredSpotSnapshot,
     decode_policy,
     policy_digest,
@@ -222,7 +223,7 @@ class FakeRepository:
         ):
             raise SpotResearchSnapshotNotFound("No matching test snapshot.")
         if len(self.stored.observations) > maximum_candles:
-            raise RuntimeError("limit exceeded")
+            raise SpotResearchStoreError("limit exceeded")
         return self.stored
 
 
@@ -933,17 +934,19 @@ def test_approved_quality_policy_zero_gap_and_one_interval_freshness() -> None:
     assert stale_report.status is DataQualityStatus.STALE
 
 
-def test_501_candles_complete_ema_500_warmup_and_pagination_budget() -> None:
+def test_501_candle_snapshot_rejects_smaller_read_limit_without_refresh_or_truncation() -> None:
     observed_settings: list[BinanceSpotSettings] = []
+    provider_calls: list[int] = []
 
     def provider_factory(settings: BinanceSpotSettings) -> FakeProvider:
         observed_settings.append(settings)
-        return FakeProvider(settings, [])
+        return FakeProvider(settings, provider_calls)
 
+    repository = FakeRepository()
     research = SpotResearchService(
         provider_settings=SOURCE_SETTINGS,
         quality_policy=policy_template(),
-        repository=FakeRepository(),
+        repository=repository,
         provider_factory=provider_factory,
         clock=lambda: NOW,
         monotonic=lambda: 100.0,
@@ -952,6 +955,10 @@ def test_501_candles_complete_ema_500_warmup_and_pagination_budget() -> None:
         response = client.post(
             f"/api/research/spot/{INSTRUMENT}/refresh",
             json=refresh_body(limit=501),
+        )
+        limited_read = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": "1m", "limit": 250},
         )
 
     payload = response.json()
@@ -964,6 +971,12 @@ def test_501_candles_complete_ema_500_warmup_and_pagination_budget() -> None:
     assert (
         payload["indicators"]["ema-500"]["result"]["points"][499]["value"] is not None
     )
+    assert limited_read.status_code == 422
+    assert limited_read.json()["code"] == "SPOT_CANDLE_LIMIT_EXCEEDED"
+    assert "candles" not in limited_read.json()
+    assert len(repository.stored.observations) == 501
+    assert provider_calls == [1]
+    assert repository.read_calls == 1
 
 
 def test_lineage_append_and_dependency_resolution_budget_support_501_candles() -> None:
