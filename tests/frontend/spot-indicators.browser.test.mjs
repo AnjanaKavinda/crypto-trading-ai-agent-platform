@@ -404,10 +404,16 @@ test("browser chart toggles preserve series isolation and bind every point to it
       await checkbox.check();
       assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), expectedClasses);
     }
+    const beginnerClasses = ["atr-line", "ema-20", "ema-50"].sort();
     await page.getByRole("button", { name: "Beginner", exact: true }).click();
-    assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), expectedClasses);
+    assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
     await page.getByRole("button", { name: "Pro", exact: true }).click();
     assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), expectedClasses);
+
+    await page.locator("#reset-button").click();
+    assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
+    await page.getByRole("button", { name: "Pro", exact: true }).click();
+    assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
     assert.equal(apiRequests.filter((request) => request.pathname.endsWith("/refresh")).length, 0);
   } finally {
     await page.close();

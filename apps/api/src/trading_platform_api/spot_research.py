@@ -440,7 +440,7 @@ def _json_value(value: object) -> Any:
     if isinstance(value, datetime):
         return (
             value.astimezone(UTC)
-            .isoformat(timespec="auto")
+            .isoformat(timespec="microseconds")
             .replace("+00:00", "Z")
         )
     if isinstance(value, UUID):

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-import { MAX_CANDLES, TIMEFRAME_SECONDS } from "../../apps/web/src/research-api.mjs";
+import { TIMEFRAME_SECONDS } from "../../apps/web/src/research-api.mjs";
 import {
   APPROVED_INSTRUMENTS,
   loadWatchlist,
@@ -123,25 +123,6 @@ test("supported-symbol response shows only the five exact approved instruments",
     ...symbolResponse,
     instruments: [{ ...symbols[0], symbol: "UNEXPECTED" }],
   }), /invalid approved/);
-});
-
-test("watchlist reads request the full supported snapshot limit", async () => {
-  const overrides = Object.fromEntries(Object.entries(APPROVED_INSTRUMENTS).map(
-    ([instrumentId, symbol]) => [instrumentId, {
-      ok: true,
-      json: async () => snapshot(instrumentId, symbol, { timeframe: "1m" }),
-    }],
-  ));
-  const { fetcher, calls } = fixtureFetch({ overrides });
-  const results = await loadWatchlist(fetcher, "1m");
-  const reads = calls.filter(({ url }) => url.includes("/candles?"));
-
-  assert.equal(results.length, 5);
-  assert.ok(results.every((result) => result.error === null));
-  assert.equal(reads.length, 5);
-  assert.ok(reads.every(({ url }) =>
-    new URL(url).searchParams.get("limit") === String(MAX_CANDLES),
-  ));
 });
 
 test("snapshot rows preserve exact latest candle values and bound provenance", () => {

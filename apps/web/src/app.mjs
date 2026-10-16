@@ -351,7 +351,7 @@ function renderChart(snapshot, preferences) {
   const volumeMax = Math.max(...candles.map((item) => item.values.volume.numeric));
   const lows = candles.map(({ values }) => values.low.numeric);
   const highs = candles.map(({ values }) => values.high.numeric);
-  const enabled = preferences.visible;
+  const enabled = preferences.mode === "beginner" ? DEFAULT_VISIBILITY : preferences.visible;
   const emaSeries = [];
   const bands = [];
   const panelDefinitions = [

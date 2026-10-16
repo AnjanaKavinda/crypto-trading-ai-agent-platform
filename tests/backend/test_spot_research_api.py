@@ -65,6 +65,7 @@ from trading_platform_api.spot_research import (
 from trading_platform_api.spot_research_store import (
     APPROVED_POLICY_VERSION,
     SpotResearchSnapshotNotFound,
+    SpotResearchStoreError,
     StoredSpotSnapshot,
     decode_policy,
     policy_digest,
@@ -222,7 +223,9 @@ class FakeRepository:
         ):
             raise SpotResearchSnapshotNotFound("No matching test snapshot.")
         if len(self.stored.observations) > maximum_candles:
-            raise RuntimeError("limit exceeded")
+            raise SpotResearchStoreError(
+                "The selected snapshot exceeds the requested candle limit."
+            )
         return self.stored
 
 
@@ -580,6 +583,31 @@ def test_read_rejects_timezone_naive_as_of_without_store_access() -> None:
     assert response.status_code == 422
     assert response.json()["code"] == "SPOT_SELECTOR_INVALID"
     assert repository.read_calls == 0
+
+
+def test_read_rejects_oversized_snapshot_without_another_provider_call() -> None:
+    research, calls, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=501),
+        )
+        assert refreshed.status_code == 200
+        assert len(refreshed.json()["candles"]) == 501
+        calls_after_refresh = list(calls)
+
+        rejected = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": "1m", "limit": 250},
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.headers["content-type"].startswith("application/problem+json")
+    assert rejected.json()["code"] == "SPOT_CANDLE_LIMIT_EXCEEDED"
+    assert "exceeds the requested candle limit" in rejected.json()["detail"]
+    assert repository.read_calls == 1
+    assert repository.persist_calls == 1
+    assert calls == calls_after_refresh == [1]
 
 
 def test_refresh_validation_uses_standard_problem_response_and_never_fetches() -> None:
