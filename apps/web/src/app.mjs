@@ -268,6 +268,17 @@ function addIndicatorCard(container, id, snapshot) {
     explanation.append(element("strong", `${label}: `), document.createTextNode(text));
     card.append(explanation);
   }
+  if (snapshot) {
+    const provenance = element("p", undefined, "indicator-provenance-link");
+    const link = element("a", "View this response's snapshot and source provenance");
+    link.href = "#snapshot-provenance";
+    link.setAttribute(
+      "aria-label",
+      `View snapshot and source provenance for ${snapshot.symbol} (${snapshot.instrument_id}), ${snapshot.timeframe}; snapshot ${snapshot.snapshot_id}, quality report ${snapshot.data_quality.report_id}`,
+    );
+    provenance.append(link);
+    card.append(provenance);
+  }
   container.append(card);
 }
 

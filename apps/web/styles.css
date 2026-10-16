@@ -123,6 +123,10 @@ th { position: sticky; top: 0; background: var(--surface-raised); color: #dbeeff
 .indicator-card h4 { margin: 0 0 .5rem; font-size: 1rem; }
 .indicator-card p { margin: .45rem 0; color: var(--muted); line-height: 1.45; }
 .indicator-card .indicator-value { color: #fff; font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.indicator-card a { color: #a8ddff; }
+.synthetic-example { margin-top: 1rem; border: 1px solid #718196; border-radius: .5rem; padding: 0 .9rem .9rem; }
+.synthetic-example summary { font-weight: 800; }
+.synthetic-example th[scope="row"] { color: #dbeeff; }
 .state-badge { display: inline-block; border: 1px solid #718196; border-radius: 999px; padding: .2rem .5rem; margin-left: .35rem; font-size: .72rem; font-weight: 800; }
 .state-badge[data-state="AVAILABLE"], .state-badge[data-state="VALID"] { border-color: var(--positive); color: #9df3cf; }
 .state-badge[data-state="WARMUP"], .state-badge[data-state="STALE"] { border-color: var(--warning); color: #ffe5a0; }

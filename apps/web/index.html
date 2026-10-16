@@ -111,13 +111,36 @@
         <div id="indicator-groups" class="indicator-groups">
           <p class="empty-state">Indicator results are supplied by the API with the snapshot.</p>
         </div>
+        <details id="synthetic-example" class="synthetic-example">
+          <summary>Static worked example — synthetic / educational only</summary>
+          <p class="education-note"><strong>Synthetic inputs and illustrative outputs only.</strong> This fixed teaching example is not provider data, not market evidence, not a validated calculation, not a signal, and not a trade instruction. It is separate from the live chart, API response, history, and research configuration.</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr><th scope="col">Supported indicator</th><th scope="col">Synthetic input (fictional)</th><th scope="col">Synthetic illustrative output (fictional)</th></tr>
+              </thead>
+              <tbody>
+                <tr><th scope="row">EMA 20</th><td>Synthetic closes rise across 20 made-up candles.</td><td>A synthetic EMA line rises more smoothly and lags those closes.</td></tr>
+                <tr><th scope="row">EMA 50</th><td>Synthetic closes rise across 50 made-up candles.</td><td>A slower synthetic EMA follows the broad rise with more lag.</td></tr>
+                <tr><th scope="row">EMA 500</th><td>Synthetic closes rise across 500 made-up candles.</td><td>A long-window synthetic EMA changes slowly; it is not short-term timing.</td></tr>
+                <tr><th scope="row">ATR 14</th><td>Synthetic candle ranges and prior closes vary across 14 made-up candles.</td><td>A synthetic ATR summarizes absolute range size, not direction or a risk limit.</td></tr>
+                <tr><th scope="row">Bollinger Bands 20</th><td>Synthetic closes are more dispersed in a made-up 20-candle window.</td><td>Synthetic bands widen around their moving mean; a touch predicts no reversal.</td></tr>
+                <tr><th scope="row">Realized volatility 20</th><td>Synthetic close-to-close returns vary in a made-up 20-candle window.</td><td>A synthetic realized-volatility value summarizes past return variation, not a forecast.</td></tr>
+                <tr><th scope="row">RSI 14</th><td>Synthetic gains outweigh losses over a made-up 14-candle window.</td><td>A synthetic RSI reading moves higher; it is not a probability or standalone reversal signal.</td></tr>
+                <tr><th scope="row">MACD 12/26/9</th><td>A synthetic faster average rises relative to a slower made-up average.</td><td>The synthetic MACD line can move above its signal line; this is descriptive, not a trade cue.</td></tr>
+                <tr><th scope="row">Stochastic 14/3</th><td>A synthetic close sits near the high of a made-up 14-candle range.</td><td>Synthetic %K may be high within that range; trending markets can remain extreme.</td></tr>
+                <tr><th scope="row">CCI 20</th><td>A synthetic typical price is above its made-up 20-candle baseline.</td><td>A synthetic CCI reading is positive relative to that baseline, not independent confirmation.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
         <section class="unavailable-panel" aria-labelledby="order-flow-heading">
           <h3 id="order-flow-heading">Order flow and advanced layers — unavailable</h3>
           <p id="order-flow-reason">Trade and book inputs are not available from this API. Footprint, bid/ask delta, CVD, depth and liquidity are never inferred from OHLCV candles.</p>
         </section>
       </section>
 
-      <section class="panel" aria-labelledby="provenance-heading">
+      <section id="snapshot-provenance" class="panel" aria-labelledby="provenance-heading">
         <div class="section-heading">
           <div>
             <p class="eyebrow">PROVENANCE AND FRESHNESS</p>
