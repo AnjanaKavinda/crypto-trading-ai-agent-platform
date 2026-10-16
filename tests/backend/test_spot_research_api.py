@@ -1076,6 +1076,7 @@ def test_persistence_deadline_returns_503_cancels_work_and_fails_closed() -> Non
 def test_refresh_response_and_lifecycle_logs_share_validated_correlation_id(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     correlation_id = "00000000-0000-4000-8000-000000000360"
     research, _, _ = service(quality_policy=policy_template())
     with client_for(research) as client:
