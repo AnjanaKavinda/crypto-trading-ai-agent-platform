@@ -961,9 +961,7 @@ class SpotResearchService:
                     timeframe=body.timeframe,
                     limit=body.limit,
                     status="CANCELLED",
-                    duration_ms=round(
-                        (time.monotonic() - provider_started) * 1000, 2
-                    ),
+                    duration_ms=round((time.monotonic() - provider_started) * 1000, 2),
                     error_code="REQUEST_CANCELLED",
                 )
                 raise
