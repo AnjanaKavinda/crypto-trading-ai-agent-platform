@@ -116,6 +116,25 @@ test("explicit refresh sends a validated correlation ID and logs only safe lifec
   assert.equal(REFRESH_DEADLINE_MS, 60_000);
 });
 
+test("invalid refresh correlation IDs are replaced before request or logging", async () => {
+  const canary = "secret-canary-not-a-valid-uuid";
+  const client = fakeFetch([{ ok: true, json: async () => ({}) }]);
+  const events = [];
+  const originalInfo = console.info;
+  console.info = (record) => events.push(record);
+  try {
+    await refreshSnapshot(client.fetcher, {
+      instrumentId, timeframe, limit: 50, correlationId: canary,
+    });
+  } finally {
+    console.info = originalInfo;
+  }
+  const correlationId = client.calls[0].options.headers["X-Correlation-ID"];
+  assert.match(correlationId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.notEqual(correlationId, canary);
+  assert.ok(events.every((record) => !record.includes(canary)));
+});
+
 test("refresh deadline bounds a never-resolving fetch and aborts it", async () => {
   let requestOptions;
   const events = [];
