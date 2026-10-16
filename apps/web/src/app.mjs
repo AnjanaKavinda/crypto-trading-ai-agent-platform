@@ -10,6 +10,8 @@ import {
 import {
   DEFAULT_VISIBILITY,
   INDICATOR_IDS,
+  beginnerPreferences,
+  chartIndicatorIds,
   indicatorBindingError,
   latestIndicatorValues,
   loadPreferences,
@@ -18,6 +20,8 @@ import {
   snapshotCandles,
   snapshotLabels,
   validateSnapshot,
+  visibleIndicators,
+  withViewMode,
   workspaceSelection,
 } from "./workspace-state.mjs";
 
@@ -266,9 +270,7 @@ function addIndicatorCard(container, id, snapshot) {
 function renderIndicators(snapshot, preferences) {
   const groups = $("#indicator-groups");
   groups.replaceChildren();
-  const visible = preferences.mode === "beginner"
-    ? DEFAULT_VISIBILITY
-    : preferences.visible;
+  const visible = visibleIndicators(preferences);
   const grouped = new Map();
   for (const id of visible) {
     if (!EDUCATION[id]) continue;
@@ -347,15 +349,13 @@ function renderChart(snapshot, preferences) {
   const closes = candles.map(({ values }) => values.close.numeric);
   const lows = candles.map(({ values }) => values.low.numeric);
   const highs = candles.map(({ values }) => values.high.numeric);
-  const enabled = preferences.mode === "beginner" ? DEFAULT_VISIBILITY : preferences.visible;
+  const enabled = chartIndicatorIds(snapshot, preferences);
   const emaSeries = [];
   const bands = [];
   const atrSeries = [];
   for (const id of enabled) {
     const result = snapshot.indicators?.[id]?.result;
-    if (snapshot.indicators?.[id]?.status !== "AVAILABLE" ||
-        indicatorBindingError(snapshot, id, snapshot.indicators?.[id]) ||
-        !result) continue;
+    if (!result) continue;
     if (id === "ema-20" || id === "ema-50") {
       emaSeries.push([id, plotValues(result)]);
     } else if (id === "bollinger-bands-20") {
@@ -711,9 +711,9 @@ async function bootstrap() {
   timeframe.addEventListener("change", () => { snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });
-  $("#beginner-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
-  $("#pro-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "pro" }));
-  $("#reset-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
+  $("#beginner-button").addEventListener("click", () => setPreferences(withViewMode(preferences, "beginner")));
+  $("#pro-button").addEventListener("click", () => setPreferences(withViewMode(preferences, "pro")));
+  $("#reset-button").addEventListener("click", () => setPreferences(beginnerPreferences()));
   refreshButton.addEventListener("click", async () => {
     if (refreshInFlight || !instrument.value || cutoff.value) return;
     const selectedInstrument = symbols.find((item) => item.instrument_id === instrument.value);

@@ -9,6 +9,8 @@ import {
   refreshSnapshot,
 } from "../../apps/web/src/research-api.mjs";
 import {
+  beginnerPreferences,
+  chartIndicatorIds,
   DEFAULT_VISIBILITY,
   displayCandle,
   indicatorBindingError,
@@ -20,6 +22,8 @@ import {
   snapshotCandles,
   snapshotLabels,
   validateSnapshot,
+  visibleIndicators,
+  withViewMode,
 } from "../../apps/web/src/workspace-state.mjs";
 
 const API_ORIGIN = "http://127.0.0.1:8000";
@@ -390,6 +394,56 @@ test("indicator charts use only returned, non-null backend points", () => {
   assert.deepEqual(plotValues({ points: [{ candle_end: "2026-10-09T15:00:00Z", value: null }] }), []);
 });
 
+test("chart modes show only available provenance-bound indicator plots", () => {
+  const snapshot = {
+    snapshot_id: "snapshot-1",
+    instrument_id: instrumentId,
+    venue_id: "BINANCE-SPOT",
+    timeframe,
+    as_of: "2026-10-09T15:01:00Z",
+    data_quality: { status: "VALID", report_status: "VALID", report_id: "report-1" },
+    lineage: { market_data_ids: ["market-1"] },
+    candles: [{ close_time: "2026-10-09T15:01:00Z" }],
+    indicators: {},
+  };
+  const result = (indicatorId, parameters) => ({
+    indicator_id: indicatorId,
+    parameters,
+    snapshot_id: snapshot.snapshot_id,
+    quality_report_id: snapshot.data_quality.report_id,
+    instrument_id: snapshot.instrument_id,
+    venue_id: snapshot.venue_id,
+    timeframe: snapshot.timeframe,
+    as_of: snapshot.as_of,
+    metadata_version: "1",
+    calculation_version: "fixture-v1",
+    input_market_data_ids: ["market-1"],
+    points: [{ candle_end: snapshot.candles[0].close_time, value: "10" }],
+  });
+  snapshot.indicators = {
+    "ema-20": { status: "AVAILABLE", result: result("ema", [["period", 20]]) },
+    "ema-50": { status: "AVAILABLE", result: result("ema", [["period", 50]]) },
+    "atr-14": { status: "AVAILABLE", result: result("atr-14", [["period", 14]]) },
+    "bollinger-bands-20": {
+      status: "AVAILABLE",
+      result: result("bollinger-bands", [["period", 20], ["standard_deviation_multiplier", "2"]]),
+    },
+    "rsi-14": { status: "AVAILABLE", result: result("rsi", [["period", 14]]) },
+  };
+  const proPreferences = {
+    mode: "beginner",
+    visible: ["bollinger-bands-20", "rsi-14", "ema-20"],
+  };
+  assert.deepEqual(chartIndicatorIds(snapshot, proPreferences), [...DEFAULT_VISIBILITY]);
+
+  snapshot.indicators["ema-50"].result.snapshot_id = "different-snapshot";
+  assert.deepEqual(chartIndicatorIds(snapshot, proPreferences), ["ema-20", "atr-14"]);
+  assert.deepEqual(
+    chartIndicatorIds(snapshot, { ...proPreferences, mode: "pro" }),
+    ["bollinger-bands-20", "ema-20"],
+  );
+});
+
 test("preferences are display-only, reset to beginner defaults, and scope by instrument and timeframe", () => {
   const values = new Map();
   const storage = {
@@ -408,9 +462,19 @@ test("preferences are display-only, reset to beginner defaults, and scope by ins
     mode: "pro",
     visible: ["ema-20", "rsi-14"],
   });
+  const beginner = withViewMode(loadPreferences(storage, instrumentId, timeframe), "beginner");
+  assert.deepEqual(beginner.visible, ["ema-20", "rsi-14"]);
+  assert.deepEqual(visibleIndicators(beginner), [...DEFAULT_VISIBILITY]);
+  savePreferences(storage, instrumentId, timeframe, beginner);
+  assert.deepEqual(loadPreferences(storage, instrumentId, timeframe), {
+    mode: "beginner",
+    visible: ["ema-20", "rsi-14"],
+  });
+  const restoredPro = withViewMode(loadPreferences(storage, instrumentId, timeframe), "pro");
+  assert.deepEqual(visibleIndicators(restoredPro), ["ema-20", "rsi-14"]);
   assert.notEqual(preferenceKey(instrumentId, timeframe), preferenceKey(instrumentId, "5m"));
   assert.notEqual(preferenceKey(instrumentId, timeframe), preferenceKey("ETH-USDT-SPOT", timeframe));
-  savePreferences(storage, instrumentId, timeframe, { mode: "beginner", visible: [...DEFAULT_VISIBILITY] });
+  savePreferences(storage, instrumentId, timeframe, beginnerPreferences());
   assert.deepEqual(loadPreferences(storage, instrumentId, timeframe).visible, [...DEFAULT_VISIBILITY]);
 });
 
@@ -430,4 +494,8 @@ test("workspace source contains no polling or external provider path", async () 
   assert.match(source, /Historical cutoffs are read-only/);
   assert.match(source, /MAX_REFRESH_SECONDS/);
   assert.match(source, /Refresh allows 2–\$\{maxRefreshCandles\} candles/);
+  assert.match(source, /chartIndicatorIds\(snapshot, preferences\)/);
+  assert.match(source, /beginner-button"\)\.addEventListener\("click", \(\) => setPreferences\(withViewMode\(preferences, "beginner"\)\)\)/);
+  assert.match(source, /pro-button"\)\.addEventListener\("click", \(\) => setPreferences\(withViewMode\(preferences, "pro"\)\)\)/);
+  assert.match(source, /reset-button"\)\.addEventListener\("click", \(\) => setPreferences\(beginnerPreferences\(\)\)\)/);
 });

@@ -47,6 +47,18 @@ export function savePreferences(storage, instrumentId, timeframe, preferences) {
   return true;
 }
 
+export function withViewMode(preferences, mode) {
+  return { ...preferences, mode: mode === "pro" ? "pro" : "beginner" };
+}
+
+export function beginnerPreferences() {
+  return { mode: "beginner", visible: [...DEFAULT_VISIBILITY] };
+}
+
+export function visibleIndicators(preferences) {
+  return preferences.mode === "beginner" ? DEFAULT_VISIBILITY : preferences.visible;
+}
+
 export function workspaceSelection(search, symbols, timeframes) {
   const parameters = new URLSearchParams(search);
   const instruments = parameters.getAll("instrument");
@@ -235,6 +247,16 @@ export function plotValues(result, field = "value") {
     if (typeof point?.candle_end !== "string" || typeof value !== "string") return [];
     if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) return [];
     return [{ candleEnd: point.candle_end, value }];
+  });
+}
+
+export function chartIndicatorIds(snapshot, preferences) {
+  const chartable = new Set(["ema-20", "ema-50", "atr-14", "bollinger-bands-20"]);
+  return visibleIndicators(preferences).filter((id) => {
+    const indicator = snapshot?.indicators?.[id];
+    return chartable.has(id) &&
+      indicator?.status === "AVAILABLE" &&
+      !indicatorBindingError(snapshot, id, indicator);
   });
 }
 
