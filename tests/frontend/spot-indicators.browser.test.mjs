@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import test from "node:test";
 import { TIMEFRAME_SECONDS } from "../../apps/web/src/research-api.mjs";
+import { DEFAULT_VISIBILITY } from "../../apps/web/src/workspace-state.mjs";
 
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium } = require("playwright");
@@ -229,10 +230,16 @@ test.after(async () => {
   if (server?.listening) await new Promise((resolveClose) => server.close(resolveClose));
 });
 
-async function openWorkspace({ storedSnapshot, allowRefresh = false } = {}) {
+async function openWorkspace({ storedSnapshot, allowRefresh = false, visible } = {}) {
   const page = await browser.newPage();
   const apiRequests = [];
   let stored = storedSnapshot ?? snapshot;
+  if (visible) {
+    await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+      key: `spot-research.presentation.v1:${instrumentId}:${stored.timeframe}`,
+      value: JSON.stringify({ mode: "pro", visible }),
+    });
+  }
   await page.route("http://127.0.0.1:8000/api/research/spot/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -436,6 +443,62 @@ test("browser chart toggles preserve series isolation and bind every point to it
   }
 });
 
+for (const scenario of [
+  {
+    name: "WARMUP",
+    mutate(fixture) {
+      const indicator = fixture.indicators["realized-volatility-20"];
+      indicator.status = "WARMUP";
+      indicator.reason_code = "INSUFFICIENT_WARMUP";
+      indicator.result.points.forEach((point) => { point.value = null; });
+    },
+    controlReason: /INSUFFICIENT_WARMUP/,
+    cardMessage: /The backend has not returned a warmed-up value.*Backend reason: INSUFFICIENT_WARMUP/s,
+  },
+  {
+    name: "UNAVAILABLE with backend reason",
+    mutate(fixture) {
+      fixture.indicators["realized-volatility-20"] = {
+        status: "UNAVAILABLE",
+        reason_code: "DETERMINISTIC_CALCULATION_FAILED",
+        result: null,
+      };
+    },
+    controlReason: /DETERMINISTIC_CALCULATION_FAILED/,
+    cardMessage: /No usable value.*Backend reason: DETERMINISTIC_CALCULATION_FAILED/s,
+  },
+  {
+    name: "omitted response entry",
+    mutate(fixture) {
+      delete fixture.indicators["realized-volatility-20"];
+    },
+    controlReason: /not supplied in response/,
+    cardMessage: /No usable value.*Display withheld: INDICATOR_STATUS_UNAVAILABLE/s,
+  },
+]) {
+  test(`browser RV20 ${scenario.name} remains unavailable and unplotted`, async () => {
+    const fixture = createSnapshot({ count: 50 });
+    scenario.mutate(fixture);
+    const { page, apiRequests } = await openWorkspace({
+      storedSnapshot: fixture,
+      visible: [...DEFAULT_VISIBILITY, "realized-volatility-20"],
+    });
+    try {
+      await waitForLoadedSnapshot(page);
+      const control = page.locator(".indicator-toggle", { hasText: "Realized volatility 20" });
+      const card = page.locator(".indicator-card", { hasText: "Realized volatility 20" });
+      assert.match(await control.innerText(), scenario.controlReason);
+      assert.equal(await page.getByRole("checkbox", { name: /Realized volatility 20/ }).isDisabled(), true);
+      assert.match(await card.innerText(), scenario.cardMessage);
+      assert.equal(await card.locator(".indicator-value").count(), 0);
+      assert.equal(await page.locator("#chart-container .realized-volatility-line").count(), 0);
+      assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
 test("browser clears the previous chart after a 501-candle snapshot rejects a 250-candle read", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
@@ -544,19 +607,36 @@ for (const [state, status, expected] of [
 for (const state of ["STALE", "INVALID", "WARMUP", "HISTORICAL"]) {
   test(`browser preserves distinct ${state} context without inventing indicators`, async () => {
     const fixture = createSnapshot({ count: 50 });
-    if (state === "STALE") fixture.data_quality.status = "STALE";
+    if (state === "STALE") {
+      fixture.data_quality.status = "STALE";
+      fixture.indicators["realized-volatility-20"] = {
+        status: "UNAVAILABLE",
+        reason_code: "STALE_FOR_SERVING_CUTOFF",
+        result: null,
+      };
+    }
     if (state === "INVALID") {
       fixture.data_quality.status = "INVALID";
       fixture.data_quality.report_status = "INVALID";
       fixture.data_quality.report.status = "INVALID";
       fixture.persisted = false;
+      fixture.indicators["realized-volatility-20"] = {
+        status: "UNAVAILABLE",
+        reason_code: "QUALITY_NOT_VALID",
+        result: null,
+      };
     }
     if (state === "WARMUP") {
       fixture.indicators["ema-20"].status = "WARMUP";
       fixture.indicators["ema-20"].reason_code = "INSUFFICIENT_WARMUP";
       fixture.indicators["ema-20"].result.points.forEach((point) => { point.value = null; });
     }
-    const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+    const { page, apiRequests } = await openWorkspace({
+      storedSnapshot: fixture,
+      visible: state === "STALE" || state === "INVALID"
+        ? [...DEFAULT_VISIBILITY, "realized-volatility-20"]
+        : undefined,
+    });
     try {
       await waitForLoadedSnapshot(page);
       if (state === "HISTORICAL") {
@@ -569,7 +649,12 @@ for (const state of ["STALE", "INVALID", "WARMUP", "HISTORICAL"]) {
             body: JSON.stringify({ ...fixture, temporal_context: "HISTORICAL", requested_as_of: asOf, freshness_cutoff: asOf }),
           });
         });
-        await page.locator("#as-of-input").fill("2026-10-16T00:00");
+        const localCutoff = await page.evaluate((value) => {
+          const instant = new Date(value);
+          const part = (number) => String(number).padStart(2, "0");
+          return `${instant.getFullYear()}-${part(instant.getMonth() + 1)}-${part(instant.getDate())}T${part(instant.getHours())}:${part(instant.getMinutes())}`;
+        }, fixture.as_of);
+        await page.locator("#as-of-input").fill(localCutoff);
         await page.locator("#as-of-input").dispatchEvent("change");
         await page.waitForFunction(() => document.querySelector("#snapshot-status").textContent.includes("HISTORICAL — NOT CURRENT"));
         assert.equal(await page.locator("#refresh-button").isDisabled(), true);
@@ -581,8 +666,21 @@ for (const state of ["STALE", "INVALID", "WARMUP", "HISTORICAL"]) {
         assert.match(await page.locator("#snapshot-status").innerText(), new RegExp(state));
         assert.equal(await page.locator("#chart-container polyline.indicator-line").count(), 0);
         assert.equal(await page.locator("#indicator-groups .indicator-value").count(), 0);
-        if (state === "STALE") {
-          assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Underlying report status\nVALID"));
+        if (state === "STALE" || state === "INVALID") {
+          const expectedReason = state === "STALE" ? "STALE_FOR_SERVING_CUTOFF" : "QUALITY_NOT_VALID";
+          if (state === "STALE") {
+            assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Underlying report status\nVALID"));
+          }
+          assert.match(
+            await page.locator(".indicator-toggle", { hasText: "Realized volatility 20" }).innerText(),
+            new RegExp(expectedReason),
+          );
+          assert.equal(await page.getByRole("checkbox", { name: /Realized volatility 20/ }).isDisabled(), true);
+          assert.match(
+            await page.locator(".indicator-card", { hasText: "Realized volatility 20" }).innerText(),
+            new RegExp(`Backend reason: ${expectedReason}`),
+          );
+          assert.equal(await page.locator("#chart-container .realized-volatility-line").count(), 0);
         }
       }
       assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);

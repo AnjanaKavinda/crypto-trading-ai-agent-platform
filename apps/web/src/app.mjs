@@ -179,7 +179,9 @@ function renderIndicatorControls(snapshot, preferences, updatePreferences) {
     const available = supplied && indicator?.status === "AVAILABLE" && !bindingError;
     const unavailableReason = !supplied
       ? "not supplied in response"
-      : bindingError ?? indicator?.reason_code ?? indicator?.status ?? "unavailable";
+      : indicator?.status === "UNAVAILABLE" && indicator?.reason_code
+        ? indicator.reason_code
+        : bindingError ?? indicator?.reason_code ?? indicator?.status ?? "unavailable";
     const toggle = element("label", undefined, `indicator-toggle${available ? "" : " unavailable"}`);
     toggle.hidden = !queryMatches(id);
     const checkbox = element("input");
@@ -233,7 +235,7 @@ function addIndicatorCard(container, id, snapshot) {
       : "No usable value is available from this response."));
   }
   if (bindingError) card.append(element("p", `Display withheld: ${bindingError}.`));
-  else if (indicator?.reason_code) card.append(element("p", `Backend reason: ${indicator.reason_code}`));
+  if (indicator?.reason_code) card.append(element("p", `Backend reason: ${indicator.reason_code}`));
   const result = indicator?.result;
   if (!bindingError && result && typeof result === "object") {
     const parameterEntries = Array.isArray(result.parameters)
