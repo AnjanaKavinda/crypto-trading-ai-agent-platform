@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import {
   listSupportedSymbols,
   readSnapshot,
+  REFRESH_DEADLINE_MS,
   refreshRequestWithinBounds,
   refreshSnapshot,
   TIMEFRAME_SECONDS,
@@ -81,6 +82,76 @@ test("only an explicit refresh request issues the bounded POST", async () => {
     limit: 50,
   });
   assert.equal(Date.parse(JSON.parse(options.body).coverage_end) % 60_000, 0);
+});
+
+test("explicit refresh sends a validated correlation ID and logs only safe lifecycle fields", async () => {
+  const correlationId = "00000000-0000-4000-8000-000000000360";
+  const client = fakeFetch([{ ok: true, json: async () => ({ snapshot_id: "fixture" }) }]);
+  const events = [];
+  const originalInfo = console.info;
+  console.info = (record) => events.push(JSON.parse(record));
+  try {
+    await refreshSnapshot(client.fetcher, {
+      instrumentId,
+      timeframe,
+      limit: 50,
+      correlationId,
+      now: Date.parse("2026-10-09T15:19:36.042Z"),
+    });
+  } finally {
+    console.info = originalInfo;
+  }
+
+  assert.equal(client.calls[0].options.headers["X-Correlation-ID"], correlationId);
+  assert.deepEqual(events.map(({ event, status }) => [event, status]), [
+    ["browser_refresh_started", "STARTED"],
+    ["browser_refresh_terminal", "SUCCEEDED"],
+  ]);
+  assert.ok(events.every((entry) =>
+    entry.correlation_id === correlationId &&
+    entry.instrument_id === instrumentId &&
+    entry.timeframe === timeframe &&
+    entry.limit === 50
+  ));
+  assert.equal(REFRESH_DEADLINE_MS, 60_000);
+});
+
+test("refresh deadline bounds a never-resolving fetch and aborts it", async () => {
+  let requestOptions;
+  const events = [];
+  const originalInfo = console.info;
+  console.info = (record) => events.push(JSON.parse(record));
+  try {
+    await assert.rejects(
+      refreshSnapshot(async (_url, options) => {
+        requestOptions = options;
+        return new Promise(() => {});
+      }, {
+        instrumentId, timeframe, limit: 50, deadlineMs: 5,
+      }),
+      (error) => error.code === "BROWSER_REFRESH_TIMEOUT" &&
+        /No current snapshot was accepted/.test(error.message),
+    );
+  } finally {
+    console.info = originalInfo;
+  }
+  assert.equal(requestOptions.signal.aborted, true);
+  assert.equal(events.at(-1).status, "FAILED");
+  assert.equal(events.at(-1).error_code, "BROWSER_REFRESH_TIMEOUT");
+});
+
+test("refresh deadline also bounds a never-resolving response body", async () => {
+  let requestOptions;
+  await assert.rejects(
+    refreshSnapshot(async (_url, options) => {
+      requestOptions = options;
+      return { ok: true, json: () => new Promise(() => {}) };
+    }, {
+      instrumentId, timeframe, limit: 50, deadlineMs: 5,
+    }),
+    (error) => error.code === "BROWSER_REFRESH_TIMEOUT",
+  );
+  assert.equal(requestOptions.signal.aborted, true);
 });
 
 test("refresh and read selectors reject unbounded or unsupported inputs before fetch", async () => {
@@ -537,4 +608,8 @@ test("workspace source contains no polling or external provider path", async () 
   assert.match(source, /Historical cutoffs are read-only/);
   assert.match(source, /MAX_REFRESH_SECONDS/);
   assert.match(source, /90-day provider-window policy limits refresh to 2–\$\{maxRefreshCandles\} candles/);
+  const failureHandler = source.slice(source.indexOf("const showFailure ="), source.indexOf("const loadSnapshot ="));
+  assert.match(failureHandler, /snapshot = null;\s*setStatus\(null, error\.message\)/);
+  const refreshHandler = source.slice(source.indexOf('refreshButton.addEventListener("click"'));
+  assert.match(refreshHandler, /finally\s*{\s*refreshInFlight = false;\s*refreshButton\.textContent = "Explicitly refresh from provider";\s*updateRefreshAvailability\(\);/);
 });
