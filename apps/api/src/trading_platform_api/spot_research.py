@@ -438,11 +438,7 @@ def _json_value(value: object) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
-        return (
-            value.astimezone(UTC)
-            .isoformat(timespec="microseconds")
-            .replace("+00:00", "Z")
-        )
+        return value.astimezone(UTC).isoformat(timespec="auto").replace("+00:00", "Z")
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, Enum):

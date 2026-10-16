@@ -338,10 +338,38 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     ...snapshot,
     data_quality: { ...snapshot.data_quality, status: "STALE" },
   }, "rsi-14", rsi), "QUALITY_NOT_VALID");
+  assert.equal(indicatorBindingError({
+    ...snapshot,
+    data_quality: {
+      ...snapshot.data_quality,
+      status: "INVALID",
+      report_status: "INVALID",
+      report: { ...snapshot.data_quality.report, status: "INVALID" },
+    },
+  }, "rsi-14", rsi), "QUALITY_NOT_VALID");
   assert.equal(indicatorBindingError(snapshot, "rsi-14", {
     ...rsi,
     result: { ...result, snapshot_id: "different-snapshot" },
   }), "INDICATOR_PROVENANCE_MISMATCH");
+  assert.equal(indicatorBindingError(snapshot, "rsi-14", {
+    ...rsi,
+    result: {
+      ...result,
+      points: [{ ...result.points[0], candle_end: "2026-10-09T15:01:00.000000Z" }],
+    },
+  }), "INDICATOR_PROVENANCE_MISMATCH");
+  const warmup = {
+    status: "WARMUP",
+    reason_code: "INSUFFICIENT_WARMUP",
+    result: {
+      ...result,
+      indicator_id: "ema",
+      parameters: [["period", 50]],
+      points: [{ ...result.points[0], value: null }],
+    },
+  };
+  assert.equal(indicatorBindingError(snapshot, "ema-50", warmup), null);
+  assert.equal(warmup.reason_code, "INSUFFICIENT_WARMUP");
   const bollinger = {
     status: "AVAILABLE",
     result: {
@@ -388,6 +416,10 @@ test("indicator charts use only returned, non-null backend points", () => {
     { candleEnd: "2026-10-09T15:01:00Z", value: "6.125" },
   ]);
   assert.deepEqual(plotValues({ points: [{ candle_end: "2026-10-09T15:00:00Z", value: null }] }), []);
+  assert.deepEqual(plotValues({ points: [
+    { candle_end: "2026-10-09T15:00:00Z", value: { status: "WARMUP", value: null } },
+    { candle_end: "2026-10-09T15:01:00Z", value: { status: "READY", value: "51.25" } },
+  ] }), [{ candleEnd: "2026-10-09T15:01:00Z", value: "51.25" }]);
 });
 
 test("preferences are display-only, reset to beginner defaults, and scope by instrument and timeframe", () => {

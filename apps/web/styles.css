@@ -75,7 +75,16 @@ label { display: grid; gap: .4rem; font-weight: 700; font-size: .9rem; }
 .chart-container .candle-down { stroke: var(--negative); fill: #b44855; }
 .chart-container .ema-20 { stroke: #70d6ff; }
 .chart-container .ema-50 { stroke: #ffe082; }
+.chart-container .ema-500 { stroke: #facc15; }
 .chart-container .atr-line { stroke: #ce9bff; }
+.chart-container .realized-volatility-line { stroke: #fb7185; }
+.chart-container .rsi-line { stroke: #38bdf8; }
+.chart-container .macd-line { stroke: #22d3ee; }
+.chart-container .macd-signal { stroke: #f59e0b; }
+.chart-container .macd-histogram { stroke: #a3e635; }
+.chart-container .stochastic-k { stroke: #2dd4bf; }
+.chart-container .stochastic-d { stroke: #f472b6; }
+.chart-container .cci-line { stroke: #c084fc; }
 .chart-container .bollinger-upper { stroke: #fb923c; }
 .chart-container .bollinger-middle { stroke: #c4b5fd; }
 .chart-container .bollinger-lower { stroke: #fb923c; }

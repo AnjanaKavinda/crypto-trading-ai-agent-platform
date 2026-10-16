@@ -79,6 +79,12 @@ jobs:
       - name: Verify product CI workflow contract
         run: python .github/scripts/test_product_ci.py
 
+      - name: Install web test dependencies and Chromium
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
       - name: Run native web regression tests
         run: node --test tests/frontend/*.test.mjs
 
