@@ -388,17 +388,35 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
     assert payload["persisted"] is True
     assert payload["data_quality"]["status"] == "VALID"
     assert payload["data_quality"]["policy_version"] == APPROVED_POLICY_VERSION
+    assert payload["temporal_context"] == "CURRENT"
     assert len(payload["candles"]) == 21
     assert payload["candles"][0]["finalization"] == "FINAL"
     assert payload["lineage"]["adapter_version"] == "binance-spot-adapter-v1"
     assert len(payload["lineage"]["sources"]) == 21
     assert payload["indicators"]["ema-20"]["status"] == "AVAILABLE"
     assert payload["indicators"]["ema-50"]["status"] == "WARMUP"
+    assert payload["indicators"]["ema-50"]["reason_code"] == "INSUFFICIENT_WARMUP"
     assert payload["data_quality"]["report_status"] == "VALID"
     assert payload["data_quality"]["comparison_assessment"] == (
         "NOT_ASSESSED_SINGLE_SOURCE"
     )
     assert payload["indicators"]["atr-14"]["status"] == "AVAILABLE"
+    for name, indicator_id, period in (("ema-20", "ema", 20), ("atr-14", "atr-14", 14)):
+        result = payload["indicators"][name]["result"]
+        assert result["indicator_id"] == indicator_id
+        assert result["period"] == period
+        assert result["snapshot_id"] == payload["snapshot_id"]
+        assert result["quality_report_id"] == payload["data_quality"]["report_id"]
+        assert result["instrument_id"] == payload["instrument_id"]
+        assert result["venue_id"] == payload["venue_id"]
+        assert result["timeframe"] == payload["timeframe"]
+        assert result["as_of"] == payload["as_of"]
+        assert result["input_market_data_ids"] == payload["lineage"]["market_data_ids"]
+        assert len(result["points"]) == len(payload["candles"])
+        assert all(
+            point["candle_end"] == candle["close_time"]
+            for point, candle in zip(result["points"], payload["candles"], strict=True)
+        )
     assert payload["indicators"]["bollinger-bands-20"]["status"] == "AVAILABLE"
     assert payload["indicators"]["realized-volatility-20"]["status"] == "AVAILABLE"
     assert payload["indicators"]["rsi-14"]["status"] == "AVAILABLE"

@@ -174,20 +174,26 @@ function renderIndicatorControls(snapshot, preferences, updatePreferences) {
   for (const id of INDICATOR_IDS) {
     const descriptor = EDUCATION[id];
     const supplied = Object.hasOwn(snapshot?.indicators ?? {}, id);
-    const toggle = element("label", undefined, `indicator-toggle${supplied ? "" : " unavailable"}`);
+    const indicator = snapshot?.indicators?.[id];
+    const bindingError = supplied ? indicatorBindingError(snapshot, id, indicator) : null;
+    const available = supplied && indicator?.status === "AVAILABLE" && !bindingError;
+    const unavailableReason = !supplied
+      ? "not supplied in response"
+      : bindingError ?? indicator?.reason_code ?? indicator?.status ?? "unavailable";
+    const toggle = element("label", undefined, `indicator-toggle${available ? "" : " unavailable"}`);
     toggle.hidden = !queryMatches(id);
     const checkbox = element("input");
     checkbox.type = "checkbox";
     checkbox.checked = preferences.visible.includes(id);
-    checkbox.disabled = !supplied;
-    checkbox.setAttribute("aria-label", `${descriptor.title}${supplied ? "" : ", unavailable because no result was returned by the API"}`);
+    checkbox.disabled = !available;
+    checkbox.setAttribute("aria-label", `${descriptor.title}${available ? "" : `, unavailable: ${unavailableReason}`}`);
     checkbox.addEventListener("change", () => {
       const visible = new Set(preferences.visible);
       if (checkbox.checked) visible.add(id);
       else visible.delete(id);
       updatePreferences({ ...preferences, visible: [...visible] });
     });
-    toggle.append(checkbox, element("span", supplied ? descriptor.title : `${descriptor.title} — unavailable (not supplied in response)`));
+    toggle.append(checkbox, element("span", available ? descriptor.title : `${descriptor.title} — unavailable (${unavailableReason})`));
     toggles.append(toggle);
   }
   input.addEventListener("input", () => {
@@ -333,37 +339,51 @@ function renderChart(snapshot, preferences) {
   }
   const candles = response.candles;
   const width = 1000;
-  const height = 520;
   const left = 70;
   const right = 20;
   const plotWidth = width - left - right;
   const priceTop = 20;
   const priceHeight = 260;
-  const atrTop = 320;
-  const atrHeight = 95;
-  const volumeTop = 445;
+  const panelsTop = 320;
+  const panelHeight = 95;
+  const panelGap = 25;
   const volumeHeight = 55;
   const volumeMax = Math.max(...candles.map((item) => item.values.volume.numeric));
-  const closes = candles.map(({ values }) => values.close.numeric);
   const lows = candles.map(({ values }) => values.low.numeric);
   const highs = candles.map(({ values }) => values.high.numeric);
-  const enabled = preferences.mode === "beginner" ? DEFAULT_VISIBILITY : preferences.visible;
+  const enabled = preferences.visible;
   const emaSeries = [];
   const bands = [];
-  const atrSeries = [];
+  const panelDefinitions = [
+    ["atr-14", "ATR", [["atr-line", "value"]]],
+    ["realized-volatility-20", "REALIZED VOL", [["realized-volatility-line", "value"]]],
+    ["rsi-14", "RSI", [["rsi-line", "value"]]],
+    ["macd-12-26-9", "MACD", [["macd-line", "line"], ["macd-signal", "signal"], ["macd-histogram", "histogram"]]],
+    ["stochastic-14-3", "STOCHASTIC", [["stochastic-k", "k"], ["stochastic-d", "d"]]],
+    ["cci-20", "CCI", [["cci-line", "value"]]],
+  ];
+  const separatePanels = [];
   for (const id of enabled) {
     const result = snapshot.indicators?.[id]?.result;
     if (snapshot.indicators?.[id]?.status !== "AVAILABLE" ||
         indicatorBindingError(snapshot, id, snapshot.indicators?.[id]) ||
         !result) continue;
-    if (id === "ema-20" || id === "ema-50") {
+    if (id === "ema-20" || id === "ema-50" || id === "ema-500") {
       emaSeries.push([id, plotValues(result)]);
     } else if (id === "bollinger-bands-20") {
       bands.push(...["upper", "middle", "lower"].map((field) => [field, plotValues(result, field)]));
-    } else if (id === "atr-14") {
-      atrSeries.push(...plotValues(result));
     }
   }
+  for (const [id, label, fields] of panelDefinitions) {
+    const indicator = snapshot.indicators?.[id];
+    if (!enabled.includes(id) || indicator?.status !== "AVAILABLE" ||
+        indicatorBindingError(snapshot, id, indicator) || !indicator.result) continue;
+    const series = fields.map(([className, field]) => [className, plotValues(indicator.result, field)])
+      .filter(([, points]) => points.length > 1);
+    if (series.length) separatePanels.push({ label, series });
+  }
+  const volumeTop = panelsTop + separatePanels.length * (panelHeight + panelGap) + 5;
+  const height = volumeTop + volumeHeight + 20;
   const visiblePriceValues = [...lows, ...highs];
   for (const [, points] of emaSeries) for (const point of points) {
     const number = numberForPlot(point.value);
@@ -396,8 +416,7 @@ function renderChart(snapshot, preferences) {
     svg.append(svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "gridline" }));
   }
   svgText(svg, 8, 16, "PRICE");
-  svgText(svg, 8, 309, "ATR");
-  svgText(svg, 8, 439, "VOLUME");
+  svgText(svg, 8, volumeTop - 6, "VOLUME");
   const priceSpan = priceMax - priceMin;
   const candleWidth = Math.max(1, Math.min(8, plotWidth / candles.length * 0.62));
   candles.forEach(({ source, values }, index) => {
@@ -432,20 +451,28 @@ function renderChart(snapshot, preferences) {
     const lineClass = ["upper", "middle", "lower"].includes(id) ? `bollinger-${id}` : id;
     if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${lineClass}` }));
   }
-  if (atrSeries.length) {
-    const numbers = atrSeries.map((point) => numberForPlot(point.value)).filter((value) => value !== null);
-    if (numbers.length) {
-      const max = Math.max(...numbers);
-      const atrMax = max === 0 ? 1 : max;
-      const polyline = makeLine(atrSeries, candleIndexes, 0, atrMax, atrTop, atrHeight, left, plotWidth);
-      if (polyline) svg.append(svgNode("polyline", { points: polyline, class: "indicator-line atr-line" }));
-    }
+  for (const [panelIndex, panel] of separatePanels.entries()) {
+    const top = panelsTop + panelIndex * (panelHeight + panelGap);
+    const numbers = panel.series.flatMap(([, points]) =>
+      points.map((point) => numberForPlot(point.value)),
+    ).filter((value) => value !== null);
+    if (!numbers.length) continue;
+    let min = Math.min(...numbers);
+    let max = Math.max(...numbers);
+    if (min >= 0) min = 0;
+    if (max <= 0) max = 0;
+    if (min === max) max = min + Math.max(Math.abs(min) * 0.02, 1);
+    svgText(svg, 8, top - 6, panel.label);
+    panel.series.forEach(([className, points], seriesIndex) => {
+      const polyline = makeLine(points, candleIndexes, min, max, top, panelHeight, left, plotWidth);
+      if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${className}` }));
+      svgText(svg, left + seriesIndex * 150, top - 6, className.replaceAll("-", " "), "legend-text");
+    });
   }
   for (const [index, [id]] of [...emaSeries, ...bands].entries()) {
     svgText(svg, left + index * 130, 18, id === "upper" || id === "middle" || id === "lower" ? `Bollinger ${id}` : id, "legend-text");
   }
-  if (atrSeries.length) svgText(svg, 160, 309, "ATR 14 · backend values", "legend-text");
-  svgText(svg, 160, 439, "Volume · backend values", "legend-text");
+  svgText(svg, 160, volumeTop - 6, "Volume · backend values", "legend-text");
   target.append(svg);
 }
 
@@ -711,7 +738,7 @@ async function bootstrap() {
   timeframe.addEventListener("change", () => { snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });
-  $("#beginner-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
+  $("#beginner-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "beginner" }));
   $("#pro-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "pro" }));
   $("#reset-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
   refreshButton.addEventListener("click", async () => {

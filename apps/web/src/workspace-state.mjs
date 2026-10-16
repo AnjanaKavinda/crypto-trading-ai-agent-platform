@@ -231,7 +231,10 @@ export function latestIndicatorValues(result) {
 export function plotValues(result, field = "value") {
   if (!Array.isArray(result?.points)) return [];
   return result.points.flatMap((point) => {
-    const value = point?.[field];
+    const raw = point?.[field];
+    const value = typeof raw === "string"
+      ? raw
+      : raw?.status === "READY" && typeof raw.value === "string" ? raw.value : null;
     if (typeof point?.candle_end !== "string" || typeof value !== "string") return [];
     if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) return [];
     return [{ candleEnd: point.candle_end, value }];

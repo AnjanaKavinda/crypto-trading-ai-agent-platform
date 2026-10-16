@@ -1,4 +1,4 @@
-import { listSupportedSymbols, readSnapshot, TIMEFRAME_SECONDS } from "./research-api.mjs";
+import { listSupportedSymbols, MAX_CANDLES, readSnapshot, TIMEFRAME_SECONDS } from "./research-api.mjs";
 import { validateSnapshot } from "./workspace-state.mjs";
 
 export const APPROVED_INSTRUMENTS = Object.freeze({
@@ -9,7 +9,7 @@ export const APPROVED_INSTRUMENTS = Object.freeze({
   "XRP-USDT-SPOT": "XRPUSDT",
 });
 
-export const WATCHLIST_LIMIT = 250;
+export const WATCHLIST_LIMIT = MAX_CANDLES;
 
 export function supportedWatchlistSymbols(response) {
   if (response?.provider !== "binance-spot-public" ||
