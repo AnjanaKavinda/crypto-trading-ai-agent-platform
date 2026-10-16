@@ -75,8 +75,9 @@ event, status, timestamp, correlation ID, and refresh selector
 (`instrument_id`, `timeframe`, and `limit` where known). API records also use
 the existing structured logging schema. The API records receipt, provider
 start, persistence start/terminal outcome, and request terminal outcome.
-Existing Binance adapter `fetch`/`fetch_failure` records remain the provider
-terminal evidence. Proxy completion includes HTTP status and request duration;
+Existing Binance adapter `fetch`/`fetch_failure` records provide normal provider
+terminal evidence; the service records provider timeout/cancellation terminals.
+Proxy completion includes HTTP status and request duration;
 timeframe and limit are `null` there because the proxy does not inspect request
 bodies.
 

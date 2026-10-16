@@ -28,7 +28,7 @@ fi
 cat > /etc/nginx/conf.d/local.conf <<EOF
 map \$http_x_correlation_id \$spot_correlation_id {
     default \$request_id;
-    ~*^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ \$http_x_correlation_id;
+    ~*^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[1-8][0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$ \$http_x_correlation_id;
 }
 map \$uri \$spot_refresh_instrument {
     default "";

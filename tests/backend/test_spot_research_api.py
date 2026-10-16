@@ -1014,7 +1014,10 @@ def test_refresh_request_cancellation_cancels_persistence_task() -> None:
     asyncio.run(exercise())
 
 
-def test_provider_deadline_returns_504_and_cancels_provider_task() -> None:
+def test_provider_deadline_returns_504_and_cancels_provider_task(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     cancelled = asyncio.Event()
 
     class DeadlineProvider:
@@ -1040,9 +1043,21 @@ def test_provider_deadline_returns_504_and_cancels_provider_task() -> None:
     assert response.status_code == 504
     assert response.json()["code"] == "PROVIDER_REQUEST_TIMEOUT"
     assert cancelled.is_set()
+    provider_terminal = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "provider_fetch_terminal"
+    ]
+    assert len(provider_terminal) == 1
+    assert provider_terminal[0]["status"] == "TIMED_OUT"
+    assert provider_terminal[0]["error_code"] == "PROVIDER_REQUEST_TIMEOUT"
 
 
-def test_persistence_deadline_returns_503_cancels_work_and_fails_closed() -> None:
+def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     cancelled = asyncio.Event()
 
     class DeadlineRepository(FakeRepository):
@@ -1071,6 +1086,15 @@ def test_persistence_deadline_returns_503_cancels_work_and_fails_closed() -> Non
     assert response.headers["content-type"].startswith("application/problem+json")
     assert "candles" not in response.json()
     assert cancelled.is_set()
+    persistence_terminal = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "persistence_terminal"
+    ]
+    assert len(persistence_terminal) == 1
+    assert persistence_terminal[0]["status"] == "FAILED"
+    assert persistence_terminal[0]["error_code"] == "RESEARCH_PERSISTENCE_TIMEOUT"
 
 
 def test_refresh_response_and_lifecycle_logs_share_validated_correlation_id(
