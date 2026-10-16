@@ -7,6 +7,7 @@ import {
   readSnapshot,
   refreshRequestWithinBounds,
   refreshSnapshot,
+  TIMEFRAME_SECONDS,
 } from "../../apps/web/src/research-api.mjs";
 import {
   DEFAULT_VISIBILITY,
@@ -154,6 +155,80 @@ test("historical cutoffs prevent refresh before fetch", async () => {
     /Historical cutoffs cannot be refreshed/,
   );
   assert.equal(client.calls.length, 0);
+});
+
+for (const selectedTimeframe of Object.keys(TIMEFRAME_SECONDS)) {
+  for (const limit of [50, 90, 100, 250, 501]) {
+    test(`selector ${selectedTimeframe}/${limit}: safe read and explicit refresh bounds`, async () => {
+      const client = fakeFetch();
+      await readSnapshot(client.fetcher, { instrumentId, timeframe: selectedTimeframe, limit });
+      assert.equal(client.calls.length, 1);
+      const url = new URL(client.calls[0].url);
+      assert.equal(url.searchParams.get("timeframe"), selectedTimeframe);
+      assert.equal(url.searchParams.get("limit"), String(limit));
+      assert.equal(client.calls[0].options.method, undefined);
+      const eligible = selectedTimeframe !== "1d" || limit <= 90;
+      assert.equal(refreshRequestWithinBounds(selectedTimeframe, limit), eligible);
+      if (!eligible) {
+        assert.throws(() => refreshSnapshot(client.fetcher, {
+          instrumentId, timeframe: selectedTimeframe, limit,
+        }), /select 90 or fewer/);
+        assert.equal(client.calls.length, 1);
+        return;
+      }
+      await refreshSnapshot(client.fetcher, {
+        instrumentId, timeframe: selectedTimeframe, limit, now: Date.parse("2026-10-16T07:59:30Z"),
+      });
+      const { options } = client.calls[1];
+      const body = JSON.parse(options.body);
+      const seconds = TIMEFRAME_SECONDS[selectedTimeframe];
+      assert.equal(options.method, "POST");
+      assert.equal(body.timeframe, selectedTimeframe);
+      assert.equal(body.limit, limit);
+      assert.equal(Date.parse(body.coverage_end) % (seconds * 1000), 0);
+      assert.equal(Date.parse(body.coverage_end) - Date.parse(body.coverage_start), limit * seconds * 1000);
+      assert.ok(limit <= Math.min(501, Math.floor(90 * 86400 / seconds)));
+    });
+  }
+}
+
+test("only the exact allowlisted oversized code selects actionable local guidance", async () => {
+  for (const problem of [
+    { code: "SPOT_CANDLE_LIMIT_EXCEEDED", detail: "PRIVATE detail", title: "<script>PRIVATE</script>" },
+    { code: "PRIVATE" },
+    { code: ["SPOT_CANDLE_LIMIT_EXCEEDED"] },
+    null,
+    "PRIVATE",
+    { code: "SPOT_CANDLE_LIMIT_EXCEEDED PRIVATE" },
+  ]) {
+    const client = fakeFetch([{ ok: false, status: 422, json: async () => problem }]);
+    await assert.rejects(readSnapshot(client.fetcher, { instrumentId, timeframe: "4h", limit: 100 }), (error) => {
+      assert.doesNotMatch(error.message, /PRIVATE|script/);
+      if (problem?.code === "SPOT_CANDLE_LIMIT_EXCEEDED") {
+        assert.match(error.message, /stored 4h snapshot.*maximum of 100/);
+        assert.match(error.message, /larger history bound.*explicitly refresh this same selector/);
+      } else {
+        assert.match(error.message, /rejected the selector or history bound/);
+      }
+      return true;
+    });
+  }
+  for (const selector of [
+    { timeframe: "1d", limit: 100 },
+    { timeframe: "1m", limit: 50, asOf: "2026-10-01T00:00:00Z" },
+  ]) {
+    const client = fakeFetch([{
+      ok: false, status: 422, json: async () => ({ code: "SPOT_CANDLE_LIMIT_EXCEEDED" }),
+    }]);
+    await assert.rejects(readSnapshot(client.fetcher, { instrumentId, ...selector }), (error) => {
+      assert.match(error.message, /read-only.*refresh is not eligible/);
+      assert.doesNotMatch(error.message, /explicitly refresh this same selector/);
+      return true;
+    });
+  }
+  const unreadable = fakeFetch([{ ok: false, status: 422, json: async () => { throw new Error("PRIVATE"); } }]);
+  await assert.rejects(readSnapshot(unreadable.fetcher, { instrumentId, timeframe, limit: 50 }),
+    /rejected the selector or history bound/);
 });
 
 test("API failure output is sanitized and does not expose server problem details", async () => {
@@ -461,5 +536,5 @@ test("workspace source contains no polling or external provider path", async () 
   assert.match(source, /refreshInFlight \|\| !instrument\.value \|\| cutoff\.value/);
   assert.match(source, /Historical cutoffs are read-only/);
   assert.match(source, /MAX_REFRESH_SECONDS/);
-  assert.match(source, /Refresh allows 2–\$\{maxRefreshCandles\} candles/);
+  assert.match(source, /90-day provider-window policy limits refresh to 2–\$\{maxRefreshCandles\} candles/);
 });

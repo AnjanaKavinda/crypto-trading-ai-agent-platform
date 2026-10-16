@@ -6,6 +6,7 @@ import { extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import test from "node:test";
+import { TIMEFRAME_SECONDS } from "../../apps/web/src/research-api.mjs";
 
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium } = require("playwright");
@@ -13,7 +14,6 @@ const webRoot = resolve(fileURLToPath(new URL("../../apps/web/", import.meta.url
 const instrumentId = "BTC-USDT-SPOT";
 const symbol = "BTCUSDT";
 const candleCount = 501;
-const intervalMs = 60_000;
 const qualityReportId = "fixture-report-btc-1m";
 const snapshotId = "fixture-snapshot-btc-1m";
 
@@ -21,7 +21,9 @@ function decimal(value) {
   return value.toFixed(4);
 }
 
-function createSnapshot() {
+function createSnapshot({ timeframe = "1m", count = candleCount } = {}) {
+  const candleCount = count;
+  const intervalMs = TIMEFRAME_SECONDS[timeframe] * 1000;
   const firstOpen = Date.UTC(2026, 9, 16, 0, 0, 0) - candleCount * intervalMs;
   const candles = Array.from({ length: candleCount }, (_, index) => {
     const openTime = new Date(firstOpen + index * intervalMs).toISOString();
@@ -56,7 +58,7 @@ function createSnapshot() {
     quality_report_id: qualityReportId,
     instrument_id: instrumentId,
     venue_id: "BINANCE-SPOT",
-    timeframe: "1m",
+    timeframe,
     as_of: asOf,
     metadata_version: "1",
     calculation_version: "fixture-calculation-v1",
@@ -93,7 +95,7 @@ function createSnapshot() {
     instrument_id: instrumentId,
     symbol,
     venue_id: "BINANCE-SPOT",
-    timeframe: "1m",
+    timeframe,
     as_of: asOf,
     freshness_cutoff: asOf,
     temporal_context: "CURRENT",
@@ -227,13 +229,14 @@ test.after(async () => {
   if (server?.listening) await new Promise((resolveClose) => server.close(resolveClose));
 });
 
-async function openWorkspace() {
+async function openWorkspace({ storedSnapshot, allowRefresh = false } = {}) {
   const page = await browser.newPage();
   const apiRequests = [];
+  let stored = storedSnapshot ?? snapshot;
   await page.route("http://127.0.0.1:8000/api/research/spot/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    apiRequests.push({ method: request.method(), pathname: url.pathname, limit: url.searchParams.get("limit") });
+    apiRequests.push({ method: request.method(), pathname: url.pathname, limit: url.searchParams.get("limit"), timeframe: url.searchParams.get("timeframe") });
     const headers = { "access-control-allow-origin": "*" };
     if (url.pathname.endsWith("/symbols")) {
       await route.fulfill({
@@ -254,8 +257,12 @@ async function openWorkspace() {
       return;
     }
     if (url.pathname.endsWith("/candles")) {
-      if (url.searchParams.get("limit") === "501") {
-        await route.fulfill({ status: 200, contentType: "application/json", headers, body: JSON.stringify(snapshot) });
+      if (url.searchParams.get("timeframe") !== stored.timeframe) {
+        await route.fulfill({ status: 404, contentType: "application/problem+json", headers, body: "{}" });
+        return;
+      }
+      if (Number(url.searchParams.get("limit")) >= stored.candles.length) {
+        await route.fulfill({ status: 200, contentType: "application/json", headers, body: JSON.stringify(stored) });
         return;
       }
       await route.fulfill({
@@ -267,13 +274,22 @@ async function openWorkspace() {
           title: "Snapshot exceeds requested candle limit",
           status: 422,
           code: "SPOT_CANDLE_LIMIT_EXCEEDED",
+          detail: "PRIVATE server diagnostic <script>must not appear</script>",
         }),
       });
       return;
     }
+    if (url.pathname.endsWith("/refresh") && allowRefresh && request.method() === "POST") {
+      const body = request.postDataJSON();
+      assert.ok(body.limit * TIMEFRAME_SECONDS[body.timeframe] <= 90 * 86400);
+      assert.ok(body.limit <= 501);
+      stored = createSnapshot({ timeframe: body.timeframe, count: body.limit });
+      await route.fulfill({ status: 200, contentType: "application/json", headers, body: JSON.stringify(stored) });
+      return;
+    }
     await route.fulfill({ status: 405, contentType: "application/json", headers, body: "{}" });
   });
-  await page.goto(`${origin}/index.html?instrument=${instrumentId}&timeframe=1m`);
+  await page.goto(`${origin}/index.html?instrument=${instrumentId}&timeframe=${stored.timeframe}`);
   return { page, apiRequests };
 }
 
@@ -431,7 +447,9 @@ test("browser clears the previous chart after a 501-candle snapshot rejects a 25
     await page.locator("#history-select").selectOption("250");
     await page.getByText("Research request failed.", { exact: true }).waitFor();
     assert.equal(await page.locator("#chart-container svg").count(), 0);
-    assert.match(await page.locator("#chart-container").innerText(), /rejected the selector or history bound/);
+    assert.match(await page.locator("#chart-container").innerText(), /stored 1m snapshot.*maximum of 250/);
+    assert.match(await page.locator("#chart-container").innerText(), /larger history bound.*explicitly refresh this same selector/);
+    assert.doesNotMatch(await page.locator("body").innerText(), /PRIVATE|must not appear/);
     assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNot yet available");
     assert.ok(apiRequests.some((request) => request.pathname.endsWith("/candles") && request.limit === "250"));
     assert.equal(apiRequests.filter((request) => request.pathname.endsWith("/refresh")).length, 0);
@@ -439,3 +457,191 @@ test("browser clears the previous chart after a 501-candle snapshot rejects a 25
     await page.close();
   }
 });
+
+for (const timeframe of Object.keys(TIMEFRAME_SECONDS)) {
+  for (const limit of [50, 90, 100, 250, 501]) {
+    test(`browser ${timeframe}/${limit}: stored read, explicit refresh eligibility, exact readback`, { timeout: 60_000 }, async () => {
+      const { page, apiRequests } = await openWorkspace({
+        storedSnapshot: createSnapshot({ timeframe, count: limit }),
+        allowRefresh: true,
+      });
+      try {
+        await page.waitForFunction(() =>
+          document.querySelector("#snapshot-status")?.dataset.state !== "warning");
+        await page.locator("#history-select").selectOption(String(limit));
+        await waitForLoadedSnapshot(page);
+        assert.equal(await page.locator("#timeframe-select").inputValue(), timeframe);
+        const metadata = await page.locator("#snapshot-metadata").innerText();
+        assert.ok(metadata.includes(`Timeframe\n${timeframe}`));
+        assert.ok(metadata.includes(`Returned candles\n${limit}`));
+        assert.equal(await page.locator("#candle-rows tr").count(), limit);
+        assert.equal(await page.locator("#chart-container svg").count(), 1);
+        assert.ok(apiRequests.some((request) =>
+          request.timeframe === timeframe && request.limit === String(limit)));
+        assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+        const eligible = timeframe !== "1d" || limit <= 90;
+        assert.equal(await page.locator("#refresh-button").isDisabled(), !eligible);
+        if (!eligible) {
+          assert.match(await page.locator("#refresh-note").innerText(), /90-day.*2–90.*1d.*historical reads.*501/);
+          return;
+        }
+
+        await page.locator("#refresh-button").click();
+        await page.waitForFunction(() => !document.querySelector("#refresh-button").disabled);
+        await waitForLoadedSnapshot(page);
+        assert.equal(apiRequests.filter((request) => request.method === "POST").length, 1);
+        const readsBefore = apiRequests.filter((request) => request.pathname.endsWith("/candles")).length;
+        await page.locator("#history-select").selectOption(limit === 501 ? "50" : "501");
+        await page.locator("#history-select").selectOption(String(limit));
+        await waitForLoadedSnapshot(page);
+        assert.ok(apiRequests.filter((request) => request.pathname.endsWith("/candles")).length > readsBefore);
+        assert.equal(apiRequests.filter((request) => request.method === "POST").length, 1);
+        assert.ok((await page.locator("#snapshot-metadata").innerText()).includes(`Returned candles\n${limit}`));
+      } finally {
+        await page.close();
+      }
+    });
+  }
+}
+
+for (const [state, status, expected] of [
+  ["missing", 404, /No stored snapshot matches/],
+  ["provider unavailable", 503, /provider\/storage is unavailable/],
+  ["invalid selector", 422, /rejected the selector or history bound/],
+  ["corrupt provenance", 200, /exact snapshot lineage/],
+]) {
+  test(`browser ${state} clears prior chart, metadata, and sources`, async () => {
+    const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
+    try {
+      await waitForLoadedSnapshot(page);
+      assert.equal(await page.locator("#history-select").inputValue(), "250");
+      assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Returned candles\n50"));
+      const corrupt = createSnapshot({ count: 50 });
+      corrupt.lineage.market_data_ids[0] = "mismatched-source";
+      await page.route("**/candles?**", (route) => route.fulfill({
+        status,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify(status === 200 ? corrupt : { detail: "PRIVATE diagnostic", code: "UNKNOWN" }),
+      }));
+      await page.locator("#history-select").selectOption("90");
+      await page.getByText("Research request failed.", { exact: true }).waitFor();
+      assert.match(await page.locator("#chart-container").innerText(), expected);
+      assert.doesNotMatch(await page.locator("body").innerText(), /PRIVATE/);
+      assert.equal(await page.locator("#chart-container svg").count(), 0);
+      assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNot yet available");
+      assert.equal(await page.locator("#source-list").innerText(), "");
+      assert.equal(await page.locator("#candle-rows td").count(), 1);
+      assert.equal(await page.locator("#indicator-groups .indicator-value").count(), 0);
+      assert.doesNotMatch(await page.locator("#indicator-groups").innerText(), /fixture-calculation|fixture-snapshot|fixture-report/);
+      assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+for (const state of ["STALE", "INVALID", "WARMUP", "HISTORICAL"]) {
+  test(`browser preserves distinct ${state} context without inventing indicators`, async () => {
+    const fixture = createSnapshot({ count: 50 });
+    if (state === "STALE") fixture.data_quality.status = "STALE";
+    if (state === "INVALID") {
+      fixture.data_quality.status = "INVALID";
+      fixture.data_quality.report_status = "INVALID";
+      fixture.data_quality.report.status = "INVALID";
+      fixture.persisted = false;
+    }
+    if (state === "WARMUP") {
+      fixture.indicators["ema-20"].status = "WARMUP";
+      fixture.indicators["ema-20"].reason_code = "INSUFFICIENT_WARMUP";
+      fixture.indicators["ema-20"].result.points.forEach((point) => { point.value = null; });
+    }
+    const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+    try {
+      await waitForLoadedSnapshot(page);
+      if (state === "HISTORICAL") {
+        await page.route("**/candles?**", (route) => {
+          const asOf = new URL(route.request().url()).searchParams.get("as_of");
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            headers: { "access-control-allow-origin": "*" },
+            body: JSON.stringify({ ...fixture, temporal_context: "HISTORICAL", requested_as_of: asOf, freshness_cutoff: asOf }),
+          });
+        });
+        await page.locator("#as-of-input").fill("2026-10-16T00:00");
+        await page.locator("#as-of-input").dispatchEvent("change");
+        await page.waitForFunction(() => document.querySelector("#snapshot-status").textContent.includes("HISTORICAL — NOT CURRENT"));
+        assert.equal(await page.locator("#refresh-button").isDisabled(), true);
+        assert.match(await page.locator("#refresh-note").innerText(), /Historical cutoffs are read-only/);
+      } else if (state === "WARMUP") {
+        assert.match(await page.locator("#indicator-groups").innerText(), /WARMUP.*INSUFFICIENT_WARMUP/s);
+        assert.equal(await page.locator("#chart-container polyline.ema-20").count(), 0);
+      } else {
+        assert.match(await page.locator("#snapshot-status").innerText(), new RegExp(state));
+        assert.equal(await page.locator("#chart-container polyline.indicator-line").count(), 0);
+        assert.equal(await page.locator("#indicator-groups .indicator-value").count(), 0);
+        if (state === "STALE") {
+          assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Underlying report status\nVALID"));
+        }
+      }
+      assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+for (const delayedAction of ["read", "refresh"]) {
+  test(`browser delayed ${delayedAction} cannot overwrite a newer timeframe selection`, async () => {
+    const { page } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
+    let releaseResponse;
+    let markStarted;
+    const responseGate = new Promise((resolveGate) => { releaseResponse = resolveGate; });
+    const started = new Promise((resolveStarted) => { markStarted = resolveStarted; });
+    try {
+      await waitForLoadedSnapshot(page);
+      await page.route("http://127.0.0.1:8000/api/research/spot/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const selectedTimeframe = request.method() === "POST"
+          ? request.postDataJSON().timeframe
+          : url.searchParams.get("timeframe");
+        if (selectedTimeframe === "1m") {
+          markStarted();
+          await responseGate;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: { "access-control-allow-origin": "*" },
+          body: JSON.stringify(createSnapshot({ timeframe: selectedTimeframe, count: 50 })),
+        });
+      });
+      if (delayedAction === "read") {
+        await page.locator("#history-select").selectOption("90");
+      } else {
+        await page.locator("#refresh-button").click();
+      }
+      await started;
+      await page.locator("#timeframe-select").selectOption("5m");
+      await page.waitForFunction(() => document.querySelector("#snapshot-metadata").innerText.includes("Timeframe\n5m"));
+      const lateResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return delayedAction === "read"
+          ? url.pathname.endsWith("/candles") && url.searchParams.get("timeframe") === "1m"
+          : url.pathname.endsWith("/refresh");
+      });
+      releaseResponse();
+      await (await lateResponse).finished();
+      await page.evaluate(() => new Promise((resolveFrame) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+      assert.equal(await page.locator("#timeframe-select").inputValue(), "5m");
+      assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Timeframe\n5m"));
+      assert.match(await page.locator("#chart-container svg title").textContent(), /5m/);
+    } finally {
+      releaseResponse();
+      await page.close();
+    }
+  });
+}

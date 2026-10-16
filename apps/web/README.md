@@ -37,13 +37,20 @@ snapshot reads; this UI does not enable or configure collection.
 
 Historical cutoffs are read-only and presented as historical. Candle counts
 are request bounds; the API response is never sliced in the browser. If the
-bound is too small for an exact stored snapshot, the API error is shown instead
-of presenting a truncated snapshot.
+bound is too small for the latest exact stored snapshot, the API returns
+`SPOT_CANDLE_LIMIT_EXCEEDED` (422), never a truncated or smaller older snapshot.
+The UI identifies the selected timeframe and maximum: choose a larger history
+bound, or explicitly refresh the same selector when eligible. Only allowlisted
+error codes select this guidance; raw server details are never displayed.
+Snapshot metadata shows the actual returned candle count and timeframe.
 Explicit refresh requests are limited to 2 through the smaller of 501 candles
 or the number fitting in the provider's 90-day OHLCV window. For example, daily
 refresh accepts at most 90 candles, while 501 four-hour candles fit. Reads may
 still request up to 501 candles. The UI and API both enforce the refresh window;
 refresh remains explicit and never retries automatically.
+All six timeframes (1m, 5m, 15m, 1h, 4h, 1d) support stored reads with bounds
+50, 90, 100, 250, and 501. Daily bounds above 90 disable refresh with an explicit
+90-day policy explanation; they do not disable stored historical reads.
 
 Presentation visibility and Beginner/Pro preferences are saved in this
 browser's local storage under instrument/timeframe-specific keys. These
