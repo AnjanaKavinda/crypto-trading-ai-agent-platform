@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from trading_platform_api.spot_research import validate_loopback_host
+from trading_platform_api.structured_logging import configure_structured_logging
 
 
 def main() -> None:
@@ -21,6 +22,7 @@ def main() -> None:
 
     import uvicorn
 
+    configure_structured_logging()
     uvicorn.run(
         "trading_platform_api.main:app",
         host=host,

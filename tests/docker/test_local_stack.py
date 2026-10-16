@@ -112,7 +112,11 @@ class LocalStackAcceptanceTests(unittest.TestCase):
         refresh = Request(
             origin + f"/api/research/spot/{instrument}/refresh",
             data=body,
-            headers={"Content-Type": "application/json", "Origin": origin},
+            headers={
+                "Content-Type": "application/json",
+                "Origin": origin,
+                "X-Correlation-ID": "00000000-0000-4000-8000-000000000360",
+            },
             method="POST",
         )
         with self.assertRaises(HTTPError) as disabled:
@@ -121,6 +125,31 @@ class LocalStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(
             json.loads(disabled.exception.read())["code"], "COLLECTION_NOT_ENABLED"
         )
+        self.assertEqual(
+            disabled.exception.headers.get("X-Correlation-ID"),
+            "00000000-0000-4000-8000-000000000360",
+        )
+        canary = "secret-canary-not-a-valid-uuid"  # pragma: allowlist secret
+        invalid_refresh = Request(
+            origin + f"/api/research/spot/{instrument}/refresh",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Origin": origin,
+                "X-Correlation-ID": canary,
+            },
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as invalid_id:
+            urlopen(invalid_refresh, timeout=10)
+        fallback_id = invalid_id.exception.headers.get("X-Correlation-ID")
+        self.assertRegex(fallback_id or "", r"^[0-9a-f]{32}$")
+        logs = compose("logs", "--no-color", "api", "web")
+        self.assertIn("refresh_request_received", logs)
+        self.assertIn("proxy_response_completed", logs)
+        self.assertIn("00000000-0000-4000-8000-000000000360", logs)
+        self.assertIn(fallback_id, logs)
+        self.assertNotIn(canary, logs)
         # The proxy must overwrite a spoofed browser credential.
         spoofed_headers = {
             "X-Local-Proxy-Secret": "wrong"  # pragma: allowlist secret

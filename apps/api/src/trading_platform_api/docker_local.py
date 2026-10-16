@@ -128,7 +128,11 @@ def main() -> None:
         import uvicorn
 
         from trading_platform_api.main import create_app
+        from trading_platform_api.structured_logging import (
+            configure_structured_logging,
+        )
 
+        configure_structured_logging()
         uvicorn.run(
             create_app(settings, _docker_local=True),
             host="0.0.0.0",

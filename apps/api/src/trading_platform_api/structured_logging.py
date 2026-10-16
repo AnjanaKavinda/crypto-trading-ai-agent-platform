@@ -153,6 +153,20 @@ class StructuredJsonFormatter(logging.Formatter):
         return serialize_log_entry(record.msg)
 
 
+def configure_structured_logging() -> None:
+    logger = logging.getLogger("trading_platform_api")
+    if not any(
+        getattr(handler, "_structured_log_handler", False)
+        for handler in logger.handlers
+    ):
+        handler = logging.StreamHandler()
+        handler.setFormatter(StructuredJsonFormatter())
+        setattr(handler, "_structured_log_handler", True)
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
 def _normalize_level(level: str | int) -> str:
     if isinstance(level, int):
         resolved = logging.getLevelName(level)

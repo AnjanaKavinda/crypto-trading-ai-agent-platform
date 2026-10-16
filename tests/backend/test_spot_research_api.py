@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -298,6 +299,26 @@ def client_for(
         allowed_origin=allowed_origin,
     )
     return TestClient(app, base_url="http://127.0.0.1")
+
+
+@pytest.fixture
+def spot_research_caplog(caplog: pytest.LogCaptureFixture):
+    logger = logging.getLogger("trading_platform_api.spot_research")
+    previous_propagation = logger.propagate
+    previous_disabled = logger.disabled
+    previous_global_disable = logging.root.manager.disable
+    logger.addHandler(caplog.handler)
+    logger.propagate = False
+    logger.disabled = False
+    logging.disable(logging.NOTSET)
+    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+        logger.propagate = previous_propagation
+        logger.disabled = previous_disabled
+        logging.disable(previous_global_disable)
 
 
 def test_local_bind_and_exact_origin_validation() -> None:
@@ -1012,6 +1033,123 @@ def test_refresh_request_cancellation_cancels_persistence_task() -> None:
         assert cancelled.is_set()
 
     asyncio.run(exercise())
+
+
+def test_provider_deadline_returns_504_and_cancels_provider_task(
+    spot_research_caplog: pytest.LogCaptureFixture,
+) -> None:
+    cancelled = asyncio.Event()
+
+    class DeadlineProvider:
+        async def fetch(self, _: MarketDataRequest) -> ProviderBatch:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=FakeRepository(),
+        provider_factory=lambda _: DeadlineProvider(),
+        clock=lambda: NOW,
+        provider_deadline_seconds=0.01,
+    )
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
+        )
+
+    assert response.status_code == 504
+    assert response.json()["code"] == "PROVIDER_REQUEST_TIMEOUT"
+    assert cancelled.is_set()
+    provider_terminal = [
+        record.msg
+        for record in spot_research_caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "provider_fetch_terminal"
+    ]
+    assert len(provider_terminal) == 1
+    assert provider_terminal[0]["status"] == "TIMED_OUT"
+    assert provider_terminal[0]["error_code"] == "PROVIDER_REQUEST_TIMEOUT"
+
+
+def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
+    spot_research_caplog: pytest.LogCaptureFixture,
+) -> None:
+    cancelled = asyncio.Event()
+
+    class DeadlineRepository(FakeRepository):
+        async def persist(self, **_: object) -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    repository = DeadlineRepository()
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=repository,
+        provider_factory=lambda _: FakeProvider(SOURCE_SETTINGS, []),
+        clock=lambda: NOW,
+        persistence_deadline_seconds=0.01,
+    )
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "RESEARCH_PERSISTENCE_TIMEOUT"
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert "candles" not in response.json()
+    assert cancelled.is_set()
+    persistence_terminal = [
+        record.msg
+        for record in spot_research_caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "persistence_terminal"
+    ]
+    assert len(persistence_terminal) == 1
+    assert persistence_terminal[0]["status"] == "FAILED"
+    assert persistence_terminal[0]["error_code"] == "RESEARCH_PERSISTENCE_TIMEOUT"
+
+
+def test_refresh_response_and_lifecycle_logs_share_validated_correlation_id(
+    spot_research_caplog: pytest.LogCaptureFixture,
+) -> None:
+    correlation_id = "00000000-0000-4000-8000-000000000360"
+    research, _, _ = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(),
+            headers={"X-Correlation-ID": correlation_id},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-correlation-id"] == correlation_id
+    entries = [
+        record.msg
+        for record in spot_research_caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("correlation_id") == correlation_id
+        and record.msg.get("component") == "spot-research"
+    ]
+    assert [entry["event"] for entry in entries] == [
+        "refresh_request_received",
+        "provider_fetch_started",
+        "persistence_started",
+        "persistence_terminal",
+        "refresh_request_terminal",
+    ]
+    assert all(
+        entry["details"]
+        == {"instrument_id": INSTRUMENT, "timeframe": "1m", "limit": 21}
+        for entry in entries
+    )
+    assert entries[-1]["status"] == "SUCCEEDED"
 
 
 def research_body():

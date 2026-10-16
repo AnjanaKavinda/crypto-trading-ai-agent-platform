@@ -26,6 +26,15 @@ if [ "$LOCAL_WEB_PORT" -eq 80 ]; then
   authority="$LOCAL_WEB_HOST"
 fi
 cat > /etc/nginx/conf.d/local.conf <<EOF
+map \$http_x_correlation_id \$spot_correlation_id {
+    default \$request_id;
+    ~*^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[1-8][0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$ \$http_x_correlation_id;
+}
+map \$uri \$spot_refresh_instrument {
+    default "";
+    ~^/api/research/spot/(?<spot_instrument>[A-Za-z0-9._:-]+)/refresh\$ \$spot_instrument;
+}
+log_format spot_refresh escape=json '{"timestamp":"\$time_iso8601","service":"local-web-proxy","component":"spot-refresh-proxy","correlation_id":"\$spot_correlation_id","instrument_id":"\$spot_refresh_instrument","timeframe":null,"limit":null,"event":"proxy_response_completed","status":"\$status","duration_seconds":"\$request_time","error_code":null}';
 server {
     listen 8080 default_server;
     server_name _;
@@ -38,12 +47,22 @@ server {
         proxy_pass http://api:8000/health;
         proxy_set_header Host \$http_host;
         proxy_set_header Origin \$http_origin;
+        proxy_set_header X-Correlation-ID \$spot_correlation_id;
+        proxy_set_header X-Local-Proxy-Secret "${LOCAL_PROXY_SECRET}";
+    }
+    location ~ ^/api/research/spot/[A-Za-z0-9._:-]+/refresh\$ {
+        access_log /dev/stdout spot_refresh;
+        proxy_pass http://api:8000;
+        proxy_set_header Host \$http_host;
+        proxy_set_header Origin \$http_origin;
+        proxy_set_header X-Correlation-ID \$spot_correlation_id;
         proxy_set_header X-Local-Proxy-Secret "${LOCAL_PROXY_SECRET}";
     }
     location /api/ {
         proxy_pass http://api:8000;
         proxy_set_header Host \$http_host;
         proxy_set_header Origin \$http_origin;
+        proxy_set_header X-Correlation-ID \$spot_correlation_id;
         proxy_set_header X-Local-Proxy-Secret "${LOCAL_PROXY_SECRET}";
     }
 }

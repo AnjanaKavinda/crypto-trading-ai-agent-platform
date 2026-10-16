@@ -63,5 +63,31 @@ Run the dependency-free frontend checks from this directory:
 npm test
 ```
 
+## Local refresh diagnostics
+
+An explicit refresh gets a UUID correlation ID in the browser. The local Nginx
+proxy forwards a valid UUID unchanged; for a missing or malformed ID it uses
+Nginx's per-request ID instead. The API returns the ID it received in
+`X-Correlation-ID`. Proxy access records are emitted only for refresh responses.
+
+Browser, API, and proxy lifecycle records are JSON and identify the component,
+event, status, timestamp, correlation ID, and refresh selector
+(`instrument_id`, `timeframe`, and `limit` where known). API records also use
+the existing structured logging schema. The API records receipt, provider
+start, persistence start/terminal outcome, and request terminal outcome.
+Existing Binance adapter `fetch`/`fetch_failure` records provide normal provider
+terminal evidence; the service records provider timeout/cancellation terminals.
+Proxy completion includes HTTP status and request duration;
+timeframe and limit are `null` there because the proxy does not inspect request
+bodies.
+
+These local diagnostics omit request and market-data payloads, candle/source
+data, credentials, proxy secrets, authorization headers, environment values,
+and raw exception text. Error codes are fixed safe codes. Browser refresh
+fetching and response-body parsing share a 60-second deadline; a timeout clears
+the in-flight UI state and displays the existing safe failure state without
+accepting the response as a current snapshot. Refresh remains explicit and is
+never retried automatically.
+
 No account or trading capability is provided. Local research data remains
 non-authoritative for any signal, risk assessment, approval, or trade.

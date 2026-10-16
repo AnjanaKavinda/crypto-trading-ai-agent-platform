@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import re
 import time
@@ -67,6 +68,10 @@ from trading_platform_api.spot_research_store import (
     policy_document,
     validate_approved_quality_policy,
 )
+from trading_platform_api.structured_logging import (
+    CorrelationContext,
+    build_structured_log_entry,
+)
 
 MAX_REFRESH_CANDLES = MAX_READ_CANDLES
 _TIMEFRAME_SECONDS = {
@@ -95,6 +100,7 @@ _SYMBOLS: dict[Instrument, str] = {
     "XRP-USDT-SPOT": "XRPUSDT",
 }
 _Result = TypeVar("_Result")
+_LOG = logging.getLogger(__name__)
 
 
 async def _await_cancellable(
@@ -128,6 +134,36 @@ async def _await_cancellable(
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         raise
+
+
+def _log_refresh_lifecycle(
+    *,
+    event: str,
+    correlation_id: str,
+    instrument_id: str,
+    timeframe: str,
+    limit: int,
+    status: str,
+    duration_ms: float | None = None,
+    error_code: str | None = None,
+) -> None:
+    _LOG.info(
+        build_structured_log_entry(
+            level="INFO",
+            service="trading-platform-api",
+            component="spot-research",
+            event=event,
+            context=CorrelationContext(correlation_id, correlation_id),
+            status=status,
+            duration_ms=duration_ms,
+            error_code=error_code,
+            details={
+                "instrument_id": instrument_id,
+                "timeframe": timeframe,
+                "limit": limit,
+            },
+        )
+    )
 
 
 class SpotSymbolView(BaseModel):
@@ -791,6 +827,8 @@ class SpotResearchService:
         | None = None,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
+        provider_deadline_seconds: float = 35,
+        persistence_deadline_seconds: float = 15,
     ) -> None:
         self.provider_settings = provider_settings
         self.quality_policy = quality_policy
@@ -798,6 +836,8 @@ class SpotResearchService:
         self.provider_factory = provider_factory or BinanceSpotProvider
         self.clock = clock or (lambda: datetime.now(UTC))
         self.monotonic = monotonic or time.monotonic
+        self.provider_deadline_seconds = provider_deadline_seconds
+        self.persistence_deadline_seconds = persistence_deadline_seconds
         self._refresh_lock = asyncio.Lock()
         self._last_refresh_started: float | None = None
 
@@ -900,9 +940,46 @@ class SpotResearchService:
                 range_end=body.coverage_end,
             )
             provider = self.provider_factory(request_settings)
-            batch = await self._fetch_cancellable(
-                provider, request, is_disconnected=is_disconnected
+            _log_refresh_lifecycle(
+                event="provider_fetch_started",
+                correlation_id=correlation_id,
+                instrument_id=instrument_id,
+                timeframe=body.timeframe,
+                limit=body.limit,
+                status="STARTED",
             )
+            provider_started = time.monotonic()
+            try:
+                batch = await self._fetch_cancellable(
+                    provider, request, is_disconnected=is_disconnected
+                )
+            except asyncio.CancelledError:
+                _log_refresh_lifecycle(
+                    event="provider_fetch_terminal",
+                    correlation_id=correlation_id,
+                    instrument_id=instrument_id,
+                    timeframe=body.timeframe,
+                    limit=body.limit,
+                    status="CANCELLED",
+                    duration_ms=round((time.monotonic() - provider_started) * 1000, 2),
+                    error_code="REQUEST_CANCELLED",
+                )
+                raise
+            except SpotResearchError as exc:
+                if exc.code == "PROVIDER_REQUEST_TIMEOUT":
+                    _log_refresh_lifecycle(
+                        event="provider_fetch_terminal",
+                        correlation_id=correlation_id,
+                        instrument_id=instrument_id,
+                        timeframe=body.timeframe,
+                        limit=body.limit,
+                        status="TIMED_OUT",
+                        duration_ms=round(
+                            (time.monotonic() - provider_started) * 1000, 2
+                        ),
+                        error_code=exc.code,
+                    )
+                raise
             if (
                 batch.request_id != request.request_id
                 or batch.status.value != "COMPLETE"
@@ -952,6 +1029,15 @@ class SpotResearchService:
             persisted = quality.status is DataQualityStatus.VALID
             if persisted:
                 try:
+                    persistence_started = time.monotonic()
+                    _log_refresh_lifecycle(
+                        event="persistence_started",
+                        correlation_id=correlation_id,
+                        instrument_id=instrument_id,
+                        timeframe=body.timeframe,
+                        limit=body.limit,
+                        status="STARTED",
+                    )
                     await _await_cancellable(
                         asyncio.create_task(
                             self.repository.persist(
@@ -962,21 +1048,71 @@ class SpotResearchService:
                             )
                         ),
                         is_disconnected=is_disconnected,
-                        timeout_seconds=15,
+                        timeout_seconds=self.persistence_deadline_seconds,
                         timeout_status=503,
                         timeout_code="RESEARCH_PERSISTENCE_TIMEOUT",
                         timeout_title="Research persistence timed out",
                         timeout_detail="The accepted snapshot could not be persisted before its deadline.",
                     )
+                except asyncio.CancelledError:
+                    _log_refresh_lifecycle(
+                        event="persistence_terminal",
+                        correlation_id=correlation_id,
+                        instrument_id=instrument_id,
+                        timeframe=body.timeframe,
+                        limit=body.limit,
+                        status="CANCELLED",
+                        duration_ms=round(
+                            (time.monotonic() - persistence_started) * 1000, 2
+                        ),
+                        error_code="REQUEST_CANCELLED",
+                    )
+                    raise
+                except SpotResearchError as exc:
+                    _log_refresh_lifecycle(
+                        event="persistence_terminal",
+                        correlation_id=correlation_id,
+                        instrument_id=instrument_id,
+                        timeframe=body.timeframe,
+                        limit=body.limit,
+                        status="FAILED",
+                        duration_ms=round(
+                            (time.monotonic() - persistence_started) * 1000, 2
+                        ),
+                        error_code=exc.code,
+                    )
+                    raise
                 except Exception as exc:
-                    if isinstance(exc, SpotResearchError):
-                        raise
+                    _log_refresh_lifecycle(
+                        event="persistence_terminal",
+                        correlation_id=correlation_id,
+                        instrument_id=instrument_id,
+                        timeframe=body.timeframe,
+                        limit=body.limit,
+                        status="FAILED",
+                        duration_ms=round(
+                            (time.monotonic() - persistence_started) * 1000, 2
+                        ),
+                        error_code="RESEARCH_PERSISTENCE_FAILED",
+                    )
                     raise SpotResearchError(
                         status=503,
                         code="RESEARCH_PERSISTENCE_FAILED",
                         title="Research snapshot was not persisted",
                         detail="The accepted market snapshot could not be durably stored.",
                     ) from exc
+                else:
+                    _log_refresh_lifecycle(
+                        event="persistence_terminal",
+                        correlation_id=correlation_id,
+                        instrument_id=instrument_id,
+                        timeframe=body.timeframe,
+                        limit=body.limit,
+                        status="SUCCEEDED",
+                        duration_ms=round(
+                            (time.monotonic() - persistence_started) * 1000, 2
+                        ),
+                    )
             response = _response(
                 snapshot=snapshot,
                 quality=quality,
@@ -1005,7 +1141,7 @@ class SpotResearchService:
             return await _await_cancellable(
                 fetch,
                 is_disconnected=is_disconnected,
-                timeout_seconds=35,
+                timeout_seconds=self.provider_deadline_seconds,
                 timeout_status=504,
                 timeout_code="PROVIDER_REQUEST_TIMEOUT",
                 timeout_title="Provider request timed out",
@@ -1202,13 +1338,57 @@ def create_research_router() -> APIRouter:
         request: Request,
     ) -> dict[str, Any]:
         service: SpotResearchService = request.app.state.spot_research_service
-        correlation_id = request.headers.get("x-correlation-id", "")
-        return await service.refresh(
-            instrument_id=instrument_id,
-            body=body,
+        correlation_id = request.state.correlation_id
+        started = time.monotonic()
+        _log_refresh_lifecycle(
+            event="refresh_request_received",
             correlation_id=correlation_id,
-            is_disconnected=request.is_disconnected,
+            instrument_id=instrument_id,
+            timeframe=body.timeframe,
+            limit=body.limit,
+            status="STARTED",
         )
+        try:
+            response = await service.refresh(
+                instrument_id=instrument_id,
+                body=body,
+                correlation_id=correlation_id,
+                is_disconnected=request.is_disconnected,
+            )
+        except SpotResearchError as exc:
+            _log_refresh_lifecycle(
+                event="refresh_request_terminal",
+                correlation_id=correlation_id,
+                instrument_id=instrument_id,
+                timeframe=body.timeframe,
+                limit=body.limit,
+                status="FAILED",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                error_code=exc.code,
+            )
+            raise
+        except asyncio.CancelledError:
+            _log_refresh_lifecycle(
+                event="refresh_request_terminal",
+                correlation_id=correlation_id,
+                instrument_id=instrument_id,
+                timeframe=body.timeframe,
+                limit=body.limit,
+                status="CANCELLED",
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+                error_code="REQUEST_CANCELLED",
+            )
+            raise
+        _log_refresh_lifecycle(
+            event="refresh_request_terminal",
+            correlation_id=correlation_id,
+            instrument_id=instrument_id,
+            timeframe=body.timeframe,
+            limit=body.limit,
+            status="SUCCEEDED",
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+        )
+        return response
 
     @router.get("/{instrument_id}/candles", response_model=SpotResearchResponse)
     async def read_candles(

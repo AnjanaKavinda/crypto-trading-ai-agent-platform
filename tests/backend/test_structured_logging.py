@@ -19,6 +19,7 @@ from trading_platform_api.structured_logging import (
     StructuredJsonFormatter,
     StructuredLoggingError,
     build_structured_log_entry,
+    configure_structured_logging,
     create_correlation_context,
     serialize_log_entry,
 )
@@ -58,6 +59,30 @@ def test_generated_context_contains_non_empty_uuid_identifiers() -> None:
     assert context.trace_id
     assert _is_valid_uuid(context.correlation_id)
     assert _is_valid_uuid(context.trace_id)
+
+
+def test_configured_application_logging_emits_redacted_json_once(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    logger = logging.getLogger("trading_platform_api")
+    original_handlers = logger.handlers[:]
+    original_level = logger.level
+    original_propagate = logger.propagate
+    try:
+        logger.handlers.clear()
+        logger.setLevel(logging.WARNING)
+        logger.propagate = True
+        configure_structured_logging()
+        configure_structured_logging()
+        entry = _manual_valid_entry()
+        logger.info(entry)
+        lines = capsys.readouterr().err.splitlines()
+        assert len(logger.handlers) == 1
+        assert json.loads(lines[0]) == entry
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
 
 
 def test_independent_generated_contexts_use_distinct_identifiers() -> None:
