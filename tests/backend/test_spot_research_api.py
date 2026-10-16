@@ -303,14 +303,22 @@ def client_for(
 
 @pytest.fixture
 def spot_research_caplog(caplog: pytest.LogCaptureFixture):
-    logger = logging.getLogger("trading_platform_api")
+    logger = logging.getLogger("trading_platform_api.spot_research")
     previous_propagation = logger.propagate
-    logger.propagate = True
+    previous_disabled = logger.disabled
+    previous_global_disable = logging.root.manager.disable
+    logger.addHandler(caplog.handler)
+    logger.propagate = False
+    logger.disabled = False
+    logging.disable(logging.NOTSET)
     caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     try:
         yield caplog
     finally:
+        logger.removeHandler(caplog.handler)
         logger.propagate = previous_propagation
+        logger.disabled = previous_disabled
+        logging.disable(previous_global_disable)
 
 
 def test_local_bind_and_exact_origin_validation() -> None:
