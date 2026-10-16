@@ -13,6 +13,10 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+from test_lineage_postgresql import database_url as database_url
 from trading_platform_api.analysis.momentum import (
     MomentumReason,
     MomentumStatus,
@@ -66,10 +70,12 @@ from trading_platform_api.spot_research_store import (
     APPROVED_POLICY_VERSION,
     SpotResearchSnapshotNotFound,
     SpotResearchStoreError,
+    SqlAlchemySpotResearchStore,
     StoredSpotSnapshot,
     decode_policy,
     policy_digest,
     policy_document,
+    spot_research_snapshots,
     validate_approved_quality_policy,
 )
 
@@ -83,6 +89,10 @@ TIMEFRAME_SECONDS = {
     "4h": 14400,
     "1d": 86400,
 }
+HISTORY_LIMITS = (50, 90, 100, 250, 501)
+READ_PAIRS = tuple(
+    (timeframe, limit) for timeframe in TIMEFRAME_SECONDS for limit in HISTORY_LIMITS
+)
 SOURCE_SETTINGS = BinanceSpotSettings(
     enabled=True,
     terms_review_reference="terms-review-1",
@@ -96,7 +106,11 @@ def policy_template() -> QualityPolicyTemplate:
 
 
 def complete_batch(
-    request: MarketDataRequest, *, candles: int = 21, timeframe: str = "1m"
+    request: MarketDataRequest,
+    *,
+    candles: int = 21,
+    timeframe: str = "1m",
+    now: datetime = NOW,
 ) -> ProviderBatch:
     step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
     coverage_start = request.range_start
@@ -144,8 +158,8 @@ def complete_batch(
         )
     snapshot = MarketSnapshot(
         snapshot_id=snapshot_id,
-        as_of=NOW,
-        created_at=NOW,
+        as_of=now,
+        created_at=now,
         instrument_id=request.instrument_id,
         venue_id="BINANCE-SPOT",
         market_data_ids=tuple(item.market_data_id for item in observations),
@@ -157,8 +171,8 @@ def complete_batch(
         provider_version="spot-api-2026-09",
         data_kind=ProviderDataKind.OHLCV,
         status=ProviderBatchStatus.COMPLETE,
-        retrieved_at=NOW,
-        fresh_until=NOW + timedelta(seconds=30),
+        retrieved_at=now,
+        fresh_until=now + timedelta(seconds=30),
         source_records=tuple(sources),
         market_data=tuple(observations),
         snapshots=(snapshot,),
@@ -176,6 +190,7 @@ class FakeProvider:
             request,
             candles=request.maximum_records,
             timeframe=self.settings.timeframe,
+            now=request.as_of,
         )
 
 
@@ -252,11 +267,13 @@ def service(
     )
 
 
-def refresh_body(*, limit: int = 21, timeframe: str = "1m") -> dict[str, object]:
+def refresh_body(
+    *, limit: int = 21, timeframe: str = "1m", now: datetime = NOW
+) -> dict[str, object]:
     step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
     interval_seconds = TIMEFRAME_SECONDS[timeframe]
     end = datetime.fromtimestamp(
-        (int(NOW.timestamp()) // interval_seconds) * interval_seconds,
+        (int(now.timestamp()) // interval_seconds) * interval_seconds,
         tz=UTC,
     )
     return {
@@ -610,6 +627,161 @@ def test_read_rejects_oversized_snapshot_without_another_provider_call() -> None
     assert calls == calls_after_refresh == [1]
 
 
+@pytest.fixture
+def persisted_service(database_url):
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    repository = SqlAlchemySpotResearchStore(sessions)
+
+    async def next_cutoff():
+        async with sessions() as session:
+            latest = await session.scalar(
+                select(func.max(spot_research_snapshots.c.as_of))
+            )
+            return max(latest or NOW, NOW) + timedelta(days=1)
+
+    now = asyncio.run(next_cutoff())
+    calls = []
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=repository,
+        provider_factory=lambda settings: FakeProvider(settings, calls),
+        clock=lambda: now,
+        monotonic=lambda: 100.0,
+    )
+    yield research, calls, repository, now
+    asyncio.run(engine.dispose())
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "limit"),
+    [
+        (timeframe, limit)
+        for timeframe, limit in READ_PAIRS
+        if limit * TIMEFRAME_SECONDS[timeframe] <= 90 * 86400
+    ],
+)
+def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit):
+    research, calls, _, now = persisted_service
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(timeframe=timeframe, limit=limit, now=now),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        read = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": timeframe, "limit": limit},
+        )
+    assert read.status_code == 200, read.text
+    payload = read.json()
+    expected = refreshed.json()
+    for field in ("snapshot_id", "candles", "lineage", "data_quality", "indicators"):
+        assert payload[field] == expected[field]
+    assert payload["timeframe"] == timeframe
+    assert len(payload["candles"]) == limit
+    assert payload["persisted"] is True
+    assert calls == [1]
+
+
+async def persist_fixture(repository, *, timeframe, limit, now):
+    step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
+    end = datetime.fromtimestamp(
+        int(now.timestamp()) // int(step.total_seconds()) * int(step.total_seconds()),
+        tz=UTC,
+    )
+    request = MarketDataRequest(
+        request_id=uuid4(),
+        correlation_id="offline-selector-matrix",
+        data_kind=ProviderDataKind.OHLCV,
+        instrument_id=INSTRUMENT,
+        venue_id="BINANCE-SPOT",
+        requested_at=now,
+        as_of=now,
+        maximum_records=limit,
+        range_start=end - limit * step,
+        range_end=end,
+    )
+    batch = complete_batch(request, candles=limit, timeframe=timeframe, now=now)
+    policy = policy_template().for_request(
+        instrument_id=INSTRUMENT,
+        timeframe=timeframe,
+        cutoff=now,
+        coverage_start=request.range_start,
+        coverage_end=end,
+    )
+    quality = assess_complete_binance_spot_batch(batch, policy, assessed_at=now)
+    assert quality.status is DataQualityStatus.VALID
+    await repository.persist(
+        batch=batch, quality=quality, policy=policy, timeframe=timeframe
+    )
+    return batch, quality
+
+
+@pytest.mark.parametrize(("timeframe", "limit"), READ_PAIRS)
+def test_store_backed_all_historical_read_pairs(persisted_service, timeframe, limit):
+    research, calls, repository, now = persisted_service
+    batch, quality = asyncio.run(
+        persist_fixture(repository, timeframe=timeframe, limit=limit, now=now)
+    )
+    research.clock = lambda: now + timedelta(days=2)
+    with client_for(research) as client:
+        read = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": timeframe, "limit": limit, "as_of": now.isoformat()},
+        )
+    assert read.status_code == 200, read.text
+    payload = read.json()
+    assert payload["timeframe"] == timeframe
+    assert len(payload["candles"]) == limit
+    assert payload["snapshot_id"] == str(batch.snapshots[0].snapshot_id)
+    assert payload["data_quality"]["report_id"] == str(quality.report_id)
+    assert payload["data_quality"]["status"] == "VALID"
+    assert payload["temporal_context"] == "HISTORICAL"
+    assert payload["lineage"]["market_data_ids"] == [
+        str(item.market_data_id) for item in batch.market_data
+    ]
+    assert calls == []
+
+
+@pytest.mark.parametrize("timeframe", TIMEFRAME_SECONDS)
+def test_store_latest_oversized_never_falls_back(persisted_service, timeframe):
+    research, calls, repository, now = persisted_service
+    older_time = now - timedelta(hours=1)
+    older, _ = asyncio.run(
+        persist_fixture(repository, timeframe=timeframe, limit=50, now=older_time)
+    )
+    latest, _ = asyncio.run(
+        persist_fixture(repository, timeframe=timeframe, limit=501, now=now)
+    )
+    with client_for(research) as client:
+        rejected = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": timeframe, "limit": 50},
+        )
+        historical = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={
+                "timeframe": timeframe,
+                "limit": 50,
+                "as_of": older_time.isoformat(),
+            },
+        )
+        full = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": timeframe, "limit": 501},
+        )
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "SPOT_CANDLE_LIMIT_EXCEEDED"
+    assert historical.status_code == 200
+    assert historical.json()["snapshot_id"] == str(older.snapshots[0].snapshot_id)
+    assert full.status_code == 200
+    assert full.json()["snapshot_id"] == str(latest.snapshots[0].snapshot_id)
+    assert len(full.json()["candles"]) == 501
+    assert calls == []
+
+
 def test_refresh_validation_uses_standard_problem_response_and_never_fetches() -> None:
     research, calls, _ = service(quality_policy=policy_template())
     with client_for(research) as client:
@@ -643,6 +815,9 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
     [
         ("1d", 90, 200),
         ("1d", 91, 422),
+        ("1d", 100, 422),
+        ("1d", 250, 422),
+        ("1d", 501, 422),
         ("4h", 501, 200),
     ],
 )

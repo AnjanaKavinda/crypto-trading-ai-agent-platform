@@ -516,6 +516,7 @@ function renderMetadata(snapshot) {
     ["Exact instrument / symbol", `${stringValue(snapshot.instrument_id)} · ${stringValue(snapshot.symbol)}`],
     ["Venue", snapshot.venue_id],
     ["Timeframe", snapshot.timeframe],
+    ["Returned candles", String(snapshot.candles.length)],
     ["As of", isoText(snapshot.as_of)],
     ["Freshness cutoff", isoText(snapshot.freshness_cutoff)],
     ["Requested as-of cutoff", snapshot.requested_as_of ? isoText(snapshot.requested_as_of) : "None · current read"],
@@ -599,7 +600,7 @@ async function bootstrap() {
     $("#refresh-note").textContent = cutoff.value
       ? "Historical cutoffs are read-only. Clear the cutoff before requesting a current explicit refresh."
       : outsideBounds
-        ? `Refresh allows 2–${maxRefreshCandles} candles for ${timeframe.value}; reads may use up to 501.`
+        ? `The 90-day provider-window policy limits refresh to 2–${maxRefreshCandles} candles for ${timeframe.value}. Stored historical reads remain available up to 501 candles.`
         : "Refresh is never automatic. This action requests a bounded public Spot update.";
   };
   const renderPreferences = () => {

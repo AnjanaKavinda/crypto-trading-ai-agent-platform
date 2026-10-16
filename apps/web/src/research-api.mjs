@@ -11,8 +11,15 @@ export const TIMEFRAME_SECONDS = Object.freeze({
   "1d": 86400,
 });
 
-function apiError(status) {
-  const message = status === 404
+function apiError(status, code, selector) {
+  const oversized = status === 422 && code === "SPOT_CANDLE_LIMIT_EXCEEDED" && selector;
+  const message = oversized
+    ? `The latest stored ${selector.timeframe} snapshot exceeds your requested maximum of ${selector.limit} candles. It was not truncated or replaced by an older snapshot. Choose a larger history bound (up to 501)${
+      refreshRequestWithinBounds(selector.timeframe, selector.limit, { historical: Boolean(selector.asOf) })
+        ? ", or explicitly refresh this same selector to collect a bounded snapshot."
+        : ". This selection is read-only; provider refresh is not eligible."
+    }`
+    : status === 404
     ? "No stored snapshot matches this instrument, timeframe, history bound, and cutoff."
     : status === 429
       ? "The local API rate-limited this request. Wait before explicitly refreshing again."
@@ -26,7 +33,7 @@ function apiError(status) {
   return error;
 }
 
-async function request(fetcher, path, options = {}) {
+async function request(fetcher, path, options = {}, selector) {
   let response;
   try {
     response = await fetcher(`${API_ORIGIN}${API_PATH}${path}`, {
@@ -38,7 +45,18 @@ async function request(fetcher, path, options = {}) {
   } catch {
     throw new Error("The local research API is unreachable.");
   }
-  if (!response.ok) throw apiError(response.status);
+  if (!response.ok) {
+    let code;
+    if (response.status === 422) {
+      try {
+        const problem = await response.json();
+        if (problem?.code === "SPOT_CANDLE_LIMIT_EXCEEDED") code = problem.code;
+      } catch {
+        // Unreadable or unrecognized problems retain the generic safe message.
+      }
+    }
+    throw apiError(response.status, code, selector);
+  }
   try {
     return await response.json();
   } catch {
@@ -55,7 +73,9 @@ export function readSnapshot(fetcher, { instrumentId, timeframe, limit, asOf }) 
   if (!Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLES) throw new Error("History bound is outside the API limit.");
   const query = new URLSearchParams({ timeframe, limit: String(limit) });
   if (asOf) query.set("as_of", asOf);
-  return request(fetcher, `/${encodeURIComponent(instrumentId)}/candles?${query}`);
+  return request(fetcher, `/${encodeURIComponent(instrumentId)}/candles?${query}`, {}, {
+    timeframe, limit, asOf,
+  });
 }
 
 export function refreshRequestWithinBounds(timeframe, limit, { historical = false } = {}) {
