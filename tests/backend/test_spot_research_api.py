@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -298,6 +299,18 @@ def client_for(
         allowed_origin=allowed_origin,
     )
     return TestClient(app, base_url="http://127.0.0.1")
+
+
+@pytest.fixture
+def spot_research_caplog(caplog: pytest.LogCaptureFixture):
+    logger = logging.getLogger("trading_platform_api")
+    previous_propagation = logger.propagate
+    logger.propagate = True
+    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
+    try:
+        yield caplog
+    finally:
+        logger.propagate = previous_propagation
 
 
 def test_local_bind_and_exact_origin_validation() -> None:
@@ -1015,9 +1028,8 @@ def test_refresh_request_cancellation_cancels_persistence_task() -> None:
 
 
 def test_provider_deadline_returns_504_and_cancels_provider_task(
-    caplog: pytest.LogCaptureFixture,
+    spot_research_caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     cancelled = asyncio.Event()
 
     class DeadlineProvider:
@@ -1045,7 +1057,7 @@ def test_provider_deadline_returns_504_and_cancels_provider_task(
     assert cancelled.is_set()
     provider_terminal = [
         record.msg
-        for record in caplog.records
+        for record in spot_research_caplog.records
         if isinstance(record.msg, dict)
         and record.msg.get("event") == "provider_fetch_terminal"
     ]
@@ -1055,9 +1067,8 @@ def test_provider_deadline_returns_504_and_cancels_provider_task(
 
 
 def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
-    caplog: pytest.LogCaptureFixture,
+    spot_research_caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     cancelled = asyncio.Event()
 
     class DeadlineRepository(FakeRepository):
@@ -1088,7 +1099,7 @@ def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
     assert cancelled.is_set()
     persistence_terminal = [
         record.msg
-        for record in caplog.records
+        for record in spot_research_caplog.records
         if isinstance(record.msg, dict)
         and record.msg.get("event") == "persistence_terminal"
     ]
@@ -1098,9 +1109,8 @@ def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
 
 
 def test_refresh_response_and_lifecycle_logs_share_validated_correlation_id(
-    caplog: pytest.LogCaptureFixture,
+    spot_research_caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("INFO", logger="trading_platform_api.spot_research")
     correlation_id = "00000000-0000-4000-8000-000000000360"
     research, _, _ = service(quality_policy=policy_template())
     with client_for(research) as client:
@@ -1114,7 +1124,7 @@ def test_refresh_response_and_lifecycle_logs_share_validated_correlation_id(
     assert response.headers["x-correlation-id"] == correlation_id
     entries = [
         record.msg
-        for record in caplog.records
+        for record in spot_research_caplog.records
         if isinstance(record.msg, dict)
         and record.msg.get("correlation_id") == correlation_id
         and record.msg.get("component") == "spot-research"
