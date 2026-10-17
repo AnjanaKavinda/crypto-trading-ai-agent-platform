@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import test from "node:test";
 import { TIMEFRAME_SECONDS } from "../../apps/web/src/research-api.mjs";
-import { DEFAULT_VISIBILITY } from "../../apps/web/src/workspace-state.mjs";
+import { DEFAULT_VISIBILITY, INDICATOR_IDS } from "../../apps/web/src/workspace-state.mjs";
 
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium } = require("playwright");
@@ -335,6 +335,89 @@ async function waitForLoadedSnapshot(page) {
   await page.locator("#snapshot-status").waitFor();
 }
 
+test("indicator provenance links use the loaded response and the synthetic example stays separate", { timeout: 60_000 }, async () => {
+  const { page, apiRequests } = await openWorkspace();
+  try {
+    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
+    await page.locator("#history-select").selectOption("501");
+    await waitForLoadedSnapshot(page);
+
+    const provenanceText = await page.locator("#snapshot-metadata").innerText();
+    const sourceText = await page.locator("#source-list").innerText();
+    for (const identity of [
+      symbol,
+      instrumentId,
+      "1m",
+      snapshotId,
+      qualityReportId,
+      "fixture-source-btc",
+    ]) {
+      assert.ok(`${provenanceText}\n${sourceText}`.includes(identity), `${identity} is present in current provenance`);
+    }
+
+    const requestsBeforeDisplayChanges = apiRequests.length;
+    const firstLink = page.locator("#indicator-groups .indicator-card .indicator-provenance-link a").first();
+    assert.equal(await page.locator("#indicator-groups .indicator-provenance-link a").count(), DEFAULT_VISIBILITY.length);
+    assert.equal(await firstLink.getAttribute("href"), "#snapshot-provenance");
+    assert.equal(await firstLink.getAttribute("tabindex"), null);
+    assert.match(await firstLink.getAttribute("aria-label"), new RegExp(
+      `${symbol}.*${instrumentId}.*1m.*${snapshotId}.*${qualityReportId}`,
+    ));
+    await firstLink.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    assert.equal(await firstLink.evaluate((link) => document.activeElement === link), true);
+    assert.equal(await firstLink.evaluate((link) => link.matches(":focus-visible")), true);
+    await firstLink.click();
+    assert.equal(new URL(page.url()).hash, "#snapshot-provenance");
+
+    await page.getByRole("button", { name: "Pro", exact: true }).click();
+    for (const id of INDICATOR_IDS) {
+      const name = {
+        "ema-20": "EMA 20",
+        "ema-50": "EMA 50",
+        "ema-500": "EMA 500",
+        "atr-14": "ATR 14",
+        "bollinger-bands-20": "Bollinger Bands 20",
+        "realized-volatility-20": "Realized volatility 20",
+        "rsi-14": "RSI 14",
+        "macd-12-26-9": "MACD 12/26/9",
+        "stochastic-14-3": "Stochastic 14/3",
+        "cci-20": "CCI 20",
+      }[id];
+      await page.getByRole("checkbox", { name, exact: true }).check();
+    }
+    const cards = page.locator("#indicator-groups .indicator-card");
+    assert.equal(await cards.count(), INDICATOR_IDS.length);
+    assert.equal(await cards.locator(".indicator-provenance-link a").count(), INDICATOR_IDS.length);
+    for (const card of await cards.all()) {
+      const text = await card.innerText();
+      assert.match(text, /Method version:/);
+      assert.match(text, /Parameters:/);
+      assert.match(text, /Regimes where it may be useful:/);
+      assert.match(text, /Failure modes and limitations:/);
+      const link = card.locator(".indicator-provenance-link a");
+      assert.equal(await link.getAttribute("href"), "#snapshot-provenance");
+      assert.match(await link.getAttribute("aria-label"), new RegExp(
+        `${symbol}.*${instrumentId}.*1m.*${snapshotId}.*${qualityReportId}`,
+      ));
+    }
+
+    await page.locator("#synthetic-example summary").click();
+    assert.equal(await page.locator("#synthetic-example tbody tr").count(), INDICATOR_IDS.length);
+    assert.match(await page.locator("#synthetic-example").innerText(), /synthetic \/ educational only/i);
+    assert.match(await page.locator("#synthetic-example").innerText(), /not provider data.*not market evidence.*not a signal/s);
+    assert.equal(await page.locator("#chart-container").innerText().then((text) => /synthetic/i.test(text)), false);
+    assert.doesNotMatch(await page.locator("#snapshot-metadata").innerText(), /synthetic/i);
+    assert.doesNotMatch(await page.locator("#indicator-groups").innerText(), /synthetic/i);
+    assert.equal(apiRequests.length, requestsBeforeDisplayChanges);
+    assert.equal(await page.locator("#snapshot-metadata").innerText(), provenanceText);
+    assert.equal(await page.locator("#source-list").innerText(), sourceText);
+  } finally {
+    await page.close();
+  }
+});
+
 test("browser chart toggles preserve series isolation and bind every point to its candle timestamp", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
@@ -514,6 +597,7 @@ test("browser clears the previous chart after a 501-candle snapshot rejects a 25
     assert.match(await page.locator("#chart-container").innerText(), /larger history bound.*explicitly refresh this same selector/);
     assert.doesNotMatch(await page.locator("body").innerText(), /PRIVATE|must not appear/);
     assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNot yet available");
+    assert.equal(await page.locator("#indicator-groups .indicator-provenance-link").count(), 0);
     assert.ok(apiRequests.some((request) => request.pathname.endsWith("/candles") && request.limit === "250"));
     assert.equal(apiRequests.filter((request) => request.pathname.endsWith("/refresh")).length, 0);
   } finally {
