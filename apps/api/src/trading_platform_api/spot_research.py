@@ -19,6 +19,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, FastAPI, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from trading_platform_api.analysis.indicator_registry import (
+    SPOT_RESEARCH_INDICATORS,
+    IndicatorMetadata,
+    IndicatorPhase,
+)
 from trading_platform_api.analysis.momentum import (
     calculate_cci,
     calculate_macd,
@@ -29,10 +34,19 @@ from trading_platform_api.analysis.moving_averages import (
     MovingAverageKind,
     calculate_moving_average,
 )
+from trading_platform_api.analysis.price_action import calculate_spot_price_action
 from trading_platform_api.analysis.volatility import (
     calculate_atr14,
     calculate_bollinger_bands,
     calculate_realized_volatility,
+)
+from trading_platform_api.analysis.vwap_volume_profile import (
+    VolumeConfirmationPointReason,
+    VolumeProfileStatus,
+    VWAPStatus,
+    calculate_volume_confirmation,
+    calculate_volume_profile,
+    calculate_vwap,
 )
 from trading_platform_api.market_data.binance_spot import (
     BinanceSpotProvider,
@@ -235,6 +249,14 @@ class SpotIndicatorView(BaseModel):
     result: dict[str, Any] | None
 
 
+class SpotAnalysisView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["AVAILABLE", "PARTIAL", "WARMUP", "UNAVAILABLE"]
+    reason_code: str | None
+    result: dict[str, Any] | None
+
+
 class SpotOrderFlowView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -261,6 +283,7 @@ class SpotResearchResponse(BaseModel):
     persisted: bool
     candles: tuple[SpotCandleView, ...]
     indicators: dict[str, SpotIndicatorView]
+    spot_analysis: dict[str, SpotAnalysisView]
     order_flow: SpotOrderFlowView
 
 
@@ -561,6 +584,200 @@ def _has_undefined_value(value: object) -> bool:
     return False
 
 
+def _registered_metadata(indicator_id: str) -> IndicatorMetadata:
+    metadata = SPOT_RESEARCH_INDICATORS.get(indicator_id, "1")
+    if metadata.phase is not IndicatorPhase.VALIDATED:
+        raise ValueError("The exact analysis method is not validated.")
+    return metadata
+
+
+def _unavailable_analysis(reason_code: str) -> dict[str, Any]:
+    return {
+        "status": "UNAVAILABLE",
+        "reason_code": reason_code,
+        "result": None,
+    }
+
+
+def _vwap_envelope(result: Any) -> dict[str, Any]:
+    ready = any(point.value.status is VWAPStatus.READY for point in result.points)
+    undefined = any(
+        point.value.status is VWAPStatus.UNDEFINED for point in result.points
+    )
+    if ready and undefined:
+        # Keep the calculator's point states intact; the wrapper is partial.
+        status = "PARTIAL"
+        reason_code = "ZERO_CUMULATIVE_VOLUME"
+    elif ready:
+        status = "AVAILABLE"
+        reason_code = None
+    else:
+        reasons = tuple(
+            point.value.reason.value
+            for point in result.points
+            if point.value.reason is not None
+        )
+        status = "UNAVAILABLE" if reasons else "WARMUP"
+        reason_code = reasons[0] if reasons else "INSUFFICIENT_WARMUP"
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "result": _json_value(result),
+    }
+
+
+def _volume_profile_envelope(result: Any) -> dict[str, Any]:
+    if result.status is VolumeProfileStatus.READY:
+        status = "AVAILABLE"
+        reason_code = None
+    else:
+        status = "UNAVAILABLE"
+        reason_code = result.reason.value if result.reason is not None else "UNDEFINED"
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "result": _json_value(result),
+    }
+
+
+def _volume_confirmation_envelope(result: Any) -> dict[str, Any]:
+    points = result.points
+    all_insufficient_history = bool(points) and all(
+        point.reason is VolumeConfirmationPointReason.INSUFFICIENT_PRIOR_CANDLES
+        for point in points
+    )
+    if all_insufficient_history:
+        status = "WARMUP"
+        reason_code = "INSUFFICIENT_WARMUP"
+    else:
+        # Even when trailing volume points are ready, the contextual assessment
+        # and comparison remain unavailable without caller-owned context.
+        status = "PARTIAL"
+        reason_code = (
+            "ZERO_PRIOR_VOLUME_BASELINE"
+            if any(
+                point.reason is VolumeConfirmationPointReason.ZERO_PRIOR_VOLUME_BASELINE
+                for point in points
+            )
+            else "CONTEXTUAL_ASSESSMENTS_NOT_CONFIGURED"
+        )
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "result": _json_value(result),
+    }
+
+
+def _calculate_ohlcv_analysis(
+    *,
+    snapshot: MarketSnapshot,
+    observations: tuple[MarketData, ...],
+    quality: DataQualityReport,
+    timeframe: str,
+    stale: bool = False,
+) -> dict[str, dict[str, Any]]:
+    if quality.status is not DataQualityStatus.VALID or stale:
+        reason = "STALE_FOR_SERVING_CUTOFF" if stale else "QUALITY_NOT_VALID"
+        return {
+            name: _unavailable_analysis(reason)
+            for name in (
+                "vwap",
+                "volume-profile",
+                "volume-confirmation",
+                "price-action-support-resistance",
+                "spot-market-structure",
+            )
+        }
+
+    outputs: dict[str, dict[str, Any]] = {}
+    try:
+        metadata = _registered_metadata("vwap")
+        result = calculate_vwap(
+            snapshot=snapshot,
+            observations=observations,
+            quality=quality,
+            timeframe=timeframe,
+            metadata_version=metadata.metadata_version,
+        )
+        outputs["vwap"] = _vwap_envelope(result)
+    except (ArithmeticError, ValueError):
+        outputs["vwap"] = _unavailable_analysis("DETERMINISTIC_CALCULATION_FAILED")
+
+    try:
+        metadata = _registered_metadata("volume-profile")
+        parameters = {item.name: item.default for item in metadata.parameters}
+        if set(parameters) != {"bin-count", "value-area-percent"}:
+            raise ValueError("Exact volume-profile parameters are unavailable.")
+        result = calculate_volume_profile(
+            snapshot=snapshot,
+            observations=observations,
+            quality=quality,
+            bin_count=parameters["bin-count"],
+            value_area_percent=parameters["value-area-percent"],
+            timeframe=timeframe,
+            metadata_version=metadata.metadata_version,
+        )
+        outputs["volume-profile"] = _volume_profile_envelope(result)
+    except (ArithmeticError, ValueError):
+        outputs["volume-profile"] = _unavailable_analysis(
+            "DETERMINISTIC_CALCULATION_FAILED"
+        )
+
+    try:
+        metadata = _registered_metadata("volume-confirmation")
+        parameters = {item.name: item.default for item in metadata.parameters}
+        if set(parameters) != {"lookback"}:
+            raise ValueError("Exact volume-confirmation parameters are unavailable.")
+        result = calculate_volume_confirmation(
+            snapshot=snapshot,
+            observations=observations,
+            quality=quality,
+            lookback=parameters["lookback"],
+            timeframe=timeframe,
+            metadata_version=metadata.metadata_version,
+            candidate_event=None,
+            policy=None,
+            comparison_context=None,
+        )
+        outputs["volume-confirmation"] = _volume_confirmation_envelope(result)
+    except (ArithmeticError, ValueError):
+        outputs["volume-confirmation"] = _unavailable_analysis(
+            "DETERMINISTIC_CALCULATION_FAILED"
+        )
+
+    try:
+        metadata = _registered_metadata("price-action-support-resistance")
+        result = calculate_spot_price_action(
+            snapshot=snapshot,
+            observations=observations,
+            quality=quality,
+            timeframe=timeframe,
+            range_baseline_policy=None,
+            pattern_policy=None,
+            support_resistance_policy=None,
+            metadata_version=metadata.metadata_version,
+        )
+        warmup = len(observations) < metadata.minimum_warmup_candles
+        outputs["price-action-support-resistance"] = {
+            "status": "WARMUP" if warmup else "PARTIAL",
+            "reason_code": (
+                "INSUFFICIENT_WARMUP"
+                if warmup
+                else "CALLER_POLICIES_NOT_SUPPLIED"
+            ),
+            "result": _json_value(result),
+        }
+    except (ArithmeticError, ValueError):
+        outputs["price-action-support-resistance"] = _unavailable_analysis(
+            "DETERMINISTIC_CALCULATION_FAILED"
+        )
+
+    outputs["spot-market-structure"] = _unavailable_analysis(
+        "CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED"
+    )
+    return outputs
+
+
 def _calculate_indicators(
     *,
     snapshot: MarketSnapshot,
@@ -794,6 +1011,13 @@ def _response(
         "persisted": persisted,
         "candles": candles,
         "indicators": _calculate_indicators(
+            snapshot=snapshot,
+            observations=observations,
+            quality=quality,
+            timeframe=timeframe,
+            stale=stale,
+        ),
+        "spot_analysis": _calculate_ohlcv_analysis(
             snapshot=snapshot,
             observations=observations,
             quality=quality,
