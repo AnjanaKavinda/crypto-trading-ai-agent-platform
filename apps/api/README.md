@@ -466,6 +466,36 @@ versioned C-003 v1 policy and digest, calculation versions, and explicit
 remains explicitly unavailable because this API does not collect trade/book
 inputs. No endpoint creates a signal, trade, or order.
 
+### Deterministic Spot OHLCV analysis projection (Issue [#354](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/354))
+
+The existing candle response projects the approved, deterministic #53–#56
+calculations from the exact validated C-001 observations, C-002 snapshot, and
+C-003 report/policy already used for that response. It adds entries to the
+new `spot_analysis` response field using the local `SpotAnalysisView` read model;
+the existing `indicators` field and its status vocabulary remain unchanged. It
+adds no endpoint, refresh, provider access, or persistence write. Each result
+retains its calculator's nested/per-point statuses, method and metadata
+versions, parameters, units, and snapshot/quality/input IDs. The top-level
+`lineage` and `data_quality` objects remain the exact C-091 source, C-003
+report, and policy binding for those results. The wrapper status may be
+`AVAILABLE`, `PARTIAL`, `WARMUP`, or `UNAVAILABLE` without rewriting calculator
+result statuses.
+
+| Issue / `spot_analysis` key | Projection and status |
+|---|---|
+| #53 `vwap` | `calculate_vwap()` → `VWAPSeries`: cumulative bar-based typical-price VWAP, anchored to the first candle in the supplied snapshot (not an inferred session). Zero cumulative volume remains `UNAVAILABLE` with the calculator's `ZERO_CUMULATIVE_VOLUME` reason; mixed undefined/ready points produce a `PARTIAL` wrapper. This is an OHLCV approximation, not trade-by-trade VWAP. |
+| #53 `volume-profile` | `calculate_volume_profile()` → `VolumeProfileSeries`: candle-assigned typical-price volume-profile proxy. The calculator receives the exact registry-v1 parameter defaults: 24 bins and a 70% value area. Zero total volume remains `UNAVAILABLE` with `ZERO_TOTAL_VOLUME`; this is not trade-level volume-at-price. |
+| #54 `volume-confirmation` | `calculate_volume_confirmation()` → `VolumeConfirmationSeries`: raw volume, previous-20-candle sum/mean, and relative-volume points. Lookback 20 comes from the exact validated registry metadata. Per-point calculator statuses and reasons are preserved; insufficient trailing history remains `UNAVAILABLE` with `INSUFFICIENT_PRIOR_CANDLES`, and zero baselines remain `UNAVAILABLE` with `ZERO_PRIOR_VOLUME_BASELINE`. Without caller event/policy or pivot-comparison context, the calculator's assessment and comparison remain `INDETERMINATE` with their missing-context reasons. Exhaustion remains `DATA_UNAVAILABLE` because reliable order-flow inputs are absent. The wrapper is `WARMUP` before any trailing value is ready and `PARTIAL` when only some measures/context are available. |
+| #55 `price-action-support-resistance` | `calculate_spot_price_action()` → `PriceActionAnalysis`: runs with all three optional policies explicitly `None`. Candle geometry is available; no registry policy defaults are applied. The response envelope is `PARTIAL` with `CALLER_POLICIES_NOT_SUPPLIED`: pattern findings, pivots, and support/resistance zones are not inferred. Its original C-008 evidence and C-012 assessment are preserved and remain bound to the exact inputs. When the snapshot is below the registered warm-up minimum, the envelope is `WARMUP` instead and still retains calculated geometry. |
+| #56 `spot-market-structure` | `calculate_spot_market_structure()` → `MarketStructureAnalysis` (not invoked): explicitly `UNAVAILABLE` with `CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED`. The calculator requires exact #55 internal/external price-action outputs and caller-supplied pivot and break policies; the API does not invent those parameters or infer structure. |
+
+Invalid/non-VALID quality or a stale serving cutoff disables all five
+projections before calculation. A deterministic calculator failure makes only
+its corresponding projection unavailable. SMC, Wyckoff, Fibonacci, and any
+other analysis not in #53–#56 are not exposed by this projection. The new
+read-model field does not change shared C-001/C-002/C-003/C-008/C-012 schemas or
+the existing `SpotIndicatorView`.
+
 Run the API using the loopback-only launcher:
 
 ```bash

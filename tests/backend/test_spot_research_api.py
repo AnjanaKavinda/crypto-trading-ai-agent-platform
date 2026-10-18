@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from test_lineage_postgresql import database_url as database_url
+from trading_platform_api.analysis.indicator_registry import SPOT_RESEARCH_INDICATORS
 from trading_platform_api.analysis.momentum import (
     MomentumReason,
     MomentumStatus,
@@ -26,6 +27,12 @@ from trading_platform_api.analysis.momentum import (
 from trading_platform_api.analysis.moving_averages import (
     MovingAverageKind,
     calculate_moving_average,
+)
+from trading_platform_api.analysis.price_action import calculate_spot_price_action
+from trading_platform_api.analysis.vwap_volume_profile import (
+    calculate_volume_confirmation,
+    calculate_volume_profile,
+    calculate_vwap,
 )
 from trading_platform_api.config import (
     AppSettings,
@@ -63,6 +70,7 @@ from trading_platform_api.spot_research import (
     QualityPolicyTemplate,
     SpotResearchService,
     _indicator_envelope,
+    _json_value,
     approved_quality_policy_template,
     validate_local_origin,
     validate_loopback_host,
@@ -465,6 +473,25 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
     assert payload["indicators"]["stochastic-14-3"]["status"] == "AVAILABLE"
     assert payload["indicators"]["cci-20"]["status"] == "AVAILABLE"
     assert payload["order_flow"]["status"] == "UNAVAILABLE"
+    assert set(payload["indicators"]) == {
+        "ema-20",
+        "ema-50",
+        "ema-500",
+        "atr-14",
+        "bollinger-bands-20",
+        "realized-volatility-20",
+        "rsi-14",
+        "macd-12-26-9",
+        "stochastic-14-3",
+        "cci-20",
+    }
+    assert set(payload["spot_analysis"]) == {
+        "vwap",
+        "volume-profile",
+        "volume-confirmation",
+        "price-action-support-resistance",
+        "spot-market-structure",
+    }
     assert repository.stored is not None
     expected_ema = calculate_moving_average(
         snapshot=repository.stored.snapshot,
@@ -477,6 +504,314 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
     assert payload["indicators"]["ema-20"]["result"]["points"][19]["value"] == str(
         expected_ema.points[19].value
     )
+
+
+def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> None:
+    research, calls, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(),
+        )
+
+    assert response.status_code == 200
+    assert repository.stored is not None
+    stored = repository.stored
+    payload = response.json()
+    analysis = payload["spot_analysis"]
+
+    profile_metadata = SPOT_RESEARCH_INDICATORS.get("volume-profile", "1")
+    profile_parameters = {
+        item.name: item.default for item in profile_metadata.parameters
+    }
+    volume_metadata = SPOT_RESEARCH_INDICATORS.get("volume-confirmation", "1")
+    lookback = next(
+        item.default for item in volume_metadata.parameters if item.name == "lookback"
+    )
+    expected_vwap = calculate_vwap(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        quality=stored.quality,
+        timeframe=stored.timeframe,
+        metadata_version="1",
+    )
+    expected_profile = calculate_volume_profile(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        quality=stored.quality,
+        bin_count=profile_parameters["bin-count"],
+        value_area_percent=profile_parameters["value-area-percent"],
+        timeframe=stored.timeframe,
+        metadata_version=profile_metadata.metadata_version,
+    )
+    expected_volume = calculate_volume_confirmation(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        quality=stored.quality,
+        lookback=lookback,
+        timeframe=stored.timeframe,
+        metadata_version=volume_metadata.metadata_version,
+        candidate_event=None,
+        policy=None,
+        comparison_context=None,
+    )
+    price_action_metadata = SPOT_RESEARCH_INDICATORS.get(
+        "price-action-support-resistance", "1"
+    )
+    expected_price_action = calculate_spot_price_action(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        quality=stored.quality,
+        timeframe=stored.timeframe,
+        range_baseline_policy=None,
+        pattern_policy=None,
+        support_resistance_policy=None,
+        metadata_version=price_action_metadata.metadata_version,
+    )
+
+    assert analysis["vwap"]["result"] == _json_value(expected_vwap)
+    assert analysis["volume-profile"]["result"] == _json_value(expected_profile)
+    assert analysis["volume-confirmation"]["result"] == _json_value(expected_volume)
+    assert analysis["price-action-support-resistance"]["result"] == _json_value(
+        expected_price_action
+    )
+    assert analysis["vwap"]["result"]["anchor_mode"] == "first-candle"
+    assert analysis["volume-profile"]["result"]["parameters"] == [
+        ["bin-count", 24],
+        ["value-area-percent", 70],
+    ]
+    assert analysis["volume-confirmation"]["result"]["lookback"] == lookback == 20
+    assert analysis["volume-confirmation"]["result"]["assessment"]["status"] == (
+        "INDETERMINATE"
+    )
+    assert analysis["volume-confirmation"]["result"]["assessment"]["reason"] == (
+        "MISSING_EVENT_CONTEXT"
+    )
+    assert (
+        analysis["volume-confirmation"]["result"]["price_volume_comparison"]["reason"]
+        == "MISSING_COMPARISON_CONTEXT"
+    )
+    assert analysis["volume-confirmation"]["result"]["exhaustion_assessment"] == {
+        "status": "DATA_UNAVAILABLE",
+        "reason": "RELIABLE_ORDER_FLOW_NOT_SUPPLIED",
+        "method_version": "reliable-order-flow-input-required-v1",
+    }
+    assert analysis["volume-confirmation"]["status"] == "PARTIAL"
+    assert analysis["volume-confirmation"]["reason_code"] == (
+        "CONTEXTUAL_ASSESSMENTS_NOT_CONFIGURED"
+    )
+    assert analysis["volume-confirmation"]["result"]["points"][-1]["raw_volume"] == "2"
+    assert analysis["volume-confirmation"]["result"]["points"][0]["status"] == (
+        "UNAVAILABLE"
+    )
+    assert analysis["volume-confirmation"]["result"]["points"][0]["reason"] == (
+        "INSUFFICIENT_PRIOR_CANDLES"
+    )
+    assert analysis["volume-confirmation"]["result"]["points"][-1]["status"] == "READY"
+    assert (
+        analysis["volume-confirmation"]["result"]["points"][-1]["relative_volume"]
+        == "1"
+    )
+    assert analysis["price-action-support-resistance"]["reason_code"] == (
+        "CALLER_POLICIES_NOT_SUPPLIED"
+    )
+    assert analysis["price-action-support-resistance"]["status"] == "PARTIAL"
+    assert expected_price_action.range_baseline_policy is None
+    assert expected_price_action.pattern_policy is None
+    assert expected_price_action.support_resistance_policy is None
+    assert expected_price_action.pivots == ()
+    assert expected_price_action.zones == ()
+    assert analysis["spot-market-structure"] == {
+        "status": "UNAVAILABLE",
+        "reason_code": "CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED",
+        "result": None,
+    }
+    assert not {
+        "spot-smart-money-concepts",
+        "spot-wyckoff-analysis",
+        "spot-fibonacci",
+    }.intersection(analysis)
+    for name in (
+        "vwap",
+        "volume-profile",
+        "volume-confirmation",
+        "price-action-support-resistance",
+    ):
+        result = analysis[name]["result"]
+        assert result["snapshot_id"] == payload["snapshot_id"]
+        assert result["quality_report_id"] == payload["data_quality"]["report_id"]
+        assert result["instrument_id"] == payload["instrument_id"]
+        assert result["venue_id"] == payload["venue_id"]
+        assert result["timeframe"] == payload["timeframe"]
+        assert result["as_of"] == payload["as_of"]
+        assert result["input_market_data_ids"] == payload["lineage"]["market_data_ids"]
+    assert (
+        analysis["price-action-support-resistance"]["result"]["source_record_ids"]
+        == payload["lineage"]["source_record_ids"]
+    )
+    assert analysis["price-action-support-resistance"]["result"]["method_version"] == (
+        "spot-price-action-geometry-patterns-pivots-zones-v1"
+    )
+    assert analysis["vwap"]["result"]["calculation_version"] == (
+        "bar-typical-price-cumulative-v1"
+    )
+    assert analysis["volume-profile"]["result"]["calculation_version"] == (
+        "candle-assigned-volume-profile-proxy-v1"
+    )
+    assert analysis["volume-confirmation"]["result"]["calculation_version"] == (
+        "trailing-prior-volume-mean-explicit-pivot-comparison-v1"
+    )
+    assert calls == [1]
+    assert repository.persist_calls == 1
+
+
+def test_spot_ohlcv_analysis_preserves_short_history_warmup_and_unavailable_context() -> (
+    None
+):
+    research, _, _ = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=2),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    analysis = payload["spot_analysis"]
+    assert payload["data_quality"]["status"] == "VALID"
+    assert analysis["vwap"]["status"] == "AVAILABLE"
+    assert analysis["volume-profile"]["status"] == "AVAILABLE"
+    assert analysis["volume-confirmation"]["status"] == "WARMUP"
+    assert analysis["volume-confirmation"]["reason_code"] == "INSUFFICIENT_WARMUP"
+    assert all(
+        point["reason"] == "INSUFFICIENT_PRIOR_CANDLES"
+        for point in analysis["volume-confirmation"]["result"]["points"]
+    )
+    assert analysis["price-action-support-resistance"]["status"] == "WARMUP"
+    assert analysis["price-action-support-resistance"]["result"]["geometry"]
+    assert analysis["spot-market-structure"]["status"] == "UNAVAILABLE"
+
+
+def test_spot_vwap_is_partial_when_undefined_and_ready_points_coexist() -> None:
+    class FirstZeroVolumeProvider:
+        async def fetch(self, request: MarketDataRequest) -> ProviderBatch:
+            batch = complete_batch(
+                request,
+                candles=request.maximum_records,
+                timeframe="1m",
+                now=request.as_of,
+            )
+            first_observation = batch.market_data[0]
+            first_observation = replace(
+                first_observation,
+                metrics=tuple(
+                    replace(metric, value=Decimal(0))
+                    if metric.metric_name == "volume"
+                    else metric
+                    for metric in first_observation.metrics
+                ),
+            )
+            return replace(
+                batch,
+                market_data=(first_observation, *batch.market_data[1:]),
+            )
+
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=FakeRepository(),
+        provider_factory=lambda _: FirstZeroVolumeProvider(),
+        clock=lambda: NOW,
+        monotonic=lambda: 100.0,
+    )
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(),
+        )
+
+    assert response.status_code == 200
+    vwap = response.json()["spot_analysis"]["vwap"]
+    assert vwap["status"] == "PARTIAL"
+    assert vwap["reason_code"] == "ZERO_CUMULATIVE_VOLUME"
+    assert vwap["result"]["points"][0]["value"]["status"] == "UNDEFINED"
+    assert vwap["result"]["points"][0]["value"]["reason"] == ("ZERO_CUMULATIVE_VOLUME")
+    assert vwap["result"]["points"][-1]["value"]["status"] == "READY"
+
+
+def test_zero_volume_analysis_states_are_explicit_and_calculation_failure_is_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ZeroVolumeProvider:
+        async def fetch(self, request: MarketDataRequest) -> ProviderBatch:
+            batch = complete_batch(
+                request,
+                candles=request.maximum_records,
+                timeframe="1m",
+                now=request.as_of,
+            )
+            observations = tuple(
+                replace(
+                    candle,
+                    metrics=tuple(
+                        replace(metric, value=Decimal(0))
+                        if metric.metric_name == "volume"
+                        else metric
+                        for metric in candle.metrics
+                    ),
+                )
+                for candle in batch.market_data
+            )
+            return replace(batch, market_data=observations)
+
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=FakeRepository(),
+        provider_factory=lambda _: ZeroVolumeProvider(),
+        clock=lambda: NOW,
+        monotonic=lambda: 100.0,
+    )
+    with client_for(research) as client:
+        zero_response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(),
+        )
+    assert zero_response.status_code == 200
+    zero_analysis = zero_response.json()["spot_analysis"]
+    assert zero_analysis["vwap"]["status"] == "UNAVAILABLE"
+    assert zero_analysis["vwap"]["reason_code"] == "ZERO_CUMULATIVE_VOLUME"
+    assert zero_analysis["volume-profile"]["status"] == "UNAVAILABLE"
+    assert zero_analysis["volume-profile"]["reason_code"] == "ZERO_TOTAL_VOLUME"
+    assert zero_analysis["volume-profile"]["result"]["status"] == "UNDEFINED"
+    assert zero_analysis["volume-confirmation"]["status"] == "PARTIAL"
+    assert (
+        zero_analysis["volume-confirmation"]["result"]["points"][-1]["reason"]
+        == "ZERO_PRIOR_VOLUME_BASELINE"
+    )
+
+    def fail_calculation(**_: object) -> None:
+        raise ValueError("untrusted input details are not returned")
+
+    monkeypatch.setattr(
+        "trading_platform_api.spot_research.calculate_vwap",
+        fail_calculation,
+    )
+    research, _, _ = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        failed_response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(),
+        )
+    assert failed_response.status_code == 200
+    failed_analysis = failed_response.json()["spot_analysis"]
+    assert failed_analysis["vwap"] == {
+        "status": "UNAVAILABLE",
+        "reason_code": "DETERMINISTIC_CALCULATION_FAILED",
+        "result": None,
+    }
+    assert failed_analysis["volume-profile"]["status"] == "AVAILABLE"
+    assert failed_analysis["price-action-support-resistance"]["status"] == "PARTIAL"
 
 
 def test_nonvalid_quality_is_explicit_never_persisted_and_disables_indicators() -> None:
@@ -507,6 +842,16 @@ def test_nonvalid_quality_is_explicit_never_persisted_and_disables_indicators() 
     assert payload["data_quality"]["status"] == "STALE"
     assert payload["persisted"] is False
     assert payload["indicators"]["ema-20"]["status"] == "UNAVAILABLE"
+    assert all(
+        payload["spot_analysis"][name]["status"] == "UNAVAILABLE"
+        for name in (
+            "vwap",
+            "volume-profile",
+            "volume-confirmation",
+            "price-action-support-resistance",
+            "spot-market-structure",
+        )
+    )
     assert repository.persist_calls == 0
     assert calls == [1]
 
@@ -536,11 +881,13 @@ def test_persistence_failure_does_not_return_a_successful_current_snapshot() -> 
 def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot() -> (
     None
 ):
-    research, _, repository = service(quality_policy=policy_template())
+    research, provider_calls, repository = service(quality_policy=policy_template())
     with client_for(research) as client:
         refreshed = client.post(
             f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
         )
+        calls_after_refresh = len(provider_calls)
+        persists_after_refresh = repository.persist_calls
         read = client.get(
             f"/api/research/spot/{INSTRUMENT}/candles",
             params={
@@ -552,10 +899,18 @@ def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot
 
     assert refreshed.status_code == 200
     assert read.status_code == 200
-    assert read.json()["snapshot_id"] == refreshed.json()["snapshot_id"]
-    assert read.json()["data_quality"] == refreshed.json()["data_quality"]
-    assert read.json()["requested_as_of"] == "2026-10-09T05:00:00Z"
+    refreshed_payload = refreshed.json()
+    read_payload = read.json()
+    assert "spot_analysis" in refreshed_payload
+    assert "spot_analysis" in read_payload
+    assert read_payload["snapshot_id"] == refreshed_payload["snapshot_id"]
+    assert read_payload["data_quality"] == refreshed_payload["data_quality"]
+    assert read_payload["indicators"] == refreshed_payload["indicators"]
+    assert read_payload["spot_analysis"] == refreshed_payload["spot_analysis"]
+    assert read_payload["requested_as_of"] == "2026-10-09T05:00:00Z"
     assert repository.read_calls == 1
+    assert len(provider_calls) == calls_after_refresh
+    assert repository.persist_calls == persists_after_refresh
 
 
 def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
@@ -578,6 +933,17 @@ def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
     assert payload["data_quality"]["report"]["status"] == "VALID"
     assert payload["indicators"]["ema-20"]["status"] == "UNAVAILABLE"
     assert payload["indicators"]["ema-20"]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"
+    assert all(
+        payload["spot_analysis"][name]["status"] == "UNAVAILABLE"
+        and payload["spot_analysis"][name]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"
+        for name in (
+            "vwap",
+            "volume-profile",
+            "volume-confirmation",
+            "price-action-support-resistance",
+            "spot-market-structure",
+        )
+    )
     assert payload["temporal_context"] == "CURRENT"
     assert repository.stored is not None
     assert repository.stored.quality.status is DataQualityStatus.VALID
@@ -698,7 +1064,14 @@ def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit
     assert read.status_code == 200, read.text
     payload = read.json()
     expected = refreshed.json()
-    for field in ("snapshot_id", "candles", "lineage", "data_quality", "indicators"):
+    for field in (
+        "snapshot_id",
+        "candles",
+        "lineage",
+        "data_quality",
+        "indicators",
+        "spot_analysis",
+    ):
         assert payload[field] == expected[field]
     assert payload["timeframe"] == timeframe
     assert len(payload["candles"]) == limit
