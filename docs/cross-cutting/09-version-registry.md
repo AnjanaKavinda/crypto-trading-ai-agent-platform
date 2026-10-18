@@ -177,6 +177,7 @@ conversion. C-009 confidence can be `AVAILABLE` only with a bounded Decimal and
 a versioned method; `UNAVAILABLE` carries a reason and no value/method. C-093
 references carry report ID, report version, schema/lineage versions, and the
 canonical digest of the referenced report.
+The confidence reason is a closed safe-code enum rather than free-form text.
 
 C-006 schema `3` contains C-009/C-010 schema `2` values. C-007 schema `3`
 retains the exact schema-2 input binding structure and adds unique output

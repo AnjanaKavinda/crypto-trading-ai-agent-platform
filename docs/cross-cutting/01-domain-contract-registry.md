@@ -197,6 +197,10 @@ confidence is a finite
 Decimal in `[0,1]` bound to a versioned method and is interpretive only; it is
 not probability of success, profitability, expected return, or win rate.
 Unavailable confidence has no numeric value or method and carries a reason.
+The v2 reason is a closed safe-code enum: `NO_VERSIONED_METHOD`,
+`MISSING_EVIDENCE`, `INSUFFICIENT_EVIDENCE`, `QUALITY_NOT_VALID`,
+`STALE_INPUT`, `INDEPENDENCE_UNAVAILABLE`, or
+`DETERMINISTIC_CALCULATION_FAILED`.
 
 C-010 schema 2 uses `LOW`, `MODERATE`, `HIGH`, `CRITICAL`, `UNKNOWN` severity.
 The versioned decision table is: LOW is localized disagreement that does not

@@ -16,6 +16,7 @@ from trading_platform_api.analysis import (
     AnalysisSnapshotReference,
     AnalysisSnapshotReferenceV3,
     AnalysisV2ContractError,
+    AnalyticalConfidenceReasonV2,
     AnalyticalConfidenceV2,
     AnalyticalDirection,
     AnalyticalFinding,
@@ -2010,7 +2011,10 @@ def test_c006_c007_v3_manifest_hashes_and_resolves_versioned_outputs() -> None:
         _id(930), "agent-independence-v1", "1", "1", "b" * 64
     )
     unavailable_confidence = AnalyticalConfidenceV2(
-        ConfidenceStatusV2.UNAVAILABLE, None, None, "NO_VERSIONED_METHOD"
+        ConfidenceStatusV2.UNAVAILABLE,
+        None,
+        None,
+        AnalyticalConfidenceReasonV2.NO_VERSIONED_METHOD,
     )
     confluence = ConfluenceAssessmentV2(
         _id(931),

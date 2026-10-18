@@ -67,6 +67,16 @@ class ConfidenceStatusV2(StrEnum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class AnalyticalConfidenceReasonV2(StrEnum):
+    NO_VERSIONED_METHOD = "NO_VERSIONED_METHOD"
+    MISSING_EVIDENCE = "MISSING_EVIDENCE"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    QUALITY_NOT_VALID = "QUALITY_NOT_VALID"
+    STALE_INPUT = "STALE_INPUT"
+    INDEPENDENCE_UNAVAILABLE = "INDEPENDENCE_UNAVAILABLE"
+    DETERMINISTIC_CALCULATION_FAILED = "DETERMINISTIC_CALCULATION_FAILED"
+
+
 class ConflictSeverityV2(StrEnum):
     LOW = "LOW"
     MODERATE = "MODERATE"
@@ -110,7 +120,7 @@ class AnalyticalConfidenceV2:
     status: ConfidenceStatusV2
     value: Decimal | None
     method: VersionReference | None
-    reason_code: str | None
+    reason_code: AnalyticalConfidenceReasonV2 | None
 
     def __post_init__(self) -> None:
         _require_enum("confidence status", self.status, ConfidenceStatusV2)
@@ -124,14 +134,13 @@ class AnalyticalConfidenceV2:
                 raise AnalysisContractError(
                     "Available analytical confidence cannot have a reason code."
                 )
-        elif (
-            self.value is not None
-            or self.method is not None
-            or not isinstance(self.reason_code, str)
-            or not self.reason_code.strip()
-        ):
+        elif self.value is not None or self.method is not None:
             raise AnalysisContractError(
                 "Unavailable analytical confidence requires only a reason code."
+            )
+        elif type(self.reason_code) is not AnalyticalConfidenceReasonV2:
+            raise AnalysisContractError(
+                "Unavailable analytical confidence requires a safe reason code."
             )
 
 
@@ -296,6 +305,7 @@ class ConflictAssessmentV2:
 __all__ = [
     "AgentIndependenceReferenceV2",
     "AnalyticalConfidenceV2",
+    "AnalyticalConfidenceReasonV2",
     "ConfidenceStatusV2",
     "ConflictAssessmentV2",
     "ConflictSeverityV2",

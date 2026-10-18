@@ -8,6 +8,7 @@ from trading_platform_api.analysis import (
     AnalysisContractError,
     AnalysisOutputReferenceV3,
     AnalysisV2ContractError,
+    AnalyticalConfidenceReasonV2,
     AnalyticalConfidenceV2,
     AnalyticalDirection,
     ConfidenceStatusV2,
@@ -43,7 +44,10 @@ def _independence_reference() -> AgentIndependenceReferenceV2:
 
 def _unavailable_confidence() -> AnalyticalConfidenceV2:
     return AnalyticalConfidenceV2(
-        ConfidenceStatusV2.UNAVAILABLE, None, None, "NO_VERSIONED_METHOD"
+        ConfidenceStatusV2.UNAVAILABLE,
+        None,
+        None,
+        AnalyticalConfidenceReasonV2.NO_VERSIONED_METHOD,
     )
 
 
@@ -91,7 +95,12 @@ def test_c009_v2_round_trips_unknown_and_shared_source_dependence() -> None:
     ("status", "value", "method", "reason"),
     (
         (ConfidenceStatusV2.AVAILABLE, Decimal("0.5"), None, None),
-        (ConfidenceStatusV2.UNAVAILABLE, Decimal("0"), None, "NO_VERSIONED_METHOD"),
+        (
+            ConfidenceStatusV2.UNAVAILABLE,
+            None,
+            None,
+            "NO_VERSIONED_METHOD",
+        ),
     ),
 )
 def test_analytical_confidence_requires_explicit_value_method_or_reason(
@@ -102,6 +111,13 @@ def test_analytical_confidence_requires_explicit_value_method_or_reason(
 ) -> None:
     with pytest.raises(AnalysisContractError):
         AnalyticalConfidenceV2(status, value, method, reason)
+
+
+def test_unavailable_confidence_rejects_unregistered_reason_code() -> None:
+    with pytest.raises(AnalysisContractError, match="safe reason code"):
+        AnalyticalConfidenceV2(
+            ConfidenceStatusV2.UNAVAILABLE, None, None, "FREE_FORM_REASON"
+        )
 
 
 def test_available_confidence_requires_versioned_method_and_bounds() -> None:

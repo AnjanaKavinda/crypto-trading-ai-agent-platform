@@ -4,6 +4,7 @@ from trading_platform_api.analysis.codec import (
 )
 from trading_platform_api.analysis.confluence_v2 import (
     AgentIndependenceReferenceV2,
+    AnalyticalConfidenceReasonV2,
     AnalyticalConfidenceV2,
     ConfidenceStatusV2,
     ConflictAssessmentV2,
@@ -235,6 +236,7 @@ __all__ = [
     *_contract_exports,
     "AgentIndependenceReferenceV2",
     "AnalyticalConfidenceV2",
+    "AnalyticalConfidenceReasonV2",
     "ConfidenceStatusV2",
     "ConflictAssessmentV2",
     "ConflictSeverityV2",
