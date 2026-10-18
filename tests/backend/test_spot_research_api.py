@@ -521,7 +521,9 @@ def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> Non
     analysis = payload["spot_analysis"]
 
     profile_metadata = SPOT_RESEARCH_INDICATORS.get("volume-profile", "1")
-    profile_parameters = {item.name: item.default for item in profile_metadata.parameters}
+    profile_parameters = {
+        item.name: item.default for item in profile_metadata.parameters
+    }
     volume_metadata = SPOT_RESEARCH_INDICATORS.get("volume-confirmation", "1")
     lookback = next(
         item.default for item in volume_metadata.parameters if item.name == "lookback"
@@ -585,9 +587,10 @@ def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> Non
     assert analysis["volume-confirmation"]["result"]["assessment"]["reason"] == (
         "MISSING_EVENT_CONTEXT"
     )
-    assert analysis["volume-confirmation"]["result"]["price_volume_comparison"][
-        "reason"
-    ] == "MISSING_COMPARISON_CONTEXT"
+    assert (
+        analysis["volume-confirmation"]["result"]["price_volume_comparison"]["reason"]
+        == "MISSING_COMPARISON_CONTEXT"
+    )
     assert analysis["volume-confirmation"]["result"]["exhaustion_assessment"] == {
         "status": "DATA_UNAVAILABLE",
         "reason": "RELIABLE_ORDER_FLOW_NOT_SUPPLIED",
@@ -605,9 +608,10 @@ def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> Non
         "INSUFFICIENT_PRIOR_CANDLES"
     )
     assert analysis["volume-confirmation"]["result"]["points"][-1]["status"] == "READY"
-    assert analysis["volume-confirmation"]["result"]["points"][-1][
-        "relative_volume"
-    ] == "1"
+    assert (
+        analysis["volume-confirmation"]["result"]["points"][-1]["relative_volume"]
+        == "1"
+    )
     assert analysis["price-action-support-resistance"]["reason_code"] == (
         "CALLER_POLICIES_NOT_SUPPLIED"
     )
@@ -641,9 +645,10 @@ def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> Non
         assert result["timeframe"] == payload["timeframe"]
         assert result["as_of"] == payload["as_of"]
         assert result["input_market_data_ids"] == payload["lineage"]["market_data_ids"]
-    assert analysis["price-action-support-resistance"]["result"][
-        "source_record_ids"
-    ] == payload["lineage"]["source_record_ids"]
+    assert (
+        analysis["price-action-support-resistance"]["result"]["source_record_ids"]
+        == payload["lineage"]["source_record_ids"]
+    )
     assert analysis["price-action-support-resistance"]["result"]["method_version"] == (
         "spot-price-action-geometry-patterns-pivots-zones-v1"
     )
@@ -660,7 +665,9 @@ def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> Non
     assert repository.persist_calls == 1
 
 
-def test_spot_ohlcv_analysis_preserves_short_history_warmup_and_unavailable_context() -> None:
+def test_spot_ohlcv_analysis_preserves_short_history_warmup_and_unavailable_context() -> (
+    None
+):
     research, _, _ = service(quality_policy=policy_template())
     with client_for(research) as client:
         response = client.post(
@@ -728,9 +735,7 @@ def test_spot_vwap_is_partial_when_undefined_and_ready_points_coexist() -> None:
     assert vwap["status"] == "PARTIAL"
     assert vwap["reason_code"] == "ZERO_CUMULATIVE_VOLUME"
     assert vwap["result"]["points"][0]["value"]["status"] == "UNDEFINED"
-    assert vwap["result"]["points"][0]["value"]["reason"] == (
-        "ZERO_CUMULATIVE_VOLUME"
-    )
+    assert vwap["result"]["points"][0]["value"]["reason"] == ("ZERO_CUMULATIVE_VOLUME")
     assert vwap["result"]["points"][-1]["value"]["status"] == "READY"
 
 
@@ -780,9 +785,10 @@ def test_zero_volume_analysis_states_are_explicit_and_calculation_failure_is_iso
     assert zero_analysis["volume-profile"]["reason_code"] == "ZERO_TOTAL_VOLUME"
     assert zero_analysis["volume-profile"]["result"]["status"] == "UNDEFINED"
     assert zero_analysis["volume-confirmation"]["status"] == "PARTIAL"
-    assert zero_analysis["volume-confirmation"]["result"]["points"][-1][
-        "reason"
-    ] == "ZERO_PRIOR_VOLUME_BASELINE"
+    assert (
+        zero_analysis["volume-confirmation"]["result"]["points"][-1]["reason"]
+        == "ZERO_PRIOR_VOLUME_BASELINE"
+    )
 
     def fail_calculation(**_: object) -> None:
         raise ValueError("untrusted input details are not returned")
@@ -875,9 +881,7 @@ def test_persistence_failure_does_not_return_a_successful_current_snapshot() -> 
 def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot() -> (
     None
 ):
-    research, provider_calls, repository = service(
-        quality_policy=policy_template()
-    )
+    research, provider_calls, repository = service(quality_policy=policy_template())
     with client_for(research) as client:
         refreshed = client.post(
             f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
@@ -931,8 +935,7 @@ def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
     assert payload["indicators"]["ema-20"]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"
     assert all(
         payload["spot_analysis"][name]["status"] == "UNAVAILABLE"
-        and payload["spot_analysis"][name]["reason_code"]
-        == "STALE_FOR_SERVING_CUTOFF"
+        and payload["spot_analysis"][name]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"
         for name in (
             "vwap",
             "volume-profile",

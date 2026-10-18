@@ -761,9 +761,7 @@ def _calculate_ohlcv_analysis(
         outputs["price-action-support-resistance"] = {
             "status": "WARMUP" if warmup else "PARTIAL",
             "reason_code": (
-                "INSUFFICIENT_WARMUP"
-                if warmup
-                else "CALLER_POLICIES_NOT_SUPPLIED"
+                "INSUFFICIENT_WARMUP" if warmup else "CALLER_POLICIES_NOT_SUPPLIED"
             ),
             "result": _json_value(result),
         }
