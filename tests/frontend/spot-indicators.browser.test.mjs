@@ -661,6 +661,24 @@ test("spot analysis unavailable and missing entries never expose supplied result
   }
 });
 
+test("volume-profile withholds levels when its nested result is not READY", async () => {
+  const fixture = createSnapshot({ count: 50 });
+  fixture.spot_analysis["volume-profile"].result.status = "UNDEFINED";
+  fixture.spot_analysis["volume-profile"].result.reason = "ZERO_TOTAL_VOLUME";
+  const { page } = await openWorkspace({ storedSnapshot: fixture });
+  try {
+    await waitForLoadedSnapshot(page);
+    const card = page.locator('[data-analysis-key="volume-profile"]');
+    assert.match(await card.innerText(), /AVAILABLE/);
+    assert.match(await card.innerText(), /Profile result status: UNDEFINED/);
+    assert.match(await card.innerText(), /Profile result reason: ZERO_TOTAL_VOLUME/);
+    assert.match(await card.innerText(), /returned levels are withheld/);
+    assert.doesNotMatch(await card.innerText(), /Returned POC bin index|Returned VAL|Returned VAH|POC bin assigned volume/);
+  } finally {
+    await page.close();
+  }
+});
+
 test("VWAP overlay remains isolated from indicator visibility preferences without refresh", async () => {
   const { page, apiRequests } = await openWorkspace({
     storedSnapshot: createSnapshot({ count: 50 }),

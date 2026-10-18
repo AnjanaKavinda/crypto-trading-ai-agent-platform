@@ -427,16 +427,23 @@ function renderVolumeProfile(card, result) {
   addReturnedFields(card, result, [
     ["status", "Profile result status"],
     ["reason", "Profile result reason"],
-    ...(card.dataset.withholdValues === "true" ? [] : [
-      ["poc_bin_index", "Returned POC bin index"],
-      ["value_area_low", `Returned VAL (${stringValue(result.price_unit)})`],
-      ["value_area_high", `Returned VAH (${stringValue(result.price_unit)})`],
-      ["value_area_volume", `Returned value-area volume (${stringValue(result.volume_unit)})`],
-      ["value_area_share", "Returned value-area share"],
-      ["value_area_bin_indices", "Returned value-area bin indices"],
-      ["high_volume_node_bin_indices", "Returned HVN bin indices"],
-      ["low_volume_node_bin_indices", "Returned LVN bin indices"],
-    ]),
+  ]);
+  if (result.status !== "READY") {
+    card.append(element(
+      "p",
+      `Profile result status is ${stringValue(result.status)}; returned levels are withheld.`,
+    ));
+    return;
+  }
+  addReturnedFields(card, result, card.dataset.withholdValues === "true" ? [] : [
+    ["poc_bin_index", "Returned POC bin index"],
+    ["value_area_low", `Returned VAL (${stringValue(result.price_unit)})`],
+    ["value_area_high", `Returned VAH (${stringValue(result.price_unit)})`],
+    ["value_area_volume", `Returned value-area volume (${stringValue(result.volume_unit)})`],
+    ["value_area_share", "Returned value-area share"],
+    ["value_area_bin_indices", "Returned value-area bin indices"],
+    ["high_volume_node_bin_indices", "Returned HVN bin indices"],
+    ["low_volume_node_bin_indices", "Returned LVN bin indices"],
   ]);
   const pocIndex = result.poc_bin_index;
   const pocBin = Array.isArray(result.bins)
