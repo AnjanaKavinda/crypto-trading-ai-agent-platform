@@ -2371,6 +2371,20 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             sources=sources,
             datasets=datasets,
         )
+    with pytest.raises(AnalysisV2ContractError, match="exact C-007 dependencies"):
+        validate_market_context_v3(
+            context,
+            manifest,
+            resolved_bindings=(
+                replace(
+                    resolved[0],
+                    direct_inputs_pass=not resolved[0].direct_inputs_pass,
+                ),
+                *resolved[1:],
+            ),
+            evidence=evidence,
+            now=CREATED,
+        )
     validate_market_context_v3(
         context,
         manifest,
@@ -2452,6 +2466,17 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
                 ),
             ),
             unresolved_manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )
+    unresolved_uncertainty = replace(
+        context.uncertainties[0], affected_finding_ids=(_id(977),)
+    )
+    with pytest.raises(AnalysisV2ContractError, match="unresolved analytical finding"):
+        validate_market_context_v3(
+            replace(context, uncertainties=(unresolved_uncertainty,)),
+            manifest,
             resolved_bindings=resolved,
             evidence=evidence,
             now=CREATED,

@@ -2246,6 +2246,42 @@ def validate_market_context_v3(
             "C-008 evidence membership is not exactly resolved."
         )
     v2_manifest = _manifest_v3_as_v2(manifest)
+    if type(resolved_bindings) is not tuple or any(
+        type(item) is not ResolvedInputBinding for item in resolved_bindings
+    ):
+        raise AnalysisV2ContractError("Resolved input bindings have an invalid type.")
+    resolved_snapshots = {
+        item.snapshot.snapshot_id: item.snapshot for item in resolved_bindings
+    }
+    resolved_reports = {item.report.report_id: item.report for item in resolved_bindings}
+    resolved_observations = {
+        record.market_data_id: record
+        for item in resolved_bindings
+        for record in item.observations
+    }
+    resolved_sources = {
+        record.source_record_id: record
+        for item in resolved_bindings
+        for record in item.sources
+    }
+    resolved_datasets = {
+        (item.dataset.dataset_id, item.dataset.version): item.dataset
+        for item in resolved_bindings
+        if item.dataset is not None
+    }
+    verified_bindings = resolve_analysis_snapshot_v2(
+        v2_manifest,
+        now=validation_time,
+        snapshots=resolved_snapshots,
+        reports=resolved_reports,
+        observations=resolved_observations,
+        sources=resolved_sources,
+        datasets=resolved_datasets,
+    )
+    if verified_bindings != resolved_bindings:
+        raise AnalysisV2ContractError(
+            "Resolved input bindings do not match their exact C-007 dependencies."
+        )
     for evidence_id, item in evidence.items():
         if item.evidence_id != evidence_id:
             raise AnalysisV2ContractError(
@@ -2316,6 +2352,11 @@ def validate_market_context_v3(
         for observation in assessment.observations:
             require_evidence_references("Observation", observation.evidence_ids)
     uncertainty_ids = {item.uncertainty_id for item in context.uncertainties}
+    for uncertainty in context.uncertainties:
+        if not set(uncertainty.affected_finding_ids).issubset(finding_by_id):
+            raise AnalysisV2ContractError(
+                "Uncertainty references an unresolved analytical finding."
+            )
     for assessment in context.assessments:
         if not isinstance(assessment, OrderFlowAssessment) and not set(
             assessment.uncertainty_ids
