@@ -692,14 +692,14 @@ def _calculate_ohlcv_analysis(
     outputs: dict[str, dict[str, Any]] = {}
     try:
         metadata = _registered_metadata("vwap")
-        result = calculate_vwap(
+        vwap_result = calculate_vwap(
             snapshot=snapshot,
             observations=observations,
             quality=quality,
             timeframe=timeframe,
             metadata_version=metadata.metadata_version,
         )
-        outputs["vwap"] = _vwap_envelope(result)
+        outputs["vwap"] = _vwap_envelope(vwap_result)
     except (ArithmeticError, ValueError):
         outputs["vwap"] = _unavailable_analysis("DETERMINISTIC_CALCULATION_FAILED")
 
@@ -708,7 +708,7 @@ def _calculate_ohlcv_analysis(
         parameters = {item.name: item.default for item in metadata.parameters}
         if set(parameters) != {"bin-count", "value-area-percent"}:
             raise ValueError("Exact volume-profile parameters are unavailable.")
-        result = calculate_volume_profile(
+        volume_profile_result = calculate_volume_profile(
             snapshot=snapshot,
             observations=observations,
             quality=quality,
@@ -717,7 +717,7 @@ def _calculate_ohlcv_analysis(
             timeframe=timeframe,
             metadata_version=metadata.metadata_version,
         )
-        outputs["volume-profile"] = _volume_profile_envelope(result)
+        outputs["volume-profile"] = _volume_profile_envelope(volume_profile_result)
     except (ArithmeticError, ValueError):
         outputs["volume-profile"] = _unavailable_analysis(
             "DETERMINISTIC_CALCULATION_FAILED"
@@ -728,7 +728,7 @@ def _calculate_ohlcv_analysis(
         parameters = {item.name: item.default for item in metadata.parameters}
         if set(parameters) != {"lookback"}:
             raise ValueError("Exact volume-confirmation parameters are unavailable.")
-        result = calculate_volume_confirmation(
+        volume_confirmation_result = calculate_volume_confirmation(
             snapshot=snapshot,
             observations=observations,
             quality=quality,
@@ -739,7 +739,7 @@ def _calculate_ohlcv_analysis(
             policy=None,
             comparison_context=None,
         )
-        outputs["volume-confirmation"] = _volume_confirmation_envelope(result)
+        outputs["volume-confirmation"] = _volume_confirmation_envelope(volume_confirmation_result)
     except (ArithmeticError, ValueError):
         outputs["volume-confirmation"] = _unavailable_analysis(
             "DETERMINISTIC_CALCULATION_FAILED"
@@ -747,7 +747,7 @@ def _calculate_ohlcv_analysis(
 
     try:
         metadata = _registered_metadata("price-action-support-resistance")
-        result = calculate_spot_price_action(
+        price_action_result = calculate_spot_price_action(
             snapshot=snapshot,
             observations=observations,
             quality=quality,
@@ -763,7 +763,7 @@ def _calculate_ohlcv_analysis(
             "reason_code": (
                 "INSUFFICIENT_WARMUP" if warmup else "CALLER_POLICIES_NOT_SUPPLIED"
             ),
-            "result": _json_value(result),
+            "result": _json_value(price_action_result),
         }
     except (ArithmeticError, ValueError):
         outputs["price-action-support-resistance"] = _unavailable_analysis(
