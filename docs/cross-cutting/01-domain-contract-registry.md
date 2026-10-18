@@ -177,6 +177,21 @@ base unit. Validation requires those base/quote units to match the exact
 resolved C-003 modality policy. The assessment grants no signal, risk, approval,
 or execution authority.
 
+## Issue #370 — Additive analysis contract schemas
+
+C-009 and C-010 schema 1 retain their existing numeric fields and exact
+serialization. Their schema-2 forms use independent categorical vocabularies:
+C-009 evidence strength is `VERY_STRONG`, `STRONG`, `MODERATE`, `WEAK`, or
+`UNKNOWN`, while evidence dependence is a required separate field; C-010
+severity is `LOW`, `MODERATE`, `HIGH`, `CRITICAL`, or `UNKNOWN`. No conversion
+between schema-1 numbers and schema-2 categories is defined.
+
+C-006 schema 3 carries only the C-009/C-010 schema-2 forms and binds to a
+C-007 schema-3 manifest. C-007 schema 3 adds canonical output references that
+bind C-009/C-010/C-093 contract IDs, identities, schema/lineage versions, and
+content digests. The schema-3 implementation adds no producer or calculation
+authority. C-093's report implementation remains owned by issue #67.
+
 ## Canonical name / alias / supersession clarifications
 
 | Canonical | Alias / related name | Disposition |

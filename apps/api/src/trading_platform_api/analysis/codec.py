@@ -17,9 +17,13 @@ from trading_platform_api.analysis.contracts import (
 )
 from trading_platform_api.analysis.versioned_contracts import (
     AnalysisSnapshotV2,
+    AnalysisSnapshotV3,
     AnalysisV2ContractError,
+    ConflictAssessmentV2,
+    ConfluenceAssessmentV2,
     EvidenceItemV2,
     MarketContextV2,
+    MarketContextV3,
     OrderFlowAssessment,
 )
 from trading_platform_api.contracts.serialization import (
@@ -34,10 +38,14 @@ from trading_platform_api.contracts.serialization import (
 _MODELS: dict[tuple[str, str], type[Any]] = {
     ("C-006", "1"): MarketContext,
     ("C-006", "2"): MarketContextV2,
+    ("C-006", "3"): MarketContextV3,
     ("C-007", "1"): AnalysisSnapshot,
     ("C-007", "2"): AnalysisSnapshotV2,
+    ("C-007", "3"): AnalysisSnapshotV3,
     ("C-008", "1"): EvidenceItem,
     ("C-008", "2"): EvidenceItemV2,
+    ("C-009", "2"): ConfluenceAssessmentV2,
+    ("C-010", "2"): ConflictAssessmentV2,
     ("C-104", "1"): OrderFlowAssessment,
 }
 
