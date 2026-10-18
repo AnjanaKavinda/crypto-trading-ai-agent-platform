@@ -2144,7 +2144,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
     }
     reports_used = tuple(item.data_quality_report for item in bindings)
     snapshot_id = _id(950)
-    c093 = AnalysisOutputReferenceV3("C-093", _id(951), "1", "1", HASH)
+    c093 = AnalysisOutputReferenceV3("C-093", _id(951), "4", "9", HASH)
     confluence = ConfluenceAssessmentV2(
         _id(952),
         "BTC",
@@ -2395,6 +2395,27 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         now=CREATED,
     )
     assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    for changed_reference in (
+        replace(c093, schema_version="5"),
+        replace(c093, lineage_version="10"),
+        replace(c093, content_sha256="b" * 64),
+    ):
+        changed_context = replace(
+            context,
+            confluence=replace(
+                confluence,
+                independence_report=changed_reference,
+            ),
+        )
+        with pytest.raises(AnalysisV2ContractError, match="is unsupported"):
+            validate_market_context_v3(
+                changed_context,
+                manifest,
+                resolved_bindings=resolved,
+                evidence=evidence,
+                supported_independence_reports=(c093,),
+                now=CREATED,
+            )
     with pytest.raises(AnalysisV2ContractError, match="is unsupported"):
         validate_market_context_v3(
             context,
