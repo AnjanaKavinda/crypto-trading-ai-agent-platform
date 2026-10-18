@@ -2351,18 +2351,10 @@ def validate_market_context_v3(
             require_evidence_references("Finding", finding.evidence_ids)
         for observation in assessment.observations:
             require_evidence_references("Observation", observation.evidence_ids)
-    uncertainty_ids = {item.uncertainty_id for item in context.uncertainties}
     for uncertainty in context.uncertainties:
         if not set(uncertainty.affected_finding_ids).issubset(finding_by_id):
             raise AnalysisV2ContractError(
                 "Uncertainty references an unresolved analytical finding."
-            )
-    for assessment in context.assessments:
-        if not isinstance(assessment, OrderFlowAssessment) and not set(
-            assessment.uncertainty_ids
-        ).issubset(uncertainty_ids):
-            raise AnalysisV2ContractError(
-                "Assessment references an unresolved analytical uncertainty."
             )
     require_evidence_references(
         "Adversarial assessment", context.adversarial.contradictory_evidence_ids

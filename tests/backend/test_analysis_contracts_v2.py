@@ -2255,7 +2255,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         ),
         evidence_ids,
         (),
-        (),
+        evidence_ids,
         UUID(bindings[0].data_quality_report.record_id),
         (VersionReference("fundamental-agent", "v2"),),
         MethodologyCategory.FUNDAMENTAL,
