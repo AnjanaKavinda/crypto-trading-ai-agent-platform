@@ -35,6 +35,10 @@ from trading_platform_api.analysis.moving_averages import (
     calculate_moving_average,
 )
 from trading_platform_api.analysis.price_action import calculate_spot_price_action
+from trading_platform_api.analysis.spot_market_regime import (
+    SpotMarketRegimeWarmup,
+    calculate_spot_market_regime,
+)
 from trading_platform_api.analysis.volatility import (
     calculate_atr14,
     calculate_bollinger_bands,
@@ -686,6 +690,7 @@ def _calculate_ohlcv_analysis(
                 "volume-confirmation",
                 "price-action-support-resistance",
                 "spot-market-structure",
+                "market-regime",
             )
         }
 
@@ -775,6 +780,25 @@ def _calculate_ohlcv_analysis(
     outputs["spot-market-structure"] = _unavailable_analysis(
         "CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED"
     )
+    try:
+        regime_result = calculate_spot_market_regime(
+            snapshot=snapshot,
+            observations=observations,
+            quality=quality,
+            timeframe=timeframe,
+        )
+        outputs["market-regime"] = {
+            "status": "AVAILABLE",
+            "reason_code": None,
+            "result": _json_value(regime_result),
+        }
+    except SpotMarketRegimeWarmup:
+        outputs["market-regime"] = _unavailable_analysis("INSUFFICIENT_WARMUP")
+        outputs["market-regime"]["status"] = "WARMUP"
+    except (ArithmeticError, ValueError):
+        outputs["market-regime"] = _unavailable_analysis(
+            "DETERMINISTIC_CALCULATION_FAILED"
+        )
     return outputs
 
 
