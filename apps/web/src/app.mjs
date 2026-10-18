@@ -17,6 +17,8 @@ import {
   savePreferences,
   snapshotCandles,
   snapshotLabels,
+  spotAnalysisBindingError,
+  SPOT_ANALYSIS_IDS,
   validateSnapshot,
   workspaceSelection,
 } from "./workspace-state.mjs";
@@ -106,6 +108,13 @@ const EDUCATION = Object.freeze({
 
 const TIMEFRAMES = Object.keys(TIMEFRAME_SECONDS);
 const HISTORY_LIMITS = new Set([50, 90, 100, 250, 501]);
+const SPOT_ANALYSIS_LABELS = Object.freeze({
+  vwap: "Spot VWAP",
+  "volume-profile": "Volume profile",
+  "volume-confirmation": "Volume confirmation",
+  "price-action-support-resistance": "Price-action candle geometry",
+  "spot-market-structure": "Spot market structure",
+});
 const $ = (selector) => document.querySelector(selector);
 const element = (tag, text, className) => {
   const node = document.createElement(tag);
@@ -317,6 +326,300 @@ function renderOrderFlow(snapshot) {
   $("#order-flow-reason").textContent = text;
 }
 
+function appendAnalysisField(container, label, value) {
+  if (value === undefined || value === null) return;
+  const row = element("div");
+  row.append(element("dt", label), element("dd", stringValue(value)));
+  container.append(row);
+}
+
+function renderAnalysisMetadata(card, result, snapshot) {
+  const metadata = element("dl", undefined, "metadata-grid analysis-metadata");
+  const parameters = Array.isArray(result.parameters)
+    ? result.parameters.flatMap((item) =>
+      Array.isArray(item) && item.length === 2
+        ? [`${stringValue(item[0])}=${stringValue(item[1])}`]
+        : [],
+    ).join(", ")
+    : undefined;
+  for (const [label, value] of [
+    ["Method", result.method_label],
+    ["Method version", result.calculation_version ?? result.method_version],
+    ["Metadata version", result.metadata_version],
+    ["Parameters", parameters],
+    ["Price unit", result.price_unit],
+    ["Volume unit", result.volume_unit],
+    ["Timeframe", result.timeframe],
+    ["Anchor mode", result.anchor_mode],
+    ["Anchor time", result.anchor_time],
+    ["Window start", result.window_start],
+    ["Window end", result.window_end],
+    ["Result as-of", result.as_of],
+    ["Snapshot freshness cutoff", snapshot.freshness_cutoff],
+    ["Snapshot quality", snapshot.data_quality?.status],
+    ["Snapshot binding", result.snapshot_id],
+    ["Quality report binding", result.quality_report_id],
+  ]) appendAnalysisField(metadata, label, value);
+  if (metadata.childElementCount) card.append(metadata);
+  const provenance = element("p", undefined, "indicator-provenance-link");
+  const link = element("a", "View this response's snapshot and source lineage");
+  link.href = "#snapshot-provenance";
+  link.setAttribute(
+    "aria-label",
+    `View source lineage for ${snapshot.symbol} (${snapshot.instrument_id}), ${snapshot.timeframe}; snapshot ${snapshot.snapshot_id}, quality report ${snapshot.data_quality.report_id}`,
+  );
+  provenance.append(link);
+  card.append(provenance);
+}
+
+function addReturnedFields(container, record, fields) {
+  if (!record || typeof record !== "object") return;
+  for (const [key, label] of fields) {
+    if (record[key] !== undefined && record[key] !== null) {
+      container.append(element("p", `${label}: ${stringValue(record[key])}`));
+    }
+  }
+}
+
+function renderVwap(card, result) {
+  card.append(element(
+    "p",
+    "Cumulative bar-based typical-price VWAP anchored to the first candle in this returned snapshot. This is an OHLCV approximation, not trade-by-trade or session VWAP.",
+  ));
+  const table = element("table");
+  const head = element("thead");
+  const header = element("tr");
+  for (const label of ["Candle end", "Point status", "Value", "Reason"]) {
+    header.append(element("th", label));
+  }
+  head.append(header);
+  table.append(head);
+  const body = element("tbody");
+  for (const point of result.points) {
+    const value = point?.value;
+    const state = value?.status ?? "MISSING";
+    const exact = card.dataset.withholdValues !== "true" &&
+        state === "READY" && typeof value?.value === "string" &&
+        /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.value) &&
+        Number.isFinite(Number(value.value))
+      ? `${value.value} ${stringValue(result.price_unit)}`
+      : "Not available";
+    const row = element("tr");
+    row.append(
+      element("td", stringValue(point?.candle_end)),
+      element("td", stringValue(state)),
+      element("td", exact),
+      element("td", stringValue(value?.reason)),
+    );
+    body.append(row);
+  }
+  table.append(body);
+  const scroll = element("div", undefined, "table-scroll");
+  scroll.append(table);
+  card.append(scroll);
+}
+
+function renderVolumeProfile(card, result) {
+  card.append(element(
+    "p",
+    "Candle-assigned typical-price volume-profile proxy. It assigns each candle's volume to a typical-price bin and is not trade-level volume-at-price.",
+  ));
+  addReturnedFields(card, result, [
+    ["status", "Profile result status"],
+    ["reason", "Profile result reason"],
+  ]);
+  if (result.status !== "READY") {
+    card.append(element(
+      "p",
+      `Profile result status is ${stringValue(result.status)}; returned levels are withheld.`,
+    ));
+    return;
+  }
+  addReturnedFields(card, result, card.dataset.withholdValues === "true" ? [] : [
+    ["poc_bin_index", "Returned POC bin index"],
+    ["value_area_low", `Returned VAL (${stringValue(result.price_unit)})`],
+    ["value_area_high", `Returned VAH (${stringValue(result.price_unit)})`],
+    ["value_area_volume", `Returned value-area volume (${stringValue(result.volume_unit)})`],
+    ["value_area_share", "Returned value-area share"],
+    ["value_area_bin_indices", "Returned value-area bin indices"],
+    ["high_volume_node_bin_indices", "Returned HVN bin indices"],
+    ["low_volume_node_bin_indices", "Returned LVN bin indices"],
+  ]);
+  const pocIndex = result.poc_bin_index;
+  const pocBin = Array.isArray(result.bins)
+    ? result.bins.find((bin) => bin?.index === pocIndex)
+    : null;
+  if (pocBin && card.dataset.withholdValues !== "true") {
+    addReturnedFields(card, pocBin, [
+      ["lower_bound", `POC bin lower bound (${stringValue(result.price_unit)})`],
+      ["upper_bound", `POC bin upper bound (${stringValue(result.price_unit)})`],
+      ["assigned_volume", `POC bin assigned volume (${stringValue(result.volume_unit)})`],
+    ]);
+  }
+}
+
+function renderVolumeConfirmation(card, result) {
+  card.append(element(
+    "p",
+    "Raw and trailing volume observations are descriptive. Contextual event/comparison assessment needs caller context; volume exhaustion remains unavailable without reliable order-flow input.",
+  ));
+  const table = element("table");
+  const head = element("thead");
+  const header = element("tr");
+  for (const label of [
+    "Candle end", "Point status", "Raw volume", "Prior volume sum",
+    "Trailing average", "Relative volume", "Reason",
+  ]) header.append(element("th", label));
+  head.append(header);
+  table.append(head);
+  const body = element("tbody");
+  for (const point of result.points ?? []) {
+    const row = element("tr");
+    row.append(
+      element("td", stringValue(point?.candle_end)),
+      element("td", stringValue(point?.status)),
+      element("td", card.dataset.withholdValues === "true" || point?.raw_volume == null ? "Not available" : `${point.raw_volume} ${stringValue(result.volume_unit)}`),
+      element("td", card.dataset.withholdValues === "true" || point?.prior_volume_sum == null ? "Not available" : stringValue(point.prior_volume_sum)),
+      element("td", card.dataset.withholdValues === "true" || point?.trailing_average == null ? "Not available" : stringValue(point.trailing_average)),
+      element("td", card.dataset.withholdValues === "true" || point?.relative_volume == null ? "Not available" : stringValue(point.relative_volume)),
+      element("td", stringValue(point?.reason)),
+    );
+    body.append(row);
+  }
+  table.append(body);
+  const scroll = element("div", undefined, "table-scroll");
+  scroll.append(table);
+  card.append(scroll);
+  addReturnedFields(card, result, [["lookback", "Lookback"]]);
+  addReturnedFields(card, result.assessment, [
+    ["status", "Contextual assessment status"],
+    ["reason", "Contextual assessment reason"],
+  ]);
+  addReturnedFields(card, result.price_volume_comparison, [
+    ["status", "Price/volume comparison status"],
+    ["reason", "Price/volume comparison reason"],
+  ]);
+  addReturnedFields(card, result.assessment, [
+    ["status", "Contextual assessment status"],
+  ]);
+  addReturnedFields(card, result.exhaustion_assessment, [
+    ["status", "Exhaustion assessment status"],
+    ["reason", "Exhaustion assessment reason"],
+  ]);
+  if (Array.isArray(result.limitations)) {
+    for (const limitation of result.limitations) {
+      card.append(element("p", `Backend limitation: ${stringValue(limitation)}`));
+    }
+  }
+}
+
+function renderPriceActionGeometry(card, result) {
+  card.append(element(
+    "p",
+    "Only backend-supplied candle geometry is shown. Pattern labels, pivots, and support/resistance zones were not inferred because caller policies were not supplied.",
+  ));
+  const table = element("table");
+  const head = element("thead");
+  const header = element("tr");
+  for (const label of [
+    "Candle end", "Open", "High", "Low", "Close", "Signed body",
+    "Absolute body", "Range", "Upper wick", "Lower wick", "Close location",
+    "Close-location reason", "Range direction", "Range comparison reason",
+  ]) header.append(element("th", label));
+  head.append(header);
+  table.append(head);
+  const body = element("tbody");
+  for (const geometry of result.geometry) {
+    const row = element("tr");
+    row.append(
+      element("td", stringValue(geometry.candle_end)),
+      ...["open", "high", "low", "close", "signed_body", "absolute_body", "range", "upper_wick", "lower_wick"]
+        .map((field) => element("td", card.dataset.withholdValues === "true" ? "Not available" : stringValue(geometry[field]))),
+      element("td", card.dataset.withholdValues === "true" || geometry.close_location == null
+        ? "Not available" : stringValue(geometry.close_location)),
+      element("td", stringValue(geometry.close_location_reason)),
+      element("td", stringValue(geometry.range_direction)),
+      element("td", stringValue(geometry.range_comparison_reason)),
+    );
+    body.append(row);
+  }
+  table.append(body);
+  const scroll = element("div", undefined, "table-scroll");
+  scroll.append(table);
+  card.append(scroll);
+  if (Array.isArray(result.limitations)) {
+    for (const limitation of result.limitations) {
+      card.append(element("p", `Backend limitation: ${stringValue(limitation)}`));
+    }
+  }
+}
+
+function renderSpotAnalyses(snapshot) {
+  const target = $("#spot-analysis-cards");
+  target.replaceChildren();
+  const quality = snapshot?.data_quality?.status;
+  const reportStatus = snapshot?.data_quality?.report_status;
+  const qualityValid = quality === "VALID" && reportStatus === "VALID";
+  const qualityMessage = qualityValid
+    ? "Each result below is bound to this response's selected instrument, timeframe, snapshot, quality report, candle lineage, and cutoff."
+    : `Analysis values withheld because snapshot quality is ${stringValue(quality)} (underlying report: ${stringValue(reportStatus)}); VALID quality is required.`;
+  $("#spot-analysis-status").textContent = qualityMessage;
+  $("#spot-analysis-status").dataset.state = qualityValid ? "valid" : quality === "STALE" ? "warning" : "error";
+  if (!snapshot) {
+    target.append(element("p", "No snapshot is loaded; no Spot analyses are displayed.", "empty-state"));
+    return;
+  }
+  for (const id of SPOT_ANALYSIS_IDS) {
+    const analysis = snapshot.spot_analysis?.[id];
+    const card = element("article", undefined, "analysis-card");
+    card.dataset.analysisKey = id;
+    const status = analysis && ["AVAILABLE", "PARTIAL", "WARMUP", "UNAVAILABLE"].includes(analysis.status)
+      ? analysis.status
+      : analysis ? "UNKNOWN" : "MISSING";
+    const heading = element("h3", SPOT_ANALYSIS_LABELS[id]);
+    const badge = element("span", status, "state-badge");
+    badge.dataset.state = status;
+    heading.append(badge);
+    card.append(heading);
+    if (analysis?.reason_code) {
+      card.append(element("p", `Backend reason: ${stringValue(analysis.reason_code)}`));
+    } else if (!analysis) {
+      card.append(element("p", "This response did not supply this spot_analysis entry."));
+    }
+    if (!analysis || status === "UNKNOWN") {
+      target.append(card);
+      continue;
+    }
+    const result = analysis.result;
+    if (result == null) {
+      card.append(element("p", "No result payload was supplied; result values are withheld."));
+      target.append(card);
+      continue;
+    }
+    if (!qualityValid) {
+      card.append(element("p", "Result payload withheld because snapshot quality is not VALID."));
+      target.append(card);
+      continue;
+    }
+    const bindingError = spotAnalysisBindingError(snapshot, id, analysis);
+    if (bindingError) {
+      card.append(element("p", `Result payload withheld: ${bindingError}.`));
+      target.append(card);
+      continue;
+    }
+    card.dataset.withholdValues = String(status === "UNAVAILABLE");
+    if (status === "UNAVAILABLE") {
+      card.append(element("p", "Backend status is UNAVAILABLE; result values are withheld."));
+    }
+    renderAnalysisMetadata(card, result, snapshot);
+    if (id === "vwap") renderVwap(card, result);
+    if (id === "volume-profile") renderVolumeProfile(card, result);
+    if (id === "volume-confirmation") renderVolumeConfirmation(card, result);
+    if (id === "price-action-support-resistance") renderPriceActionGeometry(card, result);
+    target.append(card);
+  }
+}
+
 function svgText(svg, x, y, text, className = "axis-label") {
   const node = svgNode("text", { x, y, class: className });
   node.textContent = text;
@@ -351,6 +654,23 @@ function renderChart(snapshot, preferences) {
     return;
   }
   const candles = response.candles;
+  const vwapAnalysis = snapshot.spot_analysis?.vwap;
+  const vwapBindingError = spotAnalysisBindingError(snapshot, "vwap", vwapAnalysis);
+  const vwapPoints = snapshot.data_quality?.status === "VALID" &&
+      snapshot.data_quality?.report_status === "VALID" &&
+      ["AVAILABLE", "PARTIAL"].includes(vwapAnalysis?.status) &&
+      !vwapBindingError && Array.isArray(vwapAnalysis.result?.points)
+    ? vwapAnalysis.result.points.flatMap((point) =>
+      point?.value?.status === "READY" &&
+        typeof point.value.value === "string" &&
+        /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(point.value.value) &&
+        Number.isFinite(Number(point.value.value)) &&
+        candles.some(({ source }) =>
+          Date.parse(source.close_time) === Date.parse(point.candle_end))
+        ? [{ candleEnd: point.candle_end, value: point.value.value }]
+        : [],
+    )
+    : [];
   const width = 1000;
   const left = 70;
   const right = 20;
@@ -398,6 +718,10 @@ function renderChart(snapshot, preferences) {
   const volumeTop = panelsTop + separatePanels.length * (panelHeight + panelGap) + 5;
   const height = volumeTop + volumeHeight + 20;
   const visiblePriceValues = [...lows, ...highs];
+  for (const point of vwapPoints) {
+    const number = numberForPlot(point.value);
+    if (number !== null) visiblePriceValues.push(number);
+  }
   for (const [, points] of emaSeries) for (const point of points) {
     const number = numberForPlot(point.value);
     if (number !== null) visiblePriceValues.push(number);
@@ -463,6 +787,11 @@ function renderChart(snapshot, preferences) {
     const polyline = makeLine(points, candleIndexes, priceMin, priceMax, priceTop, priceHeight, left, plotWidth);
     const lineClass = ["upper", "middle", "lower"].includes(id) ? `bollinger-${id}` : id;
     if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${lineClass}` }));
+  }
+  const vwapLine = makeLine(vwapPoints, candleIndexes, priceMin, priceMax, priceTop, priceHeight, left, plotWidth);
+  if (vwapLine) {
+    svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line" }));
+    svgText(svg, left + 4 * 130, 18, "Spot VWAP", "legend-text");
   }
   for (const [panelIndex, panel] of separatePanels.entries()) {
     const top = panelsTop + panelIndex * (panelHeight + panelGap);
@@ -644,6 +973,7 @@ async function bootstrap() {
     renderIndicatorControls(null, preferences, setPreferences);
     renderIndicators(null, preferences);
     renderOrderFlow(null);
+    renderSpotAnalyses(null);
   };
 
   const loadSnapshot = async () => {
@@ -663,6 +993,7 @@ async function bootstrap() {
     renderIndicatorControls(null, preferences, setPreferences);
     $("#indicator-groups").replaceChildren(element("p", "Loading backend indicator results…", "empty-state"));
     renderOrderFlow(null);
+    renderSpotAnalyses(null);
     const instrumentId = instrument.value;
     const selectedTimeframe = timeframe.value;
     const limit = selectedHistory();
@@ -706,6 +1037,7 @@ async function bootstrap() {
       renderIndicatorControls(snapshot, preferences, setPreferences);
       renderIndicators(snapshot, preferences);
       renderOrderFlow(snapshot);
+      renderSpotAnalyses(snapshot);
     } catch (error) {
       showFailure(error, sequence);
     }
@@ -785,6 +1117,7 @@ async function bootstrap() {
       renderIndicatorControls(snapshot, preferences, setPreferences);
       renderIndicators(snapshot, preferences);
       renderOrderFlow(snapshot);
+      renderSpotAnalyses(snapshot);
     } catch (error) {
       showFailure(error, sequence);
     } finally {

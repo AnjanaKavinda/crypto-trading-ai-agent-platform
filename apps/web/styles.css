@@ -88,6 +88,7 @@ label { display: grid; gap: .4rem; font-weight: 700; font-size: .9rem; }
 .chart-container .bollinger-upper { stroke: #fb923c; }
 .chart-container .bollinger-middle { stroke: #c4b5fd; }
 .chart-container .bollinger-lower { stroke: #fb923c; }
+.chart-container .spot-vwap-line { stroke: #f472b6; stroke-width: 2.5; }
 .chart-container .indicator-line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .chart-container .candle-wick { stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .chart-container .candle-body { stroke-width: 1; }
@@ -124,6 +125,14 @@ th { position: sticky; top: 0; background: var(--surface-raised); color: #dbeeff
 .indicator-card p { margin: .45rem 0; color: var(--muted); line-height: 1.45; }
 .indicator-card .indicator-value { color: #fff; font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .indicator-card a { color: #a8ddff; }
+.analysis-cards { display: grid; gap: .8rem; }
+.analysis-card { min-width: 0; border: 1px solid #38485b; background: #0c141e; border-radius: .5rem; padding: .9rem; }
+.analysis-card h3 { color: #c7e8ff; }
+.analysis-card p { color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.analysis-metadata { margin: .75rem 0; }
+.analysis-card table { min-width: 760px; }
+.state-badge[data-state="PARTIAL"] { border-color: var(--warning); color: #ffe5a0; }
+.state-badge[data-state="MISSING"], .state-badge[data-state="UNKNOWN"] { border-color: var(--negative); color: #ffb4b4; }
 .synthetic-example { margin-top: 1rem; border: 1px solid #718196; border-radius: .5rem; padding: 0 .9rem .9rem; }
 .synthetic-example summary { font-weight: 800; }
 .synthetic-example th[scope="row"] { color: #dbeeff; }

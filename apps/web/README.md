@@ -91,3 +91,27 @@ never retried automatically.
 
 No account or trading capability is provided. Local research data remains
 non-authoritative for any signal, risk assessment, approval, or trade.
+
+## Spot volume and structure analyses
+
+The workspace presents only the `spot_analysis` entries returned with the
+currently selected candle response. Values and series are withheld unless the
+snapshot and underlying quality report are both `VALID`, and each non-null
+result's instrument, venue, timeframe, as-of, snapshot, quality report, and
+input candle IDs bind to that exact response. Per-candle output is also matched
+to the corresponding candle timestamp/ID. Selector changes clear the previous
+snapshot before the next read; presentation changes do not issue API requests.
+
+| API key | Result/status behavior and provenance | Limitation | UI destination |
+|---|---|---|---|
+| `vwap` | Shows the wrapper status/reason, backend method/version, parameters, price/volume units, first-candle anchor, window, as-of, snapshot/quality IDs, and each point's nested status/reason/value. Only `READY` values aligned to returned candle close times are drawn on the price chart. | Cumulative bar-based typical-price VWAP anchored to the first candle in the returned snapshot; OHLCV approximation, not trade-by-trade or session VWAP. | Price-chart overlay and exact point table in the volume/structure section. |
+| `volume-profile` | Shows only supplied fields, including returned POC bin index, VAH/VAL, node-bin indices and other supplied value-area fields, with returned parameters, units, method/version, and snapshot provenance. | Candle-assigned typical-price volume-profile proxy; bins/value-area parameters are backend supplied and are never recalculated in the browser. A bin index is not presented as a computed price. | Volume/structure result card. |
+| `volume-confirmation` | Shows raw volume and any supplied prior sum, trailing average, or relative volume with each point's status/reason, plus returned assessment/comparison/exhaustion states and reasons. | Uses the returned lookback (currently 20); contextual assessment/comparison remains indeterminate without caller context, and exhaustion is unavailable without reliable order-flow input. | Volume/structure result card with exact point table. |
+| `price-action-support-resistance` | Shows supplied candle geometry and per-candle close-location/range-comparison reasons, along with wrapper status/reason and result provenance. | Caller policies are absent; patterns, pivots, and support/resistance zones are not inferred or described as detected. | Volume/structure geometry table. |
+| `spot-market-structure` | Shows the backend wrapper status and exact reason; a null result is explicitly shown without annotations. | The current API returns `UNAVAILABLE` with `CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED`; no structure is calculated or drawn. | Volume/structure result card. |
+
+Missing entries, null result payloads, `PARTIAL`, `WARMUP`, `UNAVAILABLE`,
+stale quality, and invalid/non-valid quality are visibly distinct. Backend
+reason codes and nested point reasons are retained; unavailable values are not
+replaced with zero or a browser-derived estimate. These read-only observations
+are not signals, recommendations, probabilities, or trading instructions.
