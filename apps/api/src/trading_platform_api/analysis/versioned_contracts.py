@@ -1678,9 +1678,7 @@ class ConfluenceAssessmentV2:
     method: VersionReference
     provenance: tuple[VersionReference, ...]
     contract_id: str = field(default="C-009", init=False)
-    schema_version: str = field(
-        default=META_ANALYSIS_V2_SCHEMA_VERSION, init=False
-    )
+    schema_version: str = field(default=META_ANALYSIS_V2_SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
         _uuid("assessment_id", self.assessment_id)
@@ -1696,9 +1694,7 @@ class ConfluenceAssessmentV2:
             raise AnalysisV2ContractError("status has an invalid type.")
         if type(self.status_reason) not in {ConfluenceReasonV2, type(None)}:
             raise AnalysisV2ContractError("status_reason has an invalid type.")
-        components = _typed_tuple(
-            "components", self.components, ConfluenceComponentV2
-        )
+        components = _typed_tuple("components", self.components, ConfluenceComponentV2)
         _unique("component IDs", tuple(item.component_id for item in components))
         _unique("confluence domains", tuple(item.domain for item in components))
         if type(self.analytical_confidence) is not AnalyticalConfidenceV2:
@@ -1709,13 +1705,12 @@ class ConfluenceAssessmentV2:
             type(self.independence_report) is not AnalysisOutputReferenceV3
             or self.independence_report.contract_id != "C-093"
         ):
-            raise AnalysisV2ContractError(
-                "independence_report must reference C-093."
-            )
+            raise AnalysisV2ContractError("independence_report must reference C-093.")
         _uuid("input_snapshot_id", self.input_snapshot_id)
-        if _text(
-            "input_snapshot_schema_version", self.input_snapshot_schema_version
-        ) != ANALYSIS_V3_SCHEMA_VERSION:
+        if (
+            _text("input_snapshot_schema_version", self.input_snapshot_schema_version)
+            != ANALYSIS_V3_SCHEMA_VERSION
+        ):
             raise AnalysisV2ContractError("C-009 v2 requires C-007 schema 3.")
         reports = _typed_tuple(
             "data_quality_reports", self.data_quality_reports, AnalysisRecordReference
@@ -1848,9 +1843,7 @@ class ConflictAssessmentV2:
     method: VersionReference
     provenance: tuple[VersionReference, ...]
     contract_id: str = field(default="C-010", init=False)
-    schema_version: str = field(
-        default=META_ANALYSIS_V2_SCHEMA_VERSION, init=False
-    )
+    schema_version: str = field(default=META_ANALYSIS_V2_SCHEMA_VERSION, init=False)
 
     def __post_init__(self) -> None:
         _uuid("assessment_id", self.assessment_id)
@@ -1868,7 +1861,10 @@ class ConflictAssessmentV2:
             raise AnalysisV2ContractError("evidence_state has an invalid type.")
         if type(self.materiality) is not ConflictMaterialityV2:
             raise AnalysisV2ContractError("materiality has an invalid type.")
-        if self.direct_opposition is not None and type(self.direct_opposition) is not bool:
+        if (
+            self.direct_opposition is not None
+            and type(self.direct_opposition) is not bool
+        ):
             raise AnalysisV2ContractError("direct_opposition must be bool or None.")
         if (
             self.required_premise_invalid is not None
@@ -1885,9 +1881,10 @@ class ConflictAssessmentV2:
         if type(self.resolution_status) is not ResolutionStatus:
             raise AnalysisV2ContractError("resolution_status has an invalid type.")
         _uuid("input_snapshot_id", self.input_snapshot_id)
-        if _text(
-            "input_snapshot_schema_version", self.input_snapshot_schema_version
-        ) != ANALYSIS_V3_SCHEMA_VERSION:
+        if (
+            _text("input_snapshot_schema_version", self.input_snapshot_schema_version)
+            != ANALYSIS_V3_SCHEMA_VERSION
+        ):
             raise AnalysisV2ContractError("C-010 v2 requires C-007 schema 3.")
         reports = _typed_tuple(
             "data_quality_reports", self.data_quality_reports, AnalysisRecordReference
@@ -2044,12 +2041,12 @@ class AnalysisSnapshotV3:
         )
         _unique("provenance", provenance)
         outputs = _typed_tuple(
-            "analysis_outputs", self.analysis_outputs, AnalysisOutputReferenceV3,
+            "analysis_outputs",
+            self.analysis_outputs,
+            AnalysisOutputReferenceV3,
             empty=False,
         )
-        output_keys = tuple(
-            (item.contract_id, str(item.record_id)) for item in outputs
-        )
+        output_keys = tuple((item.contract_id, str(item.record_id)) for item in outputs)
         if output_keys != tuple(sorted(output_keys)) or len(set(output_keys)) != len(
             output_keys
         ):
@@ -2090,10 +2087,7 @@ class AnalysisSnapshotReferenceV3:
 
     def __post_init__(self) -> None:
         _uuid("snapshot_id", self.snapshot_id)
-        if (
-            _text("schema_version", self.schema_version)
-            != ANALYSIS_V3_SCHEMA_VERSION
-        ):
+        if _text("schema_version", self.schema_version) != ANALYSIS_V3_SCHEMA_VERSION:
             raise AnalysisV2ContractError("C-006 v3 must reference C-007 schema 3.")
         if _SHA256.fullmatch(_text("content_sha256", self.content_sha256)) is None:
             raise AnalysisV2ContractError(
@@ -2128,7 +2122,10 @@ class MarketContextV3:
         expires = _time("expires_at", self.expires_at)
         if as_of > expires:
             raise AnalysisV2ContractError("as_of must not be after expires_at.")
-        if type(self.multi_timeframe_state) is not tuple or not self.multi_timeframe_state:
+        if (
+            type(self.multi_timeframe_state) is not tuple
+            or not self.multi_timeframe_state
+        ):
             raise AnalysisV2ContractError("multi_timeframe_state must not be empty.")
         for item in self.multi_timeframe_state:
             _text("multi_timeframe_state item", item)
@@ -2145,7 +2142,9 @@ class MarketContextV3:
             raise AnalysisV2ContractError("assessments contains an invalid type.")
         _unique(
             "assessment identities",
-            tuple((item.contract_id, str(item.assessment_id)) for item in self.assessments),
+            tuple(
+                (item.contract_id, str(item.assessment_id)) for item in self.assessments
+            ),
         )
         if type(self.confluence) is not ConfluenceAssessmentV2:
             raise AnalysisV2ContractError("confluence must be C-009 schema 2.")
@@ -2153,13 +2152,17 @@ class MarketContextV3:
             type(item) is not ConflictAssessmentV2 for item in self.conflicts
         ):
             raise AnalysisV2ContractError("conflicts must contain C-010 schema 2.")
-        _unique("conflict identities", tuple(item.assessment_id for item in self.conflicts))
+        _unique(
+            "conflict identities", tuple(item.assessment_id for item in self.conflicts)
+        )
         if type(self.adversarial) is not AdversarialAssessment:
             raise AnalysisV2ContractError("adversarial has an invalid type.")
         if (
             type(self.uncertainties) is not tuple
             or not self.uncertainties
-            or any(type(item) is not AnalyticalUncertainty for item in self.uncertainties)
+            or any(
+                type(item) is not AnalyticalUncertainty for item in self.uncertainties
+            )
         ):
             raise AnalysisV2ContractError("uncertainties contains an invalid type.")
         _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
@@ -2253,9 +2256,7 @@ def validate_market_context_v3(
         raise AnalysisV2ContractError(
             "Supported independence reports must be exact C-093 references."
         )
-    if len(set(supported_independence_reports)) != len(
-        supported_independence_reports
-    ):
+    if len(set(supported_independence_reports)) != len(supported_independence_reports):
         raise AnalysisV2ContractError(
             "Supported independence report references must be unique."
         )
@@ -2271,7 +2272,9 @@ def validate_market_context_v3(
     resolved_snapshots = {
         item.snapshot.snapshot_id: item.snapshot for item in resolved_bindings
     }
-    resolved_reports = {item.report.report_id: item.report for item in resolved_bindings}
+    resolved_reports = {
+        item.report.report_id: item.report for item in resolved_bindings
+    }
     resolved_observations = {
         record.market_data_id: record
         for item in resolved_bindings
@@ -2312,14 +2315,13 @@ def validate_market_context_v3(
             now=validation_time,
         )
     resolved_by_id = {item.binding.binding_id: item for item in resolved_bindings}
-    manifest_bindings = {
-        item.binding_id: item for item in manifest.bindings
-    }
+    manifest_bindings = {item.binding_id: item for item in manifest.bindings}
     if set(resolved_by_id) != set(manifest_bindings) or any(
         resolved_by_id[binding_id].binding != manifest_binding
         for binding_id, manifest_binding in manifest_bindings.items()
     ):
         raise AnalysisV2ContractError("Manifest input bindings are not fully resolved.")
+
     def require_evidence_references(label: str, evidence_ids: tuple[UUID, ...]) -> None:
         if not set(evidence_ids).issubset(evidence):
             raise AnalysisV2ContractError(
@@ -2408,7 +2410,9 @@ def validate_market_context_v3(
                 "C-009/C-010 context or as-of does not match the C-007 manifest."
             )
         if not set(output.evidence_ids).issubset(evidence):
-            raise AnalysisV2ContractError("Meta-analysis references missing C-008 evidence.")
+            raise AnalysisV2ContractError(
+                "Meta-analysis references missing C-008 evidence."
+            )
         requires_usable_evidence = (
             output.status is ConfluenceStatusV2.AVAILABLE
             if isinstance(output, ConfluenceAssessmentV2)
@@ -2420,9 +2424,7 @@ def validate_market_context_v3(
             raise AnalysisV2ContractError(
                 "Available meta-analysis requires usable C-008 evidence."
             )
-        expected_reports: set[
-            tuple[str, str, str, str, str]
-        ] = set()
+        expected_reports: set[tuple[str, str, str, str, str]] = set()
         used_bindings = {
             binding_id
             for evidence_id in output.evidence_ids
@@ -2454,9 +2456,8 @@ def validate_market_context_v3(
             )
             for item in output.data_quality_reports
         }
-        if (
-            not expected_reports.issubset(actual_reports)
-            or not actual_reports.issubset(report_refs)
+        if not expected_reports.issubset(actual_reports) or not actual_reports.issubset(
+            report_refs
         ):
             raise AnalysisV2ContractError(
                 "C-009/C-010 does not preserve exact C-003 input report bindings."
@@ -2536,15 +2537,12 @@ def validate_market_context_v3(
                 for source_id in item.source_record_ids
             }
             if (
-                (
-                    set(component.input_binding_ids) & set(other.input_binding_ids)
-                    or shared_observations
-                    or shared_sources
-                )
-                and (
-                    component.dependence is EvidenceDependenceV2.INDEPENDENT
-                    or other.dependence is EvidenceDependenceV2.INDEPENDENT
-                )
+                set(component.input_binding_ids) & set(other.input_binding_ids)
+                or shared_observations
+                or shared_sources
+            ) and (
+                component.dependence is EvidenceDependenceV2.INDEPENDENT
+                or other.dependence is EvidenceDependenceV2.INDEPENDENT
             ):
                 raise AnalysisV2ContractError(
                     "Shared inputs or sources cannot establish independent evidence."
@@ -2560,7 +2558,10 @@ def validate_market_context_v3(
             if any(
                 item.classification
                 not in {ClaimClassification.FACT, ClaimClassification.INFERENCE}
-                or any(not evidence[evidence_id].usable for evidence_id in item.evidence_ids)
+                or any(
+                    not evidence[evidence_id].usable
+                    for evidence_id in item.evidence_ids
+                )
                 for item in findings
             ):
                 raise AnalysisV2ContractError(
@@ -2626,8 +2627,7 @@ def validate_market_context_v3(
     )
     for time_assessment in assessment_values:
         if (
-            _time("assessment.as_of", time_assessment.as_of)
-            > manifest.analysis_cutoff
+            _time("assessment.as_of", time_assessment.as_of) > manifest.analysis_cutoff
             or _time("assessment.expires_at", time_assessment.expires_at)
             > manifest.expires_at
             or time_assessment.expires_at > context.expires_at

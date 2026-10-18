@@ -2098,11 +2098,14 @@ def test_meta_analysis_v2_uses_categorical_strength_and_conflict_table() -> None
     assert decode_analysis_contract(encode_analysis_contract(conflict)) == conflict
     with pytest.raises(AnalysisV2ContractError, match="after expires_at"):
         replace(conflict, as_of=EXPIRES + timedelta(seconds=1))
-    assert replace(
-        conflict,
-        severity=ConflictSeverityV2.CRITICAL,
-        unsafe_to_rely=True,
-    ).severity is ConflictSeverityV2.CRITICAL
+    assert (
+        replace(
+            conflict,
+            severity=ConflictSeverityV2.CRITICAL,
+            unsafe_to_rely=True,
+        ).severity
+        is ConflictSeverityV2.CRITICAL
+    )
     with pytest.raises(AnalysisV2ContractError, match="decision table"):
         replace(conflict, severity=ConflictSeverityV2.MODERATE)
     with pytest.raises(AnalysisV2ContractError, match="reason"):
@@ -2139,9 +2142,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
     evidence_ids = tuple(
         evidence_by_binding[item.modality].evidence_id for item in bindings
     )
-    evidence = {
-        item.evidence_id: item for item in evidence_by_binding.values()
-    }
+    evidence = {item.evidence_id: item for item in evidence_by_binding.values()}
     reports_used = tuple(item.data_quality_report for item in bindings)
     snapshot_id = _id(950)
     c093 = AnalysisOutputReferenceV3("C-093", _id(951), "4", "9", HASH)
@@ -2264,11 +2265,17 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         sorted(
             (
                 AnalysisOutputReferenceV3(
-                    "C-009", confluence.assessment_id, "2", "2",
+                    "C-009",
+                    confluence.assessment_id,
+                    "2",
+                    "2",
                     canonical_sha256(confluence),
                 ),
                 AnalysisOutputReferenceV3(
-                    "C-010", conflict.assessment_id, "2", "2",
+                    "C-010",
+                    conflict.assessment_id,
+                    "2",
+                    "2",
                     canonical_sha256(conflict),
                 ),
                 c093,
@@ -2348,9 +2355,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             ),
         ),
         evidence_ids,
-        AnalysisSnapshotReferenceV3(
-            manifest.snapshot_id, "3", manifest.content_sha256
-        ),
+        AnalysisSnapshotReferenceV3(manifest.snapshot_id, "3", manifest.content_sha256),
     )
     resolved = resolve_analysis_snapshot_v3(
         manifest,
@@ -2450,9 +2455,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             supported_independence_reports=(c093,),
             now=CREATED,
         )
-    unresolved_finding = replace(
-        fundamental.findings[0], evidence_ids=(_id(975),)
-    )
+    unresolved_finding = replace(fundamental.findings[0], evidence_ids=(_id(975),))
     unresolved_assessment = replace(
         fundamental,
         findings=(unresolved_finding, *fundamental.findings[1:]),
