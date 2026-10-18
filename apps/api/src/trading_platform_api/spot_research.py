@@ -739,7 +739,9 @@ def _calculate_ohlcv_analysis(
             policy=None,
             comparison_context=None,
         )
-        outputs["volume-confirmation"] = _volume_confirmation_envelope(volume_confirmation_result)
+        outputs["volume-confirmation"] = _volume_confirmation_envelope(
+            volume_confirmation_result
+        )
     except (ArithmeticError, ValueError):
         outputs["volume-confirmation"] = _unavailable_analysis(
             "DETERMINISTIC_CALCULATION_FAILED"
