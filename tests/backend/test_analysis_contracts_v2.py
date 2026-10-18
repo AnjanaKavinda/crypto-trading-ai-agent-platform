@@ -2221,3 +2221,46 @@ def test_c006_c007_v3_manifest_hashes_and_resolves_versioned_outputs() -> None:
             evidence=evidence,
             now=CREATED,
         )
+
+    mismatched_fundamental = replace(
+        fundamental, asset="ETH", instrument_id="ETH-USDT-SPOT"
+    )
+    mismatched_refs = [
+        item
+        for item in manifest.output_references
+        if (item.contract_id, item.record_id)
+        != (fundamental.contract_id, fundamental.assessment_id)
+    ]
+    mismatched_refs.append(analysis_output_reference_v3(mismatched_fundamental))
+    mismatched_refs.sort(key=lambda item: (item.contract_id, str(item.record_id)))
+    mismatched_manifest = create_analysis_snapshot_v3(
+        snapshot_id=manifest.snapshot_id,
+        asset=manifest.asset,
+        instrument_id=manifest.instrument_id,
+        venue_id=manifest.venue_id,
+        timeframe=manifest.timeframe,
+        analysis_cutoff=manifest.analysis_cutoff,
+        created_at=manifest.created_at,
+        expires_at=manifest.expires_at,
+        bindings=manifest.bindings,
+        output_references=tuple(mismatched_refs),
+        evidence_ids=manifest.evidence_ids,
+        provenance=manifest.provenance,
+    )
+    mismatched_context = replace(
+        context,
+        assessments=(mismatched_fundamental,),
+        analysis_snapshot=AnalysisSnapshotReferenceV3(
+            mismatched_manifest.snapshot_id,
+            "3",
+            mismatched_manifest.content_sha256,
+        ),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="Assessment scope"):
+        validate_market_context_v3(
+            mismatched_context,
+            mismatched_manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )

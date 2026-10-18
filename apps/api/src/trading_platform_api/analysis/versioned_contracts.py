@@ -1992,6 +1992,15 @@ def validate_market_context_v3(
     )
     for assessment in context_assessments:
         if (
+            getattr(assessment, "asset", manifest.asset) != manifest.asset
+            or getattr(assessment, "instrument_id", manifest.instrument_id)
+            != manifest.instrument_id
+            or getattr(assessment, "venue_id", manifest.venue_id) != manifest.venue_id
+        ):
+            raise AnalysisV2ContractError(
+                "Assessment scope differs from its C-007 manifest."
+            )
+        if (
             assessment.as_of > manifest.analysis_cutoff
             or assessment.expires_at > manifest.expires_at
             or assessment.expires_at <= validation_time
