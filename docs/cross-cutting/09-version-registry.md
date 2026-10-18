@@ -167,3 +167,34 @@ resolved policy; sequence metrics require measured passing continuity.
 In-memory resolvers take an explicit validation time rather than consulting
 the wall clock implicitly; expired manifests, dependencies, evidence, and
 assessments reject at that time.
+
+## Issue #370 — C-009/C-010 schema 2 and C-006/C-007 schema 3
+
+The owner-approved Option 2 adds C-009 and C-010 schema `2`; schema `1`
+payloads and their existing validators remain unchanged. Schema-2 confidence
+strength and conflict severity are categorical; there is no decimal or ordinal
+conversion. C-009 confidence can be `AVAILABLE` only with a bounded Decimal and
+a versioned method; `UNAVAILABLE` carries a reason and no value/method. C-093
+references carry report ID, report version, schema/lineage versions, and the
+canonical digest of the referenced report.
+
+C-006 schema `3` contains C-009/C-010 schema `2` values. C-007 schema `3`
+retains the exact schema-2 input binding structure and adds unique output
+references sorted by contract ID and record ID. Each output reference includes
+contract ID, record ID, schema version, lineage version, and
+`SHA-256(canonical_json_dumps(record).encode("utf-8"))` over the complete typed
+record including fixed contract metadata. C-007 v3 `content_sha256` uses the
+same canonical `wire-1` envelope preimage rule as C-007 v2, excluding only its
+own `payload.content_sha256`. C-006 v3 validation resolves all embedded C-005,
+C-008, C-009, C-010, C-093, and other assessment outputs to the exact C-007 v3
+references, input snapshots, C-003 reports, evidence IDs, and time window.
+
+Codec dispatch is explicit for C-006/3, C-007/3, C-009/2, and C-010/2. The
+existing C-006/1–2, C-007/1–2 and C-008/1–2 readers remain registered; there is
+no fallback or implicit up-conversion. The C-008 v2 validator can resolve its
+existing binding IDs against either C-007 schema 2 or schema 3 because the v3
+manifest preserves the same immutable input binding model. No v2 producer,
+analysis calculation, database write, or consumer migration is enabled by
+these schemas. Unsupported nested schemas, mismatched output digests, mixed
+snapshot/report/evidence bindings, stale inputs, and non-VALID inputs with
+usable confluence/conflict output fail closed.

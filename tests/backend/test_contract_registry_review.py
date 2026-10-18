@@ -9,9 +9,14 @@ from pathlib import Path
 
 from trading_platform_api.analysis import (
     AgentIndependenceReference,
+    AgentIndependenceReferenceV2,
     AnalysisSnapshotV2,
+    AnalysisSnapshotV3,
+    ConflictAssessmentV2,
+    ConfluenceAssessmentV2,
     EvidenceItemV2,
     MarketContextV2,
+    MarketContextV3,
     OrderFlowAssessment,
 )
 from trading_platform_api.audit import AuditEvent
@@ -49,12 +54,17 @@ DEFERRED_CONTRACTS = {
 REFERENCE_ONLY_TYPES = {
     ValidationReference: "C-028",
     AgentIndependenceReference: "C-093",
+    AgentIndependenceReferenceV2: "C-093",
 }
 VERSIONED_CONTRACT_TYPES = {
     DataQualityReportV2: ("C-003", "2"),
     MarketContextV2: ("C-006", "2"),
+    MarketContextV3: ("C-006", "3"),
     AnalysisSnapshotV2: ("C-007", "2"),
+    AnalysisSnapshotV3: ("C-007", "3"),
     EvidenceItemV2: ("C-008", "2"),
+    ConfluenceAssessmentV2: ("C-009", "2"),
+    ConflictAssessmentV2: ("C-010", "2"),
 }
 ALIAS_NAMES = {"CalibrationRecord", "ExperienceRecord"}
 AUTHORITY_METHOD_NAMES = {

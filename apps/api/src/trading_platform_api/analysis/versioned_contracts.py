@@ -9,6 +9,11 @@ from hashlib import sha256
 from typing import ClassVar, Mapping, TypeAlias, get_args
 from uuid import UUID
 
+from trading_platform_api.analysis.confluence_v2 import (
+    ConflictAssessmentV2,
+    ConfluenceAssessmentV2,
+    ConfluenceStatusV2,
+)
 from trading_platform_api.analysis.contracts import (
     AdversarialAssessment,
     AnalyticalUncertainty,
@@ -683,6 +688,231 @@ class AnalysisSnapshotReference:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisOutputReferenceV3:
+    contract_id: str
+    record_id: UUID
+    schema_version: str
+    lineage_version: str
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        contract_id = _text("contract_id", self.contract_id)
+        supported_schemas = {
+            "C-005": {"1"},
+            "C-008": {"1", "2"},
+            "C-009": {"2"},
+            "C-010": {"2"},
+            "C-011": {"1"},
+            "C-012": {"1"},
+            "C-013": {"1"},
+            "C-014": {"1"},
+            "C-015": {"1"},
+            "C-016": {"1"},
+            "C-017": {"1"},
+            "C-018": {"1"},
+            "C-019": {"1"},
+            "C-069": {"1"},
+            "C-093": {"1"},
+            "C-104": {"1"},
+        }
+        if contract_id not in supported_schemas:
+            raise AnalysisV2ContractError("Unsupported analysis output contract.")
+        _uuid("record_id", self.record_id)
+        schema = _text("schema_version", self.schema_version)
+        if schema not in supported_schemas[contract_id]:
+            raise AnalysisV2ContractError("Output schema version mismatch.")
+        lineage = _text("lineage_version", self.lineage_version)
+        expected_lineage = (
+            "2"
+            if contract_id in {"C-009", "C-010"}
+            or (contract_id == "C-008" and schema == "2")
+            else "1"
+        )
+        if lineage != expected_lineage:
+            raise AnalysisV2ContractError("Output lineage version mismatch.")
+        if _SHA256.fullmatch(_text("content_sha256", self.content_sha256)) is None:
+            raise AnalysisV2ContractError(
+                "content_sha256 must be a lowercase SHA-256 digest."
+            )
+
+
+def analysis_output_reference_v3(
+    value: object, *, lineage_version: str | None = None
+) -> AnalysisOutputReferenceV3:
+    contract_id = getattr(value, "contract_id", None)
+    schema_version = getattr(value, "schema_version", None)
+    record_id = next(
+        (
+            getattr(value, name)
+            for name in (
+                "assessment_id",
+                "regime_id",
+                "report_id",
+                "evidence_id",
+                "uncertainty_id",
+            )
+            if isinstance(getattr(value, name, None), UUID)
+        ),
+        None,
+    )
+    if not isinstance(contract_id, str) or not isinstance(schema_version, str):
+        raise AnalysisV2ContractError("Output must have a versioned contract identity.")
+    if not isinstance(record_id, UUID):
+        raise AnalysisV2ContractError("Output must expose a canonical UUID identity.")
+    if lineage_version is None:
+        lineage_version = (
+            "2"
+            if contract_id in {"C-009", "C-010"}
+            or (contract_id == "C-008" and schema_version == "2")
+            else "1"
+        )
+    return AnalysisOutputReferenceV3(
+        contract_id,
+        record_id,
+        schema_version,
+        lineage_version,
+        canonical_sha256(value),
+    )
+
+
+def _manifest_v3_preimage(manifest: AnalysisSnapshotV3) -> dict[str, object]:
+    return {
+        "canonicalization_version": CANONICAL_JSON_VERSION,
+        "contract_id": manifest.contract_id,
+        "schema_version": manifest.schema_version,
+        "payload_version": "wire-1",
+        "payload": {
+            item.name: getattr(manifest, item.name)
+            for item in fields(manifest)
+            if item.name not in {"contract_id", "schema_version", "content_sha256"}
+        },
+    }
+
+
+def analysis_snapshot_v3_sha256(manifest: AnalysisSnapshotV3) -> str:
+    return sha256(
+        canonical_json_dumps(_manifest_v3_preimage(manifest)).encode("utf-8")
+    ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisSnapshotV3:
+    snapshot_id: UUID
+    asset: str
+    instrument_id: str
+    venue_id: str
+    timeframe: str
+    analysis_cutoff: datetime
+    created_at: datetime
+    expires_at: datetime
+    bindings: tuple[InputBindingV2, ...]
+    output_references: tuple[AnalysisOutputReferenceV3, ...]
+    evidence_ids: tuple[UUID, ...]
+    provenance: tuple[VersionReference, ...]
+    content_sha256: str
+    contract_id: str = field(default="C-007", init=False)
+    schema_version: str = field(default="3", init=False)
+
+    def __post_init__(self) -> None:
+        _uuid("snapshot_id", self.snapshot_id)
+        for name in ("asset", "instrument_id", "venue_id", "timeframe"):
+            _text(name, getattr(self, name))
+        cutoff = _time("analysis_cutoff", self.analysis_cutoff)
+        created = _time("created_at", self.created_at)
+        expires = _time("expires_at", self.expires_at)
+        if cutoff > created or created > expires:
+            raise AnalysisV2ContractError(
+                "Invalid manifest analysis/creation/expiry order."
+            )
+        bindings = _typed_tuple("bindings", self.bindings, InputBindingV2, empty=False)
+        if bindings != tuple(
+            sorted(
+                bindings,
+                key=lambda item: (item.modality.value, item.market_snapshot.record_id),
+            )
+        ):
+            raise AnalysisV2ContractError(
+                "bindings must use deterministic modality/snapshot order."
+            )
+        _unique("binding IDs", tuple(item.binding_id for item in bindings))
+        _unique(
+            "bound snapshots",
+            tuple(item.market_snapshot.record_id for item in bindings),
+        )
+        _unique(
+            "bound quality reports",
+            tuple(item.data_quality_report.record_id for item in bindings),
+        )
+        if any(
+            (item.analysis_cutoff, item.instrument_id, item.venue_id)
+            != (cutoff, self.instrument_id, self.venue_id)
+            for item in bindings
+        ):
+            raise AnalysisV2ContractError(
+                "Every binding must match the manifest context."
+            )
+        outputs = _typed_tuple(
+            "output_references",
+            self.output_references,
+            AnalysisOutputReferenceV3,
+            empty=False,
+        )
+        output_keys = tuple((item.contract_id, item.record_id) for item in outputs)
+        _unique("analysis output identities", output_keys)
+        if output_keys != tuple(
+            sorted(output_keys, key=lambda item: (item[0], str(item[1])))
+        ):
+            raise AnalysisV2ContractError(
+                "output_references must use deterministic contract/record order."
+            )
+        evidence_ids = _uuid_tuple("evidence_ids", self.evidence_ids)
+        provenance = _typed_tuple(
+            "provenance", self.provenance, VersionReference, empty=False
+        )
+        _unique("provenance", provenance)
+        digest = _text("content_sha256", self.content_sha256)
+        if (
+            _SHA256.fullmatch(digest) is None
+            or analysis_snapshot_v3_sha256(self) != digest
+        ):
+            raise AnalysisV2ContractError(
+                "manifest content_sha256 does not match its canonical content."
+            )
+        object.__setattr__(self, "analysis_cutoff", cutoff)
+        object.__setattr__(self, "created_at", created)
+        object.__setattr__(self, "expires_at", expires)
+        object.__setattr__(self, "evidence_ids", evidence_ids)
+
+
+def create_analysis_snapshot_v3(**values: object) -> AnalysisSnapshotV3:
+    values = dict(values)
+    values["content_sha256"] = "0" * 64
+    temporary = object.__new__(AnalysisSnapshotV3)
+    for name, value in values.items():
+        object.__setattr__(temporary, name, value)
+    object.__setattr__(temporary, "contract_id", "C-007")
+    object.__setattr__(temporary, "schema_version", "3")
+    values["content_sha256"] = analysis_snapshot_v3_sha256(temporary)
+    return AnalysisSnapshotV3(**values)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisSnapshotReferenceV3:
+    snapshot_id: UUID
+    schema_version: str
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        _uuid("snapshot_id", self.snapshot_id)
+        if _text("schema_version", self.schema_version) != "3":
+            raise AnalysisV2ContractError("C-006 v3 must reference C-007 schema 3.")
+        if _SHA256.fullmatch(_text("content_sha256", self.content_sha256)) is None:
+            raise AnalysisV2ContractError(
+                "content_sha256 must be a lowercase SHA-256 digest."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class MarketContextV2:
     context_id: UUID
     asset: str
@@ -755,6 +985,84 @@ class MarketContextV2:
         _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
         if type(self.analysis_snapshot) is not AnalysisSnapshotReference:
             raise AnalysisV2ContractError("analysis_snapshot has an invalid type.")
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "expires_at", expires)
+
+
+@dataclass(frozen=True, slots=True)
+class MarketContextV3:
+    context_id: UUID
+    asset: str
+    instrument_id: str
+    as_of: datetime
+    expires_at: datetime
+    multi_timeframe_state: tuple[str, ...]
+    regime: MarketRegime
+    assessments: tuple[VersionedAssessment, ...]
+    confluence: ConfluenceAssessmentV2
+    conflicts: tuple[ConflictAssessmentV2, ...]
+    adversarial: AdversarialAssessment
+    uncertainties: tuple[AnalyticalUncertainty, ...]
+    evidence_ids: tuple[UUID, ...]
+    analysis_snapshot: AnalysisSnapshotReferenceV3
+    contract_id: str = field(default="C-006", init=False)
+    schema_version: str = field(default="3", init=False)
+
+    def __post_init__(self) -> None:
+        _uuid("context_id", self.context_id)
+        _text("asset", self.asset)
+        _text("instrument_id", self.instrument_id)
+        as_of = _time("as_of", self.as_of)
+        expires = _time("expires_at", self.expires_at)
+        if as_of > expires:
+            raise AnalysisV2ContractError("as_of must not be after expires_at.")
+        if (
+            type(self.multi_timeframe_state) is not tuple
+            or not self.multi_timeframe_state
+        ):
+            raise AnalysisV2ContractError("multi_timeframe_state must not be empty.")
+        for item in self.multi_timeframe_state:
+            _text("multi_timeframe_state item", item)
+        if type(self.regime) is not MarketRegime:
+            raise AnalysisV2ContractError("regime must be a MarketRegime.")
+        if (
+            type(self.assessments) is not tuple
+            or not self.assessments
+            or any(
+                type(item) not in {*get_args(Assessment), OrderFlowAssessment}
+                for item in self.assessments
+            )
+        ):
+            raise AnalysisV2ContractError("assessments contains an invalid type.")
+        _unique(
+            "assessment identities",
+            tuple(
+                (item.contract_id, str(item.assessment_id)) for item in self.assessments
+            ),
+        )
+        if type(self.confluence) is not ConfluenceAssessmentV2:
+            raise AnalysisV2ContractError("confluence must be C-009 schema 2.")
+        if type(self.conflicts) is not tuple or any(
+            type(item) is not ConflictAssessmentV2 for item in self.conflicts
+        ):
+            raise AnalysisV2ContractError(
+                "conflicts must contain C-010 schema 2 contracts."
+            )
+        if type(self.adversarial) is not AdversarialAssessment:
+            raise AnalysisV2ContractError("adversarial has an invalid type.")
+        if (
+            type(self.uncertainties) is not tuple
+            or not self.uncertainties
+            or any(
+                type(item) is not AnalyticalUncertainty for item in self.uncertainties
+            )
+        ):
+            raise AnalysisV2ContractError("uncertainties contains an invalid type.")
+        _uuid_tuple("evidence_ids", self.evidence_ids, empty=False)
+        if type(self.analysis_snapshot) is not AnalysisSnapshotReferenceV3:
+            raise AnalysisV2ContractError(
+                "analysis_snapshot must reference C-007 schema 3."
+            )
         object.__setattr__(self, "as_of", as_of)
         object.__setattr__(self, "expires_at", expires)
 
@@ -1130,14 +1438,17 @@ def _quality_eligible(item: ResolvedInputBinding) -> bool:
     return _dimension_passes(report, item.policy, _required_dimensions(item))
 
 
-def validate_evidence_item_v2(
+def _validate_evidence_item(
     evidence: EvidenceItemV2,
-    manifest: AnalysisSnapshotV2,
+    manifest: AnalysisSnapshotV2 | AnalysisSnapshotV3,
     *,
     resolved_bindings: tuple[ResolvedInputBinding, ...],
     now: datetime,
 ) -> None:
-    if type(evidence) is not EvidenceItemV2 or type(manifest) is not AnalysisSnapshotV2:
+    if type(evidence) is not EvidenceItemV2 or type(manifest) not in {
+        AnalysisSnapshotV2,
+        AnalysisSnapshotV3,
+    }:
         raise AnalysisV2ContractError("Invalid C-008 v2 evidence or C-007 manifest.")
     validation_time = _time("now", now)
     if (
@@ -1257,6 +1568,34 @@ def validate_evidence_item_v2(
             raise AnalysisV2ContractError(
                 "DEGRADED report findings must remain limitations."
             )
+
+
+def validate_evidence_item_v2(
+    evidence: EvidenceItemV2,
+    manifest: AnalysisSnapshotV2,
+    *,
+    resolved_bindings: tuple[ResolvedInputBinding, ...],
+    now: datetime,
+) -> None:
+    if type(manifest) is not AnalysisSnapshotV2:
+        raise AnalysisV2ContractError("C-008 v2 requires a C-007 schema-2 manifest.")
+    _validate_evidence_item(
+        evidence, manifest, resolved_bindings=resolved_bindings, now=now
+    )
+
+
+def validate_evidence_item_v3(
+    evidence: EvidenceItemV2,
+    manifest: AnalysisSnapshotV3,
+    *,
+    resolved_bindings: tuple[ResolvedInputBinding, ...],
+    now: datetime,
+) -> None:
+    if type(manifest) is not AnalysisSnapshotV3:
+        raise AnalysisV2ContractError("C-008 v2 requires a C-007 schema-3 manifest.")
+    _validate_evidence_item(
+        evidence, manifest, resolved_bindings=resolved_bindings, now=now
+    )
 
 
 def validate_order_flow_assessment(
@@ -1510,16 +1849,172 @@ def validate_market_context_v2(
             )
 
 
+def validate_market_context_v3(
+    context: MarketContextV3,
+    manifest: AnalysisSnapshotV3,
+    *,
+    resolved_bindings: tuple[ResolvedInputBinding, ...],
+    evidence: Mapping[UUID, EvidenceItemV2],
+    now: datetime,
+) -> None:
+    if type(context) is not MarketContextV3 or type(manifest) is not AnalysisSnapshotV3:
+        raise AnalysisV2ContractError("Expected exact C-006/C-007 schema-3 contracts.")
+    validation_time = _time("now", now)
+    if (
+        manifest.created_at > validation_time
+        or manifest.expires_at <= validation_time
+        or context.expires_at <= validation_time
+    ):
+        raise AnalysisV2ContractError("Market context or manifest is stale.")
+    if (
+        context.analysis_snapshot.snapshot_id != manifest.snapshot_id
+        or context.analysis_snapshot.content_sha256 != manifest.content_sha256
+        or context.asset != manifest.asset
+        or context.instrument_id != manifest.instrument_id
+        or context.as_of != manifest.analysis_cutoff
+        or context.expires_at > manifest.expires_at
+        or context.evidence_ids != manifest.evidence_ids
+    ):
+        raise AnalysisV2ContractError(
+            "C-006 v3 does not resolve to the exact C-007 manifest."
+        )
+    if set(evidence) != set(manifest.evidence_ids):
+        raise AnalysisV2ContractError(
+            "C-008 evidence membership is not exactly resolved."
+        )
+    resolved_by_id = {item.binding.binding_id: item for item in resolved_bindings}
+    if set(resolved_by_id) != {item.binding_id for item in manifest.bindings}:
+        raise AnalysisV2ContractError("Manifest inputs were not fully resolved.")
+    for binding in manifest.bindings:
+        resolved = resolved_by_id[binding.binding_id]
+        if resolved.binding != binding:
+            raise AnalysisV2ContractError(
+                "Resolved input differs from its manifest binding."
+            )
+    bound_snapshots = {item.market_snapshot.record_id for item in manifest.bindings}
+    bound_reports = {item.data_quality_report.record_id for item in manifest.bindings}
+    all_confluence: tuple[ConfluenceAssessmentV2 | ConflictAssessmentV2, ...] = (
+        context.confluence,
+        *context.conflicts,
+    )
+    for result in all_confluence:
+        if (
+            str(result.snapshot_id) not in bound_snapshots
+            or str(result.quality_report_id) not in bound_reports
+            or result.instrument_id != manifest.instrument_id
+            or result.timeframe != manifest.timeframe
+            or result.as_of > manifest.analysis_cutoff
+            or result.expires_at > manifest.expires_at
+            or result.expires_at <= validation_time
+        ):
+            raise AnalysisV2ContractError(
+                "C-009/C-010 output is not bound to the exact manifest input."
+            )
+        matching_binding_ids = {
+            item.binding.binding_id
+            for item in resolved_bindings
+            if item.binding.market_snapshot.record_id == str(result.snapshot_id)
+            and item.binding.data_quality_report.record_id
+            == str(result.quality_report_id)
+        }
+        result_evidence_ids = result.evidence_ids
+        if (
+            not matching_binding_ids
+            or any(
+                not set(evidence[evidence_id].binding_ids).intersection(
+                    matching_binding_ids
+                )
+                for evidence_id in result_evidence_ids
+                if evidence_id in evidence
+            )
+            or any(evidence_id not in evidence for evidence_id in result_evidence_ids)
+        ):
+            raise AnalysisV2ContractError(
+                "C-009/C-010 evidence is not bound to its exact snapshot and quality report."
+            )
+    trusted_inputs = all(
+        item.report.status is DataQualityStatus.VALID and item.direct_inputs_pass
+        for item in resolved_bindings
+    )
+    if not trusted_inputs and (
+        context.confluence.status is not ConfluenceStatusV2.UNAVAILABLE
+        or context.conflicts
+    ):
+        raise AnalysisV2ContractError(
+            "Non-VALID or failed inputs cannot produce usable confluence/conflict output."
+        )
+    for evidence_id, item in evidence.items():
+        if item.evidence_id != evidence_id:
+            raise AnalysisV2ContractError("C-008 evidence identity mismatch.")
+        validate_evidence_item_v3(
+            item,
+            manifest,
+            resolved_bindings=resolved_bindings,
+            now=validation_time,
+        )
+    required_outputs = [
+        context.regime,
+        *context.assessments,
+        context.confluence,
+        *context.conflicts,
+        context.adversarial,
+        *context.uncertainties,
+        *evidence.values(),
+    ]
+    refs_by_key = {
+        (item.contract_id, item.record_id): item for item in manifest.output_references
+    }
+    expected_refs = [analysis_output_reference_v3(item) for item in required_outputs]
+    independence = context.confluence.independence_report
+    expected_refs.append(
+        AnalysisOutputReferenceV3(
+            "C-093",
+            independence.report_id,
+            independence.schema_version,
+            independence.lineage_version,
+            independence.content_sha256,
+        )
+    )
+    if len(refs_by_key) != len(expected_refs) or any(
+        refs_by_key.get((item.contract_id, item.record_id)) != item
+        for item in expected_refs
+    ):
+        raise AnalysisV2ContractError(
+            "C-007 output references do not exactly bind the C-006/C-008 outputs."
+        )
+    context_assessments = (
+        context.regime,
+        *context.assessments,
+        context.confluence,
+        *context.conflicts,
+        context.adversarial,
+        *context.uncertainties,
+    )
+    for assessment in context_assessments:
+        if (
+            assessment.as_of > manifest.analysis_cutoff
+            or assessment.expires_at > manifest.expires_at
+            or assessment.expires_at <= validation_time
+        ):
+            raise AnalysisV2ContractError(
+                "Assessment time exceeds its manifest bounds."
+            )
+
+
 __all__ = [
     "ANALYSIS_V2_SCHEMA_VERSION",
     "AnalysisRecordReference",
+    "AnalysisOutputReferenceV3",
     "AnalysisSnapshotReference",
+    "AnalysisSnapshotReferenceV3",
     "AnalysisSnapshotV2",
+    "AnalysisSnapshotV3",
     "AnalysisV2ContractError",
     "EvidenceItemV2",
     "InputBindingV2",
     "InputModality",
     "MarketContextV2",
+    "MarketContextV3",
     "ObservationSourceBinding",
     "OrderFlowAssessment",
     "OrderFlowAssessmentState",
@@ -1529,9 +2024,14 @@ __all__ = [
     "ResolvedInputBinding",
     "VersionedAssessment",
     "analysis_snapshot_v2_sha256",
+    "analysis_output_reference_v3",
+    "analysis_snapshot_v3_sha256",
     "create_analysis_snapshot_v2",
+    "create_analysis_snapshot_v3",
     "resolve_analysis_snapshot_v2",
     "validate_evidence_item_v2",
+    "validate_evidence_item_v3",
     "validate_market_context_v2",
+    "validate_market_context_v3",
     "validate_order_flow_assessment",
 ]

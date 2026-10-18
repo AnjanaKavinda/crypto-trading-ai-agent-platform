@@ -29,8 +29,8 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-006 | MarketContext | Analysis | Strategy | Chat 5 analytical synthesis; cannot authorize trades. |
 | C-007 | AnalysisSnapshot | Analysis | Strategy, Audit, Learning | Immutable/versioned analytical output snapshot. |
 | C-008 | EvidenceItem | Analysis/Data | Strategy, Validation, UX, Audit | Traceable evidence with source, time, method, reliability and expiry. |
-| C-009 | ConfluenceAssessment | Meta Analysis | Strategy | Weighted support/neutral/contradiction with independence analysis. |
-| C-010 | ConflictAssessment | Meta Analysis | Strategy, Safety | Conflicting evidence and severity. |
+| C-009 | ConfluenceAssessment | Meta Analysis | Strategy | Schema 1 preserves historical numeric payloads; schema 2 uses categorical evidence strength, explicit uncertainty, versioned method-bound interpretive confidence, and dependence. |
+| C-010 | ConflictAssessment | Meta Analysis | Strategy, Safety | Schema 1 preserves historical numeric severity; schema 2 uses a versioned categorical severity and explicit unknown materiality. |
 | C-011 | FundamentalAssessment | Fundamental | MarketContext | Crypto-native fundamental evidence. |
 | C-012 | TechnicalAssessment | Technical | MarketContext | Deterministic/structured technical findings. |
 | C-013 | SMCAssessment | SMC | MarketContext | Structured SMC observations and invalidation. |
@@ -176,6 +176,56 @@ explicit quote unit; depth and trade-volume/delta components use its explicit
 base unit. Validation requires those base/quote units to match the exact
 resolved C-003 modality policy. The assessment grants no signal, risk, approval,
 or execution authority.
+
+## Issue #370 — versioned confluence/conflict contracts
+
+The repository owner approved Option 2 in #369. C-009/C-010 schema `1`
+remain unchanged for historical records. Schema `2` is additive and uses
+canonical-json-v1 / wire-1 with explicit codec dispatch. No v1 decimal values
+are migrated, reinterpreted, or converted to categories.
+
+C-009 schema 2 uses the Master Playbook evidence-strength vocabulary
+`VERY_STRONG`, `STRONG`, `MODERATE`, `WEAK`, `UNKNOWN`; there is no ordinal or
+decimal mapping. Dependence is separate and includes `UNKNOWN`. Its status
+distinguishes `AVAILABLE`, `PARTIAL`, and `UNAVAILABLE`; partial evidence must
+remain `INDETERMINATE`, and unavailable output has no components/evidence and
+uses `UNKNOWN` evidence strength plus a reason (`MISSING_EVIDENCE`,
+`INSUFFICIENT_EVIDENCE`, `QUALITY_NOT_VALID`, `STALE_INPUT`,
+`INDEPENDENCE_UNAVAILABLE`, or `DETERMINISTIC_CALCULATION_FAILED`). Analytical
+confidence is an explicit `AVAILABLE`/`UNAVAILABLE` value object. Available
+confidence is a finite
+Decimal in `[0,1]` bound to a versioned method and is interpretive only; it is
+not probability of success, profitability, expected return, or win rate.
+Unavailable confidence has no numeric value or method and carries a reason.
+
+C-010 schema 2 uses `LOW`, `MODERATE`, `HIGH`, `CRITICAL`, `UNKNOWN` severity.
+The versioned decision table is: LOW is localized disagreement that does not
+materially change interpretation; MODERATE affects a material interpretation
+without a direct opposing validated conclusion; HIGH is direct opposition
+between valid, materially relevant conclusions; CRITICAL invalidates a required
+premise or makes the analysis unsafe to rely on; UNKNOWN means evidence cannot
+establish materiality. Severity is distinct from resolution status and does
+not itself grant a trading gate. No conflict is represented by no C-010
+assessment, not a `NONE` severity.
+
+C-006 schema `3` carries C-009/C-010 schema `2`; schema `1` and `2` readers
+remain unchanged. C-007 schema `3` adds ordered, unique output references
+containing contract ID, record ID, schema version, lineage version, and
+canonical content digest. Its manifest digest binds these outputs and the
+existing C-007 schema `2` input bindings. C-006 schema `3` must reference the
+exact C-007 schema `3` manifest and output references resolve to the embedded
+analysis/evidence outputs. Changing an output, binding, or digest changes the
+C-007 manifest digest. Historical C-006/C-007 schema 1/2 bytes and hashes
+remain unchanged.
+
+The C-009/C-010 v2 types bind instrument, timeframe, snapshot, C-003 quality
+report, evidence IDs, C-093 report ID/version/content digest, as-of, expiry,
+and method provenance. They are contracts only: no producer, calculation,
+database write, strategy eligibility, signal, risk, approval, or execution
+behavior is enabled. Issue #67 remains the sole owner of C-093 and of the
+subsequent Spot confluence/conflict calculations. Shared OHLCV lineage must be
+marked dependent/correlated; a single snapshot cannot establish statistical
+independence.
 
 ## Canonical name / alias / supersession clarifications
 

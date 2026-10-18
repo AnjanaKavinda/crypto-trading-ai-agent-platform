@@ -10,25 +10,40 @@ import pytest
 from trading_platform_api.analysis import (
     AdversarialAssessment,
     AgentIndependenceReference,
+    AgentIndependenceReferenceV2,
+    AnalysisOutputReferenceV3,
     AnalysisRecordReference,
     AnalysisSnapshotReference,
+    AnalysisSnapshotReferenceV3,
     AnalysisV2ContractError,
+    AnalyticalConfidenceV2,
     AnalyticalDirection,
     AnalyticalFinding,
     AnalyticalUncertainty,
     AssessmentStatus,
     ClaimClassification,
+    ConfidenceStatusV2,
+    ConflictAssessmentV2,
+    ConflictSeverityV2,
     ConfluenceAssessment,
+    ConfluenceAssessmentV2,
     ConfluenceComponent,
+    ConfluenceComponentV2,
+    ConfluenceReasonV2,
     ConfluenceState,
+    ConfluenceStateV2,
+    ConfluenceStatusV2,
     DomainObservation,
     EvidenceDependence,
+    EvidenceDependenceV2,
     EvidenceItemV2,
     EvidenceRelation,
+    EvidenceStrengthLevel,
     FundamentalAssessment,
     InputBindingV2,
     InputModality,
     MarketContextV2,
+    MarketContextV3,
     MarketRegime,
     MethodologyCategory,
     ObservationSourceBinding,
@@ -41,13 +56,17 @@ from trading_platform_api.analysis import (
     ResolutionStatus,
     UncertaintyCategory,
     VersionReference,
+    analysis_output_reference_v3,
     analysis_snapshot_v2_sha256,
+    analysis_snapshot_v3_sha256,
     create_analysis_snapshot_v2,
+    create_analysis_snapshot_v3,
     decode_analysis_contract,
     encode_analysis_contract,
     resolve_analysis_snapshot_v2,
     validate_evidence_item_v2,
     validate_market_context_v2,
+    validate_market_context_v3,
     validate_order_flow_assessment,
 )
 from trading_platform_api.contracts.serialization import (
@@ -1475,7 +1494,7 @@ def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed()
     with pytest.raises(AnalysisV2ContractError, match="content_sha256"):
         replace(manifest, timeframe="5m")
     envelope = encode_analysis_contract(manifest).replace(
-        '"schema_version":"2"', '"schema_version":"3"'
+        '"schema_version":"2"', '"schema_version":"4"'
     )
     with pytest.raises(AnalysisV2ContractError, match="schema"):
         decode_analysis_contract(envelope)
@@ -1962,4 +1981,243 @@ def test_partial_metric_requires_a_value_and_explanation() -> None:
             VersionReference("order-flow-method", "1"),
             (_id(700),),
             (trade.binding_id,),
+        )
+
+
+def test_c006_c007_v3_manifest_hashes_and_resolves_versioned_outputs() -> None:
+    case = _case()
+    input_manifest, resolved = _resolved(case)
+    bindings, _, reports, observations, _, _ = case
+    evidence: dict[UUID, EvidenceItemV2] = {}
+    for index, binding in enumerate(bindings):
+        report = next(
+            item
+            for item in reports.values()
+            if str(item.snapshot_id) == binding.market_snapshot.record_id
+        )
+        selected_observations = tuple(
+            observations[UUID(item.observation.record_id)]
+            for item in binding.observations
+        )
+        evidence[_id(700 + index)] = _evidence(
+            binding, report, selected_observations, _id(700 + index)
+        )
+
+    first_binding = bindings[0]
+    second_binding = bindings[1]
+    first_evidence_id, second_evidence_id = tuple(evidence)
+    independence = AgentIndependenceReferenceV2(
+        _id(930), "agent-independence-v1", "1", "1", "b" * 64
+    )
+    unavailable_confidence = AnalyticalConfidenceV2(
+        ConfidenceStatusV2.UNAVAILABLE, None, None, "NO_VERSIONED_METHOD"
+    )
+    confluence = ConfluenceAssessmentV2(
+        _id(931),
+        INSTRUMENT,
+        "1m",
+        UUID(first_binding.market_snapshot.record_id),
+        UUID(first_binding.data_quality_report.record_id),
+        CUTOFF,
+        EXPIRES,
+        ConfluenceStatusV2.PARTIAL,
+        ConfluenceReasonV2.INSUFFICIENT_EVIDENCE,
+        ConfluenceStateV2.INDETERMINATE,
+        (
+            ConfluenceComponentV2(
+                "spot-ohlcv",
+                AnalyticalDirection.MIXED,
+                EvidenceRelation.SUPPORTING,
+                EvidenceStrengthLevel.UNKNOWN,
+                EvidenceDependenceV2.HIGHLY_CORRELATED,
+                (first_evidence_id,),
+                VersionReference("spot-confluence", "spot-profile-v1"),
+            ),
+        ),
+        unavailable_confidence,
+        EvidenceStrengthLevel.UNKNOWN,
+        independence,
+        (first_evidence_id,),
+        (VersionReference("C-009-calculation", "2"),),
+        "Same-snapshot OHLCV evidence is correlated; confidence remains unavailable.",
+    )
+    conflict = ConflictAssessmentV2(
+        _id(932),
+        INSTRUMENT,
+        "1m",
+        UUID(second_binding.market_snapshot.record_id),
+        UUID(second_binding.data_quality_report.record_id),
+        CUTOFF,
+        EXPIRES,
+        (_id(933),),
+        (second_evidence_id,),
+        ConflictSeverityV2.UNKNOWN,
+        VersionReference("conflict-severity-table", "2"),
+        "Materiality cannot be established from the available evidence.",
+        ResolutionStatus.UNRESOLVED,
+        (VersionReference("C-010-assessment", "2"),),
+    )
+    fundamental = FundamentalAssessment(
+        _id(934),
+        "BTC",
+        INSTRUMENT,
+        "1m",
+        CUTOFF,
+        CREATED,
+        EXPIRES,
+        AssessmentStatus.AVAILABLE,
+        Decimal("0.5"),
+        (
+            AnalyticalFinding(
+                _id(935),
+                "use-case",
+                ClaimClassification.FACT,
+                "Synthetic contract fixture.",
+                (first_evidence_id,),
+                VersionReference("fixture", "1"),
+                "Fixture only.",
+            ),
+        ),
+        (
+            DomainObservation(
+                "use-case",
+                "fixture",
+                None,
+                "1m",
+                VersionReference("fixture", "1"),
+                (first_evidence_id,),
+            ),
+        ),
+        (first_evidence_id,),
+        (),
+        (),
+        _id(936),
+        (VersionReference("fixture-agent", "1"),),
+        MethodologyCategory.FUNDAMENTAL,
+    )
+    regime = MarketRegime(
+        _id(937),
+        "BTC",
+        INSTRUMENT,
+        "1m",
+        CUTOFF,
+        EXPIRES,
+        AnalyticalDirection.MIXED,
+        (RegimeDimension("trend", "unknown", (first_evidence_id,)),),
+        "Synthetic contract fixture.",
+        Decimal("0"),
+        (first_evidence_id,),
+        (),
+    )
+    adversarial = AdversarialAssessment(
+        _id(938),
+        CUTOFF,
+        EXPIRES,
+        "Synthetic alternative explanation.",
+        ("Fixture only",),
+        (second_evidence_id,),
+        ("Fixture ends",),
+        (),
+        (),
+        (),
+        Decimal("0"),
+    )
+    uncertainty = AnalyticalUncertainty(
+        _id(939),
+        UncertaintyCategory.DATA,
+        "Synthetic fixture uncertainty.",
+        (),
+        ("spot-ohlcv",),
+        Decimal("0"),
+        False,
+        (),
+        CUTOFF,
+        EXPIRES,
+        ResolutionStatus.UNKNOWN,
+    )
+    outputs = (
+        regime,
+        fundamental,
+        confluence,
+        conflict,
+        adversarial,
+        uncertainty,
+        *evidence.values(),
+    )
+    output_refs = [analysis_output_reference_v3(item) for item in outputs]
+    output_refs.append(
+        AnalysisOutputReferenceV3(
+            "C-093", independence.report_id, "1", "1", independence.content_sha256
+        )
+    )
+    output_refs.sort(key=lambda item: (item.contract_id, str(item.record_id)))
+    manifest = create_analysis_snapshot_v3(
+        snapshot_id=_id(940),
+        asset="BTC",
+        instrument_id=INSTRUMENT,
+        venue_id=VENUE,
+        timeframe="1m",
+        analysis_cutoff=CUTOFF,
+        created_at=CREATED,
+        expires_at=EXPIRES,
+        bindings=input_manifest.bindings,
+        output_references=tuple(output_refs),
+        evidence_ids=input_manifest.evidence_ids,
+        provenance=(VersionReference("analysis", "3"),),
+    )
+    assert analysis_snapshot_v3_sha256(manifest) == manifest.content_sha256
+    assert decode_analysis_contract(encode_analysis_contract(manifest)) == manifest
+    changed_ref = replace(manifest.output_references[0], content_sha256="c" * 64)
+    changed_manifest = create_analysis_snapshot_v3(
+        snapshot_id=manifest.snapshot_id,
+        asset=manifest.asset,
+        instrument_id=manifest.instrument_id,
+        venue_id=manifest.venue_id,
+        timeframe=manifest.timeframe,
+        analysis_cutoff=manifest.analysis_cutoff,
+        created_at=manifest.created_at,
+        expires_at=manifest.expires_at,
+        bindings=manifest.bindings,
+        output_references=(changed_ref, *manifest.output_references[1:]),
+        evidence_ids=manifest.evidence_ids,
+        provenance=manifest.provenance,
+    )
+    assert changed_manifest.content_sha256 != manifest.content_sha256
+
+    context = MarketContextV3(
+        _id(941),
+        "BTC",
+        INSTRUMENT,
+        CUTOFF,
+        EXPIRES,
+        ("1m indeterminate",),
+        regime,
+        (fundamental,),
+        confluence,
+        (conflict,),
+        adversarial,
+        (uncertainty,),
+        manifest.evidence_ids,
+        AnalysisSnapshotReferenceV3(manifest.snapshot_id, "3", manifest.content_sha256),
+    )
+    assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    validate_market_context_v3(
+        context, manifest, resolved_bindings=resolved, evidence=evidence, now=CREATED
+    )
+    with pytest.raises(AnalysisV2ContractError, match="exact C-007 manifest"):
+        validate_market_context_v3(
+            context,
+            changed_manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )
+    failed_resolved = (replace(resolved[0], direct_inputs_pass=False), *resolved[1:])
+    with pytest.raises(AnalysisV2ContractError, match="Non-VALID or failed inputs"):
+        validate_market_context_v3(
+            context,
+            manifest,
+            resolved_bindings=failed_resolved,
+            evidence=evidence,
+            now=CREATED,
         )
