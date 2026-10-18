@@ -2281,9 +2281,23 @@ def validate_market_context_v3(
     }
     for assessment in context.assessments:
         if isinstance(assessment, OrderFlowAssessment):
+            validate_order_flow_assessment(
+                assessment,
+                v2_manifest,
+                resolved_bindings=resolved_bindings,
+                evidence=evidence,
+                now=validation_time,
+            )
             for metric in assessment.metrics:
                 require_evidence_references("C-104 metric", metric.evidence_ids)
             continue
+        if (
+            assessment.asset != manifest.asset
+            or assessment.instrument_id != manifest.instrument_id
+        ):
+            raise AnalysisV2ContractError(
+                "Assessment asset or instrument differs from its C-007 manifest."
+            )
         if str(assessment.data_quality_report_id) not in manifest_quality_report_ids:
             raise AnalysisV2ContractError(
                 "Assessment references a C-003 report outside its C-007 manifest."
@@ -2293,6 +2307,10 @@ def validate_market_context_v3(
             "Assessment contradiction", assessment.contradiction_ids
         )
         for finding in assessment.findings:
+            if finding.finding_id in finding_by_id:
+                raise AnalysisV2ContractError(
+                    "Analytical finding identities must be unique across assessments."
+                )
             finding_by_id[finding.finding_id] = finding
             require_evidence_references("Finding", finding.evidence_ids)
         for observation in assessment.observations:
@@ -2417,6 +2435,7 @@ def validate_market_context_v3(
     )
     if any(
         item.expires_at > manifest.expires_at
+        or item.expires_at > context.expires_at
         or item.expires_at <= validation_time
         or item.as_of > manifest.analysis_cutoff
         for item in meta_assessments
@@ -2530,6 +2549,13 @@ def validate_market_context_v3(
         raise AnalysisV2ContractError(
             "C-007 manifest does not bind the exact C-009/C-010/C-093 outputs."
         )
+    if (
+        context.regime.asset != manifest.asset
+        or context.regime.instrument_id != manifest.instrument_id
+    ):
+        raise AnalysisV2ContractError(
+            "Market regime asset or instrument differs from its C-007 manifest."
+        )
     assessment_values: tuple[
         MarketRegime
         | Assessment
@@ -2553,6 +2579,7 @@ def validate_market_context_v3(
             > manifest.analysis_cutoff
             or _time("assessment.expires_at", time_assessment.expires_at)
             > manifest.expires_at
+            or time_assessment.expires_at > context.expires_at
             or time_assessment.expires_at <= validation_time
         ):
             raise AnalysisV2ContractError("Assessment time exceeds manifest bounds.")
