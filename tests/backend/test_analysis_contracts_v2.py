@@ -2031,6 +2031,10 @@ def test_meta_analysis_v2_uses_categorical_strength_and_conflict_table() -> None
     )
     assert confluence.evidence_strength is ConfluenceEvidenceStrengthV2.STRONG
     assert decode_analysis_contract(encode_analysis_contract(confluence)) == confluence
+    with pytest.raises(AnalysisV2ContractError, match="after expires_at"):
+        replace(confluence, as_of=EXPIRES + timedelta(seconds=1))
+    with pytest.raises(AnalysisV2ContractError, match="C-007 schema 3"):
+        replace(confluence, input_snapshot_schema_version="2")
 
     unavailable = AnalyticalConfidenceV2(
         AnalyticalConfidenceStateV2.UNAVAILABLE,
@@ -2092,6 +2096,8 @@ def test_meta_analysis_v2_uses_categorical_strength_and_conflict_table() -> None
         (VersionReference("analysis-profile", "v2"),),
     )
     assert decode_analysis_contract(encode_analysis_contract(conflict)) == conflict
+    with pytest.raises(AnalysisV2ContractError, match="after expires_at"):
+        replace(conflict, as_of=EXPIRES + timedelta(seconds=1))
     assert replace(
         conflict,
         severity=ConflictSeverityV2.CRITICAL,
@@ -2307,6 +2313,16 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         sources=sources,
         datasets=datasets,
     )
+    with pytest.raises(AnalysisV2ContractError, match="not currently valid"):
+        resolve_analysis_snapshot_v3(
+            manifest,
+            now=EXPIRES,
+            snapshots=snapshots,
+            reports=reports,
+            observations=observations,
+            sources=sources,
+            datasets=datasets,
+        )
     validate_market_context_v3(
         context,
         manifest,
@@ -2315,6 +2331,84 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         now=CREATED,
     )
     assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    with pytest.raises(AnalysisV2ContractError, match="exact C-007 manifest"):
+        validate_market_context_v3(
+            replace(
+                context,
+                analysis_snapshot=AnalysisSnapshotReferenceV3(
+                    _id(974), "3", manifest.content_sha256
+                ),
+            ),
+            manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="exactly resolved"):
+        validate_market_context_v3(
+            context,
+            manifest,
+            resolved_bindings=resolved,
+            evidence={next(iter(evidence)): next(iter(evidence.values()))},
+            now=CREATED,
+        )
+
+    shared_components = (
+        confluence.components[0],
+        replace(
+            confluence.components[1],
+            evidence_ids=confluence.components[0].evidence_ids,
+            input_binding_ids=confluence.components[0].input_binding_ids,
+        ),
+    )
+    shared_confluence = replace(confluence, components=shared_components)
+    shared_outputs = tuple(
+        sorted(
+            (
+                AnalysisOutputReferenceV3(
+                    "C-009",
+                    shared_confluence.assessment_id,
+                    "2",
+                    "2",
+                    canonical_sha256(shared_confluence),
+                ),
+                *output_refs[1:],
+            ),
+            key=lambda item: (item.contract_id, str(item.record_id)),
+        )
+    )
+    shared_manifest = create_analysis_snapshot_v3(
+        snapshot_id=snapshot_id,
+        asset="BTC",
+        instrument_id=INSTRUMENT,
+        venue_id=VENUE,
+        timeframe="1m",
+        analysis_cutoff=CUTOFF,
+        created_at=CREATED,
+        expires_at=EXPIRES,
+        bindings=bindings,
+        assessment_ids=(order_flow.assessment_id,),
+        evidence_ids=evidence_ids,
+        provenance=(VersionReference("analysis-profile", "v2"),),
+        analysis_outputs=shared_outputs,
+    )
+    shared_context = replace(
+        context,
+        confluence=shared_confluence,
+        analysis_snapshot=AnalysisSnapshotReferenceV3(
+            shared_manifest.snapshot_id,
+            "3",
+            shared_manifest.content_sha256,
+        ),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="cannot establish independent"):
+        validate_market_context_v3(
+            shared_context,
+            shared_manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )
 
     changed_output = replace(output_refs[0], content_sha256="b" * 64)
     changed_outputs = (changed_output, *output_refs[1:])

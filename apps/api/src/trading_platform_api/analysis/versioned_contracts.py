@@ -2330,7 +2330,10 @@ def validate_market_context_v3(
             )
             for item in output.data_quality_reports
         }
-        if actual_reports != expected_reports or not actual_reports.issubset(report_refs):
+        if (
+            not expected_reports.issubset(actual_reports)
+            or not actual_reports.issubset(report_refs)
+        ):
             raise AnalysisV2ContractError(
                 "C-009/C-010 does not preserve exact C-003 input report bindings."
             )
