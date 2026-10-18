@@ -2383,6 +2383,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
                 *resolved[1:],
             ),
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
     validate_market_context_v3(
@@ -2390,9 +2391,21 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         manifest,
         resolved_bindings=resolved,
         evidence=evidence,
+        supported_independence_reports=(c093,),
         now=CREATED,
     )
     assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    with pytest.raises(AnalysisV2ContractError, match="is unsupported"):
+        validate_market_context_v3(
+            context,
+            manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            supported_independence_reports=(
+                replace(c093, schema_version="unsupported"),
+            ),
+            now=CREATED,
+        )
     with pytest.raises(AnalysisV2ContractError, match="exact C-007 manifest"):
         validate_market_context_v3(
             replace(
@@ -2404,6 +2417,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             manifest,
             resolved_bindings=resolved,
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
     with pytest.raises(AnalysisV2ContractError, match="exactly resolved"):
@@ -2412,6 +2426,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             manifest,
             resolved_bindings=resolved,
             evidence={next(iter(evidence)): next(iter(evidence.values()))},
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
     unresolved_finding = replace(
@@ -2430,6 +2445,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             manifest,
             resolved_bindings=resolved,
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
     unresolved_conflict = replace(conflict, finding_ids=(_id(976),))
@@ -2468,6 +2484,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             unresolved_manifest,
             resolved_bindings=resolved,
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
     unresolved_uncertainty = replace(
@@ -2479,6 +2496,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             manifest,
             resolved_bindings=resolved,
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
 
@@ -2536,6 +2554,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             shared_manifest,
             resolved_bindings=resolved,
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )
 
@@ -2570,5 +2589,6 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             changed_manifest,
             resolved_bindings=resolved,
             evidence=evidence,
+            supported_independence_reports=(c093,),
             now=CREATED,
         )

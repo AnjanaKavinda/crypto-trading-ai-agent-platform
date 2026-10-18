@@ -2215,6 +2215,7 @@ def validate_market_context_v3(
     *,
     resolved_bindings: tuple[ResolvedInputBinding, ...],
     evidence: Mapping[UUID, EvidenceItemV2],
+    supported_independence_reports: tuple[AnalysisOutputReferenceV3, ...],
     now: datetime,
 ) -> None:
     if type(context) is not MarketContextV3 or type(manifest) is not AnalysisSnapshotV3:
@@ -2244,6 +2245,23 @@ def validate_market_context_v3(
     if set(evidence) != set(manifest.evidence_ids):
         raise AnalysisV2ContractError(
             "C-008 evidence membership is not exactly resolved."
+        )
+    if type(supported_independence_reports) is not tuple or any(
+        type(item) is not AnalysisOutputReferenceV3 or item.contract_id != "C-093"
+        for item in supported_independence_reports
+    ):
+        raise AnalysisV2ContractError(
+            "Supported independence reports must be exact C-093 references."
+        )
+    if len(set(supported_independence_reports)) != len(
+        supported_independence_reports
+    ):
+        raise AnalysisV2ContractError(
+            "Supported independence report references must be unique."
+        )
+    if context.confluence.independence_report not in supported_independence_reports:
+        raise AnalysisV2ContractError(
+            "C-093 schema, lineage, identity, or digest is unsupported."
         )
     v2_manifest = _manifest_v3_as_v2(manifest)
     if type(resolved_bindings) is not tuple or any(

@@ -217,7 +217,10 @@ The C-007 schema-3 `content_sha256` uses the existing `wire-1` envelope and
 mismatched nested schema versions, output identities/digests, evidence
 membership, snapshots, reports, stale inputs, or status/reason combinations
 fail closed. C-093 remains owned by issue #67; this addition defines only its
-typed output reference and does not duplicate its report implementation.
+typed output reference and does not duplicate its report implementation. Since
+the C-093 schema/lineage registry is owned by #67, C-006 v3 validation requires
+the caller to provide the exact supported C-093 output references resolved by
+that registry; an opaque reference alone does not establish version support.
 
 This is a contracts/codec/validation addition only. It enables no producer,
 confluence/conflict calculation, persistence, strategy eligibility, signal,
