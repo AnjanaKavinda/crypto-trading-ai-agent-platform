@@ -69,8 +69,8 @@ from trading_platform_api.market_data.quality import (
 from trading_platform_api.spot_research import (
     QualityPolicyTemplate,
     SpotResearchService,
-    _json_value,
     _indicator_envelope,
+    _json_value,
     approved_quality_policy_template,
     validate_local_origin,
     validate_loopback_host,
