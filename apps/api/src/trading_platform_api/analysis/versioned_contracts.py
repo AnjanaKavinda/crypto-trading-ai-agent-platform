@@ -12,6 +12,7 @@ from uuid import UUID
 from trading_platform_api.analysis.contracts import (
     AdversarialAssessment,
     AnalyticalDirection,
+    AnalyticalFinding,
     AnalyticalUncertainty,
     Assessment,
     ClaimClassification,
@@ -1479,6 +1480,7 @@ def validate_market_context_v2(
             resolved_bindings=resolved_bindings,
             now=validation_time,
         )
+
     by_id = {item.binding.binding_id: item for item in resolved_bindings}
     for metric_assessment in (
         item for item in context.assessments if type(item) is OrderFlowAssessment
@@ -2264,6 +2266,48 @@ def validate_market_context_v3(
         for binding_id, manifest_binding in manifest_bindings.items()
     ):
         raise AnalysisV2ContractError("Manifest input bindings are not fully resolved.")
+    def require_evidence_references(label: str, evidence_ids: tuple[UUID, ...]) -> None:
+        if not set(evidence_ids).issubset(evidence):
+            raise AnalysisV2ContractError(
+                f"{label} references unresolved C-008 evidence."
+            )
+
+    require_evidence_references("C-005", context.regime.evidence_ids)
+    for dimension in context.regime.dimensions:
+        require_evidence_references("C-005 dimension", dimension.evidence_ids)
+    finding_by_id: dict[UUID, AnalyticalFinding] = {}
+    manifest_quality_report_ids = {
+        item.data_quality_report.record_id for item in manifest.bindings
+    }
+    for assessment in context.assessments:
+        if isinstance(assessment, OrderFlowAssessment):
+            for metric in assessment.metrics:
+                require_evidence_references("C-104 metric", metric.evidence_ids)
+            continue
+        if str(assessment.data_quality_report_id) not in manifest_quality_report_ids:
+            raise AnalysisV2ContractError(
+                "Assessment references a C-003 report outside its C-007 manifest."
+            )
+        require_evidence_references("Assessment", assessment.evidence_ids)
+        require_evidence_references(
+            "Assessment contradiction", assessment.contradiction_ids
+        )
+        for finding in assessment.findings:
+            finding_by_id[finding.finding_id] = finding
+            require_evidence_references("Finding", finding.evidence_ids)
+        for observation in assessment.observations:
+            require_evidence_references("Observation", observation.evidence_ids)
+    uncertainty_ids = {item.uncertainty_id for item in context.uncertainties}
+    for assessment in context.assessments:
+        if not isinstance(assessment, OrderFlowAssessment) and not set(
+            assessment.uncertainty_ids
+        ).issubset(uncertainty_ids):
+            raise AnalysisV2ContractError(
+                "Assessment references an unresolved analytical uncertainty."
+            )
+    require_evidence_references(
+        "Adversarial assessment", context.adversarial.contradictory_evidence_ids
+    )
     report_refs = {
         (
             item.binding.data_quality_report.contract_id,
@@ -2296,6 +2340,17 @@ def validate_market_context_v3(
             )
         if not set(output.evidence_ids).issubset(evidence):
             raise AnalysisV2ContractError("Meta-analysis references missing C-008 evidence.")
+        requires_usable_evidence = (
+            output.status is ConfluenceStatusV2.AVAILABLE
+            if isinstance(output, ConfluenceAssessmentV2)
+            else output.evidence_state is ConflictEvidenceStateV2.VALID
+        )
+        if requires_usable_evidence and any(
+            not evidence[evidence_id].usable for evidence_id in output.evidence_ids
+        ):
+            raise AnalysisV2ContractError(
+                "Available meta-analysis requires usable C-008 evidence."
+            )
         expected_reports: set[
             tuple[str, str, str, str, str]
         ] = set()
@@ -2386,18 +2441,61 @@ def validate_market_context_v3(
         )
     for index, component in enumerate(context.confluence.components):
         for other in context.confluence.components[index + 1 :]:
+            component_evidence = tuple(
+                evidence[evidence_id] for evidence_id in component.evidence_ids
+            )
+            other_evidence = tuple(
+                evidence[evidence_id] for evidence_id in other.evidence_ids
+            )
+            shared_observations = {
+                observation_id
+                for item in component_evidence
+                for observation_id in item.observation_ids
+            } & {
+                observation_id
+                for item in other_evidence
+                for observation_id in item.observation_ids
+            }
+            shared_sources = {
+                source_id
+                for item in component_evidence
+                for source_id in item.source_record_ids
+            } & {
+                source_id
+                for item in other_evidence
+                for source_id in item.source_record_ids
+            }
             if (
-                set(component.input_binding_ids) & set(other.input_binding_ids)
+                (
+                    set(component.input_binding_ids) & set(other.input_binding_ids)
+                    or shared_observations
+                    or shared_sources
+                )
                 and (
                     component.dependence is EvidenceDependenceV2.INDEPENDENT
                     or other.dependence is EvidenceDependenceV2.INDEPENDENT
                 )
             ):
                 raise AnalysisV2ContractError(
-                    "Shared input bindings cannot establish independent evidence."
+                    "Shared inputs or sources cannot establish independent evidence."
                 )
     for conflict in context.conflicts:
         validate_output(conflict)
+        if not set(conflict.finding_ids).issubset(finding_by_id):
+            raise AnalysisV2ContractError(
+                "Conflict references an unresolved analytical finding."
+            )
+        if conflict.severity is ConflictSeverityV2.HIGH:
+            findings = (finding_by_id[item] for item in conflict.finding_ids)
+            if any(
+                item.classification
+                not in {ClaimClassification.FACT, ClaimClassification.INFERENCE}
+                or any(not evidence[evidence_id].usable for evidence_id in item.evidence_ids)
+                for item in findings
+            ):
+                raise AnalysisV2ContractError(
+                    "HIGH conflict requires usable evidence for valid conclusions."
+                )
     actual_meta_outputs = tuple(
         item
         for item in manifest.analysis_outputs
@@ -2449,12 +2547,13 @@ def validate_market_context_v3(
         context.adversarial,
         *context.uncertainties,
     )
-    for assessment in assessment_values:
+    for time_assessment in assessment_values:
         if (
-            _time("assessment.as_of", assessment.as_of) > manifest.analysis_cutoff
-            or _time("assessment.expires_at", assessment.expires_at)
+            _time("assessment.as_of", time_assessment.as_of)
+            > manifest.analysis_cutoff
+            or _time("assessment.expires_at", time_assessment.expires_at)
             > manifest.expires_at
-            or assessment.expires_at <= validation_time
+            or time_assessment.expires_at <= validation_time
         ):
             raise AnalysisV2ContractError("Assessment time exceeds manifest bounds.")
 

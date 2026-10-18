@@ -2183,6 +2183,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         VersionReference("confluence-method", "v2"),
         (VersionReference("analysis-profile", "v2"),),
     )
+    finding_ids = (_id(961), _id(962))
     conflict = ConflictAssessmentV2(
         _id(960),
         "BTC",
@@ -2190,7 +2191,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         "1m",
         CUTOFF,
         EXPIRES,
-        (_id(961), _id(962)),
+        finding_ids,
         evidence_ids,
         ConflictSeverityV2.HIGH,
         ConflictEvidenceStateV2.VALID,
@@ -2211,6 +2212,53 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         _id(963),
         bindings,
         evidence_by_binding,
+    )
+    fundamental = FundamentalAssessment(
+        _id(964),
+        "BTC",
+        INSTRUMENT,
+        "1m",
+        CUTOFF,
+        CREATED,
+        EXPIRES,
+        AssessmentStatus.AVAILABLE,
+        Decimal("0.5"),
+        (
+            AnalyticalFinding(
+                finding_ids[0],
+                "adoption",
+                ClaimClassification.FACT,
+                "Adoption finding A.",
+                (evidence_ids[0],),
+                VersionReference("fundamental-method", "v2"),
+                "Adoption reverses.",
+            ),
+            AnalyticalFinding(
+                finding_ids[1],
+                "adoption",
+                ClaimClassification.FACT,
+                "Adoption finding B.",
+                (evidence_ids[1],),
+                VersionReference("fundamental-method", "v2"),
+                "Adoption reverses.",
+            ),
+        ),
+        (
+            DomainObservation(
+                "use-case",
+                "observed",
+                None,
+                "1m",
+                VersionReference("fundamental-calculation", "v2"),
+                (evidence_ids[0],),
+            ),
+        ),
+        evidence_ids,
+        (),
+        (),
+        UUID(bindings[0].data_quality_report.record_id),
+        (VersionReference("fundamental-agent", "v2"),),
+        MethodologyCategory.FUNDAMENTAL,
     )
     output_refs = tuple(
         sorted(
@@ -2238,7 +2286,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         created_at=CREATED,
         expires_at=EXPIRES,
         bindings=bindings,
-        assessment_ids=(order_flow.assessment_id,),
+        assessment_ids=(order_flow.assessment_id, fundamental.assessment_id),
         evidence_ids=evidence_ids,
         provenance=(VersionReference("analysis-profile", "v2"),),
         analysis_outputs=output_refs,
@@ -2268,7 +2316,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         EXPIRES,
         ("1m mixed",),
         regime,
-        (order_flow,),
+        (order_flow, fundamental),
         confluence,
         (conflict,),
         AdversarialAssessment(
@@ -2352,6 +2400,62 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
             evidence={next(iter(evidence)): next(iter(evidence.values()))},
             now=CREATED,
         )
+    unresolved_finding = replace(
+        fundamental.findings[0], evidence_ids=(_id(975),)
+    )
+    unresolved_assessment = replace(
+        fundamental,
+        findings=(unresolved_finding, *fundamental.findings[1:]),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="unresolved C-008 evidence"):
+        validate_market_context_v3(
+            replace(
+                context,
+                assessments=(order_flow, unresolved_assessment),
+            ),
+            manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )
+    unresolved_conflict = replace(conflict, finding_ids=(_id(976),))
+    unresolved_outputs = tuple(
+        replace(item, content_sha256=canonical_sha256(unresolved_conflict))
+        if item.contract_id == "C-010"
+        else item
+        for item in output_refs
+    )
+    unresolved_manifest = create_analysis_snapshot_v3(
+        snapshot_id=snapshot_id,
+        asset="BTC",
+        instrument_id=INSTRUMENT,
+        venue_id=VENUE,
+        timeframe="1m",
+        analysis_cutoff=CUTOFF,
+        created_at=CREATED,
+        expires_at=EXPIRES,
+        bindings=bindings,
+        assessment_ids=(order_flow.assessment_id, fundamental.assessment_id),
+        evidence_ids=evidence_ids,
+        provenance=(VersionReference("analysis-profile", "v2"),),
+        analysis_outputs=unresolved_outputs,
+    )
+    with pytest.raises(AnalysisV2ContractError, match="unresolved analytical finding"):
+        validate_market_context_v3(
+            replace(
+                context,
+                conflicts=(unresolved_conflict,),
+                analysis_snapshot=AnalysisSnapshotReferenceV3(
+                    unresolved_manifest.snapshot_id,
+                    "3",
+                    unresolved_manifest.content_sha256,
+                ),
+            ),
+            unresolved_manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            now=CREATED,
+        )
 
     shared_components = (
         confluence.components[0],
@@ -2387,7 +2491,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         created_at=CREATED,
         expires_at=EXPIRES,
         bindings=bindings,
-        assessment_ids=(order_flow.assessment_id,),
+        assessment_ids=(order_flow.assessment_id, fundamental.assessment_id),
         evidence_ids=evidence_ids,
         provenance=(VersionReference("analysis-profile", "v2"),),
         analysis_outputs=shared_outputs,
@@ -2422,7 +2526,7 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         created_at=CREATED,
         expires_at=EXPIRES,
         bindings=bindings,
-        assessment_ids=(order_flow.assessment_id,),
+        assessment_ids=(order_flow.assessment_id, fundamental.assessment_id),
         evidence_ids=evidence_ids,
         provenance=(VersionReference("analysis-profile", "v2"),),
         analysis_outputs=changed_outputs,
