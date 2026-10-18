@@ -11,6 +11,13 @@ export const INDICATOR_IDS = Object.freeze([
   "stochastic-14-3",
   "cci-20",
 ]);
+export const SPOT_ANALYSIS_IDS = Object.freeze([
+  "vwap",
+  "volume-profile",
+  "volume-confirmation",
+  "price-action-support-resistance",
+  "spot-market-structure",
+]);
 
 const STORAGE_PREFIX = "spot-research.presentation.v1";
 
@@ -199,6 +206,57 @@ export function indicatorBindingError(snapshot, indicatorId, indicator) {
       result.points.length !== snapshot.candles.length ||
       result.points.some((point, index) => point?.candle_end !== snapshot.candles[index].close_time)) {
     return "INDICATOR_PROVENANCE_MISMATCH";
+  }
+  return null;
+}
+
+export function spotAnalysisBindingError(snapshot, analysisId, analysis) {
+  if (!SPOT_ANALYSIS_IDS.includes(analysisId) ||
+      !analysis || !["AVAILABLE", "PARTIAL", "WARMUP", "UNAVAILABLE"].includes(analysis.status)) {
+    return "ANALYSIS_STATUS_UNAVAILABLE";
+  }
+  const result = analysis.result;
+  if (result == null) return null;
+  if (!snapshot || snapshot.data_quality?.status !== "VALID" ||
+      snapshot.data_quality?.report_status !== "VALID") return "QUALITY_NOT_VALID";
+  if (typeof result !== "object" || Array.isArray(result) ||
+      result.indicator_id !== analysisId ||
+      result.snapshot_id !== snapshot.snapshot_id ||
+      result.quality_report_id !== snapshot.data_quality.report_id ||
+      result.instrument_id !== snapshot.instrument_id ||
+      result.venue_id !== snapshot.venue_id ||
+      result.timeframe !== snapshot.timeframe ||
+      typeof result.as_of !== "string" ||
+      Date.parse(result.as_of) !== Date.parse(snapshot.as_of) ||
+      !Array.isArray(result.input_market_data_ids) ||
+      result.input_market_data_ids.length !== snapshot.lineage.market_data_ids.length ||
+      result.input_market_data_ids.some((id, index) =>
+        id !== snapshot.lineage.market_data_ids[index])) {
+    return "ANALYSIS_PROVENANCE_MISMATCH";
+  }
+  if (analysisId === "vwap") {
+    if (!Array.isArray(result.points) || result.points.length !== snapshot.candles.length ||
+        result.anchor_mode !== "first-candle" ||
+        Date.parse(result.anchor_time) !== Date.parse(snapshot.candles[0].open_time) ||
+        result.points.some((point, index) =>
+          Date.parse(point?.candle_end) !== Date.parse(snapshot.candles[index].close_time))) {
+      return "ANALYSIS_CANDLE_BINDING_MISMATCH";
+    }
+  }
+  if (analysisId === "volume-confirmation") {
+    if (!Array.isArray(result.points) || result.points.length !== snapshot.candles.length ||
+        result.points.some((point, index) =>
+          Date.parse(point?.candle_end) !== Date.parse(snapshot.candles[index].close_time))) {
+      return "ANALYSIS_CANDLE_BINDING_MISMATCH";
+    }
+  }
+  if (analysisId === "price-action-support-resistance") {
+    if (!Array.isArray(result.geometry) || result.geometry.length !== snapshot.candles.length ||
+        result.geometry.some((point, index) =>
+          point?.market_data_id !== snapshot.candles[index].market_data_id ||
+          Date.parse(point?.candle_end) !== Date.parse(snapshot.candles[index].close_time))) {
+      return "ANALYSIS_CANDLE_BINDING_MISMATCH";
+    }
   }
   return null;
 }

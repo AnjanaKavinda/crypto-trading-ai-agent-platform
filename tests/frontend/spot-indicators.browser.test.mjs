@@ -91,6 +91,126 @@ function createSnapshot({ timeframe = "1m", count = candleCount } = {}) {
     d: ready(35 + index * 0.02),
   }));
   const cci = points((index) => ({ value: ready(-100 + index * 0.4) }));
+  const analysisResult = (indicatorId, fields) => ({
+    indicator_id: indicatorId,
+    metadata_version: "1",
+    calculation_version: `${indicatorId}-fixture-v1`,
+    method_label: `${indicatorId} backend fixture method`,
+    timeframe,
+    instrument_id: instrumentId,
+    venue_id: "BINANCE-SPOT",
+    snapshot_id: snapshotId,
+    quality_report_id: qualityReportId,
+    as_of: asOf,
+    window_start: candles[0].open_time,
+    window_end: asOf,
+    input_market_data_ids: marketDataIds,
+    ...fields,
+  });
+  const volumeProfileBins = Array.from({ length: 24 }, (_, index) => ({
+    index,
+    lower_bound: decimal(99 + index),
+    upper_bound: decimal(100 + index),
+    includes_upper_bound: index === 23,
+    assigned_volume: decimal(index + 1),
+  }));
+  const spotAnalysis = {
+    vwap: {
+      status: "AVAILABLE",
+      reason_code: null,
+      result: analysisResult("vwap", {
+        parameters: [["anchor-mode", "snapshot-start"]],
+        price_unit: "USDT",
+        volume_unit: "BTC",
+        anchor_mode: "first-candle",
+        anchor_time: candles[0].open_time,
+        points: candles.map((candle, index) => ({
+          candle_end: candle.close_time,
+          value: { value: decimal(100 + index * 0.01), status: "READY", reason: null },
+        })),
+      }),
+    },
+    "volume-profile": {
+      status: "AVAILABLE",
+      reason_code: null,
+      result: analysisResult("volume-profile", {
+        parameters: [["bin-count", 24], ["value-area-percent", 70]],
+        price_unit: "USDT",
+        volume_unit: "BTC",
+        status: "READY",
+        reason: null,
+        bins: volumeProfileBins,
+        poc_bin_index: 12,
+        value_area_bin_indices: [8, 9, 10, 11, 12, 13, 14],
+        value_area_low: "107.0000",
+        value_area_high: "114.0000",
+        value_area_volume: "84.0000",
+        value_area_share: "0.7000",
+        high_volume_node_bin_indices: [12],
+        low_volume_node_bin_indices: [0, 23],
+      }),
+    },
+    "volume-confirmation": {
+      status: "PARTIAL",
+      reason_code: "CONTEXTUAL_ASSESSMENTS_NOT_CONFIGURED",
+      result: analysisResult("volume-confirmation", {
+        parameters: [["lookback", 20]],
+        price_unit: "USDT",
+        volume_unit: "BTC",
+        lookback: 20,
+        points: candles.map((candle, index) => ({
+          candle_end: candle.close_time,
+          raw_volume: decimal(1 + index / 10),
+          prior_volume_sum: index < 20 ? null : "20.0000",
+          trailing_average: index < 20 ? null : "1.0000",
+          relative_volume: index < 20 ? null : "1.1000",
+          status: index < 20 ? "UNAVAILABLE" : "READY",
+          reason: index < 20 ? "INSUFFICIENT_PRIOR_CANDLES" : null,
+        })),
+        assessment: { status: "INDETERMINATE", reason: "MISSING_EVENT_CONTEXT" },
+        price_volume_comparison: { status: "INDETERMINATE", reason: "MISSING_COMPARISON_CONTEXT" },
+        exhaustion_assessment: {
+          status: "DATA_UNAVAILABLE",
+          reason: "RELIABLE_ORDER_FLOW_NOT_SUPPLIED",
+        },
+        limitations: ["Caller context is not configured."],
+      }),
+    },
+    "price-action-support-resistance": {
+      status: "PARTIAL",
+      reason_code: "CALLER_POLICIES_NOT_SUPPLIED",
+      result: analysisResult("price-action-support-resistance", {
+        method_version: "spot-price-action-geometry-fixture-v1",
+        price_unit: "USDT",
+        source_record_ids: ["fixture-source-btc"],
+        range_baseline_policy: null,
+        pattern_policy: null,
+        support_resistance_policy: null,
+        geometry: candles.map((candle, index) => ({
+          market_data_id: candle.market_data_id,
+          candle_time: candle.open_time,
+          candle_end: candle.close_time,
+          signed_body: "0.2500",
+          range: "2.0000",
+          upper_wick: "0.7500",
+          lower_wick: "1.0000",
+          close_location: "0.6250",
+          close_location_reason: null,
+          range_direction: null,
+          range_comparison_reason: "NO_CALLER_BASELINE",
+          patterns: [],
+        })),
+        pivots: [],
+        zones: [],
+        limitations: ["Caller policies were not supplied."],
+      }),
+    },
+    "spot-market-structure": {
+      status: "UNAVAILABLE",
+      reason_code: "CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED",
+      result: null,
+    },
+  };
 
   return {
     instrument_id: instrumentId,
@@ -180,6 +300,7 @@ function createSnapshot({ timeframe = "1m", count = candleCount } = {}) {
         result: result("cci", [["period", 20]], cci, { period: 20 }),
       },
     },
+    spot_analysis: spotAnalysis,
     order_flow: {
       status: "UNAVAILABLE",
       reason_code: "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE",
@@ -305,6 +426,7 @@ function expectedPriceRange() {
   for (const candle of snapshot.candles) {
     values.push(Number(candle.metrics.low.value), Number(candle.metrics.high.value));
   }
+  values.push(...snapshot.spot_analysis.vwap.result.points.map((point) => Number(point.value.value)));
   for (const id of ["ema-20", "ema-50", "ema-500"]) {
     values.push(...snapshot.indicators[id].result.points.map((point) => Number(point.value)));
   }
@@ -334,6 +456,228 @@ async function waitForLoadedSnapshot(page) {
   await page.locator("#chart-container svg").waitFor({ state: "visible" });
   await page.locator("#snapshot-status").waitFor();
 }
+
+test("spot analyses render backend results bound to the exact snapshot and candle timestamps", async () => {
+  const fixture = createSnapshot({ count: 50 });
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+  try {
+    await waitForLoadedSnapshot(page);
+    const vwap = page.locator('[data-analysis-key="vwap"]');
+    assert.match(await vwap.innerText(), /AVAILABLE/);
+    assert.match(await vwap.innerText(), /bar-based typical-price VWAP/);
+    assert.match(await vwap.innerText(), /first-candle/);
+    assert.match(await vwap.innerText(), new RegExp(snapshotId));
+    const vwapRows = vwap.locator("tbody tr");
+    assert.equal(await vwapRows.count(), fixture.candles.length);
+    assert.ok((await vwapRows.first().innerText()).includes(fixture.candles[0].close_time));
+    assert.ok((await vwapRows.first().innerText()).includes("100.0000 USDT"));
+    const vwapLine = page.locator("#chart-container polyline.spot-vwap-line");
+    assert.equal(await vwapLine.count(), 1);
+    const plottedVwapPoints = await vwapLine.getAttribute("points");
+    assert.equal(plottedVwapPoints.trim().split(/\s+/).length, fixture.candles.length);
+
+    const profile = page.locator('[data-analysis-key="volume-profile"]');
+    for (const detail of [
+      "Candle-assigned typical-price volume-profile proxy",
+      "bin-count=24",
+      "value-area-percent=70",
+      "Returned POC bin index: 12",
+      "Returned VAL (USDT): 107.0000",
+      "Returned VAH (USDT): 114.0000",
+      "POC bin assigned volume (BTC): 13.0000",
+    ]) assert.ok((await profile.innerText()).includes(detail), detail);
+
+    const confirmation = page.locator('[data-analysis-key="volume-confirmation"]');
+    assert.match(await confirmation.innerText(), /PARTIAL.*CONTEXTUAL_ASSESSMENTS_NOT_CONFIGURED/s);
+    assert.match(await confirmation.innerText(), /INSUFFICIENT_PRIOR_CANDLES/);
+    assert.match(await confirmation.innerText(), /MISSING_COMPARISON_CONTEXT/);
+    assert.match(await confirmation.innerText(), /RELIABLE_ORDER_FLOW_NOT_SUPPLIED/);
+    assert.ok((await confirmation.locator("tbody tr").first().innerText()).includes("UNAVAILABLE"));
+
+    const priceAction = page.locator('[data-analysis-key="price-action-support-resistance"]');
+    assert.match(await priceAction.innerText(), /CALLER_POLICIES_NOT_SUPPLIED/);
+    assert.match(await priceAction.innerText(), /Only backend-supplied candle geometry/);
+    assert.match(await priceAction.innerText(), /NO_CALLER_BASELINE/);
+    assert.doesNotMatch(await priceAction.locator("tbody").innerText(), /engulfing|pivot|support|resistance/i);
+    assert.doesNotMatch(await priceAction.locator("tbody").innerText(), /patterns|zones/i);
+
+    const structure = page.locator('[data-analysis-key="spot-market-structure"]');
+    assert.match(await structure.innerText(), /UNAVAILABLE/);
+    assert.match(await structure.innerText(), /CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED/);
+    assert.match(await structure.innerText(), /No result payload was supplied/);
+
+    assert.match(await page.locator("#spot-analysis-status").innerText(), /selected instrument, timeframe, snapshot, quality report, candle lineage, and cutoff/);
+    assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+  } finally {
+    await page.close();
+  }
+});
+
+for (const scenario of [
+  {
+    name: "PARTIAL",
+    mutate(analysis) {
+      analysis.status = "PARTIAL";
+      analysis.reason_code = "ZERO_CUMULATIVE_VOLUME";
+      analysis.result.points[0].value = {
+        value: null,
+        status: "UNDEFINED",
+        reason: "ZERO_CUMULATIVE_VOLUME",
+      };
+    },
+    expectedValue: "Not available",
+  },
+  {
+    name: "WARMUP",
+    mutate(analysis) {
+      analysis.status = "WARMUP";
+      analysis.reason_code = "INSUFFICIENT_WARMUP";
+      for (const point of analysis.result.points) {
+        point.value = { value: null, status: "UNDEFINED", reason: "INSUFFICIENT_WARMUP" };
+      }
+    },
+    expectedValue: "Not available",
+  },
+  {
+    name: "UNAVAILABLE",
+    mutate(analysis) {
+      analysis.status = "UNAVAILABLE";
+      analysis.reason_code = "ZERO_CUMULATIVE_VOLUME";
+      analysis.result = null;
+    },
+    expectedValue: "No result payload was supplied",
+  },
+]) {
+  test(`spot VWAP ${scenario.name} preserves backend state and withholds unavailable values`, async () => {
+    const fixture = createSnapshot({ count: 50 });
+    scenario.mutate(fixture.spot_analysis.vwap);
+    const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+    try {
+      await waitForLoadedSnapshot(page);
+      const card = page.locator('[data-analysis-key="vwap"]');
+      assert.match(await card.innerText(), new RegExp(scenario.name));
+      assert.match(await card.innerText(), /ZERO_CUMULATIVE_VOLUME|INSUFFICIENT_WARMUP/);
+      assert.match(await card.innerText(), new RegExp(scenario.expectedValue));
+      assert.equal(
+        await page.locator("#chart-container polyline.spot-vwap-line").count(),
+        scenario.name === "PARTIAL" ? 1 : 0,
+      );
+      if (scenario.name !== "UNAVAILABLE") {
+        assert.match(await card.innerText(), /UNDEFINED.*ZERO_CUMULATIVE_VOLUME|UNDEFINED.*INSUFFICIENT_WARMUP/s);
+      }
+      assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+for (const quality of ["STALE", "INVALID"]) {
+  test(`spot analyses with ${quality.toLowerCase()} quality withhold all result values`, async () => {
+    const fixture = createSnapshot({ count: 50 });
+    fixture.data_quality.status = quality;
+    if (quality === "INVALID") {
+      fixture.data_quality.report_status = "INVALID";
+      fixture.data_quality.report.status = "INVALID";
+      fixture.persisted = false;
+    }
+    fixture.spot_analysis["spot-market-structure"] = {
+      status: "UNAVAILABLE",
+      reason_code: quality === "STALE" ? "STALE_FOR_SERVING_CUTOFF" : "QUALITY_NOT_VALID",
+      result: null,
+    };
+    const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+    try {
+      await waitForLoadedSnapshot(page);
+      assert.match(await page.locator("#spot-analysis-status").innerText(), new RegExp(quality));
+      assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 0);
+      for (const id of [
+        "vwap", "volume-profile", "volume-confirmation",
+        "price-action-support-resistance", "spot-market-structure",
+      ]) {
+        const card = page.locator(`[data-analysis-key="${id}"]`);
+        if (id === "spot-market-structure") {
+          assert.match(await card.innerText(), new RegExp(
+            quality === "STALE" ? "STALE_FOR_SERVING_CUTOFF" : "QUALITY_NOT_VALID",
+          ));
+        } else {
+          assert.match(await card.innerText(), /Result payload withheld because snapshot quality is not VALID/);
+        }
+        assert.equal(await card.locator("table").count(), 0);
+      }
+      assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+test("spot analysis rejects mismatched snapshot provenance or candle timestamps", async () => {
+  for (const corrupt of [
+    (fixture) => { fixture.spot_analysis.vwap.result.indicator_id = "volume-profile"; },
+    (fixture) => { fixture.spot_analysis.vwap.result.snapshot_id = "another-snapshot"; },
+    (fixture) => {
+      fixture.spot_analysis.vwap.result.points[0].candle_end =
+        fixture.candles[1].close_time;
+    },
+  ]) {
+    const fixture = createSnapshot({ count: 50 });
+    corrupt(fixture);
+    const { page } = await openWorkspace({ storedSnapshot: fixture });
+    try {
+      await waitForLoadedSnapshot(page);
+      assert.match(
+        await page.locator('[data-analysis-key="vwap"]').innerText(),
+        /Result payload withheld: ANALYSIS_(?:PROVENANCE|CANDLE_BINDING)_MISMATCH/,
+      );
+      assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 0);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("spot analysis unavailable and missing entries never expose supplied result values", async () => {
+  const fixture = createSnapshot({ count: 50 });
+  fixture.spot_analysis.vwap.status = "UNAVAILABLE";
+  fixture.spot_analysis.vwap.reason_code = "ZERO_CUMULATIVE_VOLUME";
+  delete fixture.spot_analysis["volume-profile"];
+  const { page } = await openWorkspace({ storedSnapshot: fixture });
+  try {
+    await waitForLoadedSnapshot(page);
+    const unavailable = page.locator('[data-analysis-key="vwap"]');
+    assert.match(await unavailable.innerText(), /UNAVAILABLE.*ZERO_CUMULATIVE_VOLUME/s);
+    assert.match(await unavailable.innerText(), /Backend status is UNAVAILABLE; result values are withheld/);
+    assert.equal(await unavailable.locator("tbody tr").count(), fixture.candles.length);
+    assert.equal(await unavailable.locator("tbody tr").first().locator("td").nth(2).innerText(), "Not available");
+    assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 0);
+
+    const missing = page.locator('[data-analysis-key="volume-profile"]');
+    assert.match(await missing.innerText(), /MISSING/);
+    assert.match(await missing.innerText(), /did not supply this spot_analysis entry/);
+    assert.equal(await missing.locator("table").count(), 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("VWAP overlay remains isolated from indicator visibility preferences without refresh", async () => {
+  const { page, apiRequests } = await openWorkspace({
+    storedSnapshot: createSnapshot({ count: 50 }),
+    visible: ["ema-20"],
+  });
+  try {
+    await waitForLoadedSnapshot(page);
+    assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
+    await page.getByRole("button", { name: "Pro", exact: true }).click();
+    await page.getByRole("checkbox", { name: "EMA 20", exact: true }).uncheck();
+    assert.equal(await page.locator("#chart-container polyline.ema-20").count(), 0);
+    assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
+    assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
+  } finally {
+    await page.close();
+  }
+});
 
 test("indicator provenance links use the loaded response and the synthetic example stays separate", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
@@ -444,7 +788,7 @@ test("browser chart toggles preserve series isolation and bind every point to it
       "Stochastic 14/3": ["stochastic-k", "stochastic-d"],
       "CCI 20": ["cci-line"],
     };
-    const expectedClasses = Object.values(seriesGroups).flat().sort();
+    const expectedClasses = [...Object.values(seriesGroups).flat(), "spot-vwap-line"].sort();
     const rendered = await readSeries(page);
     assert.deepEqual(rendered.map((line) => line.series).sort(), expectedClasses);
 
@@ -466,6 +810,7 @@ test("browser chart toggles preserve series isolation and bind every point to it
       "stochastic-k": snapshot.indicators["stochastic-14-3"].result.points.map((point) => [point.candle_end, point.k.value, "stochastic"]),
       "stochastic-d": snapshot.indicators["stochastic-14-3"].result.points.map((point) => [point.candle_end, point.d.value, "stochastic"]),
       "cci-line": snapshot.indicators["cci-20"].result.points.map((point) => [point.candle_end, point.value.value, "cci"]),
+      "spot-vwap-line": snapshot.spot_analysis.vwap.result.points.map((point) => [point.candle_end, point.value.value, "price"]),
     };
     const panelAxes = [
       ["atr", ["atr-line"]],
@@ -510,7 +855,7 @@ test("browser chart toggles preserve series isolation and bind every point to it
       await checkbox.check();
       assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), expectedClasses);
     }
-    const beginnerClasses = ["atr-line", "ema-20", "ema-50"].sort();
+    const beginnerClasses = ["atr-line", "ema-20", "ema-50", "spot-vwap-line"].sort();
     await page.getByRole("button", { name: "Beginner", exact: true }).click();
     assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
     await page.getByRole("button", { name: "Pro", exact: true }).click();
