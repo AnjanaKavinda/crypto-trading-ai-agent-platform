@@ -491,7 +491,12 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
         "volume-confirmation",
         "price-action-support-resistance",
         "spot-market-structure",
+        "market-regime",
     }
+    assert payload["spot_analysis"]["market-regime"]["status"] == "WARMUP"
+    assert payload["spot_analysis"]["market-regime"]["reason_code"] == (
+        "INSUFFICIENT_WARMUP"
+    )
     assert repository.stored is not None
     expected_ema = calculate_moving_average(
         snapshot=repository.stored.snapshot,
@@ -665,6 +670,99 @@ def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> Non
     assert repository.persist_calls == 1
 
 
+def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> None:
+    research, calls, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
+        )
+        readback = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles?timeframe=1m&limit=50"
+        )
+
+    assert response.status_code == 200
+    assert repository.stored is not None
+    payload = response.json()
+    projection = payload["spot_analysis"]["market-regime"]
+    assert projection["status"] == "AVAILABLE"
+    assert projection["reason_code"] is None
+    result = projection["result"]
+    regime = result["regime"]
+    evidence = result["evidence"]
+
+    assert result["profile_id"] == "spot-ohlcv"
+    assert result["profile_version"] == "spot-ohlcv-regime-profile-v1"
+    assert regime["contract_id"] == "C-005"
+    assert regime["schema_version"] == "1"
+    assert regime["asset"] == "BTC"
+    assert regime["instrument_id"] == payload["instrument_id"]
+    assert regime["timeframe"] == payload["timeframe"]
+    assert regime["as_of"] == payload["candles"][-1]["close_time"]
+    assert regime["expires_at"] > regime["as_of"]
+    assert regime["direction"] == "bullish-context"
+    assert regime["confidence"] == "0"
+    assert regime["compatible_strategy_families"] == []
+    assert {dimension["name"] for dimension in regime["dimensions"]} == {
+        "trend",
+        "realized-volatility",
+        "transition",
+    }
+    assert len(evidence) == 3
+    evidence_by_id = {item["evidence_id"]: item for item in evidence}
+    assert set(regime["evidence_ids"]) == set(evidence_by_id)
+    for dimension in regime["dimensions"]:
+        assert dimension["evidence_ids"]
+        assert set(dimension["evidence_ids"]).issubset(evidence_by_id)
+    for item in evidence:
+        assert item["contract_id"] == "C-008"
+        assert item["quality_status"] == "VALID"
+        assert item["data_quality_report_id"] == payload["data_quality"]["report_id"]
+        assert item["source_record_ids"] == payload["lineage"]["source_record_ids"]
+        assert item["method"] == {
+            "component": "spot-market-regime",
+            "version": "spot-market-regime-v1",
+        }
+        assert all(feature.endswith(":1m") for feature in item["feature_ids"])
+        assert {
+            (source["component"], source["version"]) for source in item["provenance"]
+        }.issuperset(
+            {
+                ("C-001", "1"),
+                ("C-002", "1"),
+                ("C-003", "1"),
+                ("spot-ohlcv-regime-profile", "spot-ohlcv-regime-profile-v1"),
+            }
+        )
+        assert item["usable"] is True
+        assert item["expires_at"] > item["available_at"]
+        assert item["provenance"]
+    assert result["transition_lookback_candles"] == 5
+    assert "not a probability" in result["confidence_semantics"]
+    assert any("Liquidity" in item for item in result["uncertainty"])
+    assert calls == [1]
+    assert readback.status_code == 200
+    assert (
+        readback.json()["spot_analysis"]["market-regime"]
+        == payload["spot_analysis"]["market-regime"]
+    )
+
+
+def test_spot_market_regime_never_fills_short_history_with_neutral() -> None:
+    research, _, _ = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=40),
+        )
+
+    assert response.status_code == 200
+    projection = response.json()["spot_analysis"]["market-regime"]
+    assert projection["status"] == "WARMUP"
+    assert projection["reason_code"] == "INSUFFICIENT_WARMUP"
+    assert projection["result"] is None
+
+
 def test_spot_ohlcv_analysis_preserves_short_history_warmup_and_unavailable_context() -> (
     None
 ):
@@ -690,6 +788,7 @@ def test_spot_ohlcv_analysis_preserves_short_history_warmup_and_unavailable_cont
     assert analysis["price-action-support-resistance"]["status"] == "WARMUP"
     assert analysis["price-action-support-resistance"]["result"]["geometry"]
     assert analysis["spot-market-structure"]["status"] == "UNAVAILABLE"
+    assert analysis["market-regime"]["status"] == "WARMUP"
 
 
 def test_spot_vwap_is_partial_when_undefined_and_ready_points_coexist() -> None:
@@ -850,7 +949,11 @@ def test_nonvalid_quality_is_explicit_never_persisted_and_disables_indicators() 
             "volume-confirmation",
             "price-action-support-resistance",
             "spot-market-structure",
+            "market-regime",
         )
+    )
+    assert payload["spot_analysis"]["market-regime"]["reason_code"] == (
+        "QUALITY_NOT_VALID"
     )
     assert repository.persist_calls == 0
     assert calls == [1]
@@ -942,6 +1045,7 @@ def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
             "volume-confirmation",
             "price-action-support-resistance",
             "spot-market-structure",
+            "market-regime",
         )
     )
     assert payload["temporal_context"] == "CURRENT"

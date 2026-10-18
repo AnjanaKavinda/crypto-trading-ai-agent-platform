@@ -488,13 +488,20 @@ result statuses.
 | #54 `volume-confirmation` | `calculate_volume_confirmation()` → `VolumeConfirmationSeries`: raw volume, previous-20-candle sum/mean, and relative-volume points. Lookback 20 comes from the exact validated registry metadata. Per-point calculator statuses and reasons are preserved; insufficient trailing history remains `UNAVAILABLE` with `INSUFFICIENT_PRIOR_CANDLES`, and zero baselines remain `UNAVAILABLE` with `ZERO_PRIOR_VOLUME_BASELINE`. Without caller event/policy or pivot-comparison context, the calculator's assessment and comparison remain `INDETERMINATE` with their missing-context reasons. Exhaustion remains `DATA_UNAVAILABLE` because reliable order-flow inputs are absent. The wrapper is `WARMUP` before any trailing value is ready and `PARTIAL` when only some measures/context are available. |
 | #55 `price-action-support-resistance` | `calculate_spot_price_action()` → `PriceActionAnalysis`: runs with all three optional policies explicitly `None`. Candle geometry is available; no registry policy defaults are applied. The response envelope is `PARTIAL` with `CALLER_POLICIES_NOT_SUPPLIED`: pattern findings, pivots, and support/resistance zones are not inferred. Its original C-008 evidence and C-012 assessment are preserved and remain bound to the exact inputs. When the snapshot is below the registered warm-up minimum, the envelope is `WARMUP` instead and still retains calculated geometry. |
 | #56 `spot-market-structure` | `calculate_spot_market_structure()` → `MarketStructureAnalysis` (not invoked): explicitly `UNAVAILABLE` with `CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED`. The calculator requires exact #55 internal/external price-action outputs and caller-supplied pivot and break policies; the API does not invent those parameters or infer structure. |
+| #66 `market-regime` | C-005 Spot profile v1 uses validated EMA 20/50 ordering for descriptive trend context, RV20 compared with the median of the previous 20 available RV20 values (high at >=1.5x, low at <=0.5x, otherwise typical), and a five-candle trend-state lookback for possible transition. Every dimension points to C-008 evidence carrying exact source record IDs, C-003 report ID, method/profile versions, timeframe-bound expiry, and uncertainty. The required input history is at least 41 closed candles; shorter or unavailable input remains `WARMUP`/`UNAVAILABLE`, never neutral. |
 
-Invalid/non-VALID quality or a stale serving cutoff disables all five
-projections before calculation. A deterministic calculator failure makes only
-its corresponding projection unavailable. SMC, Wyckoff, Fibonacci, and any
-other analysis not in #53–#56 are not exposed by this projection. The new
-read-model field does not change shared C-001/C-002/C-003/C-008/C-012 schemas or
-the existing `SpotIndicatorView`.
+Invalid/non-VALID quality or a stale serving cutoff disables all six
+projections before calculation (including the #66 regime projection). A
+deterministic calculator failure makes only its corresponding projection
+unavailable. The Spot regime profile does not assess liquidity, order flow,
+derivatives, cross-asset correlation, macro, strategy compatibility, signals,
+validation, risk, approval, or execution. Its required C-005 confidence is
+intentionally `0` with explicit `uncalibrated-zero` semantics; it is not a
+probability or trade-success estimate. Its three dimensions share price-derived
+inputs and are not independent confirmations. SMC, Wyckoff, Fibonacci, and any
+other analysis not in #53–#56/#66 are not exposed by this projection. The
+read-model additions do not change shared C-001/C-002/C-003/C-005/C-008/C-012
+schemas or the existing `SpotIndicatorView`.
 
 Run the API using the loopback-only launcher:
 
