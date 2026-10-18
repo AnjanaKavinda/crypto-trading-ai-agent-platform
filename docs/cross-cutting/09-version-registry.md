@@ -167,3 +167,60 @@ resolved policy; sequence metrics require measured passing continuity.
 In-memory resolvers take an explicit validation time rather than consulting
 the wall clock implicitly; expired manifests, dependencies, evidence, and
 assessments reject at that time.
+
+## Issue #370 — C-006/C-007 schema 3 and C-009/C-010 schema 2
+
+C-009/C-010 schema 1 remains unchanged. Schema 2 is an explicit additive
+version; no numeric evidence-strength or severity value is converted to or
+from the new categorical vocabularies. C-009 evidence strength uses
+`VERY_STRONG`, `STRONG`, `MODERATE`, `WEAK`, or `UNKNOWN`; dependence is an
+independent required dimension. Components sharing an input binding cannot
+claim independence. Shared OHLCV-derived indicators are dependent/correlated;
+a single OHLCV snapshot cannot establish statistical independence. Analytical
+confidence is interpretive only—not trade-success probability, profitability,
+expected return, expected value, or win rate—and when unavailable carries
+neither a numeric value nor a method reference.
+
+C-009 indeterminate status and reason codes preserve missing, partial, invalid,
+stale, or insufficient evidence without manufacturing neutral, zero, aligned,
+or confidence values. C-010 schema 2 uses `LOW`, `MODERATE`, `HIGH`, `CRITICAL`,
+or `UNKNOWN` severity and validates its categorical severity against the
+versioned decision table:
+
+| Severity | Required finding |
+|---|---|
+| `LOW` | Localized disagreement with no material change to interpretation. |
+| `MODERATE` | Disagreement affects a material interpretation but has no direct opposing validated conclusion. |
+| `HIGH` | Direct opposition between valid, materially relevant conclusions. |
+| `CRITICAL` | A conflict invalidates a required premise or makes the analysis unsafe to rely on. |
+| `UNKNOWN` | Evidence cannot establish materiality. |
+
+Evidence-establishment status and resolution status are separate. Severity
+does not itself create a trading gate. Absence of a C-010 record means there is
+no conflict assessment; `NONE` is not a severity.
+
+C-006 schema 3 references the exact C-007 schema-3 manifest and embeds only
+C-009/C-010 schema-2 records. Existing C-006 schema 1/2 and C-007 schema 1/2
+readers and payloads remain unchanged. The C-007 schema-3 output reference
+binds every C-009/C-010 assessment and its referenced C-093 report by contract
+ID, record ID, schema version, lineage version, and canonical content digest.
+It also binds the source C-002 snapshots, exact C-003 schema-2 reports and
+C-008 evidence through the manifest input bindings and evidence membership.
+The context and assessments refer to the manifest by immutable ID/schema to
+avoid a circular digest; the manifest digest then commits to the canonical
+digests of the outputs.
+
+The C-007 schema-3 `content_sha256` uses the existing `wire-1` envelope and
+`canonical-json-v1` serialization, omitting only its own
+`payload.content_sha256` from the hash preimage. Every output digest is
+`SHA-256(canonical_json_dumps(typed_output).encode("utf-8"))`. Unsupported or
+mismatched nested schema versions, output identities/digests, evidence
+membership, snapshots, reports, stale inputs, or status/reason combinations
+fail closed. C-093 remains owned by issue #67; this addition defines only its
+typed output reference and does not duplicate its report implementation.
+
+This is a contracts/codec/validation addition only. It enables no producer,
+confluence/conflict calculation, persistence, strategy eligibility, signal,
+risk, approval, trading, or execution behavior. C-009/C-010 v2 consumers must
+remain disabled until profile-specific methodology is separately implemented
+and tested.
