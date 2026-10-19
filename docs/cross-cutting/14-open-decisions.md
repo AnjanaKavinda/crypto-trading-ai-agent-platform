@@ -44,8 +44,8 @@ trigger makes a decision necessary:
 | Required field | Recorded open-state analysis |
 |---|---|
 | Problem | The named architecture choice remains unresolved, and its affected area must not rely on an unstated implementation assumption. |
-| Options | No options have been evaluated or selected. A decision-specific ADR must document alternatives when the decision is triggered. |
-| Advantages | No comparative advantages are asserted before option analysis. |
+| Options | No option is selected while the decision remains `Open`. A linked proposed ADR may document alternatives and a recommendation, but that analysis is non-binding until human approval. |
+| Advantages | No option has approved advantages; comparative analysis in a proposed ADR is advisory only. |
 | Disadvantages | Proceeding without an approved decision risks architecture or contract drift. |
 | Recommendation | Preserve the `Open` status; do not implement a dependent choice until a proposed ADR receives the required human approval. |
 | Reasoning | The Master Playbook and existing governance artifacts identify these decisions as open and do not authorize their selection here. |
