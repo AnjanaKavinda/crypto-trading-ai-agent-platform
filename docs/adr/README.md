@@ -19,6 +19,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0007 | [Local-first backup for the personal research phase](ADR-0007-local-first-phase-market-data-backup.md) | Accepted | 2026-10-04 | Platform Architect / AnjanaKavinda (explicit owner approval) | — (Phase 1 only) | No contract semantics changed | ADR-0005 cloud/cost clauses; ADR-0006 off-site backup prerequisite (Phase 1 only) | — |
 | ADR-0008 | [Versioned C-003 v2 compatibility and rollout](ADR-0008-versioned-c003-v2-compatibility.md) | Accepted | 2026-10-07 | Platform Architect / AnjanaKavinda | — | C-003 schema 2, wire-1 | — | — |
 | ADR-0009 | [Container-local Docker runtime and authenticated API proxy](ADR-0009-container-local-docker-runtime-proxy.md) | Accepted | 2026-10-09 | Platform Architect / AnjanaKavinda (explicit owner approval, 2026-10-10) | — | None | — | — |
+| ADR-0010 | [Versioned C-019/C-006 Spot adversarial path](ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md) | Accepted | 2026-10-19 | Platform Architect / AnjanaKavinda (explicit owner approval) | OD-0025 (resolved) | C-019 schema 2, C-006 schema 5 | — | — |
 
 ## Creating an ADR
 
