@@ -14,9 +14,15 @@ from trading_platform_api.analysis.indicator_registry import (
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
+    DataSourceRecord,
     MarketData,
     MarketSnapshot,
+)
+from trading_platform_api.market_data.quality import (
+    DataQualityAssessmentError,
+    validate_spot_ohlcv_quality_v2,
 )
 
 _INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
@@ -58,12 +64,24 @@ class MovingAverageSeries:
 def _closes(
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     timeframe: str,
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> tuple[tuple[Decimal, ...], str]:
     if timeframe not in _INTERVALS:
         raise MovingAverageError("Unsupported candle timeframe.")
-    if (
+    if type(quality) is DataQualityReportV2:
+        try:
+            validate_spot_ohlcv_quality_v2(
+                quality,
+                snapshot=snapshot,
+                observations=observations,
+                sources=() if sources is None else sources,
+                timeframe=timeframe,
+            )
+        except DataQualityAssessmentError as exc:
+            raise MovingAverageError(str(exc)) from exc
+    elif type(quality) is not DataQualityReport or (
         quality.snapshot_id != snapshot.snapshot_id
         or quality.status is not DataQualityStatus.VALID
     ):
@@ -131,10 +149,11 @@ def calculate_moving_average(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     kind: MovingAverageKind,
     period: int,
     timeframe: str,
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> MovingAverageSeries:
     """SMA trailing mean; EMA SMA seed and alpha 2/(N+1); WMA oldest=1..newest=N.
 
@@ -152,7 +171,7 @@ def calculate_moving_average(
         or timeframe not in metadata.timeframes
     ):
         raise MovingAverageError("Indicator is not validated for this timeframe.")
-    closes, unit = _closes(snapshot, observations, quality, timeframe)
+    closes, unit = _closes(snapshot, observations, quality, timeframe, sources=sources)
     if len(closes) < period:
         values: list[Decimal | None] = [None] * len(closes)
     else:

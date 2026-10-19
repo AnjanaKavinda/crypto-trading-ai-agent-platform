@@ -29,6 +29,10 @@ from trading_platform_api.analysis.moving_averages import (
     calculate_moving_average,
 )
 from trading_platform_api.analysis.price_action import calculate_spot_price_action
+from trading_platform_api.analysis.spot_market_regime import (
+    calculate_spot_market_regime,
+)
+from trading_platform_api.analysis.volatility import calculate_realized_volatility
 from trading_platform_api.analysis.vwap_volume_profile import (
     calculate_volume_confirmation,
     calculate_volume_profile,
@@ -64,7 +68,9 @@ from trading_platform_api.market_data.providers import (
 )
 from trading_platform_api.market_data.quality import (
     DataQualityPolicy,
+    assess_approved_spot_ohlcv_v2,
     assess_complete_binance_spot_batch,
+    validate_spot_ohlcv_quality_v2,
 )
 from trading_platform_api.spot_research import (
     QualityPolicyTemplate,
@@ -684,6 +690,18 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
     assert response.status_code == 200
     assert repository.stored is not None
     payload = response.json()
+    stored = repository.stored
+    regime_quality = assess_approved_spot_ohlcv_v2(
+        stored.snapshot,
+        stored.observations,
+        stored.sources,
+        stored.policy,
+        timeframe=stored.timeframe,
+        assessed_at=stored.quality.assessed_at,
+        finalized_market_data_ids=tuple(
+            item.market_data_id for item in stored.observations
+        ),
+    )
     projection = payload["spot_analysis"]["market-regime"]
     assert projection["status"] == "AVAILABLE"
     assert projection["reason_code"] is None
@@ -717,7 +735,8 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
     for item in evidence:
         assert item["contract_id"] == "C-008"
         assert item["quality_status"] == "VALID"
-        assert item["data_quality_report_id"] == payload["data_quality"]["report_id"]
+        assert item["data_quality_report_id"] == str(regime_quality.report_id)
+        assert item["data_quality_report_id"] != payload["data_quality"]["report_id"]
         assert item["source_record_ids"] == payload["lineage"]["source_record_ids"]
         assert item["method"] == {
             "component": "spot-market-regime",
@@ -730,7 +749,7 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
             {
                 ("C-001", "1"),
                 ("C-002", "1"),
-                ("C-003", "1"),
+                ("C-003", "2"),
                 ("spot-ohlcv-regime-profile", "spot-ohlcv-regime-profile-v1"),
             }
         )
@@ -746,6 +765,281 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
         readback.json()["spot_analysis"]["market-regime"]
         == payload["spot_analysis"]["market-regime"]
     )
+
+
+def test_spot_ohlcv_v2_quality_is_deterministic_and_bound_to_exact_profile() -> None:
+    research, _, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
+        )
+
+    assert response.status_code == 200
+    assert repository.stored is not None
+    stored = repository.stored
+    finalized_ids = tuple(item.market_data_id for item in stored.observations)
+    first = assess_approved_spot_ohlcv_v2(
+        stored.snapshot,
+        stored.observations,
+        stored.sources,
+        stored.policy,
+        timeframe=stored.timeframe,
+        assessed_at=stored.quality.assessed_at,
+        finalized_market_data_ids=finalized_ids,
+    )
+    second = assess_approved_spot_ohlcv_v2(
+        stored.snapshot,
+        stored.observations,
+        stored.sources,
+        stored.policy,
+        timeframe=stored.timeframe,
+        assessed_at=stored.quality.assessed_at,
+        finalized_market_data_ids=finalized_ids,
+    )
+
+    assert first == second
+    assert canonical_sha256(first) == canonical_sha256(second)
+    assert first.assessment_policy_id == APPROVED_POLICY_VERSION
+    assert first.assessment_policy_version.startswith("1:BTC-USDT-SPOT:1m:50:49:")
+    assert first.status is DataQualityStatus.VALID
+    assert len(first.dimensions) == 7
+    assert {item.state.value for item in first.dimensions} == {"MEASURED"}
+    assert all(
+        item.evidence_reference is not None
+        and item.evidence_reference.contract_id == "C-002"
+        and item.evidence_reference.record_id == str(stored.snapshot.snapshot_id)
+        and item.evidence_reference.evidence_sha256 == canonical_sha256(stored.snapshot)
+        and (
+            (
+                item.numerator is None
+                and item.denominator is None
+                and item.basis_unit is None
+            )
+            if item.score != Decimal(0)
+            else item.numerator == 0
+            and item.denominator is not None
+            and item.basis_unit is not None
+            and Decimal(item.numerator) / Decimal(item.denominator) == item.score
+        )
+        for item in first.dimensions
+    )
+    ema20_v2 = calculate_moving_average(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        sources=stored.sources,
+        quality=first,
+        kind=MovingAverageKind.EMA,
+        period=20,
+        timeframe=stored.timeframe,
+    )
+    rv20_v2 = calculate_realized_volatility(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        sources=stored.sources,
+        quality=first,
+        period=20,
+        timeframe=stored.timeframe,
+    )
+    assert ema20_v2.quality_report_id == first.report_id
+    assert rv20_v2.quality_report_id == first.report_id
+    invalid_scope = replace(
+        first,
+        assessment_policy_version=first.assessment_policy_version.replace(
+            ":1m:", ":5m:"
+        ),
+    )
+    with pytest.raises(ValueError, match="OHLCV policy window"):
+        calculate_moving_average(
+            snapshot=stored.snapshot,
+            observations=stored.observations,
+            sources=stored.sources,
+            quality=invalid_scope,
+            kind=MovingAverageKind.EMA,
+            period=20,
+            timeframe=stored.timeframe,
+        )
+
+    legacy_regime = calculate_spot_market_regime(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        quality=stored.quality,
+        timeframe=stored.timeframe,
+    )
+    versioned_regime = calculate_spot_market_regime(
+        snapshot=stored.snapshot,
+        observations=stored.observations,
+        sources=stored.sources,
+        quality=first,
+        timeframe=stored.timeframe,
+    )
+    assert versioned_regime.regime == legacy_regime.regime
+    assert versioned_regime.transition_state == legacy_regime.transition_state
+    assert versioned_regime.transition_lookback_candles == (
+        legacy_regime.transition_lookback_candles
+    )
+    assert all(
+        reference.version == "1"
+        for item in legacy_regime.evidence
+        for reference in item.provenance
+        if reference.component == "C-003"
+    )
+
+    nonfinal = assess_approved_spot_ohlcv_v2(
+        stored.snapshot,
+        stored.observations,
+        stored.sources,
+        stored.policy,
+        timeframe=stored.timeframe,
+        assessed_at=stored.quality.assessed_at,
+        finalized_market_data_ids=finalized_ids[:-1],
+    )
+    assert nonfinal.status is DataQualityStatus.INVALID
+
+    changed_sources = (
+        replace(stored.sources[0], content_sha256="b" * 64),
+        *stored.sources[1:],
+    )
+    with pytest.raises(ValueError, match="digest or measured results"):
+        validate_spot_ohlcv_quality_v2(
+            first,
+            snapshot=stored.snapshot,
+            observations=stored.observations,
+            sources=changed_sources,
+            timeframe=stored.timeframe,
+        )
+    mismatched_snapshot = replace(stored.snapshot, snapshot_id=uuid4())
+    with pytest.raises(ValueError, match="VALID exact snapshot"):
+        validate_spot_ohlcv_quality_v2(
+            first,
+            snapshot=mismatched_snapshot,
+            observations=stored.observations,
+            sources=stored.sources,
+            timeframe=stored.timeframe,
+        )
+    tampered_dimensions = tuple(
+        replace(
+            item,
+            evidence_reference=replace(
+                item.evidence_reference,
+                evidence_sha256="b" * 64,
+            ),
+        )
+        for item in first.dimensions
+    )
+    tampered_report = replace(first, dimensions=tampered_dimensions)
+    with pytest.raises(ValueError, match="digest or measured results"):
+        validate_spot_ohlcv_quality_v2(
+            tampered_report,
+            snapshot=stored.snapshot,
+            observations=stored.observations,
+            sources=stored.sources,
+            timeframe=stored.timeframe,
+        )
+
+    with pytest.raises(ValueError, match="approved immutable Spot profile"):
+        assess_approved_spot_ohlcv_v2(
+            stored.snapshot,
+            stored.observations,
+            stored.sources,
+            replace(stored.policy, maximum_missing_intervals=1),
+            timeframe=stored.timeframe,
+            assessed_at=stored.quality.assessed_at,
+            finalized_market_data_ids=finalized_ids,
+        )
+
+
+def test_spot_ohlcv_v2_quality_fails_closed_for_stale_incomplete_and_invalid_data() -> (
+    None
+):
+    research, _, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
+        )
+
+    assert response.status_code == 200
+    assert repository.stored is not None
+    stored = repository.stored
+    finalized_ids = tuple(item.market_data_id for item in stored.observations)
+
+    stale_snapshot = replace(
+        stored.snapshot,
+        as_of=stored.snapshot.as_of + timedelta(minutes=2),
+        created_at=stored.snapshot.created_at + timedelta(minutes=2),
+    )
+    stale_policy = replace(
+        stored.policy,
+        required_data_cutoff=stale_snapshot.as_of,
+    )
+    stale = assess_approved_spot_ohlcv_v2(
+        stale_snapshot,
+        stored.observations,
+        stored.sources,
+        stale_policy,
+        timeframe=stored.timeframe,
+        assessed_at=stale_snapshot.as_of,
+        finalized_market_data_ids=finalized_ids,
+    )
+    assert stale.status is DataQualityStatus.STALE
+    assert stale.status is not DataQualityStatus.VALID
+    stale_freshness = next(
+        item for item in stale.dimensions if item.dimension.value == "freshness"
+    )
+    assert stale_freshness.score == Decimal(0)
+    assert stale_freshness.numerator == 0
+    assert stale_freshness.evidence_reference is not None
+    assert stale_freshness.evidence_reference.evidence_sha256 == canonical_sha256(
+        stale_snapshot
+    )
+
+    incomplete_observations = (
+        *stored.observations[:10],
+        *stored.observations[11:],
+    )
+    incomplete_sources = (*stored.sources[:10], *stored.sources[11:])
+    incomplete_snapshot = replace(
+        stored.snapshot,
+        market_data_ids=tuple(item.market_data_id for item in incomplete_observations),
+        source_record_ids=tuple(item.source_record_id for item in incomplete_sources),
+    )
+    incomplete = assess_approved_spot_ohlcv_v2(
+        incomplete_snapshot,
+        incomplete_observations,
+        incomplete_sources,
+        stored.policy,
+        timeframe=stored.timeframe,
+        assessed_at=stored.quality.assessed_at,
+        finalized_market_data_ids=tuple(
+            item.market_data_id for item in incomplete_observations
+        ),
+    )
+    assert incomplete.status is DataQualityStatus.INCOMPLETE
+    assert incomplete.status is not DataQualityStatus.VALID
+
+    last = stored.observations[-1]
+    out_of_range = replace(
+        last,
+        metrics=tuple(
+            replace(metric, value=Decimal("1e19"))
+            if metric.metric_name == "volume"
+            else metric
+            for metric in last.metrics
+        ),
+    )
+    invalid_observations = (*stored.observations[:-1], out_of_range)
+    invalid = assess_approved_spot_ohlcv_v2(
+        stored.snapshot,
+        invalid_observations,
+        stored.sources,
+        stored.policy,
+        timeframe=stored.timeframe,
+        assessed_at=stored.quality.assessed_at,
+        finalized_market_data_ids=finalized_ids,
+    )
+    assert invalid.status is DataQualityStatus.INVALID
+    assert invalid.status is not DataQualityStatus.VALID
 
 
 def test_spot_market_regime_never_fills_short_history_with_neutral() -> None:

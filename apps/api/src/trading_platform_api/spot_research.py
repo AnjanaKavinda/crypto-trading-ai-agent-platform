@@ -58,6 +58,7 @@ from trading_platform_api.market_data.binance_spot import (
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
     DataSourceRecord,
     MarketData,
@@ -74,6 +75,7 @@ from trading_platform_api.market_data.quality import (
     DataQualityAssessmentError,
     DataQualityPolicy,
     MetricBound,
+    assess_approved_spot_ohlcv_v2,
     assess_complete_binance_spot_batch,
     assess_data_quality,
 )
@@ -676,7 +678,9 @@ def _calculate_ohlcv_analysis(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
+    sources: tuple[DataSourceRecord, ...],
     quality: DataQualityReport,
+    regime_quality: DataQualityReportV2 | None,
     timeframe: str,
     stale: bool = False,
 ) -> dict[str, dict[str, Any]]:
@@ -781,11 +785,16 @@ def _calculate_ohlcv_analysis(
         "CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED"
     )
     try:
+        if regime_quality is None:
+            raise DataQualityAssessmentError(
+                "The bound C-003 schema 2 OHLCV assessment is unavailable."
+            )
         regime_result = calculate_spot_market_regime(
             snapshot=snapshot,
             observations=observations,
-            quality=quality,
+            quality=regime_quality,
             timeframe=timeframe,
+            sources=sources,
         )
         outputs["market-regime"] = {
             "status": "AVAILABLE",
@@ -797,7 +806,9 @@ def _calculate_ohlcv_analysis(
         outputs["market-regime"]["status"] = "WARMUP"
     except (ArithmeticError, ValueError):
         outputs["market-regime"] = _unavailable_analysis(
-            "DETERMINISTIC_CALCULATION_FAILED"
+            "C003_V2_QUALITY_UNAVAILABLE"
+            if regime_quality is None
+            else "DETERMINISTIC_CALCULATION_FAILED"
         )
     return outputs
 
@@ -957,6 +968,7 @@ def _response(
     quality: DataQualityReport,
     observations: tuple[MarketData, ...],
     sources: tuple[DataSourceRecord, ...],
+    finalized_market_data_ids: tuple[UUID, ...],
     policy: DataQualityPolicy,
     policy_sha256: str,
     timeframe: str,
@@ -1007,6 +1019,22 @@ def _response(
         > timedelta(seconds=policy.freshness_seconds)
     )
     served_status = "STALE" if stale else quality.status.value
+    regime_quality: DataQualityReportV2 | None = None
+    if quality.status is DataQualityStatus.VALID and not stale:
+        try:
+            regime_quality = assess_approved_spot_ohlcv_v2(
+                snapshot,
+                observations,
+                sources,
+                policy,
+                timeframe=timeframe,
+                assessed_at=quality.assessed_at,
+                finalized_market_data_ids=finalized_market_data_ids,
+            )
+        except DataQualityAssessmentError:
+            # C-003 v1 remains the public contract; C-005 fails closed if its
+            # separate in-memory v2 assessment cannot be reconstructed.
+            regime_quality = None
     return {
         "instrument_id": snapshot.instrument_id,
         "symbol": symbol,
@@ -1044,7 +1072,9 @@ def _response(
         "spot_analysis": _calculate_ohlcv_analysis(
             snapshot=snapshot,
             observations=observations,
+            sources=sources,
             quality=quality,
+            regime_quality=regime_quality,
             timeframe=timeframe,
             stale=stale,
         ),
@@ -1366,6 +1396,9 @@ class SpotResearchService:
                 quality=quality,
                 observations=batch.market_data,
                 sources=batch.source_records,
+                finalized_market_data_ids=tuple(
+                    item.market_data_id for item in batch.market_data
+                ),
                 policy=policy,
                 policy_sha256=digest,
                 timeframe=body.timeframe,
@@ -1484,6 +1517,9 @@ class SpotResearchService:
             quality=stored.quality,
             observations=stored.observations,
             sources=stored.sources,
+            finalized_market_data_ids=tuple(
+                item.market_data_id for item in stored.observations
+            ),
             policy=stored.policy,
             policy_sha256=stored.policy_sha256,
             timeframe=stored.timeframe,

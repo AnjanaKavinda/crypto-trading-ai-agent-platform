@@ -26,10 +26,18 @@ from trading_platform_api.analysis.volatility import (
     calculate_realized_volatility,
 )
 from trading_platform_api.market_data.contracts import (
+    DataQualityDimension,
+    DataQualityDimensionState,
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
+    DataSourceRecord,
     MarketData,
     MarketSnapshot,
+)
+from trading_platform_api.market_data.quality import (
+    DataQualityAssessmentError,
+    validate_spot_ohlcv_quality_v2,
 )
 
 SPOT_MARKET_REGIME_METHOD_VERSION = "spot-market-regime-v1"
@@ -118,7 +126,7 @@ def _stable_id(snapshot_id: UUID, feature_id: str) -> UUID:
 def _evidence(
     *,
     snapshot: MarketSnapshot,
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     timeframe: str,
     observed_at: datetime,
     feature_id: str,
@@ -134,7 +142,7 @@ def _evidence(
     provenance = (
         VersionReference(component="C-001", version="1"),
         VersionReference(component="C-002", version="1"),
-        VersionReference(component="C-003", version="1"),
+        VersionReference(component="C-003", version=quality.schema_version),
         method,
         VersionReference(
             component="spot-ohlcv-regime-profile",
@@ -163,7 +171,17 @@ def _evidence(
         interpretation=interpretation,
         quality_status=quality.status,
         data_quality_report_id=quality.report_id,
-        reliability=quality.source_reliability,
+        reliability=(
+            quality.source_reliability
+            if not isinstance(quality, DataQualityReportV2)
+            else next(
+                item.score
+                for item in quality.dimensions
+                if item.dimension is DataQualityDimension.SOURCE_RELIABILITY
+                and item.state is DataQualityDimensionState.MEASURED
+                and item.score is not None
+            )
+        ),
         limitations=(
             "Deterministic descriptive rule; not a signal, forecast, or trade decision.",
             "All dimensions use the same Spot OHLCV source and are correlated.",
@@ -177,7 +195,7 @@ def _aligned_latest(
     series: MovingAverageSeries | VolatilitySeries,
     *,
     snapshot: MarketSnapshot,
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     timeframe: str,
     expected_candle_end: datetime,
 ) -> Decimal:
@@ -202,8 +220,9 @@ def calculate_spot_market_regime(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     timeframe: str,
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> SpotMarketRegimeResult:
     """Classify trend/volatility context from one exact VALID Spot snapshot.
 
@@ -211,6 +230,19 @@ def calculate_spot_market_regime(
     Volatility is high at >=1.5x the prior-window median and low at <=0.5x.
     This thresholded description is versioned and is not statistically validated.
     """
+    if type(quality) is DataQualityReportV2:
+        try:
+            validate_spot_ohlcv_quality_v2(
+                quality,
+                snapshot=snapshot,
+                observations=observations,
+                sources=() if sources is None else sources,
+                timeframe=timeframe,
+            )
+        except DataQualityAssessmentError as exc:
+            raise SpotMarketRegimeError(str(exc)) from exc
+    elif type(quality) is not DataQualityReport:
+        raise SpotMarketRegimeError("A supported C-003 quality schema is required.")
     if quality.status is not DataQualityStatus.VALID:
         raise SpotMarketRegimeError(
             "Matching VALID C-003 quality evidence is required."
@@ -237,6 +269,7 @@ def calculate_spot_market_regime(
         kind=MovingAverageKind.EMA,
         period=20,
         timeframe=timeframe,
+        sources=sources,
     )
     ema50 = calculate_moving_average(
         snapshot=snapshot,
@@ -245,6 +278,7 @@ def calculate_spot_market_regime(
         kind=MovingAverageKind.EMA,
         period=50,
         timeframe=timeframe,
+        sources=sources,
     )
     rv20 = calculate_realized_volatility(
         snapshot=snapshot,
@@ -252,6 +286,7 @@ def calculate_spot_market_regime(
         quality=quality,
         period=20,
         timeframe=timeframe,
+        sources=sources,
     )
     last_close_time = observations[-1].event_time + timedelta(
         seconds=_TIMEFRAME_SECONDS[timeframe]

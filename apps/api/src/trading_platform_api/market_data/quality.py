@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal
 from types import MappingProxyType
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data.contracts import (
@@ -54,6 +54,13 @@ from trading_platform_api.market_data.trades import (
 
 class DataQualityAssessmentError(ValueError):
     """Mandatory evidence or a measurable denominator is unavailable."""
+
+
+_SPOT_OHLCV_REPORT_NAMESPACE = UUID("95489d73-4ab9-5ab9-9759-c242efb3d8c1")
+_APPROVED_SPOT_OHLCV_POLICY_ID = "personal-binance-spot-ohlcv-v1"
+_SPOT_OHLCV_INTERVALS = MappingProxyType(
+    {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+)
 
 
 def _utc(name: str, value: object) -> datetime:
@@ -497,7 +504,7 @@ class _SpotPolicyDefinition:
     mode: str
     require_independent_comparison: bool
     require_checksum: bool
-    freshness_seconds: int
+    freshness_seconds: int | None
     maximum_missing_records: int
     metric_rules: tuple[tuple[str, Decimal, Decimal], ...]
     dimension_profile_version: str = _SPOT_DIMENSION_PROFILE_VERSION
@@ -515,31 +522,38 @@ def _spot_policy_definition(
         names: tuple[str, ...] = ("price", "quantity")
     elif data_kind is ProviderDataKind.TICK:
         names = ("price",)
-    else:
+    elif data_kind is ProviderDataKind.ORDER_BOOK:
         names = ("bid_1_price", "bid_1_quantity", "ask_1_price", "ask_1_quantity")
+    elif data_kind is ProviderDataKind.OHLCV:
+        names = ("open", "high", "low", "close", "volume")
+    else:
+        raise DataQualityAssessmentError("Unsupported Spot quality modality.")
+    bounds = {
+        name: (
+            Decimal("0")
+            if name == "volume"
+            or (data_kind is ProviderDataKind.ORDER_BOOK and name.endswith("quantity"))
+            else _SPOT_METRIC_MINIMUM,
+            _SPOT_METRIC_MAXIMUM,
+        )
+        for name in names
+    }
     return _SpotPolicyDefinition(
         data_kind,
         mode,
         independent,
         checksum,
-        freshness_seconds=10,
+        freshness_seconds=None if data_kind is ProviderDataKind.OHLCV else 10,
         maximum_missing_records=maximum_missing_records,
-        metric_rules=tuple(
-            (
-                name,
-                Decimal("0")
-                if name.endswith("quantity")
-                and data_kind is ProviderDataKind.ORDER_BOOK
-                else _SPOT_METRIC_MINIMUM,
-                _SPOT_METRIC_MAXIMUM,
-            )
-            for name in names
-        ),
+        metric_rules=tuple((name, *bounds[name]) for name in names),
     )
 
 
 _SPOT_POLICY_DEFINITIONS = MappingProxyType(
     {
+        (_APPROVED_SPOT_OHLCV_POLICY_ID, "1"): _spot_policy_definition(
+            ProviderDataKind.OHLCV, "window"
+        ),
         ("spot-trade-quality", "1"): _spot_policy_definition(
             ProviderDataKind.TRADE, "sequence"
         ),
@@ -577,6 +591,15 @@ _SPOT_POLICY_DEFINITIONS = MappingProxyType(
 )
 
 
+def _timestamp_token(value: datetime) -> str:
+    utc = _utc("policy timestamp", value)
+    return (
+        f"{utc.year:04d}{utc.month:02d}{utc.day:02d}T"
+        f"{utc.hour:02d}{utc.minute:02d}{utc.second:02d}"
+        f"{utc.microsecond:06d}Z"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SpotQualityPolicy:
     """Bind explicit instrument/snapshot scope to a recognized immutable policy.
@@ -599,6 +622,9 @@ class SpotQualityPolicy:
     maximum_missing_records: int = 0
     require_independent_comparison: bool = False
     require_checksum: bool = False
+    timeframe: str | None = None
+    coverage_start: datetime | None = None
+    coverage_end: datetime | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -640,7 +666,10 @@ class SpotQualityPolicy:
                 )
             )
             or type(self.freshness_seconds) is not int
-            or self.freshness_seconds != definition.freshness_seconds
+            or (
+                self.data_kind is not ProviderDataKind.OHLCV
+                and self.freshness_seconds != definition.freshness_seconds
+            )
             or type(self.maximum_missing_records) is not int
             or self.maximum_missing_records != definition.maximum_missing_records
             or (
@@ -655,6 +684,41 @@ class SpotQualityPolicy:
         ):
             raise DataQualityAssessmentError("Invalid bounded Spot policy values.")
         cutoff = _utc("required_data_cutoff", self.required_data_cutoff)
+        if self.data_kind is ProviderDataKind.OHLCV:
+            interval_seconds = _SPOT_OHLCV_INTERVALS.get(self.timeframe or "")
+            if (
+                interval_seconds is None
+                or self.coverage_start is None
+                or self.coverage_end is None
+                or self.expected_record_count is None
+                or self.freshness_seconds != interval_seconds
+                or self.expected_transition_count != self.expected_record_count - 1
+            ):
+                raise DataQualityAssessmentError(
+                    "OHLCV policy requires an exact timeframe and closed window."
+                )
+            start = _utc("coverage_start", self.coverage_start)
+            end = _utc("coverage_end", self.coverage_end)
+            duration = (end - start).total_seconds()
+            if (
+                start >= end
+                or end > cutoff
+                or duration % interval_seconds
+                or int(duration // interval_seconds) != self.expected_record_count
+            ):
+                raise DataQualityAssessmentError(
+                    "OHLCV policy window does not match its expected population."
+                )
+            object.__setattr__(self, "coverage_start", start)
+            object.__setattr__(self, "coverage_end", end)
+        elif (
+            self.timeframe is not None
+            or self.coverage_start is not None
+            or self.coverage_end is not None
+        ):
+            raise DataQualityAssessmentError(
+                "Non-OHLCV policy cannot carry a candle window."
+            )
         if (
             type(self.metric_rules) is not tuple
             or len(self.metric_rules) != len(definition.metric_rules)
@@ -671,7 +735,11 @@ class SpotQualityPolicy:
             )
         if any(
             rule.unit
-            != (instrument[2] if rule.name.endswith("quantity") else instrument[1])
+            != (
+                instrument[2]
+                if rule.name.endswith("quantity") or rule.name == "volume"
+                else instrument[1]
+            )
             for rule in self.metric_rules
         ):
             raise DataQualityAssessmentError(
@@ -724,35 +792,69 @@ class SpotQualityPolicy:
         ):
             raise DataQualityAssessmentError("Unknown Spot policy reference.")
         parts = assessment_policy_version.split(":")
-        if len(parts) != 5 or not all(parts):
+        if not all(parts):
             raise DataQualityAssessmentError("Unknown Spot policy reference.")
         definition = _SPOT_POLICY_DEFINITIONS.get((assessment_policy_id, parts[0]))
         if definition is None:
+            raise DataQualityAssessmentError("Unknown Spot policy reference.")
+        is_ohlcv = definition.data_kind is ProviderDataKind.OHLCV
+        if len(parts) != (8 if is_ohlcv else 5):
             raise DataQualityAssessmentError("Unknown Spot policy reference.")
         instrument_id = parts[1]
         instrument = _SPOT_INSTRUMENT_PROFILES.get(instrument_id)
         if instrument is None:
             raise DataQualityAssessmentError("Unknown Spot instrument reference.")
-        try:
-            cutoff_token = parts[4]
+
+        def decode_time(value: str, field_name: str) -> datetime:
             if (
-                len(cutoff_token) != 22
-                or cutoff_token[8] != "T"
-                or cutoff_token[21] != "Z"
-                or not (cutoff_token[:8] + cutoff_token[9:21]).isascii()
-                or not (cutoff_token[:8] + cutoff_token[9:21]).isdecimal()
+                len(value) != 22
+                or value[8] != "T"
+                or value[21] != "Z"
+                or not (value[:8] + value[9:21]).isascii()
+                or not (value[:8] + value[9:21]).isdecimal()
             ):
-                raise ValueError
-            cutoff = datetime(
-                int(cutoff_token[:4]),
-                int(cutoff_token[4:6]),
-                int(cutoff_token[6:8]),
-                int(cutoff_token[9:11]),
-                int(cutoff_token[11:13]),
-                int(cutoff_token[13:15]),
-                int(cutoff_token[15:21]),
-                tzinfo=UTC,
-            )
+                raise DataQualityAssessmentError(f"Malformed Spot {field_name}.")
+            try:
+                parsed = datetime(
+                    int(value[:4]),
+                    int(value[4:6]),
+                    int(value[6:8]),
+                    int(value[9:11]),
+                    int(value[11:13]),
+                    int(value[13:15]),
+                    int(value[15:21]),
+                    tzinfo=UTC,
+                )
+            except ValueError as exc:
+                raise DataQualityAssessmentError(
+                    f"Malformed Spot {field_name}."
+                ) from exc
+            if _timestamp_token(parsed) != value:
+                raise DataQualityAssessmentError(f"Malformed Spot {field_name}.")
+            return parsed
+
+        try:
+            freshness_seconds: int | None
+            if is_ohlcv:
+                timeframe = parts[2]
+                record_index = 3
+                transition_index = 4
+                start = decode_time(parts[5], "coverage start")
+                end = decode_time(parts[6], "coverage end")
+                cutoff = decode_time(parts[7], "policy cutoff")
+                freshness_seconds = _SPOT_OHLCV_INTERVALS.get(timeframe, 0)
+                if not freshness_seconds:
+                    raise DataQualityAssessmentError("Unknown Spot OHLCV timeframe.")
+            else:
+                timeframe = None
+                record_index = 2
+                transition_index = 3
+                start = None
+                end = None
+                cutoff = decode_time(parts[4], "policy cutoff")
+                freshness_seconds = definition.freshness_seconds
+                if freshness_seconds is None:
+                    raise DataQualityAssessmentError("Unknown Spot policy reference.")
         except ValueError as exc:
             raise DataQualityAssessmentError("Malformed Spot policy cutoff.") from exc
 
@@ -766,12 +868,14 @@ class SpotQualityPolicy:
                 raise DataQualityAssessmentError("Malformed Spot policy population.")
             return count
 
-        expected_record_count = decode_count(parts[2])
-        expected_transition_count = decode_count(parts[3])
+        expected_record_count = decode_count(parts[record_index])
+        expected_transition_count = decode_count(parts[transition_index])
         rules = tuple(
             SpotQualityMetricRule(
                 name,
-                instrument[2] if name.endswith("quantity") else instrument[1],
+                instrument[2]
+                if name.endswith("quantity") or name == "volume"
+                else instrument[1],
                 minimum,
                 maximum,
             )
@@ -785,12 +889,15 @@ class SpotQualityPolicy:
             instrument[0],
             cutoff,
             expected_record_count,
-            definition.freshness_seconds,
+            freshness_seconds,
             rules,
             expected_transition_count=expected_transition_count,
             maximum_missing_records=definition.maximum_missing_records,
             require_independent_comparison=definition.require_independent_comparison,
             require_checksum=definition.require_checksum,
+            timeframe=timeframe,
+            coverage_start=start,
+            coverage_end=end,
         )
 
     @property
@@ -805,12 +912,23 @@ class SpotQualityPolicy:
             if self.expected_transition_count is None
             else str(self.expected_transition_count)
         )
-        cutoff = self.required_data_cutoff
-        cutoff_token = (
-            f"{cutoff.year:04d}{cutoff.month:02d}{cutoff.day:02d}T"
-            f"{cutoff.hour:02d}{cutoff.minute:02d}{cutoff.second:02d}"
-            f"{cutoff.microsecond:06d}Z"
-        )
+        cutoff_token = _timestamp_token(self.required_data_cutoff)
+        if self.data_kind is ProviderDataKind.OHLCV:
+            assert self.timeframe is not None
+            assert self.coverage_start is not None
+            assert self.coverage_end is not None
+            return ":".join(
+                (
+                    self.assessment_policy_version,
+                    self.instrument_id,
+                    self.timeframe,
+                    expected,
+                    transitions,
+                    _timestamp_token(self.coverage_start),
+                    _timestamp_token(self.coverage_end),
+                    cutoff_token,
+                )
+            )
         return (
             f"{self.assessment_policy_version}:{self.instrument_id}:"
             f"{expected}:{transitions}:{cutoff_token}"
@@ -1164,6 +1282,318 @@ def _spot_quality_report(
         duplicate_record_ids=all_duplicates,
         anomalies=all_anomalies,
     )
+
+
+def assess_approved_spot_ohlcv_v2(
+    snapshot: MarketSnapshot,
+    observations: tuple[MarketData, ...],
+    sources: tuple[DataSourceRecord, ...],
+    policy: DataQualityPolicy,
+    *,
+    timeframe: str,
+    assessed_at: datetime,
+    finalized_market_data_ids: tuple[UUID, ...] | None,
+    dataset: DatasetVersion | None = None,
+) -> DataQualityReportV2:
+    """Build an in-memory C-003 v2 view of the approved Spot OHLCV assessment.
+
+    The existing C-003 v1 assessor remains the single calculation authority for
+    the approved thresholds and seven quality scores. This producer validates
+    that exact immutable profile, then binds those measured outcomes to a
+    registry-resolved C-003 v2 policy and the canonical C-002 snapshot digest.
+    It does not persist or emit a v2 lineage record.
+    """
+    if type(policy) is not DataQualityPolicy or type(snapshot) is not MarketSnapshot:
+        raise DataQualityAssessmentError(
+            "Approved Spot policy and snapshot are required."
+        )
+    interval = _SPOT_OHLCV_INTERVALS.get(timeframe)
+    instrument = _SPOT_INSTRUMENT_PROFILES.get(policy.instrument_id)
+    approved_bounds = {
+        "open": (Decimal("1e-18"), Decimal("1e18")),
+        "high": (Decimal("1e-18"), Decimal("1e18")),
+        "low": (Decimal("1e-18"), Decimal("1e18")),
+        "close": (Decimal("1e-18"), Decimal("1e18")),
+        "volume": (Decimal("0"), Decimal("1e18")),
+    }
+    bounds = {item.name: (item.minimum, item.maximum) for item in policy.metric_bounds}
+    if (
+        interval is None
+        or instrument is None
+        or policy.policy_version != _APPROVED_SPOT_OHLCV_POLICY_ID
+        or policy.data_kind is not ProviderDataKind.OHLCV
+        or policy.venue_id != instrument[0]
+        or policy.instrument_id != snapshot.instrument_id
+        or policy.venue_id != snapshot.venue_id
+        or policy.required_data_cutoff != snapshot.as_of
+        or policy.interval_seconds != interval
+        or policy.freshness_seconds != interval
+        or policy.maximum_missing_intervals != 0
+        or policy.required_metrics != ("open", "high", "low", "close", "volume")
+        or bounds != approved_bounds
+        or policy.require_independent_comparison
+        or policy.coverage_end > snapshot.as_of
+        or (policy.coverage_end - policy.coverage_start).total_seconds() % interval
+    ):
+        raise DataQualityAssessmentError(
+            "OHLCV policy differs from the approved immutable Spot profile."
+        )
+    expected_count = int(
+        (policy.coverage_end - policy.coverage_start).total_seconds() // interval
+    )
+    if not 2 <= expected_count <= _MAX_SPOT_RECORDS:
+        raise DataQualityAssessmentError(
+            "Spot quality window is outside policy bounds."
+        )
+    if (
+        type(sources) is not tuple
+        or not sources
+        or any(
+            source.provider_id != "binance-spot-public"
+            or source.provider_version != "spot-api-2026-09"
+            or source.raw_schema_version != "spot-public-v1"
+            or source.adapter_version != "binance-spot-adapter-v1"
+            for source in sources
+        )
+    ):
+        raise DataQualityAssessmentError(
+            "Approved Spot provider and adapter provenance is required."
+        )
+
+    profile = _SPOT_POLICY_DEFINITIONS.get((_APPROVED_SPOT_OHLCV_POLICY_ID, "1"))
+    if profile is None:
+        raise DataQualityAssessmentError("Approved Spot C-003 v2 policy is missing.")
+    rules = tuple(
+        SpotQualityMetricRule(
+            name,
+            instrument[2] if name == "volume" else instrument[1],
+            minimum,
+            maximum,
+        )
+        for name, minimum, maximum in profile.metric_rules
+    )
+    resolved_policy = SpotQualityPolicy(
+        assessment_policy_id=_APPROVED_SPOT_OHLCV_POLICY_ID,
+        assessment_policy_version="1",
+        data_kind=ProviderDataKind.OHLCV,
+        instrument_id=policy.instrument_id,
+        venue_id=policy.venue_id,
+        required_data_cutoff=policy.required_data_cutoff,
+        expected_record_count=expected_count,
+        freshness_seconds=interval,
+        metric_rules=rules,
+        expected_transition_count=expected_count - 1,
+        timeframe=timeframe,
+        coverage_start=policy.coverage_start,
+        coverage_end=policy.coverage_end,
+    )
+    legacy = assess_data_quality(
+        snapshot,
+        observations,
+        sources,
+        policy,
+        assessed_at=assessed_at,
+        finalized_market_data_ids=finalized_market_data_ids,
+        dataset=dataset,
+    )
+    evidence = DataQualityEvidenceReference(
+        "C-002",
+        str(snapshot.snapshot_id),
+        snapshot.schema_version,
+        canonical_sha256(snapshot),
+    )
+    scores = {
+        DataQualityDimension.COMPLETENESS: legacy.completeness,
+        DataQualityDimension.FRESHNESS: legacy.freshness,
+        DataQualityDimension.ACCURACY: legacy.accuracy,
+        DataQualityDimension.CONSISTENCY: legacy.consistency,
+        DataQualityDimension.SOURCE_RELIABILITY: legacy.source_reliability,
+        DataQualityDimension.COVERAGE: legacy.coverage,
+        DataQualityDimension.CONTINUITY: legacy.continuity,
+    }
+    recent_slots = min(
+        expected_count,
+        max(
+            1,
+            (policy.freshness_seconds + policy.interval_seconds - 1)
+            // policy.interval_seconds,
+        ),
+    )
+    denominators = {
+        DataQualityDimension.COMPLETENESS: len(observations)
+        * len(policy.required_metrics),
+        DataQualityDimension.FRESHNESS: recent_slots,
+        DataQualityDimension.ACCURACY: len(observations),
+        DataQualityDimension.CONSISTENCY: len(observations),
+        DataQualityDimension.SOURCE_RELIABILITY: len(observations),
+        DataQualityDimension.COVERAGE: expected_count,
+        DataQualityDimension.CONTINUITY: expected_count - 1,
+    }
+    basis_units = {
+        DataQualityDimension.COMPLETENESS: "metric_cells",
+        DataQualityDimension.FRESHNESS: "recent_candle_slots",
+        DataQualityDimension.ACCURACY: "observations",
+        DataQualityDimension.CONSISTENCY: "observations",
+        DataQualityDimension.SOURCE_RELIABILITY: "observations",
+        DataQualityDimension.COVERAGE: "candle_slots",
+        DataQualityDimension.CONTINUITY: "transitions",
+    }
+
+    def measured_dimension(
+        dimension: DataQualityDimension,
+    ) -> DataQualityDimensionResult:
+        score = scores[dimension]
+        denominator = denominators[dimension]
+        numerator = int(
+            (score * Decimal(denominator)).to_integral_value(rounding=ROUND_HALF_EVEN)
+        )
+        if (
+            numerator < 0
+            or numerator > denominator
+            or _ratio(numerator, denominator) != score
+        ):
+            raise DataQualityAssessmentError(
+                "C-003 v2 cannot represent the exact C-003 v1 measurement basis."
+            )
+        return DataQualityDimensionResult(
+            dimension=dimension,
+            state=DataQualityDimensionState.MEASURED,
+            score=score,
+            numerator=numerator if numerator == 0 else None,
+            denominator=denominator if numerator == 0 else None,
+            basis_unit=basis_units[dimension] if numerator == 0 else None,
+            evidence_reference=evidence,
+        )
+
+    dimensions = tuple(
+        measured_dimension(dimension) for dimension in DataQualityDimension
+    )
+    report_id = uuid5(
+        _SPOT_OHLCV_REPORT_NAMESPACE,
+        f"{canonical_sha256((snapshot, observations, sources, policy))}:"
+        f"{resolved_policy.resolved_policy_version}:{legacy.assessed_at.isoformat()}",
+    )
+    return DataQualityReportV2(
+        report_id=report_id,
+        snapshot_id=snapshot.snapshot_id,
+        assessed_at=legacy.assessed_at,
+        required_data_cutoff=legacy.required_data_cutoff,
+        assessment_policy_id=resolved_policy.assessment_policy_id,
+        assessment_policy_version=resolved_policy.resolved_policy_version,
+        dimensions=dimensions,
+        status=legacy.status,
+        missing_fields=legacy.missing_fields,
+        invalid_record_ids=legacy.invalid_record_ids,
+        duplicate_record_ids=legacy.duplicate_record_ids,
+        anomalies=legacy.anomalies,
+        source_conflicts=legacy.source_conflicts,
+    )
+
+
+def validate_spot_ohlcv_quality_v2(
+    quality: DataQualityReportV2,
+    *,
+    snapshot: MarketSnapshot,
+    observations: tuple[MarketData, ...],
+    sources: tuple[DataSourceRecord, ...],
+    timeframe: str,
+) -> SpotQualityPolicy:
+    """Validate a VALID v2 assessment against its exact OHLCV snapshot scope."""
+    if type(quality) is not DataQualityReportV2:
+        raise DataQualityAssessmentError("C-003 schema 2 quality is required.")
+    if (
+        quality.status is not DataQualityStatus.VALID
+        or quality.snapshot_id != snapshot.snapshot_id
+        or quality.required_data_cutoff != snapshot.as_of
+        or quality.assessed_at < snapshot.as_of
+        or type(observations) is not tuple
+        or type(sources) is not tuple
+        or len(sources) != len(observations)
+        or not all(type(item) is MarketData for item in observations)
+        or not all(type(item) is DataSourceRecord for item in sources)
+        or tuple(item.market_data_id for item in observations)
+        != snapshot.market_data_ids
+        or tuple(item.source_record_id for item in observations)
+        != snapshot.source_record_ids
+        or tuple(item.source_record_id for item in sources)
+        != snapshot.source_record_ids
+        or not observations
+        or snapshot.dataset_version is not None
+    ):
+        raise DataQualityAssessmentError(
+            "C-003 schema 2 report does not match a VALID exact snapshot."
+        )
+    policy = SpotQualityPolicy.resolve_reference(
+        quality.assessment_policy_id, quality.assessment_policy_version
+    )
+    if (
+        policy.data_kind is not ProviderDataKind.OHLCV
+        or policy.assessment_policy_id != _APPROVED_SPOT_OHLCV_POLICY_ID
+        or policy.instrument_id != snapshot.instrument_id
+        or policy.venue_id != snapshot.venue_id
+        or policy.timeframe != timeframe
+        or policy.expected_record_count != len(observations)
+        or policy.expected_transition_count != len(observations) - 1
+        or policy.required_data_cutoff != snapshot.as_of
+        or policy.coverage_start != observations[0].event_time
+        or policy.coverage_end
+        != observations[-1].event_time + timedelta(seconds=policy.freshness_seconds)
+        or tuple(item.dimension for item in quality.dimensions)
+        != tuple(DataQualityDimension)
+        or any(
+            item.state is not DataQualityDimensionState.MEASURED
+            for item in quality.dimensions
+        )
+    ):
+        raise DataQualityAssessmentError(
+            "C-003 schema 2 policy or evidence is not bound to this OHLCV window."
+        )
+    if any(
+        observation.instrument_id != snapshot.instrument_id
+        or observation.venue_id != snapshot.venue_id
+        or observation.observation_type != ProviderDataKind.OHLCV.value
+        or observation.source_record_id != source.source_record_id
+        or source.provider_id != "binance-spot-public"
+        or source.provider_version != "spot-api-2026-09"
+        or source.raw_schema_version != "spot-public-v1"
+        or source.adapter_version != "binance-spot-adapter-v1"
+        for observation, source in zip(observations, sources, strict=True)
+    ):
+        raise DataQualityAssessmentError("C-001/C-091 source binding is invalid.")
+    definition = _SPOT_POLICY_DEFINITIONS[(_APPROVED_SPOT_OHLCV_POLICY_ID, "1")]
+    metric_bounds = tuple(
+        MetricBound(name, minimum, maximum)
+        for name, minimum, maximum in definition.metric_rules
+    )
+    data_policy = DataQualityPolicy(
+        policy_version=_APPROVED_SPOT_OHLCV_POLICY_ID,
+        data_kind=ProviderDataKind.OHLCV,
+        instrument_id=policy.instrument_id,
+        venue_id=policy.venue_id,
+        required_data_cutoff=policy.required_data_cutoff,
+        coverage_start=policy.coverage_start,
+        coverage_end=policy.coverage_end,
+        interval_seconds=policy.freshness_seconds,
+        freshness_seconds=policy.freshness_seconds,
+        maximum_missing_intervals=definition.maximum_missing_records,
+        required_metrics=tuple(name for name, _, _ in definition.metric_rules),
+        metric_bounds=metric_bounds,
+        require_independent_comparison=definition.require_independent_comparison,
+    )
+    expected = assess_approved_spot_ohlcv_v2(
+        snapshot,
+        observations,
+        sources,
+        data_policy,
+        timeframe=timeframe,
+        assessed_at=quality.assessed_at,
+        finalized_market_data_ids=tuple(item.market_data_id for item in observations),
+    )
+    if expected != quality:
+        raise DataQualityAssessmentError(
+            "C-003 schema 2 report digest or measured results do not match exact inputs."
+        )
+    return policy
 
 
 def assess_normalized_spot_trades(
