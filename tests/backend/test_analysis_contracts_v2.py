@@ -913,9 +913,15 @@ def test_v1_analysis_records_keep_schema_and_canonical_identity() -> None:
         assert canonical_sha256(record) == "".join(expected[0])
         assert sha256(encoded.encode("utf-8")).hexdigest() == "".join(expected[1])
         assert decode_analysis_contract(encoded) == record
-    assert (
-        canonical_sha256(context.adversarial)
-        == "5875c3161dd55614" "b45deb5f0ff5fd94" "8ab06bc52a086f14" "5badc3ca511780e2"
+    assert canonical_sha256(context.adversarial) == (
+        "5875c316"
+        "1dd55614"
+        "b45deb5f"
+        "0ff5fd94"
+        "8ab06bc5"
+        "2a086f14"
+        "5badc3ca"
+        "511780e2"
     )
     with pytest.raises(AnalysisV2ContractError, match="Unsupported analysis"):
         encode_analysis_contract(context.adversarial)
@@ -1126,8 +1132,26 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         canonical_sha256(context),
         sha256(encoded_context.encode("utf-8")).hexdigest(),
     ) == (
-        "425ccdc1aa936d66" "e2485ee340f01f83" "10bf70b3862a5cd4" "12b03bc757905cc8",
-        "ed252af498de34df" "f2848739f860b3a9" "80a3c845ddd38b96" "c58c63eaf50c9b64",
+        (
+            "425ccdc1"
+            "aa936d66"
+            "e2485ee3"
+            "40f01f83"
+            "10bf70b3"
+            "862a5cd4"
+            "12b03bc7"
+            "57905cc8"
+        ),
+        (
+            "ed252af4"
+            "98de34df"
+            "f2848739"
+            "f860b3a9"
+            "80a3c845"
+            "ddd38b96"
+            "c58c63ea"
+            "f50c9b64"
+        ),
     )
     _, resolved = _resolved(case)
     validate_order_flow_assessment(
@@ -2421,8 +2445,26 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         canonical_sha256(context),
         sha256(encoded_context.encode("utf-8")).hexdigest(),
     ) == (
-        "ab3cc54579a2f800" "0f14a5eb53bc2c16" "989bafd2e0c9b86c" "7f017f7b3fa99d63",
-        "ce3ee2799fff6e16" "d25607dede8c5627" "c5b393e2815dddd2" "df0883332e76a2c5",
+        (
+            "ab3cc545"
+            "79a2f800"
+            "0f14a5eb"
+            "53bc2c16"
+            "989bafd2"
+            "e0c9b86c"
+            "7f017f7b"
+            "3fa99d63"
+        ),
+        (
+            "ce3ee279"
+            "9fff6e16"
+            "d25607de"
+            "de8c5627"
+            "c5b393e2"
+            "815dddd2"
+            "df088333"
+            "2e76a2c5"
+        ),
     )
     for changed_reference in (
         replace(c093, schema_version="5"),

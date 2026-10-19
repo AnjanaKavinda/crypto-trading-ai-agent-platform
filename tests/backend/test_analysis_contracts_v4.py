@@ -1342,8 +1342,26 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
         canonical_sha256(actual_context),
         sha256(actual_context_wire.encode("utf-8")).hexdigest(),
     ) == (
-        "195248d9a31b7ec7" "8dc399f1e9d0af08" "e9a3e43f45e848c3" "d2bd79b4e1b4d0f8",
-        "2d571fc60f32c2e3" "aa69fdb35be1ee2a" "f87255e99b93816a" "86981ccedbd495b4",
+        (
+            "195248d9"
+            "a31b7ec7"
+            "8dc399f1"
+            "e9d0af08"
+            "e9a3e43f"
+            "45e848c3"
+            "d2bd79b4"
+            "e1b4d0f8"
+        ),
+        (
+            "2d571fc6"
+            "0f32c2e3"
+            "aa69fdb3"
+            "5be1ee2a"
+            "f87255e9"
+            "9b93816a"
+            "86981cce"
+            "dbd495b4"
+        ),
     )
     adversarial_method = VersionReference("spot-adversarial-assessment", "v2")
     adversarial_model = VersionReference("spot-adversarial-model", "v1")
