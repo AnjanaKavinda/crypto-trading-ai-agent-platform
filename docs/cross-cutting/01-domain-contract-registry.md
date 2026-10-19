@@ -29,7 +29,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-006 | MarketContext | Analysis | Strategy | Chat 5 analytical synthesis; cannot authorize trades. |
 | C-007 | AnalysisSnapshot | Analysis | Strategy, Audit, Learning | Immutable/versioned analytical output snapshot. |
 | C-008 | EvidenceItem | Analysis/Data | Strategy, Validation, UX, Audit | Traceable evidence with source, time, method, reliability and expiry. |
-| C-009 | ConfluenceAssessment | Meta Analysis | Strategy | Weighted support/neutral/contradiction with independence analysis. |
+| C-009 | ConfluenceAssessment | Meta Analysis | Strategy | Evidence-backed categorical support/neutral/contradiction with explicit dependence; never raw vote counting. |
 | C-010 | ConflictAssessment | Meta Analysis | Strategy, Safety | Conflicting evidence and severity. |
 | C-011 | FundamentalAssessment | Fundamental | MarketContext | Crypto-native fundamental evidence. |
 | C-012 | TechnicalAssessment | Technical | MarketContext | Deterministic/structured technical findings. |
@@ -113,7 +113,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-090 | CounterfactualAnalysis | Evaluation | Governance, Strategy Evaluation | Counterfactual outcomes remain distinct from factual trade outcomes and audit history. |
 | C-091 | DataSourceRecord | Data | Analysis, Validation, Audit | Immutable source/provider/time/licensing/provenance identity for ingested data. |
 | C-092 | DatasetVersion | Data Governance | Validation, Research, Audit | Exact reproducible dataset composition and lineage; never silently mutated. |
-| C-093 | AgentIndependenceReport | Evaluation | Meta Analysis, Governance, Audit | Independence and correlation limits must prevent duplicate evidence/agent reasoning from being counted as independent confirmation. |
+| C-093 | AgentIndependenceReport | Evaluation | Meta Analysis, Governance, Audit | Records exact evidence/source/binding/method overlap; unknown remains unknown and no statistical independence or correlation is inferred. |
 | C-094 | BiasCheckReport | Quant Validation | Validation, Governance, Audit | Leakage, survivorship, look-ahead, and selection-bias checks are explicit and auditable. |
 | C-095 | ExecutionReport | Execution | Reconciliation, Monitoring, Audit, Safety | Attributable execution outcome including partial/unknown/failure states; never treated as reconciled by assumption. |
 | C-096 | ReconciliationReport | Reconciliation | Portfolio, Risk, Safety, Audit | Internal-versus-exchange deltas remain explicit and block conflicting action while unresolved. |
@@ -209,10 +209,39 @@ The existing C-008 schema-2 fields are reused only through the C-007 v4
 binding-aware validator; no C-008 wire field or historical payload is changed.
 C-009/C-010 schema 3 retain the #370 categorical states and bind to C-007
 schema 4. C-006 schema 4 contains those new output types and an exact C-007 v4
-reference. C-093 remains owned by #67: its schema and lineage are not fixed by
-this registry entry and must be resolved by that owner's registry before
-validation. This path grants no calculation, qualification, risk, approval, or
-execution authority.
+reference. C-093 remains owned by #67; its exact schema/lineage, method, and
+digest must resolve through that owner's registry before validation. This
+path grants no calculation, qualification, risk, approval, or execution
+authority.
+
+Issue #67 registers the first C-093 owner version as schema/lineage `1/1`
+through `C093Registry`. The canonical immutable report binds the exact C-002
+snapshot, C-007 v4 manifest ID/schema, C-005 regime, C-003 quality report,
+canonical C-007 Spot binding digest, C-008 evidence, participant methods, and
+analysis window. The report deliberately does not include the final C-007
+manifest digest because that manifest commits to this report's output
+reference. Pairwise
+factors record observed shared evidence, sources, bindings, windows, methods,
+agents, models, and prompts. Shared inputs are marked `PARTIALLY_DEPENDENT`;
+absence of observed overlap is `UNKNOWN`. The report never claims statistical
+independence or estimates statistical correlation. C-093 references resolve
+only when the complete identity, owner-registered versions/method, and
+canonical digest match.
+
+The Spot C-009/C-010 schema-3 calculators consume the resolver-validated C-005
+regime and exact READY findings. C-009 combines the regime direction with
+typed finding directions and preserves categorical component strengths, but
+returns `INDETERMINATE` with aggregate strength `UNKNOWN`: C-007 v4 has one
+OHLCV input and cannot establish the meaningfully independent streams that
+Chat 5 requires for a valid confluence. Analytical confidence remains
+unavailable (`NOT_ASSESSED`). It does not weight or count correlated features.
+C-010 emits records only for
+opposing directions; unresolved materiality remains `UNKNOWN`, and critical
+severity requires an explicitly invalid premise or unsafe-to-rely finding.
+Both calculators preserve exact evidence, method, snapshot, quality, and
+expiry references and grant no strategy, risk, approval, or execution
+authority. This is the bounded Spot analysis slice; full Chat 5 and held
+issues #39–#43 remain open/on hold.
 
 ## Canonical name / alias / supersession clarifications
 

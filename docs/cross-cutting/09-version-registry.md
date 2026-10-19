@@ -274,11 +274,10 @@ or producer behavior is enabled.
 
 The implementation fixes C-005's current model identity as schema/lineage
 `1/1` from the existing `MarketRegime` contract, and C-008 schema/lineage as
-`2/2` from its existing versioned model. C-093 remains intentionally
-unversioned in this registry entry: callers must provide exact
-registry-resolved references from issue #67, and the validator compares the
-complete reference including digest. It does not assume or register a C-093
-schema or lineage version.
+`2/2` from its existing versioned model. At the time #374 was implemented,
+C-093 intentionally remained unversioned; the reference boundary did not
+assume its schema or lineage. Issue #67 now registers the first canonical C-093
+version and its resolver below.
 
 Shared C-009 components over the single OHLCV binding cannot claim
 `INDEPENDENT`; the versioned contract makes dependence explicit and does not
@@ -291,3 +290,24 @@ strategy eligibility, validation, risk, approval, order, or execution behavior
 is enabled. #67 remains the sole owner of C-093 and calculations; #68 remains
 downstream. The 13-chat target and full Chat 5 requirements remain open, and
 held issues #39–#43 are unchanged.
+
+## Issue #67 — C-093 and deterministic Spot meta-analysis
+
+| Contract / method | Schema / lineage or method version | Binding and calculation rule |
+|---|---:|---|
+| C-093 `AgentIndependenceReport` | `1 / 1` | Canonical immutable report; exact C-002 snapshot and digest, C-007 v4 manifest ID/schema plus canonical binding digest, C-005 regime and digest, C-003 v2 quality identity/digest, evidence/source/observation IDs, time window, methods, and expiry. The final manifest digest is excluded to avoid a self-reference cycle. |
+| C-093 reference | `agent-independence / c093-deterministic-v1` | Resolved only by `C093Registry`; full contract/id/schema/lineage/method/digest match required. |
+| C-009 Spot confluence | `spot-confluence / spot-confluence-v1` | C-005 direction plus READY findings bound to the same validated C-007 v4 scope; preserve per-component strength and dependence, but aggregate status remains INDETERMINATE/UNKNOWN because the single OHLCV source cannot establish independent evidence streams. |
+| C-010 Spot conflict | `spot-conflict / spot-conflict-v1` | Record only actual opposing directions from the exact regime/findings; severity follows the C-010 categorical table; missing materiality is UNKNOWN and CRITICAL requires explicit unsafe/invalid-premise evidence. |
+
+Shared source, observation, or binding evidence records `PARTIALLY_DEPENDENT`;
+shared windows/methods/agent/model/prompt also record partial dependence.
+No observed overlap is `UNKNOWN`, never `INDEPENDENT`. These are categorical
+evidence-overlap labels, not estimates of statistical correlation. Distinct
+feature names, methods, agents, models, or prompts cannot establish
+independence. C-009 does not count or weight correlated findings and therefore
+keeps the current single-source Spot profile INDETERMINATE; it does not compute
+probability, win rate, expected return, or profitability. This
+analysis-only implementation does not alter C-006, create strategy/risk
+eligibility, resolve conflicts, or enable approvals or execution. Full Chat 5
+and held issues #39–#43 remain open/on hold; #68 remains downstream.

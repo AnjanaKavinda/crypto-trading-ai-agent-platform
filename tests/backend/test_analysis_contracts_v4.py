@@ -18,32 +18,42 @@ from trading_platform_api.analysis import (
     AnalyticalDirection,
     AnalyticalUncertainty,
     AssessmentStatus,
+    C093Registry,
     ClaimClassification,
     ConflictAssessmentV3,
+    ConflictCalculationState,
     ConflictEvidenceStateV2,
     ConflictMaterialityV2,
     ConflictReasonV2,
     ConflictSeverityV2,
     ConfluenceAssessmentV3,
+    ConfluenceCalculationState,
     ConfluenceComponentV2,
     ConfluenceEvidenceStrengthV2,
     ConfluenceStateV2,
     ConfluenceStatusV2,
+    DependenceFactor,
     DomainObservation,
     EvidenceDependenceV2,
     EvidenceItemV2,
     EvidenceRelation,
+    FindingReadiness,
     FundamentalAssessment,
     InputModalityV4,
     MarketContextV4,
     MarketRegime,
+    MetaAnalysisReason,
     ObservationSourceBinding,
     RegimeDimension,
     ResolutionStatus,
+    SpotMetaFinding,
     SpotOHLCVBindingV4,
     UncertaintyCategory,
     VersionReference,
     analysis_snapshot_v4_sha256,
+    assess_agent_independence,
+    calculate_spot_conflicts_v3,
+    calculate_spot_confluence_v3,
     calculate_spot_market_regime,
     create_analysis_snapshot_v4,
     decode_analysis_contract,
@@ -52,6 +62,7 @@ from trading_platform_api.analysis import (
     validate_evidence_item_v2_for_v4,
     validate_market_context_v4,
 )
+from trading_platform_api.analysis.spot_meta_analysis import _conflict_severity
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data import (
     AssessmentPolicyReference,
@@ -952,4 +963,535 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
             evidence={item.evidence_id: item for item in v2_evidence},
             supported_independence_reports=supported_c093,
             now=NOW,
+        )
+
+    evidence_map = {item.evidence_id: item for item in v2_evidence}
+    first, second = v2_evidence[:2]
+    first_finding = SpotMetaFinding(
+        _id(4100),
+        "spot-trend",
+        profile.regime.direction,
+        first.relation,
+        ConfluenceEvidenceStrengthV2.MODERATE,
+        FindingReadiness.READY,
+        (first.evidence_id,),
+        (binding_id,),
+        first.method,
+        ConflictMaterialityV2.MATERIAL,
+        False,
+        False,
+    )
+    second_finding = SpotMetaFinding(
+        _id(4101),
+        "spot-momentum",
+        profile.regime.direction,
+        second.relation,
+        ConfluenceEvidenceStrengthV2.STRONG,
+        FindingReadiness.READY,
+        (second.evidence_id,),
+        (binding_id,),
+        second.method,
+        ConflictMaterialityV2.MATERIAL,
+        False,
+        False,
+    )
+    confluence, independence = calculate_spot_confluence_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(first_finding, second_finding),
+        now=NOW,
+    )
+    assert confluence.state is ConfluenceCalculationState.INDETERMINATE
+    assert confluence.reason is MetaAnalysisReason.DEPENDENCE_UNESTABLISHED
+    assert confluence.assessment.status is ConfluenceStatusV2.INDETERMINATE
+    assert confluence.assessment.state is ConfluenceStateV2.INDETERMINATE
+    assert (
+        confluence.assessment.evidence_strength is ConfluenceEvidenceStrengthV2.UNKNOWN
+    )
+    assert tuple(item.direction for item in confluence.assessment.components) == (
+        profile.regime.direction,
+        profile.regime.direction,
+    )
+    assert all(
+        item.dependence is EvidenceDependenceV2.PARTIALLY_DEPENDENT
+        for item in confluence.assessment.components
+    )
+    assert confluence.assessment.analytical_confidence.value is None
+    assert confluence.assessment.analytical_confidence.method is None
+    assert confluence.assessment.analytical_confidence.unavailable_reason is not None
+    assert set(confluence.assessment.evidence_ids) == {
+        *profile.regime.evidence_ids,
+        first.evidence_id,
+        second.evidence_id,
+    }
+    assert independence.overall_dependence is EvidenceDependenceV2.PARTIALLY_DEPENDENT
+    assert all(
+        item.dependence is EvidenceDependenceV2.PARTIALLY_DEPENDENT
+        for item in independence.comparisons
+    )
+    assert independence.statistical_independence_established is False
+    assert {item.domain for item in independence.participants} == {
+        "spot-market-regime",
+        "spot-trend",
+        "spot-momentum",
+    }
+    assert all(
+        item.input_binding_ids == (binding_id,) for item in independence.participants
+    )
+    observed_factors = {
+        factor for item in independence.comparisons for factor in item.factors
+    }
+    assert {
+        DependenceFactor.SHARED_BINDING,
+        DependenceFactor.SHARED_SOURCE,
+        DependenceFactor.SHARED_OBSERVATION,
+        DependenceFactor.OVERLAPPING_WINDOW,
+    }.issubset(observed_factors)
+    assert all(
+        DependenceFactor.SHARED_METHOD in item.factors
+        for item in independence.comparisons
+        if item.left_finding_id == first_finding.finding_id
+        and item.right_finding_id == second_finding.finding_id
+    )
+    assert independence.snapshot_sha256 == canonical_sha256(snapshot)
+    assert independence.manifest_id == manifest.snapshot_id
+    assert independence.binding_sha256 == canonical_sha256(binding)
+    assert independence.regime_sha256 == canonical_sha256(profile.regime)
+    assert independence.quality_report_sha256 == canonical_sha256(quality_v2)
+    assert independence.method.component == "agent-independence"
+    assert (
+        decode_analysis_contract(encode_analysis_contract(independence)) == independence
+    )
+    registered_ref = C093Registry.reference(independence)
+    assert (
+        C093Registry.resolve(registered_ref, {independence.report_id: independence})
+        == independence
+    )
+    with pytest.raises(AnalysisV2ContractError, match="digest mismatch"):
+        C093Registry.resolve(
+            replace(registered_ref, content_sha256="f" * 64),
+            {independence.report_id: independence},
+        )
+    with pytest.raises(AnalysisV2ContractError, match="unsupported"):
+        C093Registry.resolve(
+            replace(registered_ref, schema_version="2"),
+            {independence.report_id: independence},
+        )
+    with pytest.raises(AnalysisV2ContractError, match="unsupported"):
+        C093Registry.resolve(
+            replace(
+                registered_ref,
+                method=VersionReference("unregistered-method", "v9"),
+            ),
+            {independence.report_id: independence},
+        )
+    with pytest.raises(AnalysisV2ContractError, match="statistical independence"):
+        replace(
+            independence.comparisons[0],
+            dependence=EvidenceDependenceV2.INDEPENDENT,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="does not claim statistical"):
+        replace(independence, statistical_independence_established=True)
+    with pytest.raises(ValueError, match="limitations must be a tuple"):
+        replace(independence, limitations=["mutable limitation"])
+    with pytest.raises(AnalysisV2ContractError, match="overall dependence"):
+        replace(independence, overall_dependence=EvidenceDependenceV2.UNKNOWN)
+    with pytest.raises(AnalysisV2ContractError, match="digest mismatch"):
+        C093Registry.resolve(registered_ref, {})
+
+    permuted_confluence, permuted_independence = calculate_spot_confluence_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(second_finding, first_finding),
+        now=NOW,
+    )
+    assert permuted_confluence == confluence
+    assert permuted_independence == independence
+
+    conflicts = calculate_spot_conflicts_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(
+            first_finding,
+            replace(second_finding, direction=AnalyticalDirection.BEARISH),
+        ),
+        now=NOW,
+    )
+    assert conflicts.state is ConflictCalculationState.ASSESSED
+    assert any(
+        item.severity is ConflictSeverityV2.HIGH
+        and item.evidence_state is ConflictEvidenceStateV2.VALID
+        and item.direct_opposition is True
+        for item in conflicts.assessments
+    )
+    assert all(
+        item.resolution_status is ResolutionStatus.UNRESOLVED
+        for item in conflicts.assessments
+    )
+    assert any(
+        item.severity is ConflictSeverityV2.LOW
+        and item.materiality is ConflictMaterialityV2.LOCALIZED
+        and item.direct_opposition is True
+        for item in calculate_spot_conflicts_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            findings=(
+                replace(first_finding, materiality=ConflictMaterialityV2.LOCALIZED),
+                replace(
+                    second_finding,
+                    direction=AnalyticalDirection.BEARISH,
+                    materiality=ConflictMaterialityV2.LOCALIZED,
+                ),
+            ),
+            now=NOW,
+        ).assessments
+    )
+    assert (
+        _conflict_severity(
+            ConflictMaterialityV2.MATERIAL,
+            required_premise_invalid=False,
+            unsafe_to_rely=False,
+            direct_opposition=False,
+        )
+        is ConflictSeverityV2.MODERATE
+    )
+    assert (
+        _conflict_severity(
+            ConflictMaterialityV2.UNKNOWN,
+            required_premise_invalid=False,
+            unsafe_to_rely=False,
+            direct_opposition=True,
+        )
+        is ConflictSeverityV2.UNKNOWN
+    )
+    assert (
+        _conflict_severity(
+            ConflictMaterialityV2.MATERIAL,
+            required_premise_invalid=True,
+            unsafe_to_rely=False,
+            direct_opposition=False,
+        )
+        is ConflictSeverityV2.CRITICAL
+    )
+    assert any(
+        item.severity is ConflictSeverityV2.UNKNOWN
+        and item.evidence_state is ConflictEvidenceStateV2.INSUFFICIENT
+        and item.status_reason is ConflictReasonV2.MATERIALITY_UNESTABLISHED
+        and item.direct_opposition is None
+        for item in conflicts.assessments
+    )
+    critical_conflicts = calculate_spot_conflicts_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(
+            first_finding,
+            replace(
+                second_finding,
+                direction=AnalyticalDirection.BEARISH,
+                materiality=ConflictMaterialityV2.UNKNOWN,
+                unsafe_to_rely=True,
+            ),
+        ),
+        now=NOW,
+    )
+    assert any(
+        item.severity is ConflictSeverityV2.CRITICAL
+        and item.unsafe_to_rely is True
+        and item.required_premise_invalid is None
+        for item in critical_conflicts.assessments
+    )
+    assert all(
+        item.resolution_status is ResolutionStatus.UNRESOLVED
+        for item in critical_conflicts.assessments
+    )
+    no_conflict = calculate_spot_conflicts_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(first_finding, second_finding),
+        now=NOW,
+    )
+    assert no_conflict.state is ConflictCalculationState.NO_CONFLICT
+    assert no_conflict.assessments == ()
+    neutral_only = calculate_spot_conflicts_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(
+            replace(first_finding, direction=AnalyticalDirection.NEUTRAL),
+            second_finding,
+        ),
+        now=NOW,
+    )
+    assert neutral_only.state is ConflictCalculationState.NO_CONFLICT
+    assert neutral_only.assessments == ()
+    final_outputs = (
+        *manifest.analysis_outputs,
+        AnalysisOutputReferenceV4(
+            "C-009",
+            confluence.assessment.assessment_id,
+            "3",
+            "3",
+            canonical_sha256(confluence.assessment),
+        ),
+        registered_ref,
+        *(
+            AnalysisOutputReferenceV4(
+                "C-010",
+                item.assessment_id,
+                "3",
+                "3",
+                canonical_sha256(item),
+            )
+            for item in conflicts.assessments
+        ),
+    )
+    final_manifest = create_analysis_snapshot_v4(
+        snapshot_id=manifest.snapshot_id,
+        asset=manifest.asset,
+        instrument_id=manifest.instrument_id,
+        venue_id=manifest.venue_id,
+        timeframe=manifest.timeframe,
+        analysis_cutoff=manifest.analysis_cutoff,
+        created_at=manifest.created_at,
+        expires_at=manifest.expires_at,
+        bindings=manifest.bindings,
+        assessment_ids=upgraded_manifest.assessment_ids,
+        evidence_ids=manifest.evidence_ids,
+        provenance=manifest.provenance,
+        analysis_outputs=tuple(
+            sorted(
+                final_outputs,
+                key=lambda item: (item.contract_id, str(item.record_id)),
+            )
+        ),
+    )
+    final_resolved = resolve_analysis_snapshot_v4(
+        final_manifest,
+        now=NOW,
+        snapshots={snapshot.snapshot_id: snapshot},
+        reports={quality_v2.report_id: quality_v2},
+        observations={item.market_data_id: item for item in observations},
+        sources={item.source_record_id: item for item in sources},
+        regimes={profile.regime.regime_id: profile.regime},
+        evidence=evidence_map,
+    )
+    repeated_confluence, repeated_independence = calculate_spot_confluence_v3(
+        manifest=final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        findings=(first_finding, second_finding),
+        now=NOW,
+    )
+    repeated_conflicts = calculate_spot_conflicts_v3(
+        manifest=final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        findings=(
+            first_finding,
+            replace(second_finding, direction=AnalyticalDirection.BEARISH),
+        ),
+        now=NOW,
+    )
+    assert repeated_confluence == confluence
+    assert repeated_independence == independence
+    assert repeated_conflicts == conflicts
+    assert (
+        decode_analysis_contract(encode_analysis_contract(final_manifest))
+        == final_manifest
+    )
+    actual_context = replace(
+        context,
+        confluence=confluence.assessment,
+        conflicts=conflicts.assessments,
+        analysis_snapshot=AnalysisSnapshotReferenceV4(
+            final_manifest.snapshot_id,
+            final_manifest.schema_version,
+            final_manifest.content_sha256,
+        ),
+    )
+    validate_market_context_v4(
+        actual_context,
+        final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        now=NOW,
+    )
+    unavailable = calculate_spot_confluence_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(replace(first_finding, readiness=FindingReadiness.STALE),),
+        now=NOW,
+    )[0]
+    assert unavailable.state is ConfluenceCalculationState.INDETERMINATE
+    assert unavailable.assessment.components == ()
+    for readiness, reason in (
+        (FindingReadiness.PARTIAL, MetaAnalysisReason.PARTIAL_EVIDENCE),
+        (FindingReadiness.WARMUP, MetaAnalysisReason.INSUFFICIENT_WARMUP),
+        (FindingReadiness.UNAVAILABLE, MetaAnalysisReason.INPUT_UNAVAILABLE),
+        (FindingReadiness.INVALID, MetaAnalysisReason.INVALID_EVIDENCE),
+        (FindingReadiness.STALE, MetaAnalysisReason.STALE_EVIDENCE),
+    ):
+        not_ready = replace(first_finding, readiness=readiness)
+        result, report = calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            findings=(not_ready,),
+            now=NOW,
+        )
+        assert result.state is ConfluenceCalculationState.INDETERMINATE
+        assert result.reason is reason
+        assert result.assessment.components == ()
+        assert (
+            calculate_spot_conflicts_v3(
+                manifest=manifest,
+                resolved_bindings=resolved,
+                evidence=evidence_map,
+                findings=(not_ready,),
+                now=NOW,
+            ).state
+            is ConflictCalculationState.NOT_ASSESSED
+        )
+        assert report.participants
+
+    contradictory, _ = calculate_spot_confluence_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(
+            first_finding,
+            replace(second_finding, direction=AnalyticalDirection.BEARISH),
+        ),
+        now=NOW,
+    )
+    assert contradictory.assessment.state is ConfluenceStateV2.INDETERMINATE
+    assert tuple(item.direction for item in contradictory.assessment.components) == (
+        profile.regime.direction,
+        AnalyticalDirection.BEARISH,
+    )
+    assert contradictory.state is ConfluenceCalculationState.INDETERMINATE
+
+    partial_lineage = SpotMetaFinding(
+        _id(4201),
+        "spot-volume",
+        AnalyticalDirection.UNKNOWN,
+        EvidenceRelation.NEUTRAL,
+        ConfluenceEvidenceStrengthV2.UNKNOWN,
+        FindingReadiness.PARTIAL,
+        (),
+        (),
+        None,
+    )
+    partial_report = assess_agent_independence(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(partial_lineage,),
+        now=NOW,
+    )
+    partial_participant = next(
+        item
+        for item in partial_report.participants
+        if item.finding_id == partial_lineage.finding_id
+    )
+    assert partial_participant.readiness is FindingReadiness.PARTIAL
+    assert partial_participant.evidence_ids == ()
+    assert partial_participant.input_binding_ids == ()
+    assert partial_participant.method is None
+
+    with pytest.raises(AnalysisV2ContractError, match="outside C-007 v4"):
+        calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            findings=(replace(first_finding, evidence_ids=(_id(4299),)),),
+            now=NOW,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="C-008 evidence identity"):
+        calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence={
+                **evidence_map,
+                first.evidence_id: replace(
+                    first,
+                    binding_ids=(_id(4298),),
+                ),
+            },
+            findings=(first_finding,),
+            now=NOW,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="expired or not yet available"):
+        calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            findings=(first_finding,),
+            now=NOW + timedelta(minutes=2),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="OHLCV binding differs"):
+        replace(manifest, timeframe="5m")
+    with pytest.raises(AnalysisV2ContractError, match="Resolved Spot dependencies"):
+        calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=(
+                replace(
+                    resolved[0],
+                    snapshot=replace(snapshot, snapshot_id=_id(4297)),
+                ),
+            ),
+            evidence=evidence_map,
+            findings=(first_finding,),
+            now=NOW,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="Resolved Spot dependencies"):
+        calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=(
+                replace(
+                    resolved[0],
+                    report=replace(quality_v2, report_id=_id(4296)),
+                ),
+            ),
+            evidence=evidence_map,
+            findings=(first_finding,),
+            now=NOW,
+        )
+    unknown_direction = calculate_spot_confluence_v3(
+        manifest=manifest,
+        resolved_bindings=resolved,
+        evidence=evidence_map,
+        findings=(replace(first_finding, direction=AnalyticalDirection.UNKNOWN),),
+        now=NOW,
+    )[0]
+    assert unknown_direction.state is ConfluenceCalculationState.INDETERMINATE
+    with pytest.raises(AnalysisV2ContractError, match="exact Spot input"):
+        calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            findings=(replace(first_finding, input_binding_ids=(_id(4199),)),),
+            now=NOW,
+        )
+    with pytest.raises(
+        AnalysisV2ContractError, match="outside the approved Spot profile"
+    ):
+        SpotMetaFinding(
+            _id(4200),
+            "on-chain",
+            AnalyticalDirection.BULLISH,
+            first.relation,
+            ConfluenceEvidenceStrengthV2.MODERATE,
+            FindingReadiness.READY,
+            (first.evidence_id,),
+            (binding_id,),
+            first.method,
         )
