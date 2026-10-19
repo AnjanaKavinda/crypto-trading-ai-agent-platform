@@ -348,6 +348,13 @@ def validate_market_context_v5(
         raise AnalysisV2ContractError(
             "C-008 evidence or C-007 bindings are not exactly resolved."
         )
+    if any(
+        type(item) is not EvidenceItemV2 or item.evidence_id != evidence_id
+        for evidence_id, item in evidence.items()
+    ):
+        raise AnalysisV2ContractError(
+            "C-008 evidence mapping keys must match exact record identities."
+        )
     if len(resolved_bindings) != 1 or any(
         type(item) is not ResolvedSpotOHLCVBindingV4 for item in resolved_bindings
     ):

@@ -1451,6 +1451,21 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
         supported_adversarial_versions=supported_adversarial_versions,
         now=NOW,
     )
+    evidence_id = adversarial.evidence[0].evidence.record_id
+    mismatched_evidence = replace(
+        evidence_map[evidence_id],
+        evidence_id=_id(4397),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="mapping keys"):
+        validate_market_context_v5(
+            adversarial_context,
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence={**evidence_map, evidence_id: mismatched_evidence},
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW,
+        )
     subset_adversarial = replace(
         adversarial,
         evidence=adversarial.evidence[:-1],
