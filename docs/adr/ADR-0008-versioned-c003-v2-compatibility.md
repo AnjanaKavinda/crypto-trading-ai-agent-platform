@@ -134,3 +134,15 @@ Accepted by `AnjanaKavinda`, human repository owner, on 2026-10-07 for the
 versioned C-003 v2 compatibility boundary and rollout sequence described here.
 V2 production, consumer migration, policy registry/producer implementation, and
 enabling v2 writes are not approved by this ADR.
+
+## Subsequent owner-approved in-memory Spot OHLCV path
+
+On 2026-10-19, the repository owner approved issue #375 to register the
+existing Spot OHLCV policy for an in-memory C-003 schema-2 assessment and to
+migrate the C-005 Spot regime, moving-average and realized-volatility quality
+gates to validate that exact report. This approval does not enable C-003 v2
+lineage writes, persistence, or a schema-2 API projection. C-003 schema-1
+storage and historical bytes remain unchanged. The policy ID and thresholds
+remain those of `personal-binance-spot-ohlcv-v1`; the resolved v2 policy scope
+adds instrument, timeframe, window and cutoff. See issue #375 and the C-003
+domain/version registry entries for the implementation contract.

@@ -112,6 +112,26 @@ and version and verify any `NOT_APPLICABLE` permission. Revalidate every
 receiving reader, add consumer dimension-required checks, and independently
 review/approve enabling v2 writes before rollout.
 
+### Issue #375 — in-memory Spot OHLCV producer and C-005 consumer
+
+The owner approved an in-memory C-003 schema-2 producer for the existing Spot
+OHLCV regime calculation. Its policy ID remains
+`personal-binance-spot-ohlcv-v1`; the resolved assessment-policy version also
+binds the supported instrument, timeframe, exact closed-candle window and
+cutoff. The approved one-interval freshness allowance, zero missing-interval
+tolerance, metric bounds, required OHLCV fields, and single-source semantics
+are unchanged. The v2 dimension values are derived from the existing
+deterministic v1 assessment, then each dimension is bound to the canonical
+C-002 snapshot digest. The resulting report identity is stable for the same
+snapshot, policy scope and assessment time.
+
+The C-005 Spot regime, moving-average and realized-volatility gates validate
+the exact resolved C-003 schema-2 report and reject mismatched snapshot,
+source membership, policy, timeframe, window, cutoff or digest evidence. C-003
+schema-1 serialization, persisted lineage and API quality projection remain
+unchanged. This does not enable C-003 schema-2 persistence or generic lineage
+writes.
+
 ## Issue #341 — C-006/C-007/C-008 schema 2 and C-104
 
 The repository owner approved the additive Option 2 direction in merged PR

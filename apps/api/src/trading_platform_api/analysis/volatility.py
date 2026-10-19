@@ -14,9 +14,15 @@ from trading_platform_api.analysis.indicator_registry import (
 )
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
+    DataSourceRecord,
     MarketData,
     MarketSnapshot,
+)
+from trading_platform_api.market_data.quality import (
+    DataQualityAssessmentError,
+    validate_spot_ohlcv_quality_v2,
 )
 
 _INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
@@ -95,12 +101,27 @@ def _ohlc(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     timeframe: str,
+    allow_c003_v2: bool = False,
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> tuple[tuple[tuple[Decimal, Decimal, Decimal], ...], str]:
     if timeframe not in _INTERVALS:
         raise VolatilityError("Unsupported candle timeframe.")
-    if (
+    if type(quality) is DataQualityReportV2:
+        if not allow_c003_v2:
+            raise VolatilityError("C-003 schema 1 quality evidence is required.")
+        try:
+            validate_spot_ohlcv_quality_v2(
+                quality,
+                snapshot=snapshot,
+                observations=observations,
+                sources=() if sources is None else sources,
+                timeframe=timeframe,
+            )
+        except DataQualityAssessmentError as exc:
+            raise VolatilityError(str(exc)) from exc
+    elif type(quality) is not DataQualityReport or (
         quality.snapshot_id != snapshot.snapshot_id
         or quality.status is not DataQualityStatus.VALID
     ):
@@ -193,7 +214,7 @@ def _series(
     period: int,
     timeframe: str,
     snapshot: MarketSnapshot,
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     unit: str,
     values: list[Decimal | None],
     observations: tuple[MarketData, ...],
@@ -351,9 +372,10 @@ def calculate_realized_volatility(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     period: int,
     timeframe: str,
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> VolatilitySeries:
     """Sample stdev of close log returns, annualized for a continuous 365-day market."""
     _metadata("realized-volatility", period, timeframe)
@@ -362,6 +384,8 @@ def calculate_realized_volatility(
         observations=observations,
         quality=quality,
         timeframe=timeframe,
+        allow_c003_v2=True,
+        sources=sources,
     )
     closes = tuple(item[2] for item in candles)
     values: list[Decimal | None] = [None] * len(closes)

@@ -151,6 +151,16 @@ is migrated here, and lineage writes remain disabled until receiving consumers
 are ready. A producer must resolve and validate the exact assessment-policy
 definition before producing a v2 report; unknown policy versions fail closed.
 
+Issue #375 adds the approved single-source Spot OHLCV C-003 schema-2 assessment
+as an in-memory report for the C-005 Spot regime path. It reuses the existing
+`personal-binance-spot-ohlcv-v1` thresholds and v1 deterministic score
+calculation, resolves timeframe/window/cutoff through the C-003 v2 policy
+registry, and binds every measured dimension to the canonical C-002 snapshot
+digest. C-003 schema-1 storage and response projection remain unchanged; v2
+lineage writes and persistence remain disabled. The C-005 regime evidence
+identifies the actual C-003 schema-2 report and policy. The policy does not
+assert independent-source comparison or provider truth.
+
 ## Issue #341 — versioned order-flow analysis contracts
 
 The repository owner approved Option 2 in merged PR #340 for issue #338. C-104
