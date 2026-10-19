@@ -1,4 +1,4 @@
-# ADR-0010: Proposed versioned C-019/C-006 Spot adversarial path
+# ADR-0010: Versioned C-019/C-006 Spot adversarial path
 
 ## Metadata
 
@@ -70,7 +70,7 @@ contract implementation is merged.
 
 The approved additive versions are:
 
-| Contract | Proposed schema / lineage | Owner / registry |
+| Contract | Approved schema / lineage | Owner / registry |
 |---|---:|---|
 | C-019 `AdversarialAssessment` | `2 / 2` | Critic owns the semantic assessment; Analysis owns its contract model and codec dispatch. |
 | C-006 `MarketContext` | `5 / 5` | Analysis owns the semantic context, contract model, and codec dispatch. |
@@ -127,8 +127,9 @@ evidence of safety.
 - C-009/C-010 schemas 1–3 and C-093 schema 1 remain unchanged. C-006 v5
   preserves the existing C-009/C-010 v3 forms and C-093 reference behavior.
 - No `canonical-json-v1`, `wire-1`, or global schema version changes are
-  proposed. New schema and lineage versions are selected explicitly.
-- After approval, a separate implementation issue must specify schema models,
+  included in this decision. New schema and lineage versions are selected
+  explicitly.
+- After this ADR merges, a separate implementation issue must specify schema models,
   codec/registry dispatch, manifest/evidence validation, and compatibility,
   digest, stale/expiry, mismatch, unsupported-version, and fail-closed tests.
   Issue #68 remains blocked until that implementation is merged and its exact
@@ -139,14 +140,14 @@ evidence of safety.
 | Area | References and impact |
 |---|---|
 | Playbook requirements | Master Playbook v2.2, Chat 3 adversarial-agent permissions and Chat 5 analysis-only/evidence requirements; no Playbook text changes. |
-| Cross-cutting artifacts | Domain Contract Registry retains C-019/C-006 semantics and owners; Version Registry records the proposed version mapping only after approval; the analysis codec's `(contract_id, schema_version)` dispatch is the implementation registration point; Evidence Graph and Handoff Matrix require reconstructable evidence and fail-closed unresolved conflicts. |
-| Contracts / events | C-019 schema 2 and C-006 schema 5 proposed; no event contract or new C-ID. No changes to C-007 v4, C-008 v2, C-003 v2, C-005 v1, C-009/C-010 v3, or C-093 v1. |
+| Cross-cutting artifacts | Domain Contract Registry retains C-019/C-006 semantics and owners; Version Registry records the approved version mapping after this ADR merges; the analysis codec's `(contract_id, schema_version)` dispatch is the implementation registration point; Evidence Graph and Handoff Matrix require reconstructable evidence and fail-closed unresolved conflicts. |
+| Contracts / events | C-019 schema 2 and C-006 schema 5 approved; no event contract or new C-ID. No changes to C-007 v4, C-008 v2, C-003 v2, C-005 v1, C-009/C-010 v3, or C-093 v1. |
 | Requirements traceability | [Issue #379](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/379) and [issue #68](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/68). Update #68 with the accepted and merged versions, and keep it blocked until contract implementation merges; prepare a separate implementation issue after approval. |
 | Versioning / migration | Additive schema/lineage `2/2` and `5/5`; retain `canonical-json-v1` / `wire-1`; no backfill, rewrite, or migration of historical records. |
 
 ## Compatibility matrix
 
-| Existing contract versions | Compatibility rule under the proposal |
+| Existing contract versions | Compatibility rule under the accepted decision |
 |---|---|
 | C-006 schemas 1–4 | Preserve payloads, identity, hashes, and readers; no conversion. C-006 v5 is a separate explicit dispatch case. |
 | C-007 schemas 1–4 | Preserve all versions. C-007 v4's output closure and validation remain unchanged; C-019 is not added to it. |
