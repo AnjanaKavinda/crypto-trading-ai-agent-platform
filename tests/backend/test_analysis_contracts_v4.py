@@ -3,16 +3,24 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from trading_platform_api.analysis import (
+    C006_V5_LINEAGE_VERSION,
+    C006_V5_SCHEMA_VERSION,
+    C019_V2_LINEAGE_VERSION,
+    C019_V2_SCHEMA_VERSION,
     AdversarialAssessment,
+    AdversarialAssessmentV2,
+    AdversarialEvidenceReferenceV2,
     AnalysisOutputReferenceV4,
     AnalysisRecordReference,
     AnalysisSnapshotReferenceV4,
     AnalysisV2ContractError,
+    AnalyticalConfidenceReasonV2,
     AnalyticalConfidenceStateV2,
     AnalyticalConfidenceV2,
     AnalyticalDirection,
@@ -41,6 +49,7 @@ from trading_platform_api.analysis import (
     FundamentalAssessment,
     InputModalityV4,
     MarketContextV4,
+    MarketContextV5,
     MarketRegime,
     MetaAnalysisReason,
     ObservationSourceBinding,
@@ -61,6 +70,7 @@ from trading_platform_api.analysis import (
     resolve_analysis_snapshot_v4,
     validate_evidence_item_v2_for_v4,
     validate_market_context_v4,
+    validate_market_context_v5,
 )
 from trading_platform_api.analysis.spot_meta_analysis import _conflict_severity
 from trading_platform_api.contracts.serialization import canonical_sha256
@@ -1323,6 +1333,325 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
         supported_independence_reports=(registered_ref,),
         now=NOW,
     )
+    assert (
+        decode_analysis_contract(encode_analysis_contract(actual_context))
+        == actual_context
+    )
+    actual_context_wire = encode_analysis_contract(actual_context)
+    assert (
+        canonical_sha256(actual_context),
+        sha256(actual_context_wire.encode("utf-8")).hexdigest(),
+    ) == (
+        "".join(
+            (
+                "195248d9",
+                "a31b7ec7",
+                "8dc399f1",
+                "e9d0af08",
+                "e9a3e43f",
+                "45e848c3",
+                "d2bd79b4",
+                "e1b4d0f8",
+            )
+        ),
+        "".join(
+            (
+                "2d571fc6",
+                "0f32c2e3",
+                "aa69fdb3",
+                "5be1ee2a",
+                "f87255e9",
+                "9b93816a",
+                "86981cce",
+                "dbd495b4",
+            )
+        ),
+    )
+    adversarial_method = VersionReference("spot-adversarial-assessment", "v2")
+    adversarial_model = VersionReference("spot-adversarial-model", "v1")
+    adversarial_prompt = VersionReference("spot-adversarial-prompt", "v1")
+    confidence_method = VersionReference("spot-interpretive-confidence", "v1")
+    adversarial = AdversarialAssessmentV2(
+        _id(4300),
+        "BTC",
+        "BTC-USDT-SPOT",
+        "1m",
+        final_manifest.bindings[0].window_start,
+        final_manifest.bindings[0].window_end,
+        final_manifest.bindings[0].snapshot_as_of,
+        final_manifest.analysis_cutoff,
+        NOW,
+        NOW + timedelta(minutes=1),
+        "The observed trend may fail at its invalidation boundary.",
+        ("The move may be a temporary continuation failure.",),
+        tuple(
+            AdversarialEvidenceReferenceV2(
+                AnalysisOutputReferenceV4(
+                    "C-008",
+                    item.evidence_id,
+                    "2",
+                    "2",
+                    canonical_sha256(item),
+                ),
+                item.binding_ids,
+                item.observation_ids,
+                item.source_record_ids,
+            )
+            for item in sorted(
+                evidence_map.values(), key=lambda value: str(value.evidence_id)
+            )
+        ),
+        (min(evidence_map, key=str),),
+        ("The input may not persist through the next window.",),
+        ("Only one OHLCV source contributes to this analysis.",),
+        (),
+        ("The thesis may overweight recent directional movement.",),
+        AnalyticalConfidenceV2(
+            AnalyticalConfidenceStateV2.AVAILABLE,
+            Decimal("0.5"),
+            confidence_method,
+            None,
+        ),
+        AnalysisSnapshotReferenceV4(
+            final_manifest.snapshot_id,
+            "4",
+            final_manifest.content_sha256,
+        ),
+        final_manifest.bindings[0].data_quality_report,
+        adversarial_method,
+        adversarial_model,
+        adversarial_prompt,
+    )
+    adversarial_context = MarketContextV5(
+        _id(4301),
+        actual_context.asset,
+        actual_context.instrument_id,
+        actual_context.as_of,
+        actual_context.expires_at,
+        actual_context.multi_timeframe_state,
+        actual_context.regime,
+        actual_context.assessments,
+        actual_context.confluence,
+        actual_context.conflicts,
+        adversarial,
+        actual_context.uncertainties,
+        actual_context.evidence_ids,
+        actual_context.analysis_snapshot,
+    )
+    adversarial_wire = encode_analysis_contract(adversarial)
+    assert decode_analysis_contract(adversarial_wire) == adversarial
+    assert (
+        decode_analysis_contract(encode_analysis_contract(adversarial_context))
+        == adversarial_context
+    )
+    assert adversarial_context.schema_version == "5"
+    assert adversarial.schema_version == "2"
+    assert not hasattr(adversarial.analytical_confidence, "probability")
+    assert (C019_V2_SCHEMA_VERSION, C019_V2_LINEAGE_VERSION) == ("2", "2")
+    assert (C006_V5_SCHEMA_VERSION, C006_V5_LINEAGE_VERSION) == ("5", "5")
+    with pytest.raises(AnalysisV2ContractError, match="Unknown analysis contract"):
+        encoded = encode_analysis_contract(adversarial)
+        prefix, suffix = encoded.rsplit('"schema_version":"2"', 1)
+        decode_analysis_contract(f'{prefix}"schema_version":"99"{suffix}')
+    with pytest.raises(AnalysisV2ContractError, match="invalid typed assessment"):
+        replace(adversarial_context, adversarial=actual_context.adversarial)
+    assert not any(
+        item.contract_id == "C-019" for item in final_manifest.analysis_outputs
+    )
+    supported_adversarial_versions = (
+        adversarial_method,
+        adversarial_model,
+        adversarial_prompt,
+        confidence_method,
+    )
+    validate_market_context_v5(
+        adversarial_context,
+        final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        supported_adversarial_versions=supported_adversarial_versions,
+        now=NOW,
+    )
+    evidence_id = adversarial.evidence[0].evidence.record_id
+    mismatched_evidence = replace(
+        evidence_map[evidence_id],
+        evidence_id=_id(4397),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="mapping keys"):
+        validate_market_context_v5(
+            adversarial_context,
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence={**evidence_map, evidence_id: mismatched_evidence},
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW,
+        )
+    subset_adversarial = replace(
+        adversarial,
+        evidence=adversarial.evidence[:-1],
+        contradictory_evidence_ids=(adversarial.evidence[0].evidence.record_id,),
+    )
+    validate_market_context_v5(
+        replace(adversarial_context, adversarial=subset_adversarial),
+        final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        supported_adversarial_versions=supported_adversarial_versions,
+        now=NOW,
+    )
+    unavailable_adversarial = replace(
+        adversarial,
+        analytical_confidence=AnalyticalConfidenceV2(
+            AnalyticalConfidenceStateV2.UNAVAILABLE,
+            None,
+            None,
+            AnalyticalConfidenceReasonV2.NOT_ASSESSED,
+        ),
+    )
+    assert unavailable_adversarial.analytical_confidence.value is None
+    unavailable_context = replace(
+        adversarial_context, adversarial=unavailable_adversarial
+    )
+    assert (
+        decode_analysis_contract(encode_analysis_contract(unavailable_context))
+        == unavailable_context
+    )
+    validate_market_context_v5(
+        unavailable_context,
+        final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        supported_adversarial_versions=supported_adversarial_versions,
+        now=NOW,
+    )
+    with pytest.raises(AnalysisV2ContractError, match="requires a reason"):
+        replace(
+            unavailable_adversarial.analytical_confidence,
+            unavailable_reason=None,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="requires a reason"):
+        replace(
+            unavailable_adversarial.analytical_confidence,
+            value=Decimal("0"),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="exact C-019 evidence set"):
+        replace(adversarial, contradictory_evidence_ids=(_id(4399),))
+    with pytest.raises(AnalysisV2ContractError, match="references are unresolved"):
+        validate_market_context_v5(
+            adversarial_context,
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=(),
+            now=NOW,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="references are unresolved"):
+        validate_market_context_v5(
+            adversarial_context,
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=(
+                adversarial_method,
+                adversarial_model,
+                adversarial_prompt,
+            ),
+            now=NOW,
+        )
+    bad_manifest_reference = AnalysisSnapshotReferenceV4(
+        final_manifest.snapshot_id, "4", "f" * 64
+    )
+    bad_manifest_context = replace(
+        adversarial_context,
+        analysis_snapshot=bad_manifest_reference,
+        adversarial=replace(adversarial, analysis_snapshot=bad_manifest_reference),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="exact C-007 v4 manifest"):
+        validate_market_context_v5(
+            bad_manifest_context,
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW,
+        )
+    bad_quality_reference = replace(
+        adversarial,
+        data_quality_report=replace(
+            adversarial.data_quality_report, content_sha256="f" * 64
+        ),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="C-003 v2 reference"):
+        validate_market_context_v5(
+            replace(adversarial_context, adversarial=bad_quality_reference),
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW,
+        )
+    tampered_adversarial = replace(
+        adversarial,
+        evidence=(
+            replace(
+                adversarial.evidence[0],
+                evidence=replace(
+                    adversarial.evidence[0].evidence,
+                    content_sha256="f" * 64,
+                ),
+            ),
+            *adversarial.evidence[1:],
+        ),
+    )
+    assert canonical_sha256(tampered_adversarial) != canonical_sha256(adversarial)
+    with pytest.raises(AnalysisV2ContractError, match="C-019 v2 evidence"):
+        validate_market_context_v5(
+            replace(adversarial_context, adversarial=tampered_adversarial),
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW,
+        )
+    tampered_lineage = replace(
+        adversarial,
+        evidence=(
+            replace(adversarial.evidence[0], observation_ids=(_id(4398),)),
+            *adversarial.evidence[1:],
+        ),
+    )
+    with pytest.raises(AnalysisV2ContractError, match="C-019 v2 evidence"):
+        validate_market_context_v5(
+            replace(adversarial_context, adversarial=tampered_lineage),
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW,
+        )
+    expired_adversarial = replace(adversarial, expires_at=NOW + timedelta(seconds=30))
+    with pytest.raises(AnalysisV2ContractError, match="expired"):
+        validate_market_context_v5(
+            replace(adversarial_context, adversarial=expired_adversarial),
+            final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            now=NOW + timedelta(seconds=31),
+        )
+    with pytest.raises(AnalysisV2ContractError, match="Unsupported C-007 v4 output"):
+        AnalysisOutputReferenceV4("C-019", _id(4302), "2", "2", HASH)
     unavailable = calculate_spot_confluence_v3(
         manifest=manifest,
         resolved_bindings=resolved,

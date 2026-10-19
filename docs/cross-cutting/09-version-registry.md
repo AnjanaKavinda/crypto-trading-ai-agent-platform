@@ -322,16 +322,24 @@ records the human repository owner's explicit approval of Option A on 2026-10-19
 | C-019 `AdversarialAssessment` | `2 / 2` | Embedded in C-006 v5; binds the exact C-007 v4 manifest ID/digest, Spot instrument/timeframe/window and cutoff, C-003 v2 report ID/digest, exact usable C-008 v2 evidence references/digests and source/observation lineage, as-of/expiry, and exact method/model/prompt version references. |
 | C-006 `MarketContext` | `5 / 5` | References the exact C-007 v4 manifest and embeds C-019 v2; preserves C-009/C-010 v3 and existing C-093 reference behavior. |
 
-The approved version path is not an implementation authorization until
-ADR-0010 is merged. C-019 v2 remains outside the C-007 v4 output closure,
+The approved version path is implemented by issue #381 after ADR-0010 was
+accepted and merged. C-019 v2 remains outside the C-007 v4 output closure,
 avoiding a digest cycle; contradictory evidence must belong to the exact usable
-C-008 set already closed over by that manifest. All C-006 v1–v4, C-007 v1–v4,
-C-009/C-010 v1–v3, C-019 v1, and C-093 v1 payloads and readers remain unchanged.
-Analytical confidence is interpretive only, never a probability. C-019 v2 must
-use a required discriminated state: `AVAILABLE` includes a defensible numeric
-interpretive value and exact method/version reference; `UNAVAILABLE` includes
-an explicit reason and no value. Consumers must handle either state explicitly;
-no zero, default, or fabricated value is permitted. No strategy eligibility,
-signal qualification, validation, risk, approval, order, or execution authority
-is added. Issue #68 remains blocked until the separately scoped contract
-implementation is merged.
+C-008 set already closed over by that manifest. C-019 v2 captures the exact
+manifest and C-003 v2 references, Spot instrument/timeframe/window/cutoff scope,
+usable C-008 content digests and source/observation lineage, and explicit
+method/model/prompt version references. Its consumer validator resolves those
+references against the same C-007 v4 manifest and requires exact supported
+method/model/prompt versions and the confidence method when available. All
+C-006 v1–v4, C-007 v1–v4, C-009/C-010 v1–v3, C-019 v1, and C-093 v1 payloads
+and readers remain unchanged.
+
+Analytical confidence is interpretive only, never a probability. C-019 v2 uses
+a required discriminated state: `AVAILABLE` includes a bounded numeric
+interpretive value and its exact confidence method/version reference;
+`UNAVAILABLE` includes an explicit reason and no value or method. Consumers
+must handle either state explicitly; no zero, default, or fabricated value is
+permitted. No strategy eligibility, signal qualification, validation, risk,
+approval, order, or execution authority is added. Issue #68 remains blocked
+until this contract implementation is merged; its producer/consumer work remains
+separately bounded.
