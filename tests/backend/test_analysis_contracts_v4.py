@@ -55,12 +55,14 @@ from trading_platform_api.analysis import (
     ObservationSourceBinding,
     RegimeDimension,
     ResolutionStatus,
+    SpotAdversarialDraft,
     SpotMetaFinding,
     SpotOHLCVBindingV4,
     UncertaintyCategory,
     VersionReference,
     analysis_snapshot_v4_sha256,
     assess_agent_independence,
+    build_spot_market_context_v5,
     calculate_spot_conflicts_v3,
     calculate_spot_confluence_v3,
     calculate_spot_market_regime,
@@ -72,6 +74,7 @@ from trading_platform_api.analysis import (
     validate_market_context_v4,
     validate_market_context_v5,
 )
+from trading_platform_api.analysis.contracts import AnalysisContractError
 from trading_platform_api.analysis.spot_meta_analysis import _conflict_severity
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data import (
@@ -1473,6 +1476,144 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
         supported_adversarial_versions=supported_adversarial_versions,
         now=NOW,
     )
+    selected_evidence = sorted(
+        evidence_map.values(), key=lambda item: str(item.evidence_id)
+    )
+    adversarial_draft = SpotAdversarialDraft(
+        counter_thesis="The apparent trend may be a single-source artifact.",
+        alternative_hypotheses=(
+            "The observed move may reflect one OHLCV-derived interpretation, not independent confirmation.",
+        ),
+        supporting_evidence_ids=(selected_evidence[0].evidence_id,),
+        falsification_evidence_ids=(selected_evidence[1].evidence_id,),
+        failure_conditions=(
+            "The next validated window fails to preserve the observed structure.",
+        ),
+        data_limitations=("The analysis uses one Spot OHLCV source.",),
+        measurement_error_risks=(
+            "Candle aggregation may obscure intraperiod movement.",
+        ),
+        confirmation_bias_concerns=(
+            "The interpretation may overweight directional agreement.",
+        ),
+        coverage_gaps=(
+            "Derivatives, on-chain, sentiment, and event-risk domains were not assessed.",
+        ),
+        method=adversarial_method,
+        model=adversarial_model,
+        prompt=adversarial_prompt,
+    )
+    produced_context = build_spot_market_context_v5(
+        base_context=actual_context,
+        manifest=final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        supported_adversarial_versions=supported_adversarial_versions,
+        draft=adversarial_draft,
+        now=NOW,
+    )
+    produced_adversarial = produced_context.adversarial
+    assert produced_context.schema_version == "5"
+    assert produced_adversarial.schema_version == "2"
+    assert produced_context.confluence is actual_context.confluence
+    assert produced_context.confluence.status is ConfluenceStatusV2.INDETERMINATE
+    assert all(
+        component.dependence is not EvidenceDependenceV2.INDEPENDENT
+        for component in produced_context.confluence.components
+    )
+    assert produced_context.conflicts == actual_context.conflicts
+    assert produced_adversarial.analysis_snapshot == actual_context.analysis_snapshot
+    assert (
+        produced_adversarial.data_quality_report
+        == final_manifest.bindings[0].data_quality_report
+    )
+    assert tuple(
+        item.evidence.record_id for item in produced_adversarial.evidence
+    ) == tuple(
+        sorted(
+            (selected_evidence[0].evidence_id, selected_evidence[1].evidence_id),
+            key=str,
+        )
+    )
+    assert produced_adversarial.contradictory_evidence_ids == (
+        selected_evidence[1].evidence_id,
+    )
+    assert (
+        produced_adversarial.analytical_confidence.state
+        is AnalyticalConfidenceStateV2.UNAVAILABLE
+    )
+    assert produced_adversarial.analytical_confidence.value is None
+    assert produced_adversarial.analytical_confidence.method is None
+    assert produced_adversarial.expires_at <= min(
+        actual_context.expires_at,
+        final_manifest.expires_at,
+        actual_context.regime.expires_at,
+        actual_context.confluence.expires_at,
+        *(item.expires_at for item in actual_context.assessments),
+        *(item.expires_at for item in actual_context.conflicts),
+        *(item.expires_at for item in actual_context.uncertainties),
+        *(item.expires_at for item in selected_evidence[:2]),
+    )
+    assert (
+        decode_analysis_contract(encode_analysis_contract(produced_context))
+        == produced_context
+    )
+    repeated_context = build_spot_market_context_v5(
+        base_context=actual_context,
+        manifest=final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        supported_adversarial_versions=supported_adversarial_versions,
+        draft=adversarial_draft,
+        now=NOW,
+    )
+    assert repeated_context == produced_context
+    changed_draft = replace(
+        adversarial_draft,
+        counter_thesis="The apparent trend may fail to persist.",
+    )
+    changed_context = build_spot_market_context_v5(
+        base_context=actual_context,
+        manifest=final_manifest,
+        resolved_bindings=final_resolved,
+        evidence=evidence_map,
+        supported_independence_reports=(registered_ref,),
+        supported_adversarial_versions=supported_adversarial_versions,
+        draft=changed_draft,
+        now=NOW,
+    )
+    assert changed_context.context_id != produced_context.context_id
+    assert (
+        changed_context.adversarial.assessment_id != produced_adversarial.assessment_id
+    )
+    with pytest.raises(
+        AnalysisV2ContractError, match="not resolved by the caller registry"
+    ):
+        build_spot_market_context_v5(
+            base_context=actual_context,
+            manifest=final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=(adversarial_method, adversarial_model),
+            draft=adversarial_draft,
+            now=NOW,
+        )
+    with pytest.raises(AnalysisV2ContractError, match="usable C-008 v2"):
+        build_spot_market_context_v5(
+            base_context=actual_context,
+            manifest=final_manifest,
+            resolved_bindings=final_resolved,
+            evidence=evidence_map,
+            supported_independence_reports=(registered_ref,),
+            supported_adversarial_versions=supported_adversarial_versions,
+            draft=replace(adversarial_draft, supporting_evidence_ids=(_id(4399),)),
+            now=NOW,
+        )
+    with pytest.raises(AnalysisContractError, match="coverage_gaps must not be empty"):
+        replace(adversarial_draft, coverage_gaps=())
     evidence_id = adversarial.evidence[0].evidence.record_id
     mismatched_evidence = replace(
         evidence_map[evidence_id],

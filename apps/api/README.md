@@ -503,6 +503,38 @@ other analysis not in #53–#56/#66 are not exposed by this projection. The
 read-model additions do not change shared C-001/C-002/C-003/C-005/C-008/C-012
 schemas or the existing `SpotIndicatorView`.
 
+### Spot adversarial context binding (Issue [#68](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/68))
+
+`analysis.spot_adversarial.build_spot_market_context_v5()` accepts a typed
+`SpotAdversarialDraft` from an upstream analyst and an existing validated
+C-006 v4 / C-007 v4 Spot context. It performs no model invocation, network
+request, provider refresh, or persistence. The draft is untrusted: the binder
+first validates the exact C-003 v2 quality report, C-008 v2 evidence closure,
+C-005 regime, C-009/C-010 results, and owner-resolved C-093 reference through
+the existing validators. It then constructs C-019 v2 inside C-006 v5 and runs
+the full v5 validator before returning a context.
+
+The draft must distinguish supporting evidence from evidence that could
+falsify the interpretation, identify failure conditions, measurement and
+confirmation-bias risks, data limitations, and coverage gaps. Evidence is
+limited to exact usable C-008 records in the validated manifest. The producer
+stores supporting and falsification records in the existing C-019 evidence
+tuple, with falsification IDs in `contradictory_evidence_ids`; because C-019 v2
+has no separate coverage-gap field, it preserves those gaps in
+`data_limitations` without changing the contract. The producer
+preserves the input confluence/conflict states, including
+`INDETERMINATE`; it cannot claim independent confirmation from one OHLCV
+source. Unsupported method/model/prompt versions, missing evidence, invalid
+quality, mixed scope, or expired inputs fail closed without a C-006 v5 result.
+
+Analytical confidence is emitted as `UNAVAILABLE / NOT_ASSESSED` by default;
+this binder does not calculate a numeric confidence. Upstream method, model,
+and prompt references must be supplied by the caller and resolve in its
+supported-version set. The base C-006 v4 retains the primary interpretation;
+the draft cannot introduce an unbound primary thesis. No strategy, signal,
+statistical validation, risk, approval, order, execution, or live-trading
+authority is added. Full Chat 5 and held issues #39–#43 remain open.
+
 Run the API using the loopback-only launcher:
 
 ```bash

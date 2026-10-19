@@ -103,6 +103,10 @@ from trading_platform_api.analysis.price_action import (
     ZoneStatus,
     calculate_spot_price_action,
 )
+from trading_platform_api.analysis.spot_adversarial import (
+    SpotAdversarialDraft,
+    build_spot_market_context_v5,
+)
 from trading_platform_api.analysis.spot_market_regime import (
     SPOT_MARKET_REGIME_METHOD_VERSION,
     SPOT_MARKET_REGIME_PROFILE_VERSION,
@@ -305,6 +309,8 @@ __all__ = [
     "SPOT_CONFLUENCE_METHOD",
     "SUPPORTED_SPOT_FINDING_DOMAINS",
     "SpotMetaFinding",
+    "SpotAdversarialDraft",
+    "build_spot_market_context_v5",
     "assess_agent_independence",
     "calculate_spot_conflicts_v3",
     "calculate_spot_confluence_v3",
