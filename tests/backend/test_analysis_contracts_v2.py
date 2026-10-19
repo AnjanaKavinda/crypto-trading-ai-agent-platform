@@ -913,6 +913,12 @@ def test_v1_analysis_records_keep_schema_and_canonical_identity() -> None:
         assert canonical_sha256(record) == "".join(expected[0])
         assert sha256(encoded.encode("utf-8")).hexdigest() == "".join(expected[1])
         assert decode_analysis_contract(encoded) == record
+    assert (
+        canonical_sha256(context.adversarial)
+        == "5875c3161dd55614b45deb5f0ff5fd948ab06bc52a086f145badc3ca511780e2"
+    )
+    with pytest.raises(AnalysisV2ContractError, match="Unsupported analysis"):
+        encode_analysis_contract(context.adversarial)
 
 
 def test_v2_manifest_mixed_bindings_and_codec_are_deterministic() -> None:
@@ -1115,6 +1121,14 @@ def test_v2_c008_and_c006_round_trip_and_manifest_reference_closure() -> None:
         AnalysisSnapshotReference(manifest.snapshot_id, "2", manifest.content_sha256),
     )
     assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    encoded_context = encode_analysis_contract(context)
+    assert (
+        canonical_sha256(context),
+        sha256(encoded_context.encode("utf-8")).hexdigest(),
+    ) == (
+        "425ccdc1aa936d66e2485ee340f01f8310bf70b3862a5cd412b03bc757905cc8",
+        "ed252af498de34dff2848739f860b3a980a3c845ddd38b96c58c63eaf50c9b64",
+    )
     _, resolved = _resolved(case)
     validate_order_flow_assessment(
         assessment,
@@ -2402,6 +2416,14 @@ def test_v3_context_binds_c009_c010_c093_outputs_and_exact_inputs() -> None:
         now=CREATED,
     )
     assert decode_analysis_contract(encode_analysis_contract(context)) == context
+    encoded_context = encode_analysis_contract(context)
+    assert (
+        canonical_sha256(context),
+        sha256(encoded_context.encode("utf-8")).hexdigest(),
+    ) == (
+        "ab3cc54579a2f8000f14a5eb53bc2c16989bafd2e0c9b86c7f017f7b3fa99d63",
+        "ce3ee2799fff6e16d25607dede8c5627c5b393e2815dddd2df0883332e76a2c5",
+    )
     for changed_reference in (
         replace(c093, schema_version="5"),
         replace(c093, lineage_version="10"),

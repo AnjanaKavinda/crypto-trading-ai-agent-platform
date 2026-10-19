@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from trading_platform_api.analysis import (
+    AdversarialAssessmentV2,
     AgentIndependenceReference,
     AgentIndependenceReport,
     AnalysisSnapshotV2,
@@ -21,6 +22,7 @@ from trading_platform_api.analysis import (
     MarketContextV2,
     MarketContextV3,
     MarketContextV4,
+    MarketContextV5,
     OrderFlowAssessment,
 )
 from trading_platform_api.audit import AuditEvent
@@ -63,6 +65,8 @@ VERSIONED_CONTRACT_TYPES = {
     MarketContextV2: ("C-006", "2"),
     MarketContextV3: ("C-006", "3"),
     MarketContextV4: ("C-006", "4"),
+    MarketContextV5: ("C-006", "5"),
+    AdversarialAssessmentV2: ("C-019", "2"),
     AnalysisSnapshotV2: ("C-007", "2"),
     AnalysisSnapshotV3: ("C-007", "3"),
     AnalysisSnapshotV4: ("C-007", "4"),

@@ -33,6 +33,10 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     ConfluenceAssessmentV3,
     MarketContextV4,
 )
+from trading_platform_api.analysis.versioned_contracts_v5 import (
+    AdversarialAssessmentV2,
+    MarketContextV5,
+)
 from trading_platform_api.contracts.serialization import (
     MAX_DOCUMENT_BYTES,
     MAX_NESTING_DEPTH,
@@ -47,6 +51,8 @@ _MODELS: dict[tuple[str, str], type[Any]] = {
     ("C-006", "2"): MarketContextV2,
     ("C-006", "3"): MarketContextV3,
     ("C-006", "4"): MarketContextV4,
+    ("C-006", "5"): MarketContextV5,
+    ("C-019", "2"): AdversarialAssessmentV2,
     ("C-007", "1"): AnalysisSnapshot,
     ("C-007", "2"): AnalysisSnapshotV2,
     ("C-007", "3"): AnalysisSnapshotV3,
