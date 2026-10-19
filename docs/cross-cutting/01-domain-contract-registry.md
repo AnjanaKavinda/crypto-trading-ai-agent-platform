@@ -202,6 +202,18 @@ bind C-009/C-010/C-093 contract IDs, identities, schema/lineage versions, and
 content digests. The schema-3 implementation adds no producer or calculation
 authority. C-093's report implementation remains owned by issue #67.
 
+Issue #374 adds an additive Spot OHLCV path: C-007 schema 4 explicitly binds
+`spot-ohlcv` inputs and their exact C-002/C-003/C-001/C-091 records, timeframe,
+window, C-005 schema-1/lineage-1 regime, and C-008 schema-2/lineage-2 evidence.
+The existing C-008 schema-2 fields are reused only through the C-007 v4
+binding-aware validator; no C-008 wire field or historical payload is changed.
+C-009/C-010 schema 3 retain the #370 categorical states and bind to C-007
+schema 4. C-006 schema 4 contains those new output types and an exact C-007 v4
+reference. C-093 remains owned by #67: its schema and lineage are not fixed by
+this registry entry and must be resolved by that owner's registry before
+validation. This path grants no calculation, qualification, risk, approval, or
+execution authority.
+
 ## Canonical name / alias / supersession clarifications
 
 | Canonical | Alias / related name | Disposition |

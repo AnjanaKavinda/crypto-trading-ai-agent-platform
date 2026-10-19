@@ -1499,7 +1499,9 @@ def test_unknown_schema_duplicate_bindings_and_stale_manifest_hash_fail_closed()
     envelope = encode_analysis_contract(manifest).replace(
         '"schema_version":"2"', '"schema_version":"4"'
     )
-    with pytest.raises(AnalysisV2ContractError, match="schema"):
+    # Schema 4 is now registered, so the altered v2 payload must fail v4's
+    # required-field validation rather than be rejected as an unknown version.
+    with pytest.raises(AnalysisV2ContractError, match="corrupt"):
         decode_analysis_contract(envelope)
     with pytest.raises(AnalysisV2ContractError, match="maximum size"):
         decode_analysis_contract(" " * (MAX_DOCUMENT_BYTES + 1))

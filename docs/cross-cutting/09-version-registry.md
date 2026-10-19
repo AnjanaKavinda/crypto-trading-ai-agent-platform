@@ -247,3 +247,47 @@ confluence/conflict calculation, persistence, strategy eligibility, signal,
 risk, approval, trading, or execution behavior. C-009/C-010 v2 consumers must
 remain disabled until profile-specific methodology is separately implemented
 and tested.
+
+## Issue #374 — Additive Spot OHLCV analysis path
+
+Issue #374 adds explicit schema dispatch while retaining every existing
+contract version and historical digest:
+
+| Contract | New schema / lineage | Binding rule |
+|---|---:|---|
+| C-005 | `1 / 1` (current `MarketRegime`) | C-007 v4 references its canonical typed-record digest; the record must match the exact instrument, timeframe, snapshot as-of, expiry, and C-008 evidence set. |
+| C-007 | `4 / 4` | One bounded Spot-profile `spot-ohlcv` binding; references exact C-002/C-003 v2, C-001/C-091 records, C-005 v1, and C-008 v2. |
+| C-008 | Existing `2 / 2` | No contract change. The v4-specific closure validator proves binding, observation/source membership, quality, method, cutoff, and expiry against the resolved C-007 v4 binding. |
+| C-009 | `3 / 3` | Preserves #370 categorical strength, dependence, status/reason, and non-probabilistic confidence semantics; requires C-007 schema 4 and a C-093 reference accepted by the C-093 owner's registry. |
+| C-010 | `3 / 3` | Preserves #370 categorical severity and decision table; requires C-007 schema 4. |
+| C-006 | `4 / 4` | References the exact C-007 v4 digest and embeds only the C-009/C-010 v3 forms. |
+
+C-007 v4 uses the existing `canonical-json-v1` / `wire-1` envelope. Its
+`content_sha256` preimage includes `canonicalization_version`, contract ID,
+schema version, payload version, and every payload field except its own
+`payload.content_sha256`. Dependency and output digests use
+`SHA-256(canonical_json_dumps(typed_record).encode("utf-8"))`. The new OHLCV
+binding explicitly records timeframe and coverage window; resolver validation
+delegates the approved C-003 v2 policy/window checks to the existing
+`validate_spot_ohlcv_quality_v2` gate. No C-003 writer, persistence, migration,
+or producer behavior is enabled.
+
+The implementation fixes C-005's current model identity as schema/lineage
+`1/1` from the existing `MarketRegime` contract, and C-008 schema/lineage as
+`2/2` from its existing versioned model. C-093 remains intentionally
+unversioned in this registry entry: callers must provide exact
+registry-resolved references from issue #67, and the validator compares the
+complete reference including digest. It does not assume or register a C-093
+schema or lineage version.
+
+Shared C-009 components over the single OHLCV binding cannot claim
+`INDEPENDENT`; the versioned contract makes dependence explicit and does not
+infer independence from multiple derived features. Unknown versions, stale or
+invalid quality, source/snapshot/window mismatch, incomplete evidence closure,
+tampered digests, unsupported C-093 references, and expiry violations fail
+closed. All changes remain analysis-contract and validation only: no
+confluence/conflict calculation, C-093 implementation, API projection,
+strategy eligibility, validation, risk, approval, order, or execution behavior
+is enabled. #67 remains the sole owner of C-093 and calculations; #68 remains
+downstream. The 13-chat target and full Chat 5 requirements remain open, and
+held issues #39–#43 are unchanged.
