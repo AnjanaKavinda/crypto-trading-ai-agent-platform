@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
-from typing import ClassVar, Mapping, TypeAlias, get_args
+from typing import ClassVar, Mapping, Protocol, TypeAlias, get_args
 from uuid import UUID
 
 from trading_platform_api.analysis.contracts import (
@@ -1143,6 +1143,75 @@ def validate_evidence_item_v2(
     now: datetime,
 ) -> None:
     if type(evidence) is not EvidenceItemV2 or type(manifest) is not AnalysisSnapshotV2:
+        raise AnalysisV2ContractError("Invalid C-008 v2 evidence or C-007 manifest.")
+    validate_evidence_item_v2_resolved(
+        evidence, manifest, resolved_bindings=resolved_bindings, now=now
+    )
+
+
+class _EvidenceManifestLike(Protocol):
+    @property
+    def contract_id(self) -> str: ...
+
+    @property
+    def schema_version(self) -> str: ...
+
+    @property
+    def created_at(self) -> datetime: ...
+
+    @property
+    def expires_at(self) -> datetime: ...
+
+    @property
+    def evidence_ids(self) -> tuple[UUID, ...]: ...
+
+
+class _EvidenceBindingLike(Protocol):
+    @property
+    def binding_id(self) -> UUID: ...
+
+    @property
+    def analysis_cutoff(self) -> datetime: ...
+
+
+class _EvidenceResolvedBindingLike(Protocol):
+    @property
+    def binding(self) -> _EvidenceBindingLike: ...
+
+    @property
+    def observations(self) -> tuple[MarketData, ...]: ...
+
+    @property
+    def sources(self) -> tuple[DataSourceRecord, ...]: ...
+
+    @property
+    def dataset(self) -> DatasetVersion | None: ...
+
+    @property
+    def dependency_expires_at(self) -> datetime: ...
+
+    @property
+    def report(self) -> DataQualityReportV2: ...
+
+
+def validate_evidence_item_v2_resolved(
+    evidence: EvidenceItemV2,
+    manifest: _EvidenceManifestLike,
+    *,
+    resolved_bindings: tuple[_EvidenceResolvedBindingLike, ...],
+    now: datetime,
+) -> None:
+    """Validate unchanged C-008 v2 fields against an exactly resolved manifest.
+
+    The schema-specific entry points retain exact type checks. This shared
+    closure validator permits an additive C-007 schema to prove compatibility
+    without converting or reinterpreting the serialized evidence.
+    """
+    if (
+        type(evidence) is not EvidenceItemV2
+        or getattr(manifest, "contract_id", None) != "C-007"
+        or getattr(manifest, "schema_version", None) not in {"2", "3", "4"}
+    ):
         raise AnalysisV2ContractError("Invalid C-008 v2 evidence or C-007 manifest.")
     validation_time = _time("now", now)
     if (
