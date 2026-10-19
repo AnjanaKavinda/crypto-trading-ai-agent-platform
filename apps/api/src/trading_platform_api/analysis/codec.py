@@ -15,6 +15,7 @@ from trading_platform_api.analysis.contracts import (
     EvidenceItem,
     MarketContext,
 )
+from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
 from trading_platform_api.analysis.versioned_contracts import (
     AnalysisSnapshotV2,
     AnalysisSnapshotV3,
@@ -56,6 +57,7 @@ _MODELS: dict[tuple[str, str], type[Any]] = {
     ("C-009", "3"): ConfluenceAssessmentV3,
     ("C-010", "2"): ConflictAssessmentV2,
     ("C-010", "3"): ConflictAssessmentV3,
+    ("C-093", "1"): AgentIndependenceReport,
     ("C-104", "1"): OrderFlowAssessment,
 }
 

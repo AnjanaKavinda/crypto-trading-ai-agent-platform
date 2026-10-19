@@ -39,6 +39,13 @@ The domain registry contains exactly C-001–C-100 with unique IDs and names.
 - The RFC 9457 API problem contract is an API response boundary and correctly
   has no C-### identity.
 
+**Status update (Issue #67):** The deferral above records the Phase 02 state at
+the time of this review. Issue #67 subsequently implemented the canonical
+C-093 schema/lineage `1/1`, owner registry, exact reference resolution, and
+bounded Spot C-009/C-010 calculations. See the current domain and version
+registries for active semantics; this historical Phase 02 inventory remains
+unchanged.
+
 ## Findings and resolutions
 
 ### C-060 identity
