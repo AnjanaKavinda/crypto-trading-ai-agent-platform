@@ -665,6 +665,44 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
     assert resolved[0].regime == profile.regime
     assert len(resolved[0].evidence) == 3
     assert quality_v1.status is DataQualityStatus.VALID
+    for rejected_status in (DataQualityStatus.STALE, DataQualityStatus.INVALID):
+        rejected_report = replace(quality_v2, status=rejected_status)
+        rejected_binding = replace(
+            binding,
+            data_quality_report=AnalysisRecordReference(
+                "C-003",
+                str(rejected_report.report_id),
+                "2",
+                "2",
+                canonical_sha256(rejected_report),
+            ),
+        )
+        rejected_manifest = create_analysis_snapshot_v4(
+            snapshot_id=manifest.snapshot_id,
+            asset=manifest.asset,
+            instrument_id=manifest.instrument_id,
+            venue_id=manifest.venue_id,
+            timeframe=manifest.timeframe,
+            analysis_cutoff=manifest.analysis_cutoff,
+            created_at=manifest.created_at,
+            expires_at=manifest.expires_at,
+            bindings=(rejected_binding,),
+            assessment_ids=manifest.assessment_ids,
+            evidence_ids=manifest.evidence_ids,
+            provenance=manifest.provenance,
+            analysis_outputs=manifest.analysis_outputs,
+        )
+        with pytest.raises(AnalysisV2ContractError, match="C-003 report is not valid"):
+            resolve_analysis_snapshot_v4(
+                rejected_manifest,
+                now=NOW,
+                snapshots={snapshot.snapshot_id: snapshot},
+                reports={rejected_report.report_id: rejected_report},
+                observations={item.market_data_id: item for item in observations},
+                sources={item.source_record_id: item for item in sources},
+                regimes={profile.regime.regime_id: profile.regime},
+                evidence={item.evidence_id: item for item in v2_evidence},
+            )
     with pytest.raises(AnalysisV2ContractError, match="expired or not yet available"):
         resolve_analysis_snapshot_v4(
             manifest,
