@@ -311,3 +311,25 @@ probability, win rate, expected return, or profitability. This
 analysis-only implementation does not alter C-006, create strategy/risk
 eligibility, resolve conflicts, or enable approvals or execution. Full Chat 5
 and held issues #39–#43 remain open/on hold; #68 remains downstream.
+
+## Issue #379 — proposed C-019/C-006 Spot adversarial version path
+
+[`ADR-0010`](../adr/ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md)
+proposes Option A, pending explicit human repository-owner approval:
+
+| Contract | Proposed schema / lineage | Proposed binding |
+|---|---:|---|
+| C-019 `AdversarialAssessment` | `2 / 2` | Embedded in C-006 v5; binds the exact C-007 v4 manifest ID/digest, Spot instrument/timeframe/window and cutoff, C-003 v2 report ID/digest, exact usable C-008 v2 evidence references/digests and source/observation lineage, as-of/expiry, and exact method/model/prompt version references. |
+| C-006 `MarketContext` | `5 / 5` | References the exact C-007 v4 manifest and embeds C-019 v2; preserves C-009/C-010 v3 and existing C-093 reference behavior. |
+
+This is a proposal, not an approved version registration or implementation
+authorization. Until ADR-0010 is accepted, current registrations and consumers
+remain unchanged. If approved, C-019 v2 remains outside the C-007 v4 output
+closure, avoiding a digest cycle; contradictory evidence must belong to the
+exact usable C-008 set already closed over by that manifest. All C-006 v1–v4,
+C-007 v1–v4, C-009/C-010 v1–v3, C-019 v1, and C-093 v1 payloads and readers
+remain unchanged. Analytical confidence is interpretive only, never a
+probability; unavailable confidence must be explicit and cannot be fabricated.
+No strategy eligibility, signal qualification, validation, risk, approval,
+order, or execution authority is added. Issue #68 remains blocked pending owner
+approval and a separately merged contract implementation.

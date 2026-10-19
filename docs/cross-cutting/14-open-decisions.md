@@ -34,6 +34,7 @@ decision scope as open.
 | OD-0022 | Strategy production-promotion thresholds | Open | Strategy governance; Chats 6, 7, 13 | Human repository owner | — | — |
 | OD-0023 | Live-trading production readiness criteria | Open | Release gates and safety; Chats 1, 9, 10, 12 | Human repository owner | — | — |
 | OD-0024 | Authoritative-source precedence and stale historical path correction | Open | Repository governance; Issues 001–002 | Human repository owner | — | — |
+| OD-0025 | Additive C-019/C-006 Spot adversarial schema and lineage path | Open | Contract compatibility; issue #379, downstream issue #68 | Human repository owner | [ADR-0010](../adr/ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md) (proposed Option A only; no implementation authority) | — |
 
 ## Open-state decision analysis
 
