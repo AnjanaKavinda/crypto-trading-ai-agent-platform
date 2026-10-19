@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-19 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
+| Human approver | AnjanaKavinda (explicit owner approval, 2026-10-19) |
 | GitHub issue / PR | [Issue #379](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/379) |
 | Open decision ID | OD-0025 |
 | Related ADRs | ADR-0008 |
@@ -23,11 +23,13 @@ closure.
 
 This record follows the explicit option, compatibility, and owner-decision
 structure used for issue #373. That precedent does not transfer approval to
-this decision; the owner decision for issue #379 remains pending.
+this decision; the human repository owner explicitly selected Option A on
+2026-10-19, as recorded below.
 
 The current C-007 v4 output whitelist and C-006 v4/C-019 v1 semantics are
-already merged compatibility boundaries. This decision must not reinterpret
-their payloads or hashes, and it authorizes no contract implementation.
+already merged compatibility boundaries. This decision does not reinterpret their payloads or hashes. Contract
+implementation remains a separate, bounded follow-up and may begin only after
+this accepted ADR is merged.
 
 ## Alternatives
 
@@ -60,11 +62,13 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed: Option A, pending explicit human repository-owner approval.** This
-ADR is not accepted and is not implementation authority. Until accepted,
-issue #68 remains blocked and no producer or schema implementation may begin.
+**Accepted: Option A.** The human repository owner explicitly approved this
+version path on 2026-10-19. This ADR records the architecture decision; it does
+not itself implement contracts or authorize a producer. A separate implementation
+issue is required after this ADR merges, and #68 remains blocked until that
+contract implementation is merged.
 
-If approved, the additive versions are:
+The approved additive versions are:
 
 | Contract | Proposed schema / lineage | Owner / registry |
 |---|---:|---|
@@ -102,13 +106,14 @@ The exact C-008 evidence set in C-019 must be a subset of the usable evidence
 set validated against that manifest; contradictory evidence IDs must be members
 of that same set.
 
-Any analytical-confidence value is interpretive only, not a probability,
+Analytical confidence is interpretive only; it is never a probability,
 calibrated likelihood, historical win rate, evidence score, or qualification.
-If no defensible interpretive value is available, represent it explicitly as
-unavailable with a reason (or omit it only if the approved schema defines that
-absence unambiguously); do not substitute zero, a default, or a fabricated
-number. Unknown confidence must not be treated as neutral or as evidence of
-safety.
+C-019 v2 must represent confidence as a required discriminated state: `AVAILABLE`
+requires a defensible numeric interpretive value and an exact method/version
+reference; `UNAVAILABLE` requires an explicit reason and carries no value.
+Consumers must handle both states explicitly. Do not substitute zero, a default,
+or a fabricated number, and never treat unknown confidence as neutral or as
+evidence of safety.
 
 ## Consequences
 
@@ -165,8 +170,8 @@ preferred whenever evidence or safety is insufficient.
 
 ## Approval record
 
-Pending explicit decision by `AnjanaKavinda`, human repository owner. Until
-approval is recorded here and the ADR status is changed to `Accepted`, this
-proposal authorizes no contract implementation. Approval of this version path
-would not approve a producer, consumer migration, persistence, or any trading
-behavior.
+Approved by `AnjanaKavinda`, human repository owner, on 2026-10-19: Option A
+(C-019 schema/lineage 2/2 embedded in C-006 schema/lineage 5/5), with the
+required typed confidence state defined above. The ADR becomes effective as
+implementation authority when merged. This approval does not approve a producer,
+consumer migration, persistence, or any trading behavior.
