@@ -169,13 +169,9 @@ def normalize_events(
             raise EventNormalizationError("Invalid source identity.")
 
         provider_id = _identifier("provider_id", item.provider_id)
-        provider_event_id = _identifier(
-            "provider_event_id", item.provider_event_id
-        )
+        provider_event_id = _identifier("provider_event_id", item.provider_event_id)
         publisher_id = _identifier("publisher_id", item.publisher_id)
-        canonical_event_id = _identifier(
-            "canonical_event_id", item.canonical_event_id
-        )
+        canonical_event_id = _identifier("canonical_event_id", item.canonical_event_id)
         event_type = _identifier("event_type", item.event_type)
         for name in (
             "provider_version",
@@ -197,17 +193,25 @@ def normalize_events(
         )
         if len(set(asset_ids)) != len(asset_ids):
             raise EventNormalizationError("asset_ids must not contain duplicates.")
-        if item.asset_attribution in (
-            EventAssetAttribution.OBSERVED,
-            EventAssetAttribution.INFERRED,
-        ) and not asset_ids:
+        if (
+            item.asset_attribution
+            in (
+                EventAssetAttribution.OBSERVED,
+                EventAssetAttribution.INFERRED,
+            )
+            and not asset_ids
+        ):
             raise EventNormalizationError(
                 "Observed/inferred asset attribution requires asset IDs."
             )
-        if item.asset_attribution in (
-            EventAssetAttribution.UNKNOWN,
-            EventAssetAttribution.NOT_APPLICABLE,
-        ) and asset_ids:
+        if (
+            item.asset_attribution
+            in (
+                EventAssetAttribution.UNKNOWN,
+                EventAssetAttribution.NOT_APPLICABLE,
+            )
+            and asset_ids
+        ):
             raise EventNormalizationError(
                 "Unknown/not-applicable attribution cannot carry asset IDs."
             )
@@ -278,9 +282,7 @@ def normalize_events(
         )
         if provider_key in seen:
             if seen[provider_key] != fingerprint:
-                raise EventNormalizationError(
-                    "Conflicting provider event identity."
-                )
+                raise EventNormalizationError("Conflicting provider event identity.")
             if provider_event_id not in duplicates:
                 duplicates.append(provider_event_id)
             continue
