@@ -239,14 +239,6 @@ def normalize_supplemental_derivatives(
             raise SupplementalDerivativesError(
                 "Complete coverage requires a declared scope."
             )
-        if (
-            item.coverage_status is not CoverageStatus.COMPLETE_WITH_DECLARED_SCOPE
-            and scope is not None
-        ):
-            raise SupplementalDerivativesError(
-                "Only complete coverage may declare complete scope."
-            )
-
         window_start = (
             _utc("window_start", item.window_start)
             if item.window_start is not None
