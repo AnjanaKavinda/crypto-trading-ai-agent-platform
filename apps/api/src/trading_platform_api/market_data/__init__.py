@@ -34,16 +34,6 @@ from trading_platform_api.market_data.derivatives import (
     RawDerivativesObservation,
     normalize_derivatives,
 )
-from trading_platform_api.market_data.on_chain import (
-    AssetAttribution,
-    FinalityStatus,
-    NormalizedOnChain,
-    OnChainIdentity,
-    OnChainNormalizationError,
-    OnChainPolicy,
-    RawOnChainObservation,
-    normalize_on_chain,
-)
 from trading_platform_api.market_data.history_contracts import (
     HistoricalEvidencePin,
     HistoricalUniverse,
@@ -61,6 +51,16 @@ from trading_platform_api.market_data.ohlcv import (
     NormalizedCandles,
     RawCandle,
     normalize_ohlcv,
+)
+from trading_platform_api.market_data.on_chain import (
+    AssetAttribution,
+    FinalityStatus,
+    NormalizedOnChain,
+    OnChainIdentity,
+    OnChainNormalizationError,
+    OnChainPolicy,
+    RawOnChainObservation,
+    normalize_on_chain,
 )
 from trading_platform_api.market_data.order_book import (
     BookDelta,
