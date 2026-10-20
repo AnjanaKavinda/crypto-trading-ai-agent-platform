@@ -35,6 +35,7 @@ from trading_platform_api.market_data.derivatives import (
     normalize_derivatives,
 )
 from trading_platform_api.market_data.on_chain import (
+    AssetAttribution,
     FinalityStatus,
     NormalizedOnChain,
     OnChainIdentity,
@@ -124,6 +125,7 @@ from trading_platform_api.market_data.trades import (
 )
 
 __all__ = [
+    "AssetAttribution",
     "AssessmentPolicyReference",
     "DataQualityDimension",
     "DataQualityDimensionReasonCode",
