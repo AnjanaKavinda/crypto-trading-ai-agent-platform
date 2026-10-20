@@ -131,6 +131,16 @@ from trading_platform_api.market_data.quality import (
     assess_normalized_spot_trades,
     validate_spot_ohlcv_quality_v2,
 )
+from trading_platform_api.market_data.social_sentiment import (
+    CoverageStatus,
+    NormalizedSocialSentiment,
+    RawSocialObservation,
+    SentimentAssetAttribution,
+    SocialSentimentIdentity,
+    SocialSentimentNormalizationError,
+    SocialSentimentPolicy,
+    normalize_social_sentiment,
+)
 from trading_platform_api.market_data.trades import (
     NormalizedTradeTicks,
     RawTradeTick,
@@ -183,6 +193,14 @@ __all__ = [
     "NormalizedFundamentals",
     "RawFundamentalObservation",
     "normalize_fundamentals",
+    "CoverageStatus",
+    "NormalizedSocialSentiment",
+    "RawSocialObservation",
+    "SentimentAssetAttribution",
+    "SocialSentimentIdentity",
+    "SocialSentimentNormalizationError",
+    "SocialSentimentPolicy",
+    "normalize_social_sentiment",
     "EventAssetAttribution",
     "EventDisposition",
     "NormalizedEventGroup",

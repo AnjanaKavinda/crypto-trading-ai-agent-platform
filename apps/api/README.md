@@ -754,3 +754,24 @@ This provider-neutral slice uses synthetic fixtures only. It does not select or
 call Marketaux or another vendor, claim retention or redistribution rights, or
 measure coverage/freshness. Provider use remains gated by OD-0006 and explicit
 usage/rights review.
+
+
+## Provider-neutral social/sentiment normalization (Issue #43)
+
+`trading_platform_api.market_data.social_sentiment` validates bounded synthetic
+or provider-supplied metric batches without making network calls or computing
+sentiment. It preserves platform/provider identity, asset-attribution status,
+source and sample-window times, observed sample counts, and explicit coverage
+status. Unknown population coverage remains unknown. Bot/manipulation risk is
+optional evidence and requires a bounded uncertainty value and model version;
+modeled sentiment scores require an analysis version. No classifier is
+implemented here.
+
+Raw social post text is not part of the output interface; bounded input bytes
+are hashed and discarded. This prevents untrusted post content from becoming
+tool instructions. The module does not infer representativeness, authentic
+engagement, sentiment, source reliability, or trading value from raw volume.
+
+The provider-neutral slice uses synthetic fixtures only. It selects no social
+provider and claims no sampling or storage rights. Real social/sentiment sources
+remain gated by OD-0006 and explicit source/sampling-rights approval.
