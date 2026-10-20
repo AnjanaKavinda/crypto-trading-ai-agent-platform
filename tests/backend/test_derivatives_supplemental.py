@@ -123,6 +123,16 @@ def test_liquidation_preserves_sampled_coverage_and_raw_side_label() -> None:
     assert record.coverage_scope is None
 
 
+def test_sampled_coverage_scope_is_preserved_without_claiming_completeness() -> None:
+    item = observation(
+        SupplementalDerivativesKind.LIQUIDATION,
+        coverage_scope="sampled public stream",
+    )
+    record = normalize_supplemental_derivatives((item,), POLICY).records[0]
+    assert record.coverage_status is SupplementalCoverageStatus.SAMPLED
+    assert record.coverage_scope == "sampled public stream"
+
+
 def test_liquidation_requires_side_semantics_and_window() -> None:
     item = observation(
         SupplementalDerivativesKind.LIQUIDATION,
