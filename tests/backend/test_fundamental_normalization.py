@@ -156,7 +156,6 @@ def test_duplicate_revision_identity_and_batch_bounds_fail_closed() -> None:
         normalize_fundamentals((first, second), small_policy)
 
 
-
 def test_raw_source_bytes_are_bounded_by_policy() -> None:
     policy = replace(POLICY, maximum_source_bytes=4)
     with pytest.raises(FundamentalNormalizationError, match="bounded raw source"):
