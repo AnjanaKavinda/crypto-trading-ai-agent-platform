@@ -120,7 +120,7 @@ def test_exact_provider_event_duplicate_is_removed_but_conflicts_fail() -> None:
     [
         {"asset_id": "asset:BTC"},
         {"asset_attribution": "INFERRED"},
-        {"asset_id": None, "asset_attribution": SentimentAssetAttribution.UNKNOWN},
+        {"asset_attribution": SentimentAssetAttribution.UNKNOWN},
         {"coverage_status": "MEASURED"},
         {
             "coverage_status": CoverageStatus.MEASURED,
