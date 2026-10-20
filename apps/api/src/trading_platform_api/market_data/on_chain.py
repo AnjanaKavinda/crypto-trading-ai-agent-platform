@@ -70,7 +70,10 @@ class OnChainPolicy:
     def __post_init__(self) -> None:
         for name in ("chain_id", "network_id", "asset_id"):
             _identifier(name, getattr(self, name))
-        if type(self.maximum_records) is not int or not 1 <= self.maximum_records <= 1000:
+        if (
+            type(self.maximum_records) is not int
+            or not 1 <= self.maximum_records <= 1000
+        ):
             raise OnChainNormalizationError("maximum_records is out of bounds.")
         if (
             type(self.maximum_source_bytes) is not int
@@ -212,7 +215,9 @@ def normalize_on_chain(
             finality_basis = _identifier("finality_basis", finality_basis)
 
         if (item.block_height is None) != (item.block_hash is None):
-            raise OnChainNormalizationError("Block height and hash must be supplied together.")
+            raise OnChainNormalizationError(
+                "Block height and hash must be supplied together."
+            )
         if item.block_height is not None and (
             type(item.block_height) is not int or item.block_height < 0
         ):
@@ -228,17 +233,27 @@ def normalize_on_chain(
             else None
         )
         if parent_hash is not None and block_hash is None:
-            raise OnChainNormalizationError("Parent block hash requires a block identity.")
+            raise OnChainNormalizationError(
+                "Parent block hash requires a block identity."
+            )
 
         if (item.window_start is None) != (item.window_end is None):
             raise OnChainNormalizationError("Window bounds must be supplied together.")
         window_start = (
-            _utc("window_start", item.window_start) if item.window_start is not None else None
+            _utc("window_start", item.window_start)
+            if item.window_start is not None
+            else None
         )
         window_end = (
-            _utc("window_end", item.window_end) if item.window_end is not None else None
+            _utc("window_end", item.window_end)
+            if item.window_end is not None
+            else None
         )
-        if window_start is not None and window_end is not None and window_start >= window_end:
+        if (
+            window_start is not None
+            and window_end is not None
+            and window_start >= window_end
+        ):
             raise OnChainNormalizationError("window_start must precede window_end.")
 
         if item.finality_status in (
