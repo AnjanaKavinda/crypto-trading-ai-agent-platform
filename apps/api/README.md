@@ -647,7 +647,7 @@ Three status histories remain independent and append-only:
 
 | Axis | Initial state | Transition rule |
 | --- | --- | --- |
-| C-020 strategy availability | `EXPERIMENTAL` | `EXPERIMENTAL → ACTIVE / SUSPENDED / DEPRECATED`; `ACTIVE → SUSPENDED / DEPRECATED`; `SUSPENDED → ACTIVE / DEPRECATED`; `DEPRECATED` is terminal. `ACTIVE` means research selection only. |
+| C-020 strategy availability | `EXPERIMENTAL` | `EXPERIMENTAL → ACTIVE / SUSPENDED / DEPRECATED`; `ACTIVE → SUSPENDED / DEPRECATED`; `SUSPENDED → ACTIVE / DEPRECATED`; `DEPRECATED` is terminal. Reactivation records the exact prior suspension event it resolves, alongside fresh governed decision and evidence references. `ACTIVE` means research selection only. |
 | C-021 `StrategyLifecycle` | `RESEARCH` | Follows the strategy/model/prompt candidate-promotion machine in `08-state-machine-registry.md`; `RESEARCH → VALIDATED → APPROVED_FOR_SHADOW → APPROVED_FOR_PAPER → APPROVED_FOR_PRODUCTION → ACTIVE`; rejection is permitted from `VALIDATED` through `ACTIVE`; `ACTIVE → RETIRED / ROLLED_BACK`; terminal outcomes cannot be reopened. A rollback records an exact distinct same-strategy C-021 version ID whose state on this axis is `APPROVED_FOR_PRODUCTION` or `ACTIVE` at the effective time. |
 | Version Registry lifecycle | `DRAFT` | Uses the vocabulary in `09-version-registry.md`: `DRAFT → CANDIDATE → VALIDATED → APPROVED_FOR_SHADOW → APPROVED_FOR_PAPER → APPROVED_FOR_PRODUCTION → ACTIVE`, with governed rejection and `ACTIVE → RETIRED / ROLLED_BACK` outcomes. A rollback records an exact distinct same-strategy version ID whose state on this axis is `APPROVED_FOR_PRODUCTION` or `ACTIVE` at the effective time. |
 
