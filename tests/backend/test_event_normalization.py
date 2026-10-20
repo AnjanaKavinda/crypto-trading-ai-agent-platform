@@ -203,3 +203,7 @@ def test_conflicting_group_types_and_payload_bounds_fail_closed() -> None:
     small_policy = replace(POLICY, maximum_source_bytes=4)
     with pytest.raises(EventNormalizationError, match="bounded raw source"):
         normalize_events((observation(raw_source_bytes=b"12345"),), small_policy)
+
+    one_record_policy = replace(POLICY, maximum_records=1)
+    with pytest.raises(EventNormalizationError, match="exceeds policy"):
+        normalize_events((first, conflict), one_record_policy)
