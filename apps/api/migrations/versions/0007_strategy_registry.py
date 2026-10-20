@@ -148,10 +148,10 @@ def upgrade() -> None:
             name="ck_strategy_registry_event_target_status",
         ),
         sa.CheckConstraint(
-        "((COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
-        "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NOT NULL) OR "
-        "(NOT COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
-        "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NULL))",
+            "((COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
+            "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NOT NULL) OR "
+            "(NOT COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
+            "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NULL))",
             name="ck_strategy_registry_event_suspension_resolution",
         ),
         sa.CheckConstraint(
