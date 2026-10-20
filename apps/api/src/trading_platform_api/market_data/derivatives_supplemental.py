@@ -347,10 +347,22 @@ def normalize_supplemental_derivatives(
             raise SupplementalDerivativesError("Invalid observation chronology.")
         if previous_time is not None and observed < previous_time:
             raise SupplementalDerivativesError("Out-of-order observations.")
-        if window_end is not None and window_end > observed:
-            raise SupplementalDerivativesError("Coverage window cannot end in the future.")
+        if window_end is not None and window_end > retrieved:
+            raise SupplementalDerivativesError("Coverage window cannot follow retrieval.")
+        if (
+            item.kind is not SupplementalDerivativesKind.LIQUIDATION
+            and window_end is not None
+            and window_end > observed
+        ):
+            raise SupplementalDerivativesError(
+                "Coverage window cannot end after its observation."
+            )
         if item.kind is SupplementalDerivativesKind.LIQUIDATION:
-            if not window_start <= observed <= window_end:  # type: ignore[operator]
+            if (
+                window_start is None
+                or window_end is None
+                or not window_start <= observed <= window_end
+            ):
                 raise SupplementalDerivativesError(
                     "Liquidation event must fall within its coverage window."
                 )
@@ -372,6 +384,9 @@ def normalize_supplemental_derivatives(
             item.contract_id,
             observed,
             provider_time,
+            retrieved,
+            ingested,
+            available,
             item.value,
             unit,
             item.coverage_status,
