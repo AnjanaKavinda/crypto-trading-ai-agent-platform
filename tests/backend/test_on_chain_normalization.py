@@ -140,7 +140,11 @@ def test_exact_duplicate_is_reported_but_conflicting_event_is_rejected() -> None
         {"block_height": None},
         {"block_hash": None},
         {"finality_basis": None},
-        {"parent_block_hash": "parent-without-block"},
+        {
+            "block_height": None,
+            "block_hash": None,
+            "parent_block_hash": "parent-without-block",
+        },
         {
             "finality_status": FinalityStatus.NON_CANONICAL,
             "reorged_event_id": None,
