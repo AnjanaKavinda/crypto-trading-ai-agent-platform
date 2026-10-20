@@ -197,6 +197,20 @@ def normalize_events(
         )
         if len(set(asset_ids)) != len(asset_ids):
             raise EventNormalizationError("asset_ids must not contain duplicates.")
+        if item.asset_attribution in (
+            EventAssetAttribution.OBSERVED,
+            EventAssetAttribution.INFERRED,
+        ) and not asset_ids:
+            raise EventNormalizationError(
+                "Observed/inferred asset attribution requires asset IDs."
+            )
+        if item.asset_attribution in (
+            EventAssetAttribution.UNKNOWN,
+            EventAssetAttribution.NOT_APPLICABLE,
+        ) and asset_ids:
+            raise EventNormalizationError(
+                "Unknown/not-applicable attribution cannot carry asset IDs."
+            )
         language = (
             _identifier("language", item.language, maximum=35)
             if item.language is not None
