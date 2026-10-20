@@ -161,6 +161,14 @@ def test_correction_and_retraction_links_remain_explicit() -> None:
         {"publication_time": T0 + timedelta(minutes=2)},
         {"asset_ids": ("asset:ETH", "asset:ETH")},
         {"asset_attribution": "INFERRED"},
+        {
+            "asset_ids": (),
+            "asset_attribution": EventAssetAttribution.OBSERVED,
+        },
+        {
+            "asset_ids": ("asset:ETH",),
+            "asset_attribution": EventAssetAttribution.UNKNOWN,
+        },
         {"disposition": "CORRECTION"},
         {
             "disposition": EventDisposition.ORIGINAL,
