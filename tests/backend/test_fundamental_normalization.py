@@ -91,7 +91,9 @@ def test_revisions_are_preserved_as_observations_without_overwriting_history() -
     result = normalize_fundamentals((first, second), POLICY)
 
     assert len(result.fundamental_data) == 2
-    assert tuple(item.value for row in result.fundamental_data for item in row.metrics) == (
+    assert tuple(
+        item.value for row in result.fundamental_data for item in row.metrics
+    ) == (
         Decimal("120000000"),
         Decimal("119000000"),
     )
