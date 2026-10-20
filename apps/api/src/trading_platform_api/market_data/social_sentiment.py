@@ -53,9 +53,7 @@ def _utc(name: str, value: object) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise SocialSentimentNormalizationError(f"{name} must be timezone-aware.")
     if value.utcoffset() is None:
-        raise SocialSentimentNormalizationError(
-            f"{name} must be timezone-aware."
-        )
+        raise SocialSentimentNormalizationError(f"{name} must be timezone-aware.")
     return value.astimezone(UTC)
 
 
