@@ -20,6 +20,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0008 | [Versioned C-003 v2 compatibility and rollout](ADR-0008-versioned-c003-v2-compatibility.md) | Accepted | 2026-10-07 | Platform Architect / AnjanaKavinda | — | C-003 schema 2, wire-1 | — | — |
 | ADR-0009 | [Container-local Docker runtime and authenticated API proxy](ADR-0009-container-local-docker-runtime-proxy.md) | Accepted | 2026-10-09 | Platform Architect / AnjanaKavinda (explicit owner approval, 2026-10-10) | — | None | — | — |
 | ADR-0010 | [Versioned C-019/C-006 Spot adversarial path](ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md) | Accepted | 2026-10-19 | Platform Architect / AnjanaKavinda (explicit owner approval) | OD-0025 (resolved) | C-019 schema 2, C-006 schema 5 | — | — |
+| ADR-0011 | [Proposed Binance USDⓈ-M personal derivatives-data scope](ADR-0011-proposed-binance-usdm-personal-derivatives-scope.md) | Proposed | 2026-10-20 | Platform Architect / human approval pending | OD-0002, OD-0004 (remain Open) | No change proposed | — | — |
 
 ## Creating an ADR
 
