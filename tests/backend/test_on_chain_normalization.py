@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from trading_platform_api.market_data.on_chain import (
+    AssetAttribution,
     FinalityStatus,
     OnChainNormalizationError,
     OnChainPolicy,
@@ -27,6 +28,7 @@ def observation(**changes: object) -> RawOnChainObservation:
         "chain_id": POLICY.chain_id,
         "network_id": POLICY.network_id,
         "asset_id": POLICY.asset_id,
+        "asset_attribution": AssetAttribution.OBSERVED,
         "metric_name": "active_addresses",
         "value": Decimal("1250"),
         "unit": "addresses",
@@ -71,6 +73,11 @@ def test_normalization_preserves_chain_finality_units_and_source_lineage() -> No
     assert identity.chain_id == "eip155:1"
     assert identity.network_id == "ethereum-mainnet"
     assert identity.asset_id == "ETH"
+    assert identity.asset_attribution is AssetAttribution.OBSERVED
+    assert identity.provider_time == T0
+    assert identity.retrieval_time == T0 + timedelta(seconds=1)
+    assert identity.ingestion_time == T0 + timedelta(seconds=2)
+    assert identity.availability_time == T0 + timedelta(seconds=3)
     assert identity.finality_status is FinalityStatus.FINALIZED
     assert identity.finality_basis == "provider-finalized"
     assert identity.block_height == 100
