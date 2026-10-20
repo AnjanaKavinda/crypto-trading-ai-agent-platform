@@ -877,7 +877,10 @@ class StrategyRegistry:
             and current == StrategyAvailability.SUSPENDED.value
             and to_status == StrategyAvailability.ACTIVE.value
         ):
-            if not history or history[-1].to_status != StrategyAvailability.SUSPENDED.value:
+            if (
+                not history
+                or history[-1].to_status != StrategyAvailability.SUSPENDED.value
+            ):
                 return await self._reject(
                     axis,
                     strategy_id,
