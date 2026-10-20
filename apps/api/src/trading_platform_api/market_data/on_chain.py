@@ -242,9 +242,7 @@ def normalize_on_chain(
             else None
         )
         window_end = (
-            _utc("window_end", item.window_end)
-            if item.window_end is not None
-            else None
+            _utc("window_end", item.window_end) if item.window_end is not None else None
         )
         if (
             window_start is not None
