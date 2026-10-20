@@ -163,6 +163,7 @@ class RegistryLifecycleEvent:
     effective_at: datetime
     recorded_at: datetime
     rollback_target_version_id: UUID | None = None
+    resolves_suspension_event_id: UUID | None = None
     environment: DeploymentEnvironment | None = None
     operating_mode: OperatingMode | None = None
     event_id: UUID = field(default_factory=uuid4)
@@ -207,6 +208,19 @@ class RegistryLifecycleEvent:
         elif self.rollback_target_version_id is not None:
             raise StrategyRegistryError(
                 "rollback_target_version_id is valid only for ROLLED_BACK events."
+            )
+        resolves_suspension = (
+            self.axis is LifecycleAxis.STRATEGY_AVAILABILITY
+            and self.from_status == StrategyAvailability.SUSPENDED.value
+            and self.to_status == StrategyAvailability.ACTIVE.value
+        )
+        if resolves_suspension != isinstance(self.resolves_suspension_event_id, UUID):
+            raise StrategyRegistryError(
+                "suspension reactivation must link exactly one prior suspension event."
+            )
+        if self.resolves_suspension_event_id == self.event_id:
+            raise StrategyRegistryError(
+                "a lifecycle event cannot resolve itself as a suspension event."
             )
         if self.from_status is not None:
             _required_text("from_status", self.from_status)
@@ -857,6 +871,26 @@ class StrategyRegistry:
                 current_status=current,
             )
         history = await self._store.history(axis, strategy_id, strategy_version_id)
+        resolves_suspension_event_id = None
+        if (
+            axis is LifecycleAxis.STRATEGY_AVAILABILITY
+            and current == StrategyAvailability.SUSPENDED.value
+            and to_status == StrategyAvailability.ACTIVE.value
+        ):
+            if not history or history[-1].to_status != StrategyAvailability.SUSPENDED.value:
+                return await self._reject(
+                    axis,
+                    strategy_id,
+                    strategy_version_id,
+                    to_status,
+                    actor,
+                    "SUSPENSION_CAUSE_EVENT_MISSING",
+                    "reactivation cannot resolve an unavailable suspension event",
+                    moment,
+                    now,
+                    current_status=current,
+                )
+            resolves_suspension_event_id = history[-1].event_id
         if history and moment <= history[-1].effective_at:
             return await self._reject(
                 axis,
@@ -883,6 +917,7 @@ class StrategyRegistry:
             effective_at=moment,
             recorded_at=now,
             rollback_target_version_id=rollback_target_version_id,
+            resolves_suspension_event_id=resolves_suspension_event_id,
             environment=environment,
             operating_mode=operating_mode,
         )
@@ -1153,6 +1188,7 @@ def _make_event(
     effective_at: datetime,
     recorded_at: datetime,
     rollback_target_version_id: UUID | None = None,
+    resolves_suspension_event_id: UUID | None = None,
     environment: DeploymentEnvironment | None = None,
     operating_mode: OperatingMode | None = None,
 ) -> RegistryLifecycleEvent:
@@ -1170,6 +1206,7 @@ def _make_event(
         effective_at=effective_at,
         recorded_at=recorded_at,
         rollback_target_version_id=rollback_target_version_id,
+        resolves_suspension_event_id=resolves_suspension_event_id,
         environment=environment,
         operating_mode=operating_mode,
         event_id=event_id,
