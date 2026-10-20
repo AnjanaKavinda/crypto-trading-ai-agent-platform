@@ -589,8 +589,7 @@ def test_strategy_availability_experimental_can_suspend_then_reactivate():
         reactivated = await transition("ACTIVE")
         assert reactivated.accepted and reactivated.event is not None
         assert (
-            reactivated.event.resolves_suspension_event_id
-            == suspended.event.event_id
+            reactivated.event.resolves_suspension_event_id == suspended.event.event_id
         )
         assert (await transition("DEPRECATED")).accepted
 
