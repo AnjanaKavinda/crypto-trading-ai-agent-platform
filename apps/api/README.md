@@ -730,3 +730,27 @@ metadata. The provider-neutral slice uses synthetic fixtures only. It selects no
 vendor, makes no claims about asset coverage or rights, and does not enable a
 live source; real fundamental ingestion remains gated by asset-specific source,
 semantics, and data-rights approval.
+
+
+## Provider-neutral event normalization (Issue #42)
+
+`trading_platform_api.market_data.news_events` normalizes bounded synthetic or
+provider-supplied event observations without making network calls. It preserves
+publisher and provider identity, publication/update/retrieval/ingestion/
+availability times, effective time, language, explicit asset-attribution
+status, correction/retraction links, and source digests. Supplied canonical
+event-group IDs retain multiple source references; exact same-provider event
+duplicates are removed, while conflicting identities or group event types fail
+closed. The normalizer does not infer event clusters from article similarity.
+
+The canonical `EventData` event time is publication time. Effective time,
+update/disposition status, asset mappings, language, and grouped source
+references remain in sidecars because C-002 schema 1 does not serialize them.
+Payload bytes are hashed and discarded from normalized output; headlines and
+article text are not exposed to downstream consumers. Event content is
+untrusted input and does not instruct tools or authorize trades.
+
+This provider-neutral slice uses synthetic fixtures only. It does not select or
+call Marketaux or another vendor, claim retention or redistribution rights, or
+measure coverage/freshness. Provider use remains gated by OD-0006 and explicit
+usage/rights review.
