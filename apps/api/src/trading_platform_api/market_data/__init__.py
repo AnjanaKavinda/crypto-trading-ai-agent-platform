@@ -52,6 +52,16 @@ from trading_platform_api.market_data.ohlcv import (
     RawCandle,
     normalize_ohlcv,
 )
+from trading_platform_api.market_data.on_chain import (
+    AssetAttribution,
+    FinalityStatus,
+    NormalizedOnChain,
+    OnChainIdentity,
+    OnChainNormalizationError,
+    OnChainPolicy,
+    RawOnChainObservation,
+    normalize_on_chain,
+)
 from trading_platform_api.market_data.order_book import (
     BookDelta,
     BookFailure,
@@ -115,6 +125,7 @@ from trading_platform_api.market_data.trades import (
 )
 
 __all__ = [
+    "AssetAttribution",
     "AssessmentPolicyReference",
     "DataQualityDimension",
     "DataQualityDimensionReasonCode",
@@ -147,6 +158,13 @@ __all__ = [
     "OpenInterestUnit",
     "RawDerivativesObservation",
     "normalize_derivatives",
+    "FinalityStatus",
+    "NormalizedOnChain",
+    "OnChainIdentity",
+    "OnChainNormalizationError",
+    "OnChainPolicy",
+    "RawOnChainObservation",
+    "normalize_on_chain",
     "CONTRACT_SCHEMA_VERSION",
     "DataQualityReport",
     "DataQualityStatus",
