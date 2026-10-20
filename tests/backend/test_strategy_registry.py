@@ -584,8 +584,14 @@ def test_strategy_availability_experimental_can_suspend_then_reactivate():
         )
 
     async def check():
-        assert (await transition("SUSPENDED")).accepted
-        assert (await transition("ACTIVE")).accepted
+        suspended = await transition("SUSPENDED")
+        assert suspended.accepted and suspended.event is not None
+        reactivated = await transition("ACTIVE")
+        assert reactivated.accepted and reactivated.event is not None
+        assert (
+            reactivated.event.resolves_suspension_event_id
+            == suspended.event.event_id
+        )
         assert (await transition("DEPRECATED")).accepted
 
     asyncio.run(check())
@@ -1274,6 +1280,8 @@ def test_alembic_head_includes_registry_ddl_and_immutable_guards(monkeypatch):
         assert f"CREATE TABLE {table}" in sql
         assert f"{table}_IMMUTABLE" in sql
     assert "FK_STRATEGY_REGISTRY_EVENT_AUDIT" in sql
+    assert "FK_STRATEGY_REGISTRY_EVENT_RESOLVED_SUSPENSION" in sql
+    assert "CK_STRATEGY_REGISTRY_EVENT_SUSPENSION_RESOLUTION" in sql
     assert "CK_STRATEGY_REGISTRY_EVENT_TARGET_STATUS" in sql
     assert "CK_STRATEGY_REGISTRY_EVENT_ROLLBACK_TARGET" in sql
     assert "FK_STRATEGY_REGISTRY_EVENT_ROLLBACK_TARGET" in sql
