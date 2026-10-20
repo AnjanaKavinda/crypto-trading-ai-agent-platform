@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from trading_platform_api.market_data.derivatives_supplemental import (
-    CoverageStatus,
+    SupplementalCoverageStatus,
     RawSupplementalDerivativeRecord,
     SupplementalDerivativesError,
     SupplementalDerivativesKind,
@@ -42,7 +42,7 @@ def observation(
         "metric_name": kind.value.lower(),
         "value": Decimal("0.01"),
         "unit": "provider-declared-unit",
-        "coverage_status": CoverageStatus.UNKNOWN,
+        "coverage_status": SupplementalCoverageStatus.UNKNOWN,
         "coverage_scope": None,
         "window_start": None,
         "window_end": None,
@@ -67,7 +67,7 @@ def observation(
             retrieval_time=T0 + timedelta(hours=1, seconds=2),
             ingestion_time=T0 + timedelta(hours=1, seconds=3),
             availability_time=T0 + timedelta(hours=1, seconds=4),
-            coverage_status=CoverageStatus.SAMPLED,
+            coverage_status=SupplementalCoverageStatus.SAMPLED,
             window_start=T0,
             window_end=T0 + timedelta(hours=1),
             provider_side_label="SELL",
@@ -100,7 +100,7 @@ def test_basis_preserves_reference_period_unit_and_source_digest() -> None:
     assert record.basis_period_seconds == 86_400
     assert record.value == Decimal("0.01")
     assert record.unit == "provider-declared-unit"
-    assert record.coverage_status is CoverageStatus.UNKNOWN
+    assert record.coverage_status is SupplementalCoverageStatus.UNKNOWN
     assert record.content_sha256
 
 
@@ -119,7 +119,7 @@ def test_liquidation_preserves_sampled_coverage_and_raw_side_label() -> None:
     record = result.records[0]
     assert record.provider_side_label == "SELL"
     assert record.provider_side_semantics == "provider's raw liquidation side label"
-    assert record.coverage_status is CoverageStatus.SAMPLED
+    assert record.coverage_status is SupplementalCoverageStatus.SAMPLED
     assert record.coverage_scope is None
 
 
@@ -135,7 +135,7 @@ def test_liquidation_requires_side_semantics_and_window() -> None:
 def test_complete_coverage_requires_an_explicit_scope() -> None:
     item = observation(
         SupplementalDerivativesKind.LIQUIDATION,
-        coverage_status=CoverageStatus.COMPLETE_WITH_DECLARED_SCOPE,
+        coverage_status=SupplementalCoverageStatus.COMPLETE_WITH_DECLARED_SCOPE,
         coverage_scope=None,
     )
     with pytest.raises(SupplementalDerivativesError, match="declared scope"):
