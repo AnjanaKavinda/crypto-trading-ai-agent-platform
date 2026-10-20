@@ -710,3 +710,23 @@ slice therefore does not persist or publish these rows as a complete on-chain
 snapshot. Durable snapshot encoding requires an approved explicit C-002 schema
 version. No live provider, credential, external data, or database migration is
 used; real integration remains gated by OD-0005.
+
+
+## Provider-neutral fundamental normalization (Issue #41)
+
+`trading_platform_api.market_data.fundamentals` validates bounded synthetic or
+provider-supplied metric observations without making network calls. It keeps
+asset identity, metric units, source digest, publication, provider-update,
+retrieval, ingestion and availability times, revision IDs, and supersession
+references. Publication time is the canonical observation time. Effective time
+is retained in an immutable sidecar and may be later than availability for a
+published schedule (such as an unlock) or earlier than publication for a
+subsequent revision. Revisions remain append-only observations; the normalizer
+does not overwrite prior values or infer continuity.
+
+The sidecar is required alongside canonical `FundamentalData` and
+`DataSourceRecord`: C-002 schema 1 does not serialize effective/revision
+metadata. The provider-neutral slice uses synthetic fixtures only. It selects no
+vendor, makes no claims about asset coverage or rights, and does not enable a
+live source; real fundamental ingestion remains gated by asset-specific source,
+semantics, and data-rights approval.
