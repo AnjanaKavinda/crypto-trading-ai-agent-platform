@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import pytest
 from trading_platform_api.market_data.derivatives_supplemental import (
-    SupplementalCoverageStatus,
     RawSupplementalDerivativeRecord,
+    SupplementalCoverageStatus,
     SupplementalDerivativesError,
     SupplementalDerivativesKind,
     SupplementalDerivativesPolicy,
