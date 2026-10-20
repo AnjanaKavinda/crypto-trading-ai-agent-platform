@@ -34,6 +34,15 @@ from trading_platform_api.market_data.derivatives import (
     RawDerivativesObservation,
     normalize_derivatives,
 )
+from trading_platform_api.market_data.on_chain import (
+    FinalityStatus,
+    NormalizedOnChain,
+    OnChainIdentity,
+    OnChainNormalizationError,
+    OnChainPolicy,
+    RawOnChainObservation,
+    normalize_on_chain,
+)
 from trading_platform_api.market_data.history_contracts import (
     HistoricalEvidencePin,
     HistoricalUniverse,
@@ -147,6 +156,13 @@ __all__ = [
     "OpenInterestUnit",
     "RawDerivativesObservation",
     "normalize_derivatives",
+    "FinalityStatus",
+    "NormalizedOnChain",
+    "OnChainIdentity",
+    "OnChainNormalizationError",
+    "OnChainPolicy",
+    "RawOnChainObservation",
+    "normalize_on_chain",
     "CONTRACT_SCHEMA_VERSION",
     "DataQualityReport",
     "DataQualityStatus",
