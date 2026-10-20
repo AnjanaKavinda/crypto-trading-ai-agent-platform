@@ -25,7 +25,7 @@ class SupplementalDerivativesKind(StrEnum):
     POSITIONING = "POSITIONING"
 
 
-class CoverageStatus(StrEnum):
+class SupplementalCoverageStatus(StrEnum):
     COMPLETE_WITH_DECLARED_SCOPE = "COMPLETE_WITH_DECLARED_SCOPE"
     PARTIAL = "PARTIAL"
     SAMPLED = "SAMPLED"
@@ -94,7 +94,7 @@ class RawSupplementalDerivativeRecord:
     metric_name: str
     value: Decimal
     unit: str
-    coverage_status: CoverageStatus
+    coverage_status: SupplementalCoverageStatus
     coverage_scope: str | None
     window_start: datetime | None
     window_end: datetime | None
@@ -137,7 +137,7 @@ class SupplementalDerivativeRecord:
     metric_name: str
     value: Decimal
     unit: str
-    coverage_status: CoverageStatus
+    coverage_status: SupplementalCoverageStatus
     coverage_scope: str | None
     window_start: datetime | None
     window_end: datetime | None
@@ -201,7 +201,7 @@ def normalize_supplemental_derivatives(
         event_id = _text("provider_event_id", item.provider_event_id)
         if type(item.kind) is not SupplementalDerivativesKind:
             raise SupplementalDerivativesError("Unsupported derivatives record kind.")
-        if type(item.coverage_status) is not CoverageStatus:
+        if type(item.coverage_status) is not SupplementalCoverageStatus:
             raise SupplementalDerivativesError("Coverage status must be explicit.")
         if type(item.value) is not Decimal or not item.value.is_finite():
             raise SupplementalDerivativesError("Value must be a finite Decimal.")
@@ -233,7 +233,7 @@ def normalize_supplemental_derivatives(
             else None
         )
         if (
-            item.coverage_status is CoverageStatus.COMPLETE_WITH_DECLARED_SCOPE
+            item.coverage_status is SupplementalCoverageStatus.COMPLETE_WITH_DECLARED_SCOPE
             and scope is None
         ):
             raise SupplementalDerivativesError(
