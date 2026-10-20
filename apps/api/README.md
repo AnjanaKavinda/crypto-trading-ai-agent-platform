@@ -697,11 +697,11 @@ keep their own dependency gates.
 `trading_platform_api.market_data.on_chain` validates bounded synthetic or
 provider-supplied on-chain observation batches without making network calls.
 It preserves chain/network/asset identity, metric units and windows, source
-digest and timestamps, explicit finality claims, block references, and
-reorg lineage in an immutable identity sidecar accompanying the canonical
+digest and timestamps, provider-declared attribution and finality, block
+references, and reorg lineage in an immutable identity sidecar accompanying the canonical
 `OnChainData` and `DataSourceRecord` rows. Unknown finality remains unknown;
 the normalizer does not infer finality, continuity, entity attribution, or
-provider coverage. Conflicting event identities and invalid chronology fail
+provider coverage. Attribution is preserved as a provider-declared status. Conflicting event identities and invalid chronology fail
 closed.
 
 The sidecar is required alongside the canonical rows: C-002 schema 1 does not
