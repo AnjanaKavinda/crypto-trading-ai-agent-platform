@@ -293,7 +293,9 @@ def normalize_on_chain(
         if not observed <= provider_time <= retrieved <= ingested <= available:
             raise OnChainNormalizationError("Invalid observation chronology.")
         if window_end is not None and window_end > observed:
-            raise OnChainNormalizationError("window_end cannot follow observation_time.")
+            raise OnChainNormalizationError(
+                "window_end cannot follow observation_time."
+            )
         if previous_time is not None and observed < previous_time:
             raise OnChainNormalizationError("Out-of-order observations.")
         previous_time = observed
@@ -303,7 +305,9 @@ def normalize_on_chain(
             type(raw_bytes) is not bytes
             or not 0 < len(raw_bytes) <= policy.maximum_source_bytes
         ):
-            raise OnChainNormalizationError("Exact bounded raw source bytes are required.")
+            raise OnChainNormalizationError(
+                "Exact bounded raw source bytes are required."
+            )
         digest = sha256(raw_bytes).hexdigest()
         key = (item.chain_id, item.network_id, event_id, metric_name)
         finality_status = item.finality_status
