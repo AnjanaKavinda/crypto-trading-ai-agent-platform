@@ -248,9 +248,7 @@ def normalize_supplemental_derivatives(
             else None
         )
         window_end = (
-            _utc("window_end", item.window_end)
-            if item.window_end is not None
-            else None
+            _utc("window_end", item.window_end) if item.window_end is not None else None
         )
         if (window_start is None) != (window_end is None):
             raise SupplementalDerivativesError(
