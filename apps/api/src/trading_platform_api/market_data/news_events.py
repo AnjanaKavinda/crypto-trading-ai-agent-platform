@@ -160,7 +160,7 @@ def normalize_events(
     duplicates: list[str] = []
     seen: dict[tuple[str, str], tuple[object, ...]] = {}
     source_ids: set[UUID] = set()
-    groups: dict[str, dict[str, object]] = {}
+    groups: dict[str, tuple[str, list[UUID], list[str]]] = {}
 
     for item in observations:
         if not isinstance(item, RawEventObservation):
@@ -277,19 +277,15 @@ def normalize_events(
         source_ids.add(item.source_record_id)
 
         group = groups.get(canonical_event_id)
-        if group is not None and group["event_type"] != event_type:
+        if group is not None and group[0] != event_type:
             raise EventNormalizationError(
                 "Canonical event group has conflicting event types."
             )
         if group is None:
-            group = {
-                "event_type": event_type,
-                "source_record_ids": [],
-                "provider_event_ids": [],
-            }
+            group = (event_type, [], [])
             groups[canonical_event_id] = group
-        group["source_record_ids"].append(item.source_record_id)
-        group["provider_event_ids"].append(provider_event_id)
+        group[1].append(item.source_record_id)
+        group[2].append(provider_event_id)
 
         sources.append(
             DataSourceRecord(
@@ -339,9 +335,9 @@ def normalize_events(
     normalized_groups = tuple(
         NormalizedEventGroup(
             canonical_event_id=canonical_event_id,
-            event_type=str(group["event_type"]),
-            source_record_ids=tuple(group["source_record_ids"]),
-            provider_event_ids=tuple(group["provider_event_ids"]),
+            event_type=group[0],
+            source_record_ids=tuple(group[1]),
+            provider_event_ids=tuple(group[2]),
         )
         for canonical_event_id, group in groups.items()
     )
