@@ -34,6 +34,14 @@ from trading_platform_api.market_data.derivatives import (
     RawDerivativesObservation,
     normalize_derivatives,
 )
+from trading_platform_api.market_data.fundamentals import (
+    FundamentalIdentity,
+    FundamentalNormalizationError,
+    FundamentalPolicy,
+    NormalizedFundamentals,
+    RawFundamentalObservation,
+    normalize_fundamentals,
+)
 from trading_platform_api.market_data.history_contracts import (
     HistoricalEvidencePin,
     HistoricalUniverse,
@@ -158,6 +166,12 @@ __all__ = [
     "OpenInterestUnit",
     "RawDerivativesObservation",
     "normalize_derivatives",
+    "FundamentalIdentity",
+    "FundamentalNormalizationError",
+    "FundamentalPolicy",
+    "NormalizedFundamentals",
+    "RawFundamentalObservation",
+    "normalize_fundamentals",
     "FinalityStatus",
     "NormalizedOnChain",
     "OnChainIdentity",
