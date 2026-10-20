@@ -32,9 +32,7 @@ def _identifier(name: str, value: object, *, maximum: int = 255) -> str:
         or len(value) > maximum
         or any(ord(char) < 32 for char in value)
     ):
-        raise FundamentalNormalizationError(
-            f"{name} must be a bounded identifier."
-        )
+        raise FundamentalNormalizationError(f"{name} must be a bounded identifier.")
     return value
 
 
@@ -160,9 +158,7 @@ def normalize_fundamentals(
             else None
         )
         if supersedes_revision_id == revision_id:
-            raise FundamentalNormalizationError(
-                "A revision cannot supersede itself."
-            )
+            raise FundamentalNormalizationError("A revision cannot supersede itself.")
 
         for name in (
             "provider_id",
