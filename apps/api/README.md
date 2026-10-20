@@ -124,7 +124,9 @@ the operator; code cannot establish legal rights or geographic eligibility.
 
 ```python
 from trading_platform_api.market_data.binance_spot import (
-    BinanceSpotArchive, BinanceSpotProvider, BinanceSpotSettings,
+    BinanceSpotArchive,
+    BinanceSpotProvider,
+    BinanceSpotSettings,
 )
 
 settings = BinanceSpotSettings()  # disabled; no import-time I/O
@@ -569,8 +571,8 @@ The service rejects over-window requests before provider access. The exact
 resolved policy and hash are stored with the matching C-002 snapshot and C-003
 report.
 
-Set `DATABASE_URL` and apply the existing Alembic migrations through
-`0006_spot_research_read_model` before requesting refresh or historical reads.
+Set `DATABASE_URL` and apply the Alembic migrations through `head` before requesting refresh or
+historical reads.
 Downgrading this append-only history index is intentionally prohibited.
 The optional `TRADING_PLATFORM_LOCAL_MARKET_ARCHIVE_ROOT` enables exact lineage
 reads for archived payloads. Without it, unavailable cold payloads fail closed.
@@ -611,3 +613,80 @@ remains unavailable.
 ```bash
 PYTHONPATH=apps/api/src python -m pytest -q tests/backend/test_spot_research_api.py
 ```
+
+## Strategy registry and immutable versions (Issue #79)
+
+`trading_platform_api.strategy.StrategyRegistry` provides an application service
+and `SqlAlchemyStrategyRegistryStore` a caller-transaction-owned PostgreSQL
+store for the existing immutable C-020 `Strategy` and C-021 `StrategyVersion`
+contracts. The registry is not wired to an HTTP endpoint or an evaluator in
+this issue. It does not produce candidates, assess profitability, validate
+strategies statistically, or authorize risk, approval, production use, or
+execution.
+
+The strategy ID is the permanent C-020 identity. Each immutable C-021 version
+has its own UUID and canonical semantic version, and may name a parent version
+only from the same strategy whose SemVer precedence is lower. Exact lookup
+requires one selector: version UUID or exact SemVer under the supplied
+strategy ID. Duplicate IDs, duplicate per-strategy SemVer values, malformed
+SemVer, hash mismatch, unknown parents, and cross-strategy parent links fail
+closed. Historical version documents are retained and resolved by their exact
+ID or SemVer.
+
+C-021 content hashing uses `canonical-json-v1` and `canonical_sha256` over this
+preimage: the canonicalization version, C-021 contract ID, schema version,
+`wire-1` payload version, and all C-021 dataclass fields except the
+self-referential `content_sha256` field.
+The persisted `content_sha256` must match that digest. The separately stored
+`document_sha256` covers the complete canonical `wire-1` contract document,
+including its declared content digest. C-020 stores the digest of its complete
+canonical `wire-1` document. Reads decode the exact stored envelope, require a
+canonical round trip, and re-verify its identity and digest.
+
+Three status histories remain independent and append-only:
+
+| Axis | Initial state | Transition rule |
+| --- | --- | --- |
+| C-020 strategy availability | `EXPERIMENTAL` | `EXPERIMENTAL → ACTIVE / SUSPENDED / DEPRECATED`; `ACTIVE → SUSPENDED / DEPRECATED`; `SUSPENDED → ACTIVE / DEPRECATED`; `DEPRECATED` is terminal. Reactivation records the exact prior suspension event it resolves, alongside fresh governed decision and evidence references. `ACTIVE` means research selection only. |
+| C-021 `StrategyLifecycle` | `RESEARCH` | Follows the strategy/model/prompt candidate-promotion machine in `08-state-machine-registry.md`; `RESEARCH → VALIDATED → APPROVED_FOR_SHADOW → APPROVED_FOR_PAPER → APPROVED_FOR_PRODUCTION → ACTIVE`; rejection is permitted from `VALIDATED` through `ACTIVE`; `ACTIVE → RETIRED / ROLLED_BACK`; terminal outcomes cannot be reopened. A rollback records an exact distinct same-strategy C-021 version ID whose state on this axis is `APPROVED_FOR_PRODUCTION` or `ACTIVE` at the effective time. |
+| Version Registry lifecycle | `DRAFT` | Uses the vocabulary in `09-version-registry.md`: `DRAFT → CANDIDATE → VALIDATED → APPROVED_FOR_SHADOW → APPROVED_FOR_PAPER → APPROVED_FOR_PRODUCTION → ACTIVE`, with governed rejection and `ACTIVE → RETIRED / ROLLED_BACK` outcomes. A rollback records an exact distinct same-strategy version ID whose state on this axis is `APPROVED_FOR_PRODUCTION` or `ACTIVE` at the effective time. |
+
+No state is inferred from another axis. In particular, strategy-availability
+`ACTIVE` is not C-021 `ACTIVE`, and neither means production authority. Research
+selection is blocked by `SUSPENDED`/`DEPRECATED` availability or a terminal
+rejected, retired, or rolled-back version state. A successful lifecycle
+transition records its actor, reason, exact decision and evidence references,
+effective and recorded UTC times, and a C-060 audit row. Version-axis
+transition events also persist the exact environment and operating mode used
+for scope validation; initial events and strategy-availability events have no
+version scope. The event ID equals the audit ID. Rejected transition attempts append an auditable C-060 rejection
+record and return `TransitionResult.reason_code`; the caller must commit that
+audit result even though no lifecycle event was accepted.
+
+A required `LifecycleReferenceResolver` delegates immutable-reference lookup
+to the registry that owns each C-057 governance decision, C-028 validation
+result, or evidence artifact. It must resolve the *same* artifact type, ID,
+version, and digest at the requested effective time and return `None` for
+unknown references. The strategy registry rejects unresolved, expired, stale,
+failed, invalid, revoked, unavailable, rejected evidence; mismatched subjects;
+and mismatched environment/mode scope. C-021 validation and promotion require
+exact C-028 `PASSED` evidence. Version transitions must also name an
+environment and operating mode declared by that immutable C-021 version, and
+any scope attached to the resolved decision/evidence must match. The resolver
+is mandatory; without it the operation fails closed.
+
+The caller owns the SQLAlchemy transaction and decides whether to commit or
+roll back. A rollback event links its target through a composite same-strategy
+foreign key, so the target cannot be missing or belong to another strategy.
+Migration `0007_strategy_registry` creates the immutable identity and version
+tables and append-only lifecycle event table. Database triggers
+reject update, delete, and truncate operations; foreign keys tie every lifecycle
+event to its identity/version and C-060 audit row. Downgrade is blocked because
+it would destroy immutable history. The optional PostgreSQL integration test
+runs only when `LINEAGE_TEST_DATABASE_URL` points to the disposable local
+`lineage_test` database; unit tests use synthetic in-memory fixtures.
+
+No C-020/C-021 schema, shared contract, API, UI, Chat 5/Chat 3 gate, strategy
+evaluation, signal, risk, approval, execution, or live-trading behavior is
+changed. Issues #61–#65 and holds #39–#43 remain governed separately; #80–#90
+keep their own dependency gates.
