@@ -52,6 +52,17 @@ from trading_platform_api.market_data.history_selection import (
     HistoricalReconstruction,
     reconstruct_history,
 )
+from trading_platform_api.market_data.news_events import (
+    EventAssetAttribution,
+    EventDisposition,
+    NormalizedEventGroup,
+    EventIdentity,
+    EventNormalizationError,
+    EventPolicy,
+    NormalizedEvents,
+    RawEventObservation,
+    normalize_events,
+)
 from trading_platform_api.market_data.ohlcv import (
     CandleNormalizationError,
     CandlePolicy,
@@ -172,6 +183,15 @@ __all__ = [
     "NormalizedFundamentals",
     "RawFundamentalObservation",
     "normalize_fundamentals",
+    "EventAssetAttribution",
+    "EventDisposition",
+    "NormalizedEventGroup",
+    "EventIdentity",
+    "EventNormalizationError",
+    "EventPolicy",
+    "NormalizedEvents",
+    "RawEventObservation",
+    "normalize_events",
     "FinalityStatus",
     "NormalizedOnChain",
     "OnChainIdentity",
