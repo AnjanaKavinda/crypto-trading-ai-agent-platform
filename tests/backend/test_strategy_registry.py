@@ -1192,12 +1192,18 @@ def test_postgresql_roundtrip_and_immutable_registry_tables(registry_database_ur
         identity_decision, identity_evidence, version_decision, version_evidence = (
             bind_registration(resolver, identity.strategy_id, item)
         )
+        clock_tick = [0]
+
+        def clock():
+            clock_tick[0] += 1
+            return NOW + timedelta(seconds=clock_tick[0])
+
         try:
             async with sessions.begin() as session:
                 registry = StrategyRegistry(
                     SqlAlchemyStrategyRegistryStore(session),
                     reference_resolver=resolver,
-                    clock=lambda: NOW,
+                    clock=clock,
                 )
                 await registry.register_strategy(
                     identity,
@@ -1213,11 +1219,43 @@ def test_postgresql_roundtrip_and_immutable_registry_tables(registry_database_ur
                     decision_reference=version_decision,
                     evidence_references=version_evidence,
                 )
+                suspension_decision, suspension_evidence = bind_transition(
+                    resolver, identity.strategy_id
+                )
+                suspended = await registry.transition(
+                    axis=LifecycleAxis.STRATEGY_AVAILABILITY,
+                    strategy_id=identity.strategy_id,
+                    strategy_version_id=None,
+                    to_status="SUSPENDED",
+                    actor="integration-test",
+                    reason="synthetic suspension",
+                    decision_reference=suspension_decision,
+                    evidence_references=suspension_evidence,
+                )
+                assert suspended.accepted and suspended.event is not None
+                reactivation_decision, reactivation_evidence = bind_transition(
+                    resolver, identity.strategy_id
+                )
+                reactivated = await registry.transition(
+                    axis=LifecycleAxis.STRATEGY_AVAILABILITY,
+                    strategy_id=identity.strategy_id,
+                    strategy_version_id=None,
+                    to_status="ACTIVE",
+                    actor="integration-test",
+                    reason="synthetic cause resolution",
+                    decision_reference=reactivation_decision,
+                    evidence_references=reactivation_evidence,
+                )
+                assert reactivated.accepted and reactivated.event is not None
+                assert (
+                    reactivated.event.resolves_suspension_event_id
+                    == suspended.event.event_id
+                )
             async with sessions() as session:
                 registry = StrategyRegistry(
                     SqlAlchemyStrategyRegistryStore(session),
                     reference_resolver=resolver,
-                    clock=lambda: NOW + timedelta(seconds=1),
+                    clock=lambda: NOW + timedelta(seconds=10),
                 )
                 resolved = await registry.resolve_version(
                     strategy_id=identity.strategy_id,
@@ -1234,6 +1272,18 @@ def test_postgresql_roundtrip_and_immutable_registry_tables(registry_database_ur
                         )
                     )
                     == 1
+                )
+                availability_history = await SqlAlchemyStrategyRegistryStore(
+                    session
+                ).history(
+                    LifecycleAxis.STRATEGY_AVAILABILITY,
+                    identity.strategy_id,
+                    None,
+                )
+                assert len(availability_history) == 3
+                assert (
+                    availability_history[-1].resolves_suspension_event_id
+                    == availability_history[-2].event_id
                 )
             for statement in (
                 "UPDATE strategy_registry_versions SET semantic_version='9.9.9' "
@@ -1254,7 +1304,7 @@ def test_postgresql_roundtrip_and_immutable_registry_tables(registry_database_ur
                         "(SELECT count(*) FROM strategy_registry_lifecycle_events)"
                     )
                 )
-                assert counts.one() == (1, 1, 3)
+                assert counts.one() == (1, 1, 5)
         finally:
             await engine.dispose()
 
