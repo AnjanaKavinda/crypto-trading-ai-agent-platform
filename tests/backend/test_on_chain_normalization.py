@@ -88,6 +88,7 @@ def test_normalization_preserves_chain_finality_units_and_source_lineage() -> No
 
 def test_unknown_finality_and_aggregate_window_remain_explicit() -> None:
     item = observation(
+        asset_attribution=AssetAttribution.INFERRED,
         finality_status=FinalityStatus.UNKNOWN,
         finality_basis=None,
         block_height=None,
@@ -98,6 +99,7 @@ def test_unknown_finality_and_aggregate_window_remain_explicit() -> None:
     )
     result = normalize_on_chain((item,), POLICY)
     identity = result.identities[0]
+    assert identity.asset_attribution is AssetAttribution.INFERRED
     assert identity.finality_status is FinalityStatus.UNKNOWN
     assert identity.finality_basis is None
     assert identity.block_height is None
@@ -131,6 +133,7 @@ def test_exact_duplicate_is_reported_but_conflicting_event_is_rejected() -> None
     "changes",
     [
         {"chain_id": "eip155:10"},
+        {"asset_attribution": "INFERRED"},
         {"network_id": ""},
         {"asset_id": "BTC"},
         {"value": Decimal("NaN")},
