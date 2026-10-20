@@ -7,7 +7,6 @@ from hashlib import sha256
 from uuid import uuid4
 
 import pytest
-
 from trading_platform_api.market_data.on_chain import (
     AssetAttribution,
     FinalityStatus,
