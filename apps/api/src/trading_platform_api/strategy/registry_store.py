@@ -343,6 +343,7 @@ class SqlAlchemyStrategyRegistryStore:
                 strategy_id=event.strategy_id,
                 strategy_version_id=event.strategy_version_id,
                 rollback_target_version_id=event.rollback_target_version_id,
+                resolves_suspension_event_id=event.resolves_suspension_event_id,
                 environment=(event.environment.value if event.environment else None),
                 operating_mode=(
                     event.operating_mode.value if event.operating_mode else None
@@ -527,6 +528,7 @@ def _event_from_row(row: Any) -> RegistryLifecycleEvent:
         strategy_id=row["strategy_id"],
         strategy_version_id=row["strategy_version_id"],
         rollback_target_version_id=row["rollback_target_version_id"],
+        resolves_suspension_event_id=row["resolves_suspension_event_id"],
         environment=(
             None
             if row["environment"] is None
