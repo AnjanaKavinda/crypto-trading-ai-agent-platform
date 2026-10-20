@@ -45,17 +45,13 @@ def _identifier(name: str, value: object, *, maximum: int = 255) -> str:
         or len(value) > maximum
         or any(ord(char) < 32 for char in value)
     ):
-        raise SocialSentimentNormalizationError(
-            f"{name} must be a bounded identifier."
-        )
+        raise SocialSentimentNormalizationError(f"{name} must be a bounded identifier.")
     return value
 
 
 def _utc(name: str, value: object) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
-        raise SocialSentimentNormalizationError(
-            f"{name} must be timezone-aware."
-        )
+        raise SocialSentimentNormalizationError(f"{name} must be timezone-aware.")
     if value.utcoffset() is None:
         raise SocialSentimentNormalizationError(
             f"{name} must be timezone-aware."
@@ -83,9 +79,7 @@ class SocialSentimentPolicy:
             type(self.maximum_records) is not int
             or not 1 <= self.maximum_records <= 1000
         ):
-            raise SocialSentimentNormalizationError(
-                "maximum_records is out of bounds."
-            )
+            raise SocialSentimentNormalizationError("maximum_records is out of bounds.")
         if (
             type(self.maximum_source_bytes) is not int
             or not 1 <= self.maximum_source_bytes <= 1_048_576
@@ -190,9 +184,7 @@ def normalize_social_sentiment(
             raise SocialSentimentNormalizationError("Invalid source identity.")
 
         provider_id = _identifier("provider_id", item.provider_id)
-        provider_event_id = _identifier(
-            "provider_event_id", item.provider_event_id
-        )
+        provider_event_id = _identifier("provider_event_id", item.provider_event_id)
         platform_id = _identifier("platform_id", item.platform_id)
         metric_name = _identifier("metric_name", item.metric_name)
         unit = _identifier("unit", item.unit)
@@ -213,17 +205,25 @@ def normalize_social_sentiment(
         )
         if asset_id is not None and asset_id != policy.asset_id:
             raise SocialSentimentNormalizationError("Mismatched asset_id.")
-        if item.asset_attribution in (
-            SentimentAssetAttribution.OBSERVED,
-            SentimentAssetAttribution.INFERRED,
-        ) and asset_id is None:
+        if (
+            item.asset_attribution
+            in (
+                SentimentAssetAttribution.OBSERVED,
+                SentimentAssetAttribution.INFERRED,
+            )
+            and asset_id is None
+        ):
             raise SocialSentimentNormalizationError(
                 "Observed/inferred attribution requires an asset ID."
             )
-        if item.asset_attribution in (
-            SentimentAssetAttribution.UNKNOWN,
-            SentimentAssetAttribution.NOT_APPLICABLE,
-        ) and asset_id is not None:
+        if (
+            item.asset_attribution
+            in (
+                SentimentAssetAttribution.UNKNOWN,
+                SentimentAssetAttribution.NOT_APPLICABLE,
+            )
+            and asset_id is not None
+        ):
             raise SocialSentimentNormalizationError(
                 "Unknown/not-applicable attribution cannot carry an asset ID."
             )
@@ -231,7 +231,9 @@ def normalize_social_sentiment(
         if type(item.coverage_status) is not CoverageStatus:
             raise SocialSentimentNormalizationError("Invalid coverage status.")
         if type(item.sample_count) is not int or item.sample_count < 0:
-            raise SocialSentimentNormalizationError("sample_count must be non-negative.")
+            raise SocialSentimentNormalizationError(
+                "sample_count must be non-negative."
+            )
         population_count = item.population_count
         if population_count is not None and (
             type(population_count) is not int or population_count < 0
@@ -259,20 +261,14 @@ def normalize_social_sentiment(
         bot_model_version = item.bot_model_version
         if bot_risk is None and bot_uncertainty is None and bot_model_version is None:
             pass
-        elif (
-            bot_risk is None
-            or bot_uncertainty is None
-            or bot_model_version is None
-        ):
+        elif bot_risk is None or bot_uncertainty is None or bot_model_version is None:
             raise SocialSentimentNormalizationError(
                 "Bot-risk evidence requires risk, uncertainty, and model version."
             )
         else:
             bot_risk = _bounded_decimal("bot_risk", bot_risk)
             bot_uncertainty = _bounded_decimal("bot_uncertainty", bot_uncertainty)
-            bot_model_version = _identifier(
-                "bot_model_version", bot_model_version
-            )
+            bot_model_version = _identifier("bot_model_version", bot_model_version)
 
         analysis_version = (
             _identifier("analysis_version", item.analysis_version)
@@ -284,7 +280,9 @@ def normalize_social_sentiment(
                 "Sentiment score requires an analysis version."
             )
         if type(item.value) is not Decimal or not item.value.is_finite():
-            raise SocialSentimentNormalizationError("Metric value must be finite Decimal.")
+            raise SocialSentimentNormalizationError(
+                "Metric value must be finite Decimal."
+            )
         if metric_name == "sentiment_score" and not (
             Decimal("-1") <= item.value <= Decimal("1")
         ):
@@ -350,9 +348,7 @@ def normalize_social_sentiment(
         seen[key] = fingerprint
 
         if item.source_record_id in source_ids:
-            raise SocialSentimentNormalizationError(
-                "Duplicate source record identity."
-            )
+            raise SocialSentimentNormalizationError("Duplicate source record identity.")
         source_ids.add(item.source_record_id)
         sources.append(
             DataSourceRecord(
