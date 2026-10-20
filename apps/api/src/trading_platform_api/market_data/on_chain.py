@@ -271,13 +271,14 @@ def normalize_on_chain(
             raise OnChainNormalizationError("Exact bounded raw source bytes are required.")
         digest = sha256(raw_bytes).hexdigest()
         key = (item.chain_id, item.network_id, event_id, metric_name)
+        finality_status = item.finality_status
         fingerprint = (
             digest,
             item.value,
             unit,
             observed,
             provider_time,
-            finality_status := item.finality_status,
+            finality_status,
             finality_basis,
             item.block_height,
             block_hash,
