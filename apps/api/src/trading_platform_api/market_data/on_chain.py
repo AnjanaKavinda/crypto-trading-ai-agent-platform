@@ -156,10 +156,7 @@ def normalize_on_chain(
     """
     if type(policy) is not OnChainPolicy:
         raise OnChainNormalizationError("Invalid on-chain policy.")
-    if (
-        type(observations) is not tuple
-        or len(observations) > policy.maximum_records
-    ):
+    if type(observations) is not tuple or len(observations) > policy.maximum_records:
         raise OnChainNormalizationError("Observation batch exceeds policy.")
 
     sources: list[DataSourceRecord] = []
