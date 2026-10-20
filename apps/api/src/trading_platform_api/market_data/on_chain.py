@@ -32,6 +32,13 @@ class FinalityStatus(StrEnum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
+class AssetAttribution(StrEnum):
+    OBSERVED = "OBSERVED"
+    INFERRED = "INFERRED"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
 def _identifier(name: str, value: object, *, maximum: int = 255) -> str:
     if (
         not isinstance(value, str)
@@ -79,6 +86,7 @@ class RawOnChainObservation:
     chain_id: str
     network_id: str
     asset_id: str
+    asset_attribution: AssetAttribution
     metric_name: str
     value: Decimal
     unit: str
@@ -110,7 +118,12 @@ class OnChainIdentity:
     chain_id: str
     network_id: str
     asset_id: str
+    asset_attribution: AssetAttribution
     metric_name: str
+    provider_time: datetime
+    retrieval_time: datetime
+    ingestion_time: datetime
+    availability_time: datetime
     finality_status: FinalityStatus
     finality_basis: str | None
     block_height: int | None
@@ -138,7 +151,12 @@ def normalize_on_chain(
     rows. C-002 v1 does not serialize chain/block/finality metadata; callers
     must not persist only the canonical rows and claim those semantics survived.
     """
-    if type(observations) is not tuple or len(observations) > policy.maximum_records:
+    if type(policy) is not OnChainPolicy:
+        raise OnChainNormalizationError("Invalid on-chain policy.")
+    if (
+        type(observations) is not tuple
+        or len(observations) > policy.maximum_records
+    ):
         raise OnChainNormalizationError("Observation batch exceeds policy.")
 
     sources: list[DataSourceRecord] = []
@@ -162,6 +180,8 @@ def normalize_on_chain(
                 raise OnChainNormalizationError(f"Mismatched {name}.")
 
         event_id = _identifier("provider_event_id", item.provider_event_id)
+        if type(item.asset_attribution) is not AssetAttribution:
+            raise OnChainNormalizationError("Invalid asset attribution status.")
         metric_name = _identifier("metric_name", item.metric_name)
         unit = _identifier("unit", item.unit)
         for name in (
@@ -287,6 +307,7 @@ def normalize_on_chain(
             window_end,
             reorged_event_id,
             current_provider,
+            item.asset_attribution,
         )
         if key in seen:
             if seen[key] != fingerprint:
@@ -330,7 +351,12 @@ def normalize_on_chain(
                 chain_id=item.chain_id,
                 network_id=item.network_id,
                 asset_id=item.asset_id,
+                asset_attribution=item.asset_attribution,
                 metric_name=metric_name,
+                provider_time=provider_time,
+                retrieval_time=retrieved,
+                ingestion_time=ingested,
+                availability_time=available,
                 finality_status=finality_status,
                 finality_basis=finality_basis,
                 block_height=item.block_height,
