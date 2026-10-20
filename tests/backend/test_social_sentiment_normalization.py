@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from hashlib import sha256
 from uuid import uuid4
 
@@ -66,7 +67,7 @@ def test_unknown_coverage_and_bot_uncertainty_remain_unknown() -> None:
     assert data.observation_time == T0
     assert data.availability_time == T0 + timedelta(seconds=4)
     assert data.metrics[0].metric_name == "mention_count"
-    assert data.metrics[0].value == 20
+    assert data.metrics[0].value == Decimal("20")
     assert data.metrics[0].unit == "posts"
     identity = result.identities[0]
     assert identity.coverage_status is CoverageStatus.UNKNOWN
