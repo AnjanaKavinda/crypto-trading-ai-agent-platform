@@ -55,10 +55,10 @@ from trading_platform_api.market_data.history_selection import (
 from trading_platform_api.market_data.news_events import (
     EventAssetAttribution,
     EventDisposition,
-    NormalizedEventGroup,
     EventIdentity,
     EventNormalizationError,
     EventPolicy,
+    NormalizedEventGroup,
     NormalizedEvents,
     RawEventObservation,
     normalize_events,
