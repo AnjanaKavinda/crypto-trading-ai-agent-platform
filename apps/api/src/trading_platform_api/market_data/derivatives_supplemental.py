@@ -73,7 +73,9 @@ class SupplementalDerivativesPolicy:
         if self.market_type not in ("PERPETUAL", "DATED_FUTURE"):
             raise SupplementalDerivativesError("Unsupported derivative market type.")
         _positive_int("maximum_records", self.maximum_records, maximum=1000)
-        _positive_int("maximum_source_bytes", self.maximum_source_bytes, maximum=1_048_576)
+        _positive_int(
+            "maximum_source_bytes", self.maximum_source_bytes, maximum=1_048_576
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +235,8 @@ def normalize_supplemental_derivatives(
             else None
         )
         if (
-            item.coverage_status is SupplementalCoverageStatus.COMPLETE_WITH_DECLARED_SCOPE
+            item.coverage_status
+            is SupplementalCoverageStatus.COMPLETE_WITH_DECLARED_SCOPE
             and scope is None
         ):
             raise SupplementalDerivativesError(
@@ -250,7 +253,9 @@ def normalize_supplemental_derivatives(
             else None
         )
         if (window_start is None) != (window_end is None):
-            raise SupplementalDerivativesError("Window bounds must be supplied together.")
+            raise SupplementalDerivativesError(
+                "Window bounds must be supplied together."
+            )
         if window_start is not None and window_end is not None:
             if window_start >= window_end:
                 raise SupplementalDerivativesError("Invalid coverage window.")
@@ -282,7 +287,9 @@ def normalize_supplemental_derivatives(
             else None
         )
         population = (
-            _text("population", item.population) if item.population is not None else None
+            _text("population", item.population)
+            if item.population is not None
+            else None
         )
         cohort = _text("cohort", item.cohort) if item.cohort is not None else None
 
@@ -296,7 +303,9 @@ def normalize_supplemental_derivatives(
                 raise SupplementalDerivativesError(
                     "Basis requires explicit reference and period semantics."
                 )
-            _positive_int("basis_period_seconds", basis_period_seconds, maximum=31_536_000)
+            _positive_int(
+                "basis_period_seconds", basis_period_seconds, maximum=31_536_000
+            )
             if side_label is not None or population is not None or cohort is not None:
                 raise SupplementalDerivativesError("Unexpected non-basis semantics.")
         elif item.kind is SupplementalDerivativesKind.LIQUIDATION:
@@ -305,9 +314,13 @@ def normalize_supplemental_derivatives(
                     "Liquidations require source side semantics and a coverage window."
                 )
             if item.value < 0:
-                raise SupplementalDerivativesError("Liquidation quantity must be non-negative.")
+                raise SupplementalDerivativesError(
+                    "Liquidation quantity must be non-negative."
+                )
             if population is not None or reference_instrument_id is not None:
-                raise SupplementalDerivativesError("Unexpected non-liquidation semantics.")
+                raise SupplementalDerivativesError(
+                    "Unexpected non-liquidation semantics."
+                )
         else:
             if (
                 population is None
@@ -326,9 +339,13 @@ def normalize_supplemental_derivatives(
                 or item.population_count < 0
                 or item.sample_count > item.population_count
             ):
-                raise SupplementalDerivativesError("Invalid positioning coverage counts.")
+                raise SupplementalDerivativesError(
+                    "Invalid positioning coverage counts."
+                )
             if side_label is not None or reference_instrument_id is not None:
-                raise SupplementalDerivativesError("Unexpected non-positioning semantics.")
+                raise SupplementalDerivativesError(
+                    "Unexpected non-positioning semantics."
+                )
 
         observed = _utc("observation_time", item.observation_time)
         provider_time = _utc("provider_time", item.provider_time)
@@ -340,7 +357,9 @@ def normalize_supplemental_derivatives(
         if previous_time is not None and observed < previous_time:
             raise SupplementalDerivativesError("Out-of-order observations.")
         if window_end is not None and window_end > retrieved:
-            raise SupplementalDerivativesError("Coverage window cannot follow retrieval.")
+            raise SupplementalDerivativesError(
+                "Coverage window cannot follow retrieval."
+            )
         if (
             item.kind is not SupplementalDerivativesKind.LIQUIDATION
             and window_end is not None
@@ -359,11 +378,15 @@ def normalize_supplemental_derivatives(
                     "Liquidation event must fall within its coverage window."
                 )
         if reference_time is not None and reference_time > observed:
-            raise SupplementalDerivativesError("Basis reference cannot be from the future.")
+            raise SupplementalDerivativesError(
+                "Basis reference cannot be from the future."
+            )
 
         raw = item.raw_source_bytes
         if type(raw) is not bytes or not 0 < len(raw) <= policy.maximum_source_bytes:
-            raise SupplementalDerivativesError("Exact bounded raw source bytes required.")
+            raise SupplementalDerivativesError(
+                "Exact bounded raw source bytes required."
+            )
         digest = sha256(raw).hexdigest()
         key = (item.kind, event_id)
         fingerprint = (
