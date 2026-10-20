@@ -360,7 +360,7 @@ requires its own approved market/product decision, verified source semantics
 and owner-run integration evidence. Tests use synthetic fixtures:
 
 ```bash
-python -m pytest -q tests/backend/test_derivatives_normalization.py tests/backend/test_derivatives_supplemental.py
+python -m pytest -q tests/backend/test_derivatives_normalization.py \\\n    tests/backend/test_derivatives_supplemental.py
 ```
 
 ## Deterministic Spot OHLCV quality (Issue #44)
