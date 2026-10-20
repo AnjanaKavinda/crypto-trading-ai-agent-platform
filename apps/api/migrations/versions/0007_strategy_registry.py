@@ -90,6 +90,9 @@ def upgrade() -> None:
         sa.Column(
             "rollback_target_version_id", postgresql.UUID(as_uuid=True), nullable=True
         ),
+        sa.Column(
+            "resolves_suspension_event_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
         sa.Column("environment", sa.String(length=16), nullable=True),
         sa.Column("operating_mode", sa.String(length=32), nullable=True),
         sa.Column("from_status", sa.String(length=64), nullable=True),
@@ -108,6 +111,22 @@ def upgrade() -> None:
         ),
         sa.Column("effective_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint(
+            "event_id",
+            "strategy_id",
+            "axis",
+            name="uq_strategy_registry_event_subject_axis",
+        ),
+        sa.ForeignKeyConstraint(
+            ["resolves_suspension_event_id", "strategy_id", "axis"],
+            [
+                "strategy_registry_lifecycle_events.event_id",
+                "strategy_registry_lifecycle_events.strategy_id",
+                "strategy_registry_lifecycle_events.axis",
+            ],
+            name="fk_strategy_registry_event_resolved_suspension",
+            ondelete="RESTRICT",
+        ),
         sa.CheckConstraint(
             "axis IN ('STRATEGY_AVAILABILITY','C021_VERSION','ARTIFACT_VERSION')",
             name="ck_strategy_registry_event_axis",
@@ -127,6 +146,13 @@ def upgrade() -> None:
             "('DRAFT','CANDIDATE','VALIDATED','APPROVED_FOR_SHADOW','APPROVED_FOR_PAPER',"
             "'APPROVED_FOR_PRODUCTION','ACTIVE','REJECTED','RETIRED','ROLLED_BACK'))",
             name="ck_strategy_registry_event_target_status",
+        ),
+        sa.CheckConstraint(
+        "((COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
+        "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NOT NULL) OR "
+        "(NOT COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
+        "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NULL))",
+            name="ck_strategy_registry_event_suspension_resolution",
         ),
         sa.CheckConstraint(
             "(to_status = 'ROLLED_BACK' AND axis IN ('C021_VERSION','ARTIFACT_VERSION') "
