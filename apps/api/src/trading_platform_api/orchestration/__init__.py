@@ -1,8 +1,8 @@
 """Bounded workflow orchestration for validated research outputs."""
 
 from trading_platform_api.orchestration.spot_analysis_fanout import (
-    SpotAnalysisFanoutError,
     SpotAnalysisFanoutAssessment,
+    SpotAnalysisFanoutError,
     SpotAnalysisFanoutResult,
     SpotAnalysisTask,
     SpotAnalysisTaskOutcome,
