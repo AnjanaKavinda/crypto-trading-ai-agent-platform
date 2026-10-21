@@ -72,7 +72,9 @@ def test_fanout_bounds_concurrency_and_preserves_correlation_and_order() -> None
         "spot-volatility",
     )
     assert all(item.correlation_id == correlation_id for item in result.outcomes)
-    assert all(item.status is SpotAnalysisTaskStatus.COMPLETE for item in result.outcomes)
+    assert all(
+        item.status is SpotAnalysisTaskStatus.COMPLETE for item in result.outcomes
+    )
     assert not result.is_partial
 
 
