@@ -27,8 +27,35 @@ class SpotAnalysisFanoutError(ValueError):
 
 class SpotAnalysisTaskStatus(StrEnum):
     COMPLETE = "COMPLETE"
+    UNAVAILABLE = "UNAVAILABLE"
     FAILED = "FAILED"
     TIMED_OUT = "TIMED_OUT"
+
+
+class SpotAnalysisTaskReason(StrEnum):
+    """Bounded task outcome reasons; arbitrary callback text is never retained."""
+
+    ANALYSIS_FAILED = "ANALYSIS_FAILED"
+    ANALYSIS_TIMEOUT = "ANALYSIS_TIMEOUT"
+    INPUT_UNAVAILABLE = "INPUT_UNAVAILABLE"
+    INSUFFICIENT_WARMUP = "INSUFFICIENT_WARMUP"
+    INVALID_FINDING = "INVALID_FINDING"
+    INVALID_INPUT = "INVALID_INPUT"
+    POLICY_REQUIRED = "POLICY_REQUIRED"
+    STALE_INPUT = "STALE_INPUT"
+
+
+@dataclass(frozen=True, slots=True)
+class SpotAnalysisUnavailable:
+    """Expected unavailable state from a domain operation, with a safe reason."""
+
+    reason_code: SpotAnalysisTaskReason
+
+    def __post_init__(self) -> None:
+        if type(self.reason_code) is not SpotAnalysisTaskReason:
+            raise SpotAnalysisFanoutError(
+                "unavailable results require a bounded SpotAnalysisTaskReason."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +64,7 @@ class SpotAnalysisTask:
 
     task_id: UUID
     domain: str
-    run: Callable[[], Awaitable[SpotMetaFinding]]
+    run: Callable[[], Awaitable[SpotMetaFinding | SpotAnalysisUnavailable]]
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, UUID):
@@ -55,14 +82,35 @@ class SpotAnalysisTask:
 
 @dataclass(frozen=True, slots=True)
 class SpotAnalysisTaskOutcome:
-    """One task result with shared correlation and a bounded failure code."""
+    """One task result with shared correlation and a bounded reason code."""
 
     correlation_id: UUID
     task_id: UUID
     domain: str
     status: SpotAnalysisTaskStatus
     finding: SpotMetaFinding | None
-    failure_code: str | None
+    reason_code: SpotAnalysisTaskReason | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.correlation_id, UUID) or not isinstance(
+            self.task_id, UUID
+        ):
+            raise SpotAnalysisFanoutError("outcome IDs must be UUID values.")
+        if type(self.status) is not SpotAnalysisTaskStatus:
+            raise SpotAnalysisFanoutError("outcome status has an invalid type.")
+        if self.reason_code is not None and type(
+            self.reason_code
+        ) is not SpotAnalysisTaskReason:
+            raise SpotAnalysisFanoutError("outcome reason must use the bounded enum.")
+        if self.status is SpotAnalysisTaskStatus.COMPLETE:
+            if type(self.finding) is not SpotMetaFinding or self.reason_code is not None:
+                raise SpotAnalysisFanoutError(
+                    "complete outcomes require one finding and no reason code."
+                )
+        elif self.finding is not None or self.reason_code is None:
+            raise SpotAnalysisFanoutError(
+                "non-complete outcomes require a reason code and no finding."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,22 +186,31 @@ async def run_spot_analysis_fanout(
         try:
             async with asyncio.timeout(timeout_seconds):
                 async with semaphore:
-                    finding = await task.run()
-            if type(finding) is not SpotMetaFinding or finding.domain != task.domain:
+                    result = await task.run()
+            if type(result) is SpotAnalysisUnavailable:
+                return SpotAnalysisTaskOutcome(
+                    correlation_id,
+                    task.task_id,
+                    task.domain,
+                    SpotAnalysisTaskStatus.UNAVAILABLE,
+                    None,
+                    result.reason_code,
+                )
+            if type(result) is not SpotMetaFinding or result.domain != task.domain:
                 return SpotAnalysisTaskOutcome(
                     correlation_id,
                     task.task_id,
                     task.domain,
                     SpotAnalysisTaskStatus.FAILED,
                     None,
-                    "INVALID_FINDING",
+                    SpotAnalysisTaskReason.INVALID_FINDING,
                 )
             return SpotAnalysisTaskOutcome(
                 correlation_id,
                 task.task_id,
                 task.domain,
                 SpotAnalysisTaskStatus.COMPLETE,
-                finding,
+                result,
                 None,
             )
         except TimeoutError:
@@ -163,7 +220,7 @@ async def run_spot_analysis_fanout(
                 task.domain,
                 SpotAnalysisTaskStatus.TIMED_OUT,
                 None,
-                "ANALYSIS_TIMEOUT",
+                SpotAnalysisTaskReason.ANALYSIS_TIMEOUT,
             )
         except Exception:
             # Never expose arbitrary callback exception text to logs or callers.
@@ -173,7 +230,7 @@ async def run_spot_analysis_fanout(
                 task.domain,
                 SpotAnalysisTaskStatus.FAILED,
                 None,
-                "ANALYSIS_FAILED",
+                SpotAnalysisTaskReason.ANALYSIS_FAILED,
             )
 
     outcomes = await asyncio.gather(*(execute(task) for task in tasks))
