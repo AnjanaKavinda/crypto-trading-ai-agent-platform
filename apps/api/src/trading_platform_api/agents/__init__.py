@@ -1,6 +1,7 @@
 from trading_platform_api.agents.contracts import (
     CONTRACT_SCHEMA_VERSION,
     AgentContractError,
+    AgentDefinition,
     AgentResult,
     AgentResultStatus,
     FallbackPolicy,
@@ -17,6 +18,13 @@ from trading_platform_api.agents.result_validation import (
     AgentResultValidationError,
     validate_agent_result,
 )
+from trading_platform_api.agents.registry import (
+    PERSONAL_SPOT_AGENT_REGISTRY,
+    PERSONAL_SPOT_RESEARCH_AGENT,
+    AgentRegistry,
+    AgentRegistryError,
+    resolve_agent_definition,
+)
 from trading_platform_api.agents.routing import (
     ModelProvider,
     ModelRoutingError,
@@ -28,6 +36,9 @@ from trading_platform_api.agents.routing import (
 __all__ = [
     "CONTRACT_SCHEMA_VERSION",
     "AgentContractError",
+    "AgentDefinition",
+    "AgentRegistry",
+    "AgentRegistryError",
     "AgentResult",
     "AgentResultExpectation",
     "AgentResultStatus",
@@ -43,7 +54,10 @@ __all__ = [
     "ModelRoutingError",
     "ModelRoutingPolicy",
     "ProviderAvailabilityEvidence",
+    "PERSONAL_SPOT_AGENT_REGISTRY",
+    "PERSONAL_SPOT_RESEARCH_AGENT",
     "invoke_provider",
     "resolve_model_route",
+    "resolve_agent_definition",
     "validate_agent_result",
 ]
