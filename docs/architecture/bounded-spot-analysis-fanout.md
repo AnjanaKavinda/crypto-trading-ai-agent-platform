@@ -17,12 +17,15 @@ findings fail as `INVALID_FINDING`. Callback exception text is not exposed.
 ## Evidence and independence
 
 The fan-in preserves evidence IDs, input bindings, method, and finding identity
-from each `SpotMetaFinding`. Callers pass successful findings to the
-existing C-093 `assess_agent_independence` path with the validated snapshot,
-quality report, manifest, and bindings. C-093 records observed shared inputs;
-it does not establish statistical independence or correlation for this Spot
-profile. Shared OHLCV evidence therefore remains explicitly dependent or
-unknown. Fan-out count is never a vote count or confidence score.
+from each `SpotMetaFinding`. The
+`run_spot_analysis_fanout_with_independence` composition passes only successful
+findings to the existing C-093 `assess_agent_independence` path, alongside the
+caller's exact validated manifest, resolved bindings, evidence, and evaluation
+time. C-093 records observed shared inputs; it does not establish statistical
+independence or correlation for this Spot profile. Shared OHLCV evidence
+therefore remains explicitly dependent or unknown. Invalid scope fails closed
+instead of being returned as a task-level failure. Fan-out count is never a
+vote count or confidence score.
 
 ## Replay and authority boundary
 

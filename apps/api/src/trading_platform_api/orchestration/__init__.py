@@ -1,6 +1,7 @@
 """Bounded workflow orchestration for validated research outputs."""
 
 from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SpotAnalysisFanoutAssessment,
     SpotAnalysisFanoutError,
     SpotAnalysisFanoutResult,
     SpotAnalysisTask,
@@ -9,6 +10,7 @@ from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisTaskStatus,
     SpotAnalysisUnavailable,
     run_spot_analysis_fanout,
+    run_spot_analysis_fanout_with_independence,
 )
 from trading_platform_api.orchestration.spot_results import (
     SpotResultState,
@@ -18,6 +20,7 @@ from trading_platform_api.orchestration.spot_results import (
 
 __all__ = [
     "SpotAnalysisFanoutError",
+    "SpotAnalysisFanoutAssessment",
     "SpotAnalysisFanoutResult",
     "SpotAnalysisTask",
     "SpotAnalysisTaskOutcome",
@@ -27,5 +30,6 @@ __all__ = [
     "SpotResultState",
     "build_spot_result_graph",
     "run_spot_analysis_fanout",
+    "run_spot_analysis_fanout_with_independence",
     "run_spot_result_graph",
 ]

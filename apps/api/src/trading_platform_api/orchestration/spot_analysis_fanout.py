@@ -10,14 +10,22 @@ independence for this Spot profile.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
 from trading_platform_api.analysis.spot_meta_analysis import (
     SUPPORTED_SPOT_FINDING_DOMAINS,
+    AgentIndependenceReport,
     SpotMetaFinding,
+    assess_agent_independence,
+)
+from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts_v4 import (
+    AnalysisSnapshotV4,
+    ResolvedSpotOHLCVBindingV4,
 )
 
 
@@ -142,6 +150,14 @@ class SpotAnalysisFanoutResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SpotAnalysisFanoutAssessment:
+    """Fan-out outcomes paired with C-093's bounded dependence assessment."""
+
+    fanout: SpotAnalysisFanoutResult
+    independence_report: AgentIndependenceReport
+
+
 async def run_spot_analysis_fanout(
     tasks: tuple[SpotAnalysisTask, ...],
     *,
@@ -239,3 +255,39 @@ async def run_spot_analysis_fanout(
 
     outcomes = await asyncio.gather(*(execute(task) for task in tasks))
     return SpotAnalysisFanoutResult(correlation_id, tuple(outcomes))
+
+
+async def run_spot_analysis_fanout_with_independence(
+    tasks: tuple[SpotAnalysisTask, ...],
+    *,
+    correlation_id: UUID,
+    manifest: AnalysisSnapshotV4,
+    resolved_bindings: tuple[ResolvedSpotOHLCVBindingV4, ...],
+    evidence: Mapping[UUID, EvidenceItemV2],
+    now: datetime,
+    max_concurrency: int = 4,
+    timeout_seconds: float = 5.0,
+) -> SpotAnalysisFanoutAssessment:
+    """Run local tasks, then assess only successful findings with C-093.
+
+    C-093 receives the caller's exact validated analysis scope and controls
+    whether the findings are usable for dependence assessment. It records
+    observed shared inputs and does not establish statistical independence.
+    Invalid or mismatched scope raises from C-093 rather than being hidden as a
+    task failure.
+    """
+
+    fanout = await run_spot_analysis_fanout(
+        tasks,
+        correlation_id=correlation_id,
+        max_concurrency=max_concurrency,
+        timeout_seconds=timeout_seconds,
+    )
+    independence_report = assess_agent_independence(
+        manifest=manifest,
+        resolved_bindings=resolved_bindings,
+        evidence=evidence,
+        findings=fanout.findings,
+        now=now,
+    )
+    return SpotAnalysisFanoutAssessment(fanout, independence_report)
