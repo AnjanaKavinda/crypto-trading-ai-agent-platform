@@ -12,7 +12,6 @@ from trading_platform_api.agents.contracts import (
     ModelAvailability,
     ModelRequest,
     ModelResponse,
-    ModelRoute,
     ModelRoutingDecision,
     ModelRoutingPolicy,
 )
