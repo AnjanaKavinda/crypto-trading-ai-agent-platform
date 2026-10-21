@@ -38,17 +38,23 @@ The current reference also leaves two normalization details unresolved:
 
 - `GET /fapi/v1/fundingRate` returns `fundingRate` and `fundingTime`, but no
   per-record funding interval. `GET /fapi/v1/fundingInfo` exposes
-  `fundingIntervalHours` for symbols with funding-cap, floor, or interval
+  `fundingIntervalHours` only for symbols with funding-cap, floor, or interval
   adjustments; it is not a historical interval attached to each funding
-  record. Do not infer an interval for a history row or apply today's interval
-  retrospectively. Preserve interval as unknown unless an independently
-  verified, time-bounded source establishes it.
+  record. Funding history may therefore be represented as a rate per observed
+  settlement event, bound to its `fundingTime`, without asserting a fixed
+  duration. A settlement interval may be attached only when a deterministic
+  rule proves that the adjacent records are consecutive settlement events;
+  otherwise it remains unknown. Current `fundingInfo` must not be applied
+  retrospectively. Interval-specific costs and annualization remain
+  unavailable when the interval is unknown.
 - `GET /futures/data/openInterestHist` describes `sumOpenInterest` as total
   open interest and `sumOpenInterestValue` as total open-interest value, but
   the USDⓈ-M reference does not state their units. Preserve the raw fields
-  separately and leave their units unknown; do not label them as contracts,
-  base asset, or quote value, convert them, or calculate derived quantities
-  until the unit semantics are independently verified.
+  separately and leave their units unknown. Do not map them to normalized
+  `open_interest` metrics, label them as contracts, base asset, or quote value,
+  convert them, compare them across sources, or calculate derived quantities
+  until unit semantics are independently verified or an approved versioned
+  contract can represent unknown units explicitly.
 
 These endpoint semantics were checked against the official reference on
 2026-10-21. Recheck them during implementation preflight because provider
@@ -89,12 +95,21 @@ Costs, risks, and constraints:
 **Proposed for human review:** select Option B only for a disabled-by-default,
 read-only personal research adapter, limited initially to public funding and
 open-interest observations for Binance USDⓈ-M BTCUSDT and ETHUSDT perpetuals.
-Do not enable requests or claim permission unless and until the human owner
-accepts this ADR and completes the applicable terms and regional-access review.
-Funding records must not be annualized or used to calculate interval-specific
-funding cost when their applicable interval is unknown. Open-interest values
-must retain unknown units until verified; consumers must not compare, convert,
-or derive signals from them as though their units were established.
+This decision remains Proposed. It grants no implementation or provider-request
+authority. The owner must accept this ADR and complete the applicable terms and
+regional-access review before any provider request. Issue #39 also remains
+sequenced after the first Spot research/paper-trading workflow unless a chosen
+strategy demonstrates an earlier need for Futures evidence.
+
+Funding history is an event-level rate: preserve the source rate and exact
+funding time, without assigning a fixed interval by default. Consumers may use
+an interval only when consecutive settlement records are established by a
+documented, deterministic coverage rule. Interval-specific cost and
+annualization remain unavailable otherwise. Preserve open-interest history
+fields as distinct raw values with unknown units. They are excluded from
+unit-dependent analysis until the units are independently verified or a
+separately reviewed, versioned contract explicitly models unknown-unit values
+and prevents unsafe consumers from using them.
 
 Basis may be added only after the provider's spot/futures reference, price
 units, observation-time alignment, contract identity, maturity, and annualized
@@ -120,12 +135,19 @@ normalizer must not fabricate continuity or extrapolate older history.
 
 ## Consequences
 
-If accepted, implementation may proceed only for the stated public read-only
-funding/OI scope and after a no-cost preflight confirms source availability,
-regional reachability, endpoint behavior, and the owner's applicable terms.
-Requests remain off by default, bounded by explicit symbol, record, time-window,
+If accepted, implementation remains gated on the #39 Spot/paper-workflow
+sequence and a no-cost preflight confirming source availability, regional
+reachability, endpoint behavior, and the owner's applicable terms. Requests
+remain off by default and bounded by explicit symbol, record, time-window,
 timeout, and rate limits. No exchange account key, trading permission,
 private/account endpoint, always-on collector, or order capability is allowed.
+
+The first implementation may normalize event-level funding observations under
+the existing metric model only if the unit unambiguously means a rate per
+settlement event and no unknown interval is encoded as known. Open-interest
+history remains raw-source evidence until its units are verified or a separate
+versioned contract proposal is reviewed and approved. This ADR does not approve
+that contract change or permit a compatibility-breaking C-002 modification.
 
 Store exact source provenance and raw-content digests under the existing
 lineage path, while preserving observation, provider, retrieval, ingestion,
@@ -144,7 +166,7 @@ blocked until their own dependencies and evidence are satisfied.
 |---|---|
 | Playbook requirements | Master Playbook v2.2, Chat 4: preserve derivatives scope and provenance; separate acquisition, normalization, validation, storage, and interpretation; no fabricated coverage. |
 | Cross-cutting artifacts | OD-0002 and OD-0004 remain Open. ADR-0004's Spot scope is unchanged. |
-| Contracts / events | No shared contract, event, or C-002 schema change proposed. Existing C-001/C-002-compatible normalization and source lineage remain in use. |
+| Contracts / events | This ADR proposes no shared-contract change. Funding may use an explicitly event-level metric if existing C-001/C-002 semantics support it. Mapping open-interest values with unknown units into normalized C-002 metrics requires a separate versioned contract proposal, impact analysis, compatibility plan, and human approval. Until then, preserve raw source evidence and keep those values out of normalized analysis. |
 | Requirements traceability | GitHub #39; downstream Chat 5 GitHub #61. |
 | Versioning / migration | None. No persistence migration is proposed. |
 
