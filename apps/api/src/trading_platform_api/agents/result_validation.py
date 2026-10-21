@@ -52,9 +52,7 @@ class AgentResultExpectation:
             not isinstance(item, UUID) for item in self.allowed_tool_access_ids
         ):
             raise AgentResultValidationError("tool allowlist is invalid.")
-        if len(set(self.allowed_tool_access_ids)) != len(
-            self.allowed_tool_access_ids
-        ):
+        if len(set(self.allowed_tool_access_ids)) != len(self.allowed_tool_access_ids):
             raise AgentResultValidationError("tool allowlist contains duplicates.")
         if not isinstance(self.allowed_evidence_ids, tuple) or any(
             not isinstance(item, UUID) for item in self.allowed_evidence_ids
