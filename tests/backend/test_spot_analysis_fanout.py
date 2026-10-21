@@ -6,8 +6,8 @@ from uuid import uuid4
 import pytest
 from trading_platform_api.analysis import (
     AnalyticalDirection,
-    ConfluenceEvidenceStrengthV2,
     ConflictMaterialityV2,
+    ConfluenceEvidenceStrengthV2,
     EvidenceRelation,
     FindingReadiness,
     SpotMetaFinding,
