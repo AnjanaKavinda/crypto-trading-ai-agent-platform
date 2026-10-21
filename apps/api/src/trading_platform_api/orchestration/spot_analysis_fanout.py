@@ -17,8 +17,8 @@ from enum import StrEnum
 from uuid import UUID
 
 from trading_platform_api.analysis.spot_meta_analysis import (
-    AgentIndependenceReport,
     SUPPORTED_SPOT_FINDING_DOMAINS,
+    AgentIndependenceReport,
     SpotMetaFinding,
     assess_agent_independence,
 )
