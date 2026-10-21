@@ -36,6 +36,7 @@ class AgentResultExpectation:
     agent_version: str
     routing_decision: ModelRoutingDecision
     allowed_tool_access_ids: tuple[UUID, ...]
+    allowed_evidence_ids: tuple[UUID, ...]
     allowed_output_schemas: Mapping[str, OutputSchema]
 
     def __post_init__(self) -> None:
@@ -55,6 +56,12 @@ class AgentResultExpectation:
             self.allowed_tool_access_ids
         ):
             raise AgentResultValidationError("tool allowlist contains duplicates.")
+        if not isinstance(self.allowed_evidence_ids, tuple) or any(
+            not isinstance(item, UUID) for item in self.allowed_evidence_ids
+        ):
+            raise AgentResultValidationError("evidence allowlist is invalid.")
+        if len(set(self.allowed_evidence_ids)) != len(self.allowed_evidence_ids):
+            raise AgentResultValidationError("evidence allowlist contains duplicates.")
         if not isinstance(self.allowed_output_schemas, Mapping):
             raise AgentResultValidationError("output schema allowlist is required.")
         schemas = dict(self.allowed_output_schemas)
@@ -104,6 +111,11 @@ def validate_agent_result(
             expectation.allowed_tool_access_ids
         ):
             raise AgentResultValidationError("tool provenance is not allowed.")
+        evidence_refs = set(result.supporting_evidence_ids) | set(
+            result.contradicting_evidence_ids
+        )
+        if not evidence_refs.issubset(expectation.allowed_evidence_ids):
+            raise AgentResultValidationError("evidence provenance is not allowed.")
         if result.generated_at > instant:
             raise AgentResultValidationError("result timestamp is future-dated.")
         if result.generated_at < result.routing_decision.decided_at:

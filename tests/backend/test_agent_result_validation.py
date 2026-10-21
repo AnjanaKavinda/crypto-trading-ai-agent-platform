@@ -76,6 +76,9 @@ def expectation(value: AgentResult) -> AgentResultExpectation:
         agent_version=value.agent_version,
         routing_decision=value.routing_decision,
         allowed_tool_access_ids=value.tool_access_ids,
+        allowed_evidence_ids=(
+            value.supporting_evidence_ids + value.contradicting_evidence_ids
+        ),
         allowed_output_schemas={"C-067": ("1", ModelRoutingDecision)},
     )
 
@@ -129,6 +132,17 @@ def test_unknown_output_contract_and_expired_route_are_rejected() -> None:
     )
     with pytest.raises(AgentResultValidationError, match="expired"):
         validate_agent_result(expired, expectation=expectation(expired), now=NOW)
+
+
+def test_evidence_references_must_resolve_within_the_bound_context() -> None:
+    value = result()
+    trusted = replace(
+        expectation(value),
+        allowed_evidence_ids=(),
+    )
+
+    with pytest.raises(AgentResultValidationError, match="evidence provenance"):
+        validate_agent_result(value, expectation=trusted, now=NOW)
 
 
 def test_no_trade_is_valid_and_keeps_its_unresolved_risk() -> None:
