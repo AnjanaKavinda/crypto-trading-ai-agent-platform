@@ -13,7 +13,6 @@ from trading_platform_api.agents import (
     AgentResultValidationError,
     ModelAvailability,
     ModelCapabilityTier,
-    ModelRoute,
     ModelRoutingDecision,
     validate_agent_result,
 )
