@@ -98,9 +98,10 @@ class SpotAnalysisTaskOutcome:
             raise SpotAnalysisFanoutError("outcome IDs must be UUID values.")
         if type(self.status) is not SpotAnalysisTaskStatus:
             raise SpotAnalysisFanoutError("outcome status has an invalid type.")
-        if self.reason_code is not None and type(
-            self.reason_code
-        ) is not SpotAnalysisTaskReason:
+        if (
+            self.reason_code is not None
+            and type(self.reason_code) is not SpotAnalysisTaskReason
+        ):
             raise SpotAnalysisFanoutError("outcome reason must use the bounded enum.")
         if self.status is SpotAnalysisTaskStatus.COMPLETE:
             if type(self.finding) is not SpotMetaFinding or self.reason_code is not None:
