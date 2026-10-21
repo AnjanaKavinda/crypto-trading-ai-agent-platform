@@ -35,6 +35,22 @@ and C-064, subject to C-098 policy ceilings. Definitions are currently
 code-registered in memory; durable persistence and lifecycle promotion are not
 introduced by this issue.
 
+## Issue #72 — C-063/C-064 permission enforcement
+
+C-063 schema `1` binds one exact C-061 agent version, role, environment, and
+mode to a C-098 policy ceiling, a bounded validity window, and explicit C-064
+access IDs. C-064 schema `1` is one immutable tool/action/resource scope with
+an append-only revision number. An
+access is usable only when the exact tool, action, resource, environment, and
+mode match both the C-061 definition and a C-098 grant, and the policy, profile,
+grant, and access are all active. Wildcard scopes, unknown versions, missing
+grants, expired state, and revoked state deny access. Every decision is
+appended to C-060 before the result is returned; audit-store failure blocks the
+request. Revocation appends a C-060 event and returns a new immutable revoked
+revision while retaining the earlier record. The `PERSONAL_SPOT_RESEARCH`
+agent currently declares no tools, so its runtime profile remains
+deny-by-default with no tool grants.
+
 ## Required immutable registry record
 
 | Registry field | Required content | Baseline rule |

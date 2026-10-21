@@ -8,6 +8,9 @@ from enum import StrEnum
 from typing import ClassVar
 from uuid import UUID
 
+from trading_platform_api.risk import ContractReference
+from trading_platform_api.safety import AgentPermissionPolicy
+
 CONTRACT_SCHEMA_VERSION = "1"
 _SENSITIVE = re.compile(
     r"(?i)(api[-_ ]?key|authorization|password|secret|token)\s*[:=]|"
@@ -92,6 +95,144 @@ class AgentDefinition:
         """C-061 is descriptive only; C-063/C-064 govern runtime grants."""
 
         return False
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPermissionProfile:
+    """C-063 runtime scope bound to one definition and one C-098 ceiling."""
+
+    profile_id: UUID
+    agent_id: str
+    agent_version: str
+    role: str
+    environment: str
+    mode: str
+    policy: AgentPermissionPolicy
+    tool_access_ids: tuple[UUID, ...]
+    valid_from: datetime
+    valid_until: datetime
+    revision: int = 1
+    revoked_at: datetime | None = None
+    revocation_audit_ref: ContractReference | None = None
+    contract_id: str = field(default="C-063", init=False)
+    schema_version: str = field(default=CONTRACT_SCHEMA_VERSION, init=False)
+
+    __contract_id__: ClassVar[str] = "C-063"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.profile_id, UUID):
+            raise AgentContractError("profile_id must be a UUID.")
+        for name in ("agent_id", "agent_version", "role", "environment", "mode"):
+            _text(name, getattr(self, name))
+        if not isinstance(self.policy, AgentPermissionPolicy):
+            raise AgentContractError("policy must be a validated C-098 policy.")
+        if self.role not in self.policy.agent_roles:
+            raise AgentContractError("profile role exceeds the C-098 policy.")
+        if self.policy.agent_identities and (
+            f"{self.agent_id}@{self.agent_version}" not in self.policy.agent_identities
+        ):
+            raise AgentContractError("profile identity exceeds the C-098 policy.")
+        if self.environment not in self.policy.environments:
+            raise AgentContractError("profile environment exceeds the C-098 policy.")
+        if self.mode not in self.policy.modes:
+            raise AgentContractError("profile mode exceeds the C-098 policy.")
+        if not isinstance(self.tool_access_ids, tuple) or any(
+            not isinstance(item, UUID) for item in self.tool_access_ids
+        ):
+            raise AgentContractError("tool_access_ids must be a tuple of UUIDs.")
+        if len(set(self.tool_access_ids)) != len(self.tool_access_ids):
+            raise AgentContractError("tool_access_ids must not contain duplicates.")
+        _positive_int("revision", self.revision)
+        valid_from = _utc("valid_from", self.valid_from)
+        valid_until = _utc("valid_until", self.valid_until)
+        if valid_from >= valid_until:
+            raise AgentContractError("profile validity window must be positive.")
+        if (
+            valid_from < self.policy.effective_at
+            or valid_until > self.policy.expires_at
+        ):
+            raise AgentContractError("profile validity exceeds the C-098 policy.")
+        revoked_at = (
+            None if self.revoked_at is None else _utc("revoked_at", self.revoked_at)
+        )
+        if (revoked_at is None) != (self.revocation_audit_ref is None):
+            raise AgentContractError("revocation requires a C-060 audit reference.")
+        if revoked_at is not None and not valid_from <= revoked_at < valid_until:
+            raise AgentContractError("revocation time is outside the profile window.")
+        if revoked_at is not None:
+            if not isinstance(self.revocation_audit_ref, ContractReference):
+                raise AgentContractError(
+                    "revocation reference must be a contract reference."
+                )
+            if self.revocation_audit_ref.contract_id != "C-060":
+                raise AgentContractError("revocation reference must target C-060.")
+        object.__setattr__(self, "valid_from", valid_from)
+        object.__setattr__(self, "valid_until", valid_until)
+        object.__setattr__(self, "revoked_at", revoked_at)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentToolAccess:
+    """C-064 immutable, exact-scope, revocable access to one tool/resource."""
+
+    access_id: UUID
+    profile_id: UUID
+    grant_id: str
+    tool: str
+    resource: str
+    action: str
+    environment: str
+    mode: str
+    valid_from: datetime
+    valid_until: datetime
+    revision: int = 1
+    revoked_at: datetime | None = None
+    revocation_audit_ref: ContractReference | None = None
+    contract_id: str = field(default="C-064", init=False)
+    schema_version: str = field(default=CONTRACT_SCHEMA_VERSION, init=False)
+
+    __contract_id__: ClassVar[str] = "C-064"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.access_id, UUID) or not isinstance(
+            self.profile_id, UUID
+        ):
+            raise AgentContractError("access and profile IDs must be UUIDs.")
+        for name in (
+            "grant_id",
+            "tool",
+            "resource",
+            "action",
+            "environment",
+            "mode",
+        ):
+            value = _text(name, getattr(self, name))
+            if value in {"*", "ANY", "UNRESTRICTED", "ARBITRARY"}:
+                raise AgentContractError(f"{name} must use an exact scope.")
+        valid_from = _utc("valid_from", self.valid_from)
+        valid_until = _utc("valid_until", self.valid_until)
+        if valid_from >= valid_until:
+            raise AgentContractError("tool access validity window must be positive.")
+        _positive_int("revision", self.revision)
+        revoked_at = (
+            None if self.revoked_at is None else _utc("revoked_at", self.revoked_at)
+        )
+        if (revoked_at is None) != (self.revocation_audit_ref is None):
+            raise AgentContractError("revocation requires a C-060 audit reference.")
+        if revoked_at is not None:
+            if not valid_from <= revoked_at < valid_until:
+                raise AgentContractError(
+                    "revocation time is outside the access window."
+                )
+            if not isinstance(self.revocation_audit_ref, ContractReference):
+                raise AgentContractError(
+                    "revocation reference must be a contract reference."
+                )
+            if self.revocation_audit_ref.contract_id != "C-060":
+                raise AgentContractError("revocation reference must target C-060.")
+        object.__setattr__(self, "valid_from", valid_from)
+        object.__setattr__(self, "valid_until", valid_until)
+        object.__setattr__(self, "revoked_at", revoked_at)
 
 
 @dataclass(frozen=True, slots=True)
