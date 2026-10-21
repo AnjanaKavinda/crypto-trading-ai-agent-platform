@@ -61,7 +61,7 @@ PERSONAL_SPOT_RESEARCH_AGENT = AgentDefinition(
         "no-deterministic-risk-authority",
         "no-human-approval-authority",
         "no-order-or-exchange-execution-authority",
-        "NO_TRADE-and-INSUFFICIENT_DATA-are-valid-outcomes",
+        "non-action outcomes remain valid",
     ),
 )
 
