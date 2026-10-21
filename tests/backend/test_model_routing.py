@@ -7,7 +7,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-
 from trading_platform_api.agents import (
     ModelAvailability,
     ModelCapabilityTier,
