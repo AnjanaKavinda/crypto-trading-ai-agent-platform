@@ -16,7 +16,9 @@ from trading_platform_api.analysis import (
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisFanoutError,
     SpotAnalysisTask,
+    SpotAnalysisTaskReason,
     SpotAnalysisTaskStatus,
+    SpotAnalysisUnavailable,
     run_spot_analysis_fanout,
 )
 
@@ -98,7 +100,37 @@ def test_fanout_isolates_failure_without_losing_successful_findings() -> None:
     assert result.is_partial
     assert len(result.findings) == 1
     assert result.outcomes[1].status is SpotAnalysisTaskStatus.FAILED
-    assert result.outcomes[1].failure_code == "ANALYSIS_FAILED"
+    assert result.outcomes[1].reason_code is SpotAnalysisTaskReason.ANALYSIS_FAILED
+
+
+def test_fanout_preserves_unavailable_reason_and_successful_findings() -> None:
+    async def unavailable() -> SpotAnalysisUnavailable:
+        return SpotAnalysisUnavailable(SpotAnalysisTaskReason.POLICY_REQUIRED)
+
+    async def succeed() -> SpotMetaFinding:
+        return _finding("spot-trend")
+
+    result = asyncio.run(
+        run_spot_analysis_fanout(
+            (
+                _task("spot-trend", succeed),
+                _task("spot-momentum", unavailable),
+            ),
+            correlation_id=uuid4(),
+        )
+    )
+
+    unavailable_outcome = result.outcomes[1]
+    assert result.is_partial
+    assert len(result.findings) == 1
+    assert unavailable_outcome.status is SpotAnalysisTaskStatus.UNAVAILABLE
+    assert unavailable_outcome.finding is None
+    assert unavailable_outcome.reason_code is SpotAnalysisTaskReason.POLICY_REQUIRED
+
+
+def test_unavailable_reason_must_use_bounded_enum() -> None:
+    with pytest.raises(SpotAnalysisFanoutError, match="bounded"):
+        SpotAnalysisUnavailable("caller supplied free-form explanation")  # type: ignore[arg-type]
 
 
 def test_fanout_timeout_is_explicit_and_does_not_retry() -> None:
@@ -119,7 +151,7 @@ def test_fanout_timeout_is_explicit_and_does_not_retry() -> None:
     )
 
     assert result.outcomes[0].status is SpotAnalysisTaskStatus.TIMED_OUT
-    assert result.outcomes[0].failure_code == "ANALYSIS_TIMEOUT"
+    assert result.outcomes[0].reason_code is SpotAnalysisTaskReason.ANALYSIS_TIMEOUT
     assert calls == 1
 
 

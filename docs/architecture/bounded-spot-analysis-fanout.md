@@ -9,9 +9,10 @@ provider requests.
 Each task has a UUID and one explicit domain. Every outcome carries the shared
 correlation UUID, task UUID, domain, status, and the original typed finding when
 successful. The runner bounds concurrency to four, applies a per-task deadline,
-preserves successful findings when another task fails or times out, and never
-retries. A malformed or mismatched finding fails as `INVALID_FINDING`;
-callback exception text is not exposed.
+preserves successful findings when another task is unavailable, fails, or times
+out, and never retries. Expected unavailable states use a bounded reason code
+such as `POLICY_REQUIRED` or `INSUFFICIENT_WARMUP`; malformed or mismatched
+findings fail as `INVALID_FINDING`. Callback exception text is not exposed.
 
 ## Evidence and independence
 
