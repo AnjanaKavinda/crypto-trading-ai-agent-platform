@@ -36,6 +36,89 @@ class FallbackPolicy(StrEnum):
     DENY = "DENY"
 
 
+class AgentResultStatus(StrEnum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+    NO_TRADE = "NO_TRADE"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentResult:
+    """C-062 result bound to one task, context, route, and typed output."""
+
+    result_id: UUID
+    task_id: UUID
+    context_id: UUID
+    agent_id: str
+    agent_version: str
+    routing_decision: ModelRoutingDecision
+    tool_access_ids: tuple[UUID, ...]
+    generated_at: datetime
+    expires_at: datetime
+    status: AgentResultStatus
+    confidence: Decimal | None
+    supporting_evidence_ids: tuple[UUID, ...]
+    contradicting_evidence_ids: tuple[UUID, ...]
+    unresolved_risks: tuple[str, ...]
+    output: object
+    contract_id: str = field(default="C-062", init=False)
+    schema_version: str = field(default=CONTRACT_SCHEMA_VERSION, init=False)
+
+    __contract_id__: ClassVar[str] = "C-062"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result_id, UUID):
+            raise AgentContractError("result_id must be a UUID.")
+        if not isinstance(self.task_id, UUID) or not isinstance(self.context_id, UUID):
+            raise AgentContractError("task_id and context_id must be UUIDs.")
+        for name in ("agent_id", "agent_version"):
+            _text(name, getattr(self, name))
+        if not isinstance(self.routing_decision, ModelRoutingDecision):
+            raise AgentContractError("routing_decision must be a validated C-067.")
+        if not isinstance(self.tool_access_ids, tuple) or any(
+            not isinstance(item, UUID) for item in self.tool_access_ids
+        ):
+            raise AgentContractError("tool_access_ids must be a tuple of UUIDs.")
+        if len(set(self.tool_access_ids)) != len(self.tool_access_ids):
+            raise AgentContractError("tool_access_ids must not contain duplicates.")
+        generated_at = _utc("generated_at", self.generated_at)
+        expires_at = _utc("expires_at", self.expires_at)
+        if expires_at <= generated_at:
+            raise AgentContractError("expires_at must be later than generated_at.")
+        object.__setattr__(self, "generated_at", generated_at)
+        object.__setattr__(self, "expires_at", expires_at)
+        if not isinstance(self.status, AgentResultStatus):
+            raise AgentContractError("status must be a known AgentResultStatus.")
+        if self.confidence is not None and (
+            not isinstance(self.confidence, Decimal)
+            or not self.confidence.is_finite()
+            or not Decimal(0) <= self.confidence <= Decimal(1)
+        ):
+            raise AgentContractError("confidence must be a finite Decimal from 0 to 1.")
+        for name in ("supporting_evidence_ids", "contradicting_evidence_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or any(
+                not isinstance(item, UUID) for item in values
+            ):
+                raise AgentContractError(f"{name} must be a tuple of UUIDs.")
+            if len(set(values)) != len(values):
+                raise AgentContractError(f"{name} must not contain duplicates.")
+        if (
+            self.confidence not in (None, Decimal(0))
+            and not self.supporting_evidence_ids
+        ):
+            raise AgentContractError(
+                "non-zero confidence requires supporting evidence."
+            )
+        if not isinstance(self.unresolved_risks, tuple):
+            raise AgentContractError("unresolved_risks must be a tuple.")
+        for risk in self.unresolved_risks:
+            _text("unresolved_risk", risk)
+        if self.status is AgentResultStatus.NO_TRADE and not self.unresolved_risks:
+            raise AgentContractError("NO_TRADE results must state an unresolved risk.")
+
+
 def _text(name: str, value: object, *, maximum: int = 255) -> str:
     if not isinstance(value, str) or not value.strip() or value != value.strip():
         raise AgentContractError(f"{name} must be non-blank trimmed text.")

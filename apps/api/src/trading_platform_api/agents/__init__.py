@@ -1,6 +1,8 @@
 from trading_platform_api.agents.contracts import (
     CONTRACT_SCHEMA_VERSION,
     AgentContractError,
+    AgentResult,
+    AgentResultStatus,
     FallbackPolicy,
     ModelAvailability,
     ModelCapabilityTier,
@@ -9,6 +11,11 @@ from trading_platform_api.agents.contracts import (
     ModelRoute,
     ModelRoutingDecision,
     ModelRoutingPolicy,
+)
+from trading_platform_api.agents.result_validation import (
+    AgentResultExpectation,
+    AgentResultValidationError,
+    validate_agent_result,
 )
 from trading_platform_api.agents.routing import (
     ModelProvider,
@@ -21,6 +28,10 @@ from trading_platform_api.agents.routing import (
 __all__ = [
     "CONTRACT_SCHEMA_VERSION",
     "AgentContractError",
+    "AgentResult",
+    "AgentResultExpectation",
+    "AgentResultStatus",
+    "AgentResultValidationError",
     "FallbackPolicy",
     "ModelAvailability",
     "ModelCapabilityTier",
@@ -34,4 +45,5 @@ __all__ = [
     "ProviderAvailabilityEvidence",
     "invoke_provider",
     "resolve_model_route",
+    "validate_agent_result",
 ]

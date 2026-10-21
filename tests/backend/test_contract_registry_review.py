@@ -51,7 +51,6 @@ CONTRACT_PACKAGES = (
 )
 DEFERRED_CONTRACTS = {
     "C-061": "AgentDefinition",
-    "C-062": "AgentResult",
     "C-063": "AgentPermissionProfile",
     "C-064": "AgentToolAccess",
     "C-065": "AgentHandoff",
@@ -158,7 +157,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
     assert set(registry) == {f"C-{number:03d}" for number in range(1, 105)}
     assert len(set(registry.values())) == 104
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 98
+    assert len(owners) == 99
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
@@ -168,6 +167,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
     } == {contract_id: registry[contract_id] for contract_id in owners}
     assert owners["C-093"] is AgentIndependenceReport
     assert owners["C-067"] is ModelRoutingDecision
+    assert owners["C-062"].__name__ == "AgentResult"
 
 
 def test_every_canonical_owner_has_stable_v1_schema_metadata() -> None:
