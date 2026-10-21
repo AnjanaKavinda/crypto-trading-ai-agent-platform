@@ -99,13 +99,10 @@ def _permission_reason(
         return "POLICY_INACTIVE"
     if not access.valid_from <= now < access.valid_until:
         return "ACCESS_INACTIVE"
-    if (
-        profile.role not in policy.agent_roles
-        or (
-            policy.agent_identities
-            and f"{definition.agent_id}@{definition.agent_version}"
-            not in policy.agent_identities
-        )
+    if profile.role not in policy.agent_roles or (
+        policy.agent_identities
+        and f"{definition.agent_id}@{definition.agent_version}"
+        not in policy.agent_identities
     ):
         return "AGENT_OUTSIDE_POLICY_CEILING"
     if environment not in policy.environments or mode not in policy.modes:
