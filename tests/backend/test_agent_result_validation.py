@@ -100,7 +100,10 @@ def test_result_requires_exact_trusted_bindings_and_registered_output() -> None:
         {"routing_decision": routing_decision()},
         {"tool_access_ids": (uuid4(), uuid4())},
         {"generated_at": NOW + timedelta(seconds=1)},
-        {"expires_at": NOW},
+        {
+            "generated_at": NOW - timedelta(seconds=1),
+            "expires_at": NOW,
+        },
         {"status": AgentResultStatus.INSUFFICIENT_DATA},
     ],
 )
