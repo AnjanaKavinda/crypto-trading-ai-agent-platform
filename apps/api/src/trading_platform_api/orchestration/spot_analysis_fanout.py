@@ -42,8 +42,13 @@ class SpotAnalysisTask:
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, UUID):
             raise SpotAnalysisFanoutError("task_id must be a UUID.")
-        if not isinstance(self.domain, str) or self.domain not in SUPPORTED_SPOT_FINDING_DOMAINS:
-            raise SpotAnalysisFanoutError("domain is outside the approved Spot profile.")
+        if (
+            not isinstance(self.domain, str)
+            or self.domain not in SUPPORTED_SPOT_FINDING_DOMAINS
+        ):
+            raise SpotAnalysisFanoutError(
+                "domain is outside the approved Spot profile."
+            )
         if not callable(self.run):
             raise SpotAnalysisFanoutError("run must be a trusted analysis operation.")
 
@@ -107,7 +112,9 @@ async def run_spot_analysis_fanout(
     if len(tasks) > len(SUPPORTED_SPOT_FINDING_DOMAINS):
         raise SpotAnalysisFanoutError("task count exceeds the approved Spot domains.")
     if any(type(task) is not SpotAnalysisTask for task in tasks):
-        raise SpotAnalysisFanoutError("all tasks must be validated SpotAnalysisTask values.")
+        raise SpotAnalysisFanoutError(
+            "all tasks must be validated SpotAnalysisTask values."
+        )
     if len({task.task_id for task in tasks}) != len(tasks):
         raise SpotAnalysisFanoutError("task IDs must be unique.")
     if len({task.domain for task in tasks}) != len(tasks):
