@@ -130,7 +130,15 @@ def validate_agent_result(
                 "INSUFFICIENT_DATA results must explain the unresolved gap."
             )
 
-        contract_id = getattr(type(result.output), "__contract_id__", None)
+        # Runtime-agent contracts declare this identity on their type, while the
+        # approved analysis contracts carry it as a frozen dataclass field. The
+        # exact output type remains allowlisted below, so reading the instance
+        # field does not permit coercion or an unregistered schema.
+        contract_id = getattr(
+            type(result.output),
+            "__contract_id__",
+            getattr(result.output, "contract_id", None),
+        )
         if not isinstance(contract_id, str):
             raise AgentResultValidationError("output contract identity is missing.")
         schema = expectation.allowed_output_schemas.get(contract_id)
