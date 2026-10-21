@@ -26,8 +26,10 @@ The domain registry contains exactly C-001–C-100 with unique IDs and names.
 
 - 92 canonical contract owners are implemented and covered by deterministic
   registry review.
-- C-061–C-067 remain intentionally deferred to their Phase 05 orchestration
-  owners.
+- At the time of this review, C-061–C-067 were deferred to their Phase 05
+  orchestration owners. Issue #69 subsequently implemented C-067
+  `ModelRoutingDecision`; C-061–C-066 remain deferred. This historical review
+  does not replace the current canonical owner/contract tests.
 - Full C-093 `AgentIndependenceReport` remains intentionally deferred to the
   later confluence/independence implementation. Phase 02 exposes only a bounded
   reference to that future report.

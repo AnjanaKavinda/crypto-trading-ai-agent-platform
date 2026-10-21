@@ -786,3 +786,28 @@ engagement, sentiment, source reliability, or trading value from raw volume.
 The provider-neutral slice uses synthetic fixtures only. It selects no social
 provider and claims no sampling or storage rights. Real social/sentiment sources
 remain gated by OD-0006 and explicit source/sampling-rights approval.
+
+## Vendor-neutral model routing boundary (Issue #69)
+
+`trading_platform_api.agents` defines the C-067 `ModelRoutingDecision`, a
+provider protocol, and an explicit allowlist resolver. A route is usable only
+when the requested capability tier, workload, prompt version, immutable model
+version, fresh provider-availability evidence, token bounds, and per-request
+cost ceiling all match. The request content is bound by a digest. Missing or
+stale mapping/availability, insufficient budget, provider mismatch, unknown
+usage cost, and provider errors fail closed; no downgrade, retry, or provider
+fallback is attempted.
+
+This issue adds **no concrete LLM provider adapter or runtime model mapping**.
+The runtime mapping is not approved by ADR-0002's development-review mapping;
+it requires its own workload validation and approval. No credentials are stored
+in these contracts, and adapters must obtain secrets outside the domain
+boundary. No model output is trusted until the registered result validation
+gate in Issue #70 accepts it. Model routing adds no signal, statistical
+validation, risk, approval, exchange, or execution authority.
+
+Deterministic tests:
+
+```bash
+python -m pytest -q tests/backend/test_model_routing.py tests/backend/test_contract_registry_review.py
+```

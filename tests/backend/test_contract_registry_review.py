@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from trading_platform_api.agents import ModelRoutingDecision
 from trading_platform_api.analysis import (
     AdversarialAssessmentV2,
     AgentIndependenceReference,
@@ -38,6 +39,7 @@ from trading_platform_api.validation import CalibrationResult
 
 REGISTRY_PATH = Path("docs/cross-cutting/01-domain-contract-registry.md")
 CONTRACT_PACKAGES = (
+    "agents",
     "market_data",
     "analysis",
     "strategy",
@@ -54,7 +56,6 @@ DEFERRED_CONTRACTS = {
     "C-064": "AgentToolAccess",
     "C-065": "AgentHandoff",
     "C-066": "AgentEvaluation",
-    "C-067": "ModelRoutingDecision",
 }
 REFERENCE_ONLY_TYPES = {
     ValidationReference: "C-028",
@@ -157,7 +158,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
     assert set(registry) == {f"C-{number:03d}" for number in range(1, 105)}
     assert len(set(registry.values())) == 104
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 97
+    assert len(owners) == 98
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
@@ -166,6 +167,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
         for contract_id, contract_type in owners.items()
     } == {contract_id: registry[contract_id] for contract_id in owners}
     assert owners["C-093"] is AgentIndependenceReport
+    assert owners["C-067"] is ModelRoutingDecision
 
 
 def test_every_canonical_owner_has_stable_v1_schema_metadata() -> None:
