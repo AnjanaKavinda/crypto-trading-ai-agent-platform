@@ -86,8 +86,7 @@ def test_result_requires_exact_trusted_bindings_and_registered_output() -> None:
     value = result()
 
     assert (
-        validate_agent_result(value, expectation=expectation(value), now=NOW)
-        is value
+        validate_agent_result(value, expectation=expectation(value), now=NOW) is value
     )
 
 
