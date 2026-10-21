@@ -341,15 +341,26 @@ parser or a data-quality verdict. Exact duplicates are tracked within one
 batch only. Empty input is empty; gaps are never interpolated.
 
 The batch rejects mixed instruments/contracts, provider identities, unknown
-units, invalid time order, non-finite values and over-budget payloads. No
-network source, historical coverage, store, liquidation totals, basis
-reference, quality assessment, analysis, orders or execution is added. A
-read-only derivatives adapter requires its own approved market/product
-decision, concrete source semantics and owner-run integration evidence.
-Tests use synthetic fixtures:
+units, invalid time order, non-finite values and over-budget payloads.
+
+`market_data.derivatives_supplemental.normalize_supplemental_derivatives`
+accepts bounded synthetic basis, liquidation and positioning records. It keeps
+provider-declared basis references and periods, liquidation side labels and
+coverage windows, positioning populations/cohorts/sample counts, provenance
+and observation/retrieval times. It does not calculate or annualize basis,
+translate provider side labels to long/short, add liquidation records into
+totals, compare venues, or infer complete coverage. The returned identity and
+coverage fields are an in-memory sidecar; C-002 schema 1 does not persist all
+these semantics, so callers must retain the sidecar and must not publish a
+generic metric as a complete record on its own.
+
+No provider source, historical collection, store, C-003 quality assessment,
+analysis, orders or execution is added. A read-only derivatives adapter
+requires its own approved market/product decision, verified source semantics
+and owner-run integration evidence. Tests use synthetic fixtures:
 
 ```bash
-python -m pytest -q tests/backend/test_derivatives_normalization.py
+python -m pytest -q tests/backend/test_derivatives_normalization.py \\\n    tests/backend/test_derivatives_supplemental.py
 ```
 
 ## Deterministic Spot OHLCV quality (Issue #44)

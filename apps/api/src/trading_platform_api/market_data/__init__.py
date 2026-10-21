@@ -34,6 +34,16 @@ from trading_platform_api.market_data.derivatives import (
     RawDerivativesObservation,
     normalize_derivatives,
 )
+from trading_platform_api.market_data.derivatives_supplemental import (
+    NormalizedSupplementalDerivatives,
+    RawSupplementalDerivativeRecord,
+    SupplementalCoverageStatus,
+    SupplementalDerivativeRecord,
+    SupplementalDerivativesError,
+    SupplementalDerivativesKind,
+    SupplementalDerivativesPolicy,
+    normalize_supplemental_derivatives,
+)
 from trading_platform_api.market_data.fundamentals import (
     FundamentalIdentity,
     FundamentalNormalizationError,
@@ -187,6 +197,14 @@ __all__ = [
     "OpenInterestUnit",
     "RawDerivativesObservation",
     "normalize_derivatives",
+    "NormalizedSupplementalDerivatives",
+    "RawSupplementalDerivativeRecord",
+    "SupplementalCoverageStatus",
+    "SupplementalDerivativeRecord",
+    "SupplementalDerivativesError",
+    "SupplementalDerivativesKind",
+    "SupplementalDerivativesPolicy",
+    "normalize_supplemental_derivatives",
     "FundamentalIdentity",
     "FundamentalNormalizationError",
     "FundamentalPolicy",
