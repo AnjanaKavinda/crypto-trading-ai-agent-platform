@@ -104,7 +104,10 @@ class SpotAnalysisTaskOutcome:
         ):
             raise SpotAnalysisFanoutError("outcome reason must use the bounded enum.")
         if self.status is SpotAnalysisTaskStatus.COMPLETE:
-            if type(self.finding) is not SpotMetaFinding or self.reason_code is not None:
+            if (
+                type(self.finding) is not SpotMetaFinding
+                or self.reason_code is not None
+            ):
                 raise SpotAnalysisFanoutError(
                     "complete outcomes require one finding and no reason code."
                 )
