@@ -34,6 +34,28 @@ trades may be omitted. These are implementation constraints to recheck during
 preflight, not evidence of data rights or a promise of complete history:
 [USDⓈ-M Futures market-data REST reference](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data).
 
+The current reference also leaves two normalization details unresolved:
+
+- `GET /fapi/v1/fundingRate` returns `fundingRate` and `fundingTime`, but no
+  per-record funding interval. `GET /fapi/v1/fundingInfo` exposes
+  `fundingIntervalHours` for symbols with funding-cap, floor, or interval
+  adjustments; it is not a historical interval attached to each funding
+  record. Do not infer an interval for a history row or apply today's interval
+  retrospectively. Preserve interval as unknown unless an independently
+  verified, time-bounded source establishes it.
+- `GET /futures/data/openInterestHist` describes `sumOpenInterest` as total
+  open interest and `sumOpenInterestValue` as total open-interest value, but
+  the USDⓈ-M reference does not state their units. Preserve the raw fields
+  separately and leave their units unknown; do not label them as contracts,
+  base asset, or quote value, convert them, or calculate derived quantities
+  until the unit semantics are independently verified.
+
+These endpoint semantics were checked against the official reference on
+2026-10-21. Recheck them during implementation preflight because provider
+documentation and response schemas can change. This review does not establish
+that requests are permitted under applicable terms or reachable from the
+owner's region.
+
 ## Alternatives
 
 ### Option A — Keep the existing provider-neutral fixtures only
@@ -69,6 +91,10 @@ read-only personal research adapter, limited initially to public funding and
 open-interest observations for Binance USDⓈ-M BTCUSDT and ETHUSDT perpetuals.
 Do not enable requests or claim permission unless and until the human owner
 accepts this ADR and completes the applicable terms and regional-access review.
+Funding records must not be annualized or used to calculate interval-specific
+funding cost when their applicable interval is unknown. Open-interest values
+must retain unknown units until verified; consumers must not compare, convert,
+or derive signals from them as though their units were established.
 
 Basis may be added only after the provider's spot/futures reference, price
 units, observation-time alignment, contract identity, maturity, and annualized
