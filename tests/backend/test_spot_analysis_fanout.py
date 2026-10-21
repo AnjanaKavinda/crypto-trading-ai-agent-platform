@@ -100,9 +100,7 @@ def test_fanout_isolates_failure_without_losing_successful_findings() -> None:
     assert result.is_partial
     assert len(result.findings) == 1
     assert result.outcomes[1].status is SpotAnalysisTaskStatus.FAILED
-    assert (
-        result.outcomes[1].reason_code is SpotAnalysisTaskReason.ANALYSIS_FAILED
-    )
+    assert result.outcomes[1].reason_code is SpotAnalysisTaskReason.ANALYSIS_FAILED
 
 
 def test_fanout_preserves_unavailable_reason_and_successful_findings() -> None:
