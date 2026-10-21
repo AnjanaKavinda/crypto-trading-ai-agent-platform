@@ -138,7 +138,9 @@ def test_fanout_preserves_unavailable_reason_and_successful_findings() -> None:
     assert unavailable_outcome.reason_code is SpotAnalysisTaskReason.POLICY_REQUIRED
 
 
-def test_composed_fanout_assesses_only_successful_findings_with_c093(monkeypatch) -> None:
+def test_composed_fanout_assesses_only_successful_findings_with_c093(
+    monkeypatch,
+) -> None:
     finding = _finding("spot-trend")
     unavailable_reason = SpotAnalysisTaskReason.POLICY_REQUIRED
     report = object()
