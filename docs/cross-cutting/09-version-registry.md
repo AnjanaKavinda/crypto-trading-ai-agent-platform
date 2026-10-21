@@ -5,6 +5,20 @@ It preserves exact historical resolution for trades, decisions, validations,
 experiments, and rollback actions without redefining canonical contract
 schemas.
 
+## Issue #70 — C-062 AgentResult schema 1
+
+C-062 schema `1` is a frozen, attributable result envelope bound to exact task
+and context IDs, agent/version, C-067 routing decision, tool-access IDs,
+generation/expiry times, result status, evidence references, unresolved risks,
+and a typed output contract. Downstream validation requires a trusted caller
+binding and an allowlist of exact output contract IDs, schema versions, and
+types; unknown output is rejected without coercion. Confidence is bounded to
+`0..1` and cannot be nonzero without supporting evidence; it remains an agent
+assessment, not a probability or qualification. `NO_TRADE` and
+`INSUFFICIENT_DATA` remain valid non-action outcomes. This does not add result
+quarantine persistence, model invocation, approval, risk, or execution
+authority.
+
 ## Required immutable registry record
 
 | Registry field | Required content | Baseline rule |
