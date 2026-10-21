@@ -17,6 +17,10 @@ from trading_platform_api.orchestration.spot_results import (
     build_spot_result_graph,
     run_spot_result_graph,
 )
+from trading_platform_api.orchestration.spot_rsi_finding import (
+    SPOT_RSI_FINDING_METHOD,
+    adapt_rsi14_finding,
+)
 
 __all__ = [
     "SpotAnalysisFanoutError",
@@ -27,6 +31,8 @@ __all__ = [
     "SpotAnalysisTaskReason",
     "SpotAnalysisTaskStatus",
     "SpotAnalysisUnavailable",
+    "SPOT_RSI_FINDING_METHOD",
+    "adapt_rsi14_finding",
     "SpotResultState",
     "build_spot_result_graph",
     "run_spot_analysis_fanout",
