@@ -20,6 +20,21 @@ assessment, not a probability or qualification. `NO_TRADE` and
 quarantine persistence, model invocation, approval, risk, or execution
 authority.
 
+## Issue #71 — C-061 AgentDefinition schema 1
+
+C-061 schema `1` records an immutable `(agent_id, agent_version)` definition
+with its bounded role, purpose, contract input/output allowlists, tool names,
+allowed modes, dependencies, and non-escalatable authority boundaries. The
+registry resolves an exact version and rejects attempts to redefine an
+existing identity/version pair. A new role meaning requires a new
+`agent_version`; it does not rewrite an older definition. The initial
+`PERSONAL_SPOT_RESEARCH` registration is analysis-only, declares no tools, and
+has no risk, human-approval, order, or exchange-execution authority. Registry
+membership is descriptive metadata only: runtime grants remain owned by C-063
+and C-064, subject to C-098 policy ceilings. Definitions are currently
+code-registered in memory; durable persistence and lifecycle promotion are not
+introduced by this issue.
+
 ## Required immutable registry record
 
 | Registry field | Required content | Baseline rule |

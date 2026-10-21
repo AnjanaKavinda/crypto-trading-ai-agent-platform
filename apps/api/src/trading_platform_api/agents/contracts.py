@@ -44,6 +44,57 @@ class AgentResultStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class AgentDefinition:
+    """C-061 immutable role metadata; it does not grant runtime permissions."""
+
+    agent_id: str
+    agent_version: str
+    role: str
+    purpose: str
+    allowed_inputs: tuple[str, ...]
+    allowed_outputs: tuple[str, ...]
+    allowed_tools: tuple[str, ...]
+    allowed_modes: tuple[str, ...]
+    dependencies: tuple[str, ...]
+    authority_boundaries: tuple[str, ...]
+    contract_id: str = field(default="C-061", init=False)
+    schema_version: str = field(default=CONTRACT_SCHEMA_VERSION, init=False)
+
+    __contract_id__: ClassVar[str] = "C-061"
+
+    def __post_init__(self) -> None:
+        for name in ("agent_id", "agent_version", "role", "purpose"):
+            _text(name, getattr(self, name))
+        for name in (
+            "allowed_inputs",
+            "allowed_outputs",
+            "allowed_tools",
+            "allowed_modes",
+            "dependencies",
+            "authority_boundaries",
+        ):
+            values = getattr(self, name)
+            if not isinstance(values, tuple):
+                raise AgentContractError(f"{name} must be a tuple.")
+            normalized = tuple(_text(f"{name} item", value) for value in values)
+            if len(set(normalized)) != len(normalized):
+                raise AgentContractError(f"{name} must not contain duplicates.")
+            object.__setattr__(self, name, normalized)
+        if not self.allowed_inputs or not self.allowed_outputs:
+            raise AgentContractError("agent inputs and outputs must be declared.")
+        if not self.allowed_modes or not self.authority_boundaries:
+            raise AgentContractError(
+                "agent modes and authority boundaries are required."
+            )
+
+    @property
+    def permissions_granted(self) -> bool:
+        """C-061 is descriptive only; C-063/C-064 govern runtime grants."""
+
+        return False
+
+
+@dataclass(frozen=True, slots=True)
 class AgentResult:
     """C-062 result bound to one task, context, route, and typed output."""
 
