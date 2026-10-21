@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from uuid import uuid4
+from collections.abc import Mapping
+from datetime import datetime
+from typing import cast
+from uuid import UUID, uuid4
 
 import pytest
 from trading_platform_api.analysis import (
+    AnalysisSnapshotV4,
     AnalyticalDirection,
     ConflictMaterialityV2,
     ConfluenceEvidenceStrengthV2,
@@ -13,6 +17,11 @@ from trading_platform_api.analysis import (
     SpotMetaFinding,
     VersionReference,
 )
+from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts_v4 import (
+    ResolvedSpotOHLCVBindingV4,
+)
+from trading_platform_api.orchestration import spot_analysis_fanout as fanout_module
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisFanoutError,
     SpotAnalysisTask,
@@ -20,6 +29,7 @@ from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisTaskStatus,
     SpotAnalysisUnavailable,
     run_spot_analysis_fanout,
+    run_spot_analysis_fanout_with_independence,
 )
 
 
@@ -126,6 +136,52 @@ def test_fanout_preserves_unavailable_reason_and_successful_findings() -> None:
     assert unavailable_outcome.status is SpotAnalysisTaskStatus.UNAVAILABLE
     assert unavailable_outcome.finding is None
     assert unavailable_outcome.reason_code is SpotAnalysisTaskReason.POLICY_REQUIRED
+
+
+def test_composed_fanout_assesses_only_successful_findings_with_c093(monkeypatch) -> None:
+    finding = _finding("spot-trend")
+    unavailable_reason = SpotAnalysisTaskReason.POLICY_REQUIRED
+    report = object()
+    observed = {}
+
+    async def succeed() -> SpotMetaFinding:
+        return finding
+
+    async def unavailable() -> SpotAnalysisUnavailable:
+        return SpotAnalysisUnavailable(unavailable_reason)
+
+    def assess_agent_independence(**kwargs):
+        observed.update(kwargs)
+        return report
+
+    monkeypatch.setattr(
+        fanout_module, "assess_agent_independence", assess_agent_independence
+    )
+    correlation_id = uuid4()
+    manifest = cast(AnalysisSnapshotV4, object())
+    bindings = cast(tuple[ResolvedSpotOHLCVBindingV4, ...], (object(),))
+    evidence: Mapping[UUID, EvidenceItemV2] = {}
+    result = asyncio.run(
+        run_spot_analysis_fanout_with_independence(
+            (
+                _task("spot-trend", succeed),
+                _task("spot-momentum", unavailable),
+            ),
+            correlation_id=correlation_id,
+            manifest=manifest,
+            resolved_bindings=bindings,
+            evidence=evidence,
+            now=cast(datetime, object()),
+        )
+    )
+
+    assert result.fanout.correlation_id == correlation_id
+    assert result.fanout.is_partial
+    assert result.independence_report is report
+    assert observed["findings"] == (finding,)
+    assert observed["manifest"] is manifest
+    assert observed["resolved_bindings"] is bindings
+    assert observed["evidence"] is evidence
 
 
 def test_unavailable_reason_must_use_bounded_enum() -> None:
