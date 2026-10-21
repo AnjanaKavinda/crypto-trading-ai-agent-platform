@@ -2,12 +2,12 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 from trading_platform_api.agents import (
+    PERSONAL_SPOT_AGENT_REGISTRY,
+    PERSONAL_SPOT_RESEARCH_AGENT,
     AgentContractError,
     AgentDefinition,
     AgentRegistry,
     AgentRegistryError,
-    PERSONAL_SPOT_AGENT_REGISTRY,
-    PERSONAL_SPOT_RESEARCH_AGENT,
     resolve_agent_definition,
 )
 

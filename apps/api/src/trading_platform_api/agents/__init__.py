@@ -13,17 +13,17 @@ from trading_platform_api.agents.contracts import (
     ModelRoutingDecision,
     ModelRoutingPolicy,
 )
-from trading_platform_api.agents.result_validation import (
-    AgentResultExpectation,
-    AgentResultValidationError,
-    validate_agent_result,
-)
 from trading_platform_api.agents.registry import (
     PERSONAL_SPOT_AGENT_REGISTRY,
     PERSONAL_SPOT_RESEARCH_AGENT,
     AgentRegistry,
     AgentRegistryError,
     resolve_agent_definition,
+)
+from trading_platform_api.agents.result_validation import (
+    AgentResultExpectation,
+    AgentResultValidationError,
+    validate_agent_result,
 )
 from trading_platform_api.agents.routing import (
     ModelProvider,
