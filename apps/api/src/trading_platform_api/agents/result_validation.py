@@ -131,6 +131,8 @@ def validate_agent_result(
             )
 
         contract_id = getattr(type(result.output), "__contract_id__", None)
+        if not isinstance(contract_id, str):
+            raise AgentResultValidationError("output contract identity is missing.")
         schema = expectation.allowed_output_schemas.get(contract_id)
         if schema is None:
             raise AgentResultValidationError("output contract is not allowlisted.")
