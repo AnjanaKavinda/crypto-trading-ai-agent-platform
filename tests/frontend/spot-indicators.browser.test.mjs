@@ -809,6 +809,10 @@ test("browser chart toggles preserve series isolation and bind every point to it
     const expectedClasses = [...Object.values(seriesGroups).flat(), "spot-vwap-line"].sort();
     const rendered = await readSeries(page);
     assert.deepEqual(rendered.map((line) => line.series).sort(), expectedClasses);
+    const candleXs = await page.locator("#chart-container line.candle-wick").evaluateAll((wicks) =>
+      wicks.map((wick) => Number(wick.getAttribute("x1"))),
+    );
+    assert.equal(candleXs.length, candleCount);
 
     const priceRange = expectedPriceRange();
     const candleIndex = new Map(snapshot.candles.map((candle, index) => [Date.parse(candle.close_time), index]));
@@ -854,7 +858,7 @@ test("browser chart toggles preserve series isolation and bind every point to it
       expected.forEach(([candleEnd, exactValue, axis], index) => {
         const candle = candleIndex.get(Date.parse(candleEnd));
         assert.equal(candle, index, `${className} point timestamp must match its candle`);
-        const expectedX = 70 + candle * 910 / (candleCount - 1);
+        const expectedX = candleXs[candle];
         const value = Number(exactValue);
         const panel = panelScales.get(axis);
         const expectedY = axis === "price"

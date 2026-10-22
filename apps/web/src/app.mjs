@@ -1,4 +1,10 @@
 import {
+  chartIndexAtPointer,
+  candleInspectorText,
+  moveChartSelection,
+  priceAxisTicks,
+} from "./chart-interaction.mjs";
+import {
   listSupportedSymbols,
   readSnapshot,
   refreshSnapshot,
@@ -624,6 +630,7 @@ function svgText(svg, x, y, text, className = "axis-label") {
   const node = svgNode("text", { x, y, class: className });
   node.textContent = text;
   svg.append(node);
+  return node;
 }
 
 function numberForPlot(exact) {
@@ -672,8 +679,8 @@ function renderChart(snapshot, preferences) {
     )
     : [];
   const width = 1000;
-  const left = 70;
-  const right = 20;
+  const left = 150;
+  const right = 125;
   const plotWidth = width - left - right;
   const priceTop = 20;
   const priceHeight = 260;
@@ -687,6 +694,18 @@ function renderChart(snapshot, preferences) {
   const enabled = preferences.mode === "beginner" ? DEFAULT_VISIBILITY : preferences.visible;
   const emaSeries = [];
   const bands = [];
+  const fieldsByIndicator = {
+    "ema-20": [["EMA 20", "value"]],
+    "ema-50": [["EMA 50", "value"]],
+    "ema-500": [["EMA 500", "value"]],
+    "bollinger-bands-20": [["BB upper", "upper"], ["BB middle", "middle"], ["BB lower", "lower"]],
+    "atr-14": [["ATR 14", "value"]],
+    "realized-volatility-20": [["Realized volatility 20", "value"]],
+    "rsi-14": [["RSI 14", "value"]],
+    "macd-12-26-9": [["MACD", "line"], ["MACD signal", "signal"], ["MACD histogram", "histogram"]],
+    "stochastic-14-3": [["Stochastic K", "k"], ["Stochastic D", "d"]],
+    "cci-20": [["CCI 20", "value"]],
+  };
   const panelDefinitions = [
     ["atr-14", "ATR", [["atr-line", "value"]]],
     ["realized-volatility-20", "REALIZED VOL", [["realized-volatility-line", "value"]]],
@@ -738,27 +757,35 @@ function renderChart(snapshot, preferences) {
   const candleIndexes = new Map(candles.map(({ source }, index) => [Date.parse(source.close_time), index]));
   const svg = svgNode("svg", {
     viewBox: `0 0 ${width} ${height}`,
-    role: "img",
+    role: "group",
     "aria-labelledby": "chart-svg-title chart-svg-desc",
-    focusable: "false",
+    "aria-describedby": "chart-inspector",
+    "aria-label": `${snapshot.symbol} ${snapshot.timeframe} candle chart. Use left and right arrow keys to inspect candles.`,
+    tabindex: "0",
+    focusable: "true",
   });
   const title = svgNode("title", { id: "chart-svg-title" });
   title.textContent = `${snapshot.symbol} ${snapshot.timeframe} exact API candles, volume${snapshot.data_quality?.status === "STALE" ? ", stale" : ""}`;
   svg.append(title);
   const description = svgNode("desc", { id: "chart-svg-desc" });
-  description.textContent = `${candles.length} returned finalized candles. Chart scales are visual only; exact returned values are available in the table below.`;
+  description.textContent = `${candles.length} returned finalized candles. Hover over a candle or focus the chart and use the arrow keys to inspect exact returned values.`;
   svg.append(description);
-  for (let i = 0; i <= 4; i += 1) {
-    const y = priceTop + i * priceHeight / 4;
-    svg.append(svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "gridline" }));
-  }
-  svgText(svg, 8, 16, "PRICE");
-  svgText(svg, 8, volumeTop - 6, "VOLUME");
   const priceSpan = priceMax - priceMin;
+  const priceUnit = candles.at(-1).values.close.unit;
+  const formatPrice = (value) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(value);
+  const priceY = (value) => priceTop + priceHeight - ((value - priceMin) / priceSpan) * priceHeight;
+  for (const { fraction, value } of priceAxisTicks(priceMin, priceMax, 4)) {
+    const y = priceTop + fraction * priceHeight;
+    svg.append(svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "gridline" }));
+    const tick = svgText(svg, width - right + 8, y + 4, formatPrice(value), "axis-label price-axis-tick");
+    tick.setAttribute("text-anchor", "start");
+  }
+  svgText(svg, 8, 16, `PRICE · ${priceUnit}`);
+  svgText(svg, 8, volumeTop - 6, "VOLUME");
   const candleWidth = Math.max(1, Math.min(8, plotWidth / candles.length * 0.62));
   candles.forEach(({ source, values }, index) => {
     const x = left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
-    const y = (value) => priceTop + priceHeight - ((value - priceMin) / priceSpan) * priceHeight;
+    const y = priceY;
     const up = values.close.numeric >= values.open.numeric;
     svg.append(svgNode("line", {
       x1: x, x2: x, y1: y(values.high.numeric), y2: y(values.low.numeric),
@@ -780,7 +807,8 @@ function renderChart(snapshot, preferences) {
       class: "volume-bar",
     }));
     if (index === 0 || index === candles.length - 1 || index === Math.floor(candles.length / 2)) {
-      svgText(svg, x - 34, height - 4, isoText(source.open_time).split(" · ")[0], "axis-label");
+      const label = svgText(svg, x, height - 4, isoText(source.open_time).split(" · ")[0], "axis-label");
+      label.setAttribute("text-anchor", index === 0 ? "start" : index === candles.length - 1 ? "end" : "middle");
     }
   });
   for (const [id, points] of [...emaSeries, ...bands]) {
@@ -791,7 +819,6 @@ function renderChart(snapshot, preferences) {
   const vwapLine = makeLine(vwapPoints, candleIndexes, priceMin, priceMax, priceTop, priceHeight, left, plotWidth);
   if (vwapLine) {
     svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line" }));
-    svgText(svg, left + 4 * 130, 18, "Spot VWAP", "legend-text");
   }
   for (const [panelIndex, panel] of separatePanels.entries()) {
     const top = panelsTop + panelIndex * (panelHeight + panelGap);
@@ -811,11 +838,80 @@ function renderChart(snapshot, preferences) {
       svgText(svg, left + seriesIndex * 150, top - 6, className.replaceAll("-", " "), "legend-text");
     });
   }
-  for (const [index, [id]] of [...emaSeries, ...bands].entries()) {
-    svgText(svg, left + index * 130, 18, id === "upper" || id === "middle" || id === "lower" ? `Bollinger ${id}` : id, "legend-text");
-  }
-  svgText(svg, 160, volumeTop - 6, "Volume · backend values", "legend-text");
-  target.append(svg);
+  const overlayLegend = [
+    ...emaSeries.map(([id]) => ({ label: id.toUpperCase().replace("-", " "), className: id })),
+    ...bands.map(([field]) => ({ label: `BB ${field}`, className: `bollinger-${field}` })),
+    ...(vwapLine ? [{ label: "VWAP", className: "spot-vwap-line" }] : []),
+  ];
+  const legendStep = overlayLegend.length ? plotWidth / overlayLegend.length : 0;
+  overlayLegend.forEach((item, index) => {
+    const label = svgText(svg, left + index * legendStep, 18, item.label, "legend-text");
+    label.setAttribute("class", `legend-text legend-${item.className}`);
+  });
+  svgText(svg, left, volumeTop - 6, "Volume · backend values", "legend-text");
+
+  const crosshair = svgNode("line", {
+    x1: 0, x2: 0, y1: priceTop, y2: volumeTop + volumeHeight,
+    class: "chart-crosshair", "pointer-events": "none",
+  });
+  const marker = svgNode("circle", { cx: 0, cy: 0, r: 4, class: "chart-inspection-marker", "pointer-events": "none" });
+  svg.append(crosshair, marker);
+
+  const inspector = element("p", "", "chart-inspector");
+  inspector.id = "chart-inspector";
+  inspector.setAttribute("aria-live", "polite");
+  inspector.setAttribute("aria-atomic", "true");
+  const inspectCandle = (requestedIndex) => {
+    const index = Math.max(0, Math.min(candles.length - 1, requestedIndex));
+    const candle = candles[index];
+    const x = left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
+    crosshair.setAttribute("x1", String(x));
+    crosshair.setAttribute("x2", String(x));
+    crosshair.setAttribute("visibility", "visible");
+    marker.setAttribute("cx", String(x));
+    marker.setAttribute("cy", String(priceY(candle.values.close.numeric)));
+    marker.setAttribute("visibility", "visible");
+    const indicatorReadouts = [];
+    const candleEnd = Date.parse(candle.source.close_time);
+    for (const id of enabled) {
+      const indicator = snapshot.indicators?.[id];
+      if (indicator?.status !== "AVAILABLE" ||
+          indicatorBindingError(snapshot, id, indicator) ||
+          !indicator.result) continue;
+      for (const [label, field] of fieldsByIndicator[id] ?? []) {
+        const point = plotValues(indicator.result, field)
+          .find((item) => Date.parse(item.candleEnd) === candleEnd);
+        if (point) indicatorReadouts.push(`${label}: ${point.value}`);
+      }
+    }
+    const vwapPoint = vwapPoints.find((point) => Date.parse(point.candleEnd) === candleEnd);
+    if (vwapPoint) indicatorReadouts.push(`Spot VWAP: ${vwapPoint.value}`);
+    inspector.textContent = candleInspectorText(candle, indicatorReadouts);
+    svg.dataset.inspectedIndex = String(index);
+  };
+  const indexAtPointer = (event) => {
+    const rect = svg.getBoundingClientRect();
+    return chartIndexAtPointer({
+      clientX: event.clientX,
+      boundsLeft: rect.left,
+      boundsWidth: rect.width,
+      viewWidth: width,
+      plotLeft: left,
+      plotWidth,
+      candleCount: candles.length,
+    });
+  };
+  svg.addEventListener("pointermove", (event) => inspectCandle(indexAtPointer(event)));
+  svg.addEventListener("keydown", (event) => {
+    const current = Number(svg.dataset.inspectedIndex ?? candles.length - 1);
+    const next = moveChartSelection(current, event.key, candles.length);
+    if (next !== null) {
+      event.preventDefault();
+      inspectCandle(next);
+    }
+  });
+  inspectCandle(candles.length - 1);
+  target.append(svg, inspector);
 }
 
 function renderCandles(snapshot) {
