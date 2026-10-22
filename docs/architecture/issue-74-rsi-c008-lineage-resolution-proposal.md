@@ -2,9 +2,13 @@
 
 ## Status
 
-Proposal only. This document requests an owner decision before changing the
-merged RSI14 adapter, producing RSI evidence, or changing any shared contract.
-It relates to existing Issue #74; it does not create another tracking issue.
+**Accepted: Option A.** PR #405 merged on 2026-10-22 and records the owner
+decision to keep C-007 v4/C-008 v2 and cite the exact resolved source evidence
+consumed by the RSI calculation. The approved follow-up under existing Issue
+#74 carries the calculated RSI value/unit and RSI versions on the typed
+finding. This document retains the original proposal and alternatives as the
+decision record; its approval-request section reflects the original proposal
+state. No shared C-### contract change is authorized.
 
 ## Objective and constraints
 
@@ -111,7 +115,7 @@ derived value. If Option A is not acceptable, keep the adapter unavailable and
 complete Option B's impact analysis as a separate architecture decision before
 any contract implementation.
 
-## Approval requested
+## Approval requested (resolved by merged PR #405)
 
 1. May the RSI finding reference the exact C-008 source evidence consumed by
    the RSI calculation, with the RSI metadata/calculation versions and computed

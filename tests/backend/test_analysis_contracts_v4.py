@@ -75,6 +75,7 @@ from trading_platform_api.analysis import (
     validate_market_context_v5,
 )
 from trading_platform_api.analysis.contracts import AnalysisContractError
+from trading_platform_api.analysis.momentum import calculate_rsi
 from trading_platform_api.analysis.spot_meta_analysis import _conflict_severity
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data import (
@@ -90,6 +91,13 @@ from trading_platform_api.market_data import (
     assess_complete_binance_spot_batch,
 )
 from trading_platform_api.market_data.quality import assess_approved_spot_ohlcv_v2
+from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SpotAnalysisUnavailable,
+)
+from trading_platform_api.orchestration.spot_rsi_finding import (
+    SPOT_RSI_FINDING_METHOD,
+    adapt_rsi14_finding,
+)
 from trading_platform_api.spot_research import approved_quality_policy_template
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=UTC)
@@ -689,6 +697,36 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
     assert resolved[0].regime == profile.regime
     assert len(resolved[0].evidence) == 3
     assert quality_v1.status is DataQualityStatus.VALID
+    rsi = calculate_rsi(
+        snapshot=snapshot,
+        observations=tuple(observations),
+        quality=quality_v2,
+        period=14,
+        timeframe="1m",
+        sources=tuple(sources),
+    )
+    rsi_finding = adapt_rsi14_finding(
+        series=rsi,
+        evidence_ids=tuple(item.evidence_id for item in v2_evidence),
+        evidence_by_id={item.evidence_id: item for item in v2_evidence},
+        manifest=manifest,
+        resolved_binding=resolved[0],
+        now=NOW,
+    )
+    assert not isinstance(rsi_finding, SpotAnalysisUnavailable)
+    assert rsi_finding.evidence_ids == tuple(
+        sorted((item.evidence_id for item in v2_evidence), key=str)
+    )
+    assert rsi_finding.input_binding_ids == (binding_id,)
+    assert rsi_finding.method == SPOT_RSI_FINDING_METHOD
+    assert rsi_finding.readiness is FindingReadiness.PARTIAL
+    assert rsi_finding.evidence_strength is ConfluenceEvidenceStrengthV2.UNKNOWN
+    assert rsi_finding.result_value == rsi.points[-1].value.value
+    assert rsi_finding.result_unit == "percent"
+    assert rsi_finding.provenance == (
+        VersionReference("indicator-metadata:rsi", "1"),
+        VersionReference("rsi", "rsi-wilder-sma-seed-v1"),
+    )
     for rejected_status in (DataQualityStatus.STALE, DataQualityStatus.INVALID):
         rejected_report = replace(quality_v2, status=rejected_status)
         rejected_binding = replace(

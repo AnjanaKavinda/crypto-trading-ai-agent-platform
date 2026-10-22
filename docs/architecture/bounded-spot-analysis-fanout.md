@@ -52,17 +52,22 @@ compares typed direction to the resolved C-005 regime, and emits only
 the binding, snapshot, quality report, cutoff, exact evidence IDs, method and
 indicator versions.
 
-Before a finding can be emitted, the caller supplies an exact C-007 manifest,
-its matching resolved C-007 binding, and C-008 items. Each item must pass the
-existing C-007/C-008 resolver validation and must identify this RSI result:
-method `rsi` at the pinned calculation version, feature `rsi` or `rsi14`, the
-exact RSI value/unit, and provenance references `indicator-metadata:rsi` and
-`rsi` at the series' metadata and calculation versions. Binding, OHLCV
-observations, source records, freshness, and quality must match the resolved
-scope. The adapter never derives evidence IDs from RSI output. Because the
-repository does not yet provide a production RSI-to-C-008 evidence producer,
-missing or differently scoped RSI evidence remains `UNAVAILABLE` with
-`INPUT_UNAVAILABLE` until a separately approved producer supplies it.
+The merged Option A decision in PR #405 keeps the C-007 v4/C-008 v2 evidence
+closure intact. Before a finding can be emitted, the caller supplies an exact
+C-007 manifest, its matching resolved binding, and the C-008 source items
+already bound to that C-005 regime. Each item passes the existing resolver
+validation, uses the binding's regime method/profile, and covers part of the
+RSI inputs. The selected items' combined observation and source IDs must equal
+the full RSI input scope. The finding retains those source evidence IDs while
+carrying the exact calculated RSI value/unit and the pinned metadata and
+calculation versions in its typed fields. It does not claim that a C-008
+regime item contains a derived RSI value or create evidence IDs from RSI output.
+
+The RSI calculator accepts the resolver's validated C-003 v2 quality report
+and bound source records, so its quality identity can match the resolved C-007
+binding. An end-to-end regression test exercises resolution, calculation, and
+adaptation together. The adapter still returns an explicit unavailable outcome
+when evidence is absent, partial, stale, or outside that exact scope.
 
 Warm-up and undefined points remain unavailable; stale dependencies remain
 stale; inconsistent input scope remains invalid. This adapter does not change

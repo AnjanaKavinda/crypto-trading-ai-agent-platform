@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Mapping
 from uuid import UUID, uuid5
@@ -137,6 +138,9 @@ class SpotMetaFinding:
     agent_id: str | None = None
     model: VersionReference | None = None
     prompt: VersionReference | None = None
+    result_value: Decimal | None = None
+    result_unit: str | None = None
+    provenance: tuple[VersionReference, ...] = ()
 
     def __post_init__(self) -> None:
         _uuid("finding_id", self.finding_id)
@@ -173,6 +177,23 @@ class SpotMetaFinding:
             raise AnalysisV2ContractError("finding model has an invalid type.")
         if self.prompt is not None and type(self.prompt) is not VersionReference:
             raise AnalysisV2ContractError("finding prompt has an invalid type.")
+        if self.result_value is not None and (
+            type(self.result_value) is not Decimal or not self.result_value.is_finite()
+        ):
+            raise AnalysisV2ContractError(
+                "finding result_value must be a finite Decimal or None."
+            )
+        if self.result_unit is not None:
+            _text("result_unit", self.result_unit)
+        if (self.result_value is None) != (self.result_unit is None):
+            raise AnalysisV2ContractError(
+                "finding result_value and result_unit must be supplied together."
+            )
+        provenance = _typed_tuple(
+            "finding provenance", self.provenance, VersionReference
+        )
+        _unique("finding provenance", provenance)
+        object.__setattr__(self, "provenance", provenance)
         if self.agent_id is not None:
             _text("agent_id", self.agent_id)
         for name, value in (
@@ -742,6 +763,33 @@ def _participant(
     )
 
 
+def _finding_fingerprint_input(item: SpotMetaFinding) -> dict[str, object]:
+    """Keep established identities stable as internal result metadata grows."""
+    return {
+        "finding_id": item.finding_id,
+        "domain": item.domain,
+        "direction": item.direction,
+        "relation": item.relation,
+        "evidence_strength": item.evidence_strength,
+        "readiness": item.readiness,
+        "evidence_ids": item.evidence_ids,
+        "input_binding_ids": item.input_binding_ids,
+        "method": item.method,
+        "materiality": item.materiality,
+        "required_premise_invalid": item.required_premise_invalid,
+        "unsafe_to_rely": item.unsafe_to_rely,
+        "agent_id": item.agent_id,
+        "model": item.model,
+        "prompt": item.prompt,
+    }
+
+
+def _finding_fingerprint_inputs(
+    findings: tuple[SpotMetaFinding, ...],
+) -> tuple[dict[str, object], ...]:
+    return tuple(_finding_fingerprint_input(item) for item in findings)
+
+
 def _regime_finding(binding: ResolvedSpotOHLCVBindingV4) -> SpotMetaFinding:
     """Create a non-strength-bearing participant for the exact C-005 result."""
     return SpotMetaFinding(
@@ -877,7 +925,10 @@ def assess_agent_independence(
         _IDENTITY_NAMESPACE,
         "c093-v1:"
         + canonical_sha256(
-            (_input_scope_fingerprint(manifest, binding), ordered_findings)
+            (
+                _input_scope_fingerprint(manifest, binding),
+                _finding_fingerprint_inputs(ordered_findings),
+            )
         ),
     )
     return AgentIndependenceReport(
@@ -1034,7 +1085,10 @@ def calculate_spot_confluence_v3(
         _IDENTITY_NAMESPACE,
         "confluence-v3:"
         + canonical_sha256(
-            (_input_scope_fingerprint(manifest, binding), ordered_findings)
+            (
+                _input_scope_fingerprint(manifest, binding),
+                _finding_fingerprint_inputs(ordered_findings),
+            )
         ),
     )
     assessment = ConfluenceAssessmentV3(
@@ -1154,7 +1208,11 @@ def calculate_spot_conflicts_v3(
                 _IDENTITY_NAMESPACE,
                 "conflict-v3:"
                 + canonical_sha256(
-                    (_input_scope_fingerprint(manifest, binding), left, right)
+                    (
+                        _input_scope_fingerprint(manifest, binding),
+                        _finding_fingerprint_input(left),
+                        _finding_fingerprint_input(right),
+                    )
                 ),
             )
             if not critical and (
