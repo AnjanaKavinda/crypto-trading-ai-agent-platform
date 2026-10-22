@@ -1,5 +1,6 @@
 """Synthetic compatibility and canonical-wire tests for the Spot C-007 v4 path."""
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -92,11 +93,16 @@ from trading_platform_api.market_data import (
 )
 from trading_platform_api.market_data.quality import assess_approved_spot_ohlcv_v2
 from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SpotAnalysisTaskReason,
+    SpotAnalysisTaskStatus,
     SpotAnalysisUnavailable,
+    run_spot_analysis_fanout,
+    run_spot_analysis_fanout_with_independence,
 )
 from trading_platform_api.orchestration.spot_rsi_finding import (
     SPOT_RSI_FINDING_METHOD,
     adapt_rsi14_finding,
+    build_spot_rsi14_task,
 )
 from trading_platform_api.spot_research import approved_quality_policy_template
 
@@ -726,6 +732,67 @@ def test_v4_resolver_binds_synthetic_spot_c005_and_c008_to_exact_ohlcv() -> None
     assert rsi_finding.provenance == (
         VersionReference("indicator-metadata:rsi", "1"),
         VersionReference("rsi", "rsi-wilder-sma-seed-v1"),
+        VersionReference("spot-market-regime", "spot-market-regime-v1"),
+        VersionReference("spot-ohlcv-regime-profile", "spot-ohlcv-regime-profile-v1"),
+    )
+    evidence_map = {item.evidence_id: item for item in v2_evidence}
+    task = build_spot_rsi14_task(
+        evidence_ids=tuple(item.evidence_id for item in v2_evidence),
+        evidence_by_id=evidence_map,
+        manifest=manifest,
+        resolved_binding=resolved[0],
+        clock=lambda: NOW,
+    )
+    fanout = asyncio.run(
+        run_spot_analysis_fanout_with_independence(
+            (task,),
+            correlation_id=_id(3005),
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            now=NOW,
+        )
+    )
+    assert fanout.fanout.outcomes[0].status is SpotAnalysisTaskStatus.COMPLETE
+    assert fanout.fanout.findings[0].finding_id == rsi_finding.finding_id
+    assert fanout.independence_report.statistical_independence_established is False
+    assert (
+        fanout.independence_report.overall_dependence
+        is EvidenceDependenceV2.PARTIALLY_DEPENDENT
+    )
+    with pytest.raises(
+        AnalysisV2ContractError,
+        match="finding method is absent from its evidence provenance",
+    ):
+        assess_agent_independence(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence_map,
+            findings=(
+                replace(
+                    rsi_finding,
+                    method=VersionReference("unapproved-derived-method", "1"),
+                ),
+            ),
+            now=NOW,
+        )
+
+    missing_evidence_task = build_spot_rsi14_task(
+        evidence_ids=(),
+        evidence_by_id=evidence_map,
+        manifest=manifest,
+        resolved_binding=resolved[0],
+        clock=lambda: NOW,
+    )
+    unavailable = asyncio.run(
+        run_spot_analysis_fanout(
+            (missing_evidence_task,),
+            correlation_id=_id(3006),
+        )
+    )
+    assert unavailable.outcomes[0].status is SpotAnalysisTaskStatus.UNAVAILABLE
+    assert (
+        unavailable.outcomes[0].reason_code is SpotAnalysisTaskReason.INPUT_UNAVAILABLE
     )
     for rejected_status in (DataQualityStatus.STALE, DataQualityStatus.INVALID):
         rejected_report = replace(quality_v2, status=rejected_status)

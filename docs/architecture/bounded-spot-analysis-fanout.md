@@ -73,3 +73,19 @@ Warm-up and undefined points remain unavailable; stale dependencies remain
 stale; inconsistent input scope remains invalid. This adapter does not change
 the C-008 or C-007 contracts and does not grant strategy, risk, approval, or
 execution authority.
+
+`build_spot_rsi14_task` composes the deterministic RSI calculation and the
+adapter as one callable `spot-momentum` task. It reads the exact resolved
+snapshot, observations, C-003 v2 report, sources, and selected C-008 evidence;
+the shared fan-out then preserves its result or bounded unavailable reason and
+passes successful findings to C-093. The integration test confirms the shared
+OHLCV evidence remains dependent and statistical independence is false. This
+derived finding is accepted by C-093 only when its adapter method/version,
+RSI metadata/calculation versions, and the resolved source method/profile are
+all present in its typed provenance. Other findings retain the existing rule
+that their method must be present on their cited evidence.
+
+The factory consumes an existing resolved C-007 manifest; it does not create or
+persist C-007/C-008 records or change the existing HTTP response. Wiring a
+production request path requires an approved manifest/evidence handoff and is
+deferred to its own bounded Issue #74 step.
