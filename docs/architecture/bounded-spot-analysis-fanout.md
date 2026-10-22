@@ -85,7 +85,31 @@ RSI metadata/calculation versions, and the resolved source method/profile are
 all present in its typed provenance. Other findings retain the existing rule
 that their method must be present on their cited evidence.
 
-The factory consumes an existing resolved C-007 manifest; it does not create or
-persist C-007/C-008 records or change the existing HTTP response. Wiring a
-production request path requires an approved manifest/evidence handoff and is
-deferred to its own bounded Issue #74 step.
+## Request-path handoff
+
+The local Spot refresh and stored-candle read now compose the validated C-002
+snapshot, C-003 v1 report, observations, source records, and approved quality
+policy into a request-scoped C-003 v2 report, C-005 regime, C-008 v2 evidence,
+and C-007 v4 manifest. The implementation resolves that exact closure before
+creating the RSI task and running the bounded fan-out/C-093 assessment. The API
+returns the manifest record and digest, C-003 v2 report, C-008 evidence, task
+outcomes, and C-093 report under `analysis_fanout`, allowing the caller to
+inspect the exact provenance used for the finding.
+
+This is an in-memory, deterministic handoff over validated Spot data already
+stored by the existing research path. C-003 v2, C-005, C-008 v2, C-007 v4, and
+C-093 request results are not added to durable lineage storage by this slice.
+The new C-007/C-008 output is not emitted when quality is invalid/stale, the
+regime is in warm-up, dependencies have expired, or exact resolution fails;
+the API returns an explicit `UNAVAILABLE` reason. A valid resolved manifest
+with an unavailable RSI task remains `PARTIAL` and retains the C-093 dependence
+report. The historical C-003 v1 response and existing indicator/analysis
+projections remain unchanged.
+
+The request correlation ID is deterministically converted to a UUID for the
+fan-out contract without changing the existing HTTP correlation format. No
+provider call is added to the read path, no external agent/model is dispatched,
+and no retry/checkpoint behavior is introduced. Durable C-007/C-008/C-093
+lineage storage and later Docker Desktop end-to-end user testing remain
+deferred. This work adds no strategy, signal qualification, risk, approval,
+order, paper/testnet, exchange execution, or live-trading authority.
