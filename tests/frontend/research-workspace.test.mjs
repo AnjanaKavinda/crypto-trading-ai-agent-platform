@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import {
+  chartIndexAtPointer,
+  candleInspectorText,
+  moveChartSelection,
+  priceAxisTicks,
+} from "../../apps/web/src/chart-interaction.mjs";
+import {
   listSupportedSymbols,
   readSnapshot,
   REFRESH_DEADLINE_MS,
@@ -569,6 +575,50 @@ test("complete snapshots must preserve the exact candle-to-lineage and source bi
     values: [],
     unavailable: ["line: WARMUP (WARMUP)", "signal: UNDEFINED (ZERO_RANGE)"],
   });
+});
+
+test("chart coordinate maps to a bounded candle index across the displayed plot", () => {
+  const scale = { boundsLeft: 100, boundsWidth: 1000, viewWidth: 1000, plotLeft: 150, plotWidth: 725, candleCount: 501 };
+  assert.equal(chartIndexAtPointer({ ...scale, clientX: 250 }), 0);
+  assert.equal(chartIndexAtPointer({ ...scale, clientX: 612.5 }), 250);
+  assert.equal(chartIndexAtPointer({ ...scale, clientX: 975 }), 500);
+  assert.equal(chartIndexAtPointer({ ...scale, clientX: -500 }), 0);
+  assert.equal(chartIndexAtPointer({ ...scale, clientX: 2500 }), 500);
+  assert.equal(chartIndexAtPointer({ ...scale, boundsWidth: 0, clientX: 500 }), null);
+});
+
+test("chart keyboard navigation stays within the candle window", () => {
+  assert.equal(moveChartSelection(10, "ArrowLeft", 20), 9);
+  assert.equal(moveChartSelection(10, "ArrowRight", 20), 11);
+  assert.equal(moveChartSelection(10, "Home", 20), 0);
+  assert.equal(moveChartSelection(10, "End", 20), 19);
+  assert.equal(moveChartSelection(0, "ArrowLeft", 20), 0);
+  assert.equal(moveChartSelection(19, "ArrowRight", 20), 19);
+  assert.equal(moveChartSelection(4, "Tab", 20), null);
+});
+
+test("price axis returns evenly spaced labels across the display range", () => {
+  assert.deepEqual(priceAxisTicks(100, 200, 4), [
+    { fraction: 0, value: 200 },
+    { fraction: 0.25, value: 175 },
+    { fraction: 0.5, value: 150 },
+    { fraction: 0.75, value: 125 },
+    { fraction: 1, value: 100 },
+  ]);
+  assert.deepEqual(priceAxisTicks(1, 1, 0), []);
+});
+
+test("candle inspection preserves exact API strings and units", () => {
+  assert.equal(candleInspectorText({
+    source: { open_time: "2026-10-22T18:28:00Z" },
+    values: {
+      open: { exact: "81308.04000000", unit: "USDT" },
+      high: { exact: "81338.33000000", unit: "USDT" },
+      low: { exact: "81298.00000000", unit: "USDT" },
+      close: { exact: "81300.08000000", unit: "USDT" },
+      volume: { exact: "6.05375000", unit: "BTC" },
+    },
+  }, ["EMA 20: 81301.25"]), "2026-10-22T18:28:00Z · Open: 81308.04000000 USDT · High: 81338.33000000 USDT · Low: 81298.00000000 USDT · Close: 81300.08000000 USDT · Volume: 6.05375000 BTC · EMA 20: 81301.25");
 });
 
 test("indicator charts use only returned, non-null backend points", () => {
