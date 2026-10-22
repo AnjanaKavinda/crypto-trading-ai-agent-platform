@@ -64,6 +64,9 @@ from trading_platform_api.market_data.contracts import (
 C093_SCHEMA_VERSION = "1"
 C093_LINEAGE_VERSION = "1"
 C093_METHOD = VersionReference("agent-independence", "c093-deterministic-v1")
+_SPOT_RSI_FINDING_METHOD = VersionReference("spot-rsi-momentum-finding", "1")
+_SPOT_RSI_METADATA_PROVENANCE = VersionReference("indicator-metadata:rsi", "1")
+_SPOT_RSI_CALCULATION_PROVENANCE = VersionReference("rsi", "rsi-wilder-sma-seed-v1")
 C007_V4_LINEAGE_VERSION = "4"
 SPOT_CONFLUENCE_METHOD = VersionReference("spot-confluence", "spot-confluence-v1")
 SPOT_CONFLICT_METHOD = VersionReference("spot-conflict", "spot-conflict-v1")
@@ -720,7 +723,19 @@ def _validate_scope(
                 raise AnalysisV2ContractError(
                     "finding evidence is not usable and valid."
                 )
-            if finding.method not in {item.method, *item.provenance}:
+            if finding.method not in {item.method, *item.provenance} and not (
+                finding.domain == "spot-momentum"
+                and finding.method == _SPOT_RSI_FINDING_METHOD
+                and item.method == binding.binding.regime_method
+                and {
+                    item.method,
+                    binding.binding.regime_profile,
+                    _SPOT_RSI_METADATA_PROVENANCE,
+                    _SPOT_RSI_CALCULATION_PROVENANCE,
+                }.issubset(finding.provenance)
+                and finding.result_value is not None
+                and finding.result_unit == "percent"
+            ):
                 raise AnalysisV2ContractError(
                     "finding method is absent from its evidence provenance."
                 )
@@ -812,7 +827,10 @@ def _ordered_provenance(
 ) -> tuple[VersionReference, ...]:
     values = {C093_METHOD, method}
     values.update((binding.binding.regime_method, binding.binding.regime_profile))
-    values.update(item.method for item in findings if item.method is not None)
+    for item in findings:
+        if item.method is not None:
+            values.add(item.method)
+        values.update(item.provenance)
     return tuple(sorted(values, key=lambda item: (item.component, item.version)))
 
 

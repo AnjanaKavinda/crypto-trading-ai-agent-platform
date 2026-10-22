@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Mapping
+from typing import Callable, Mapping
 from uuid import UUID, uuid5
 
 from trading_platform_api.analysis.contracts import (
@@ -15,6 +16,7 @@ from trading_platform_api.analysis.contracts import (
 from trading_platform_api.analysis.momentum import (
     MomentumStatus,
     RSISeries,
+    calculate_rsi,
 )
 from trading_platform_api.analysis.spot_meta_analysis import (
     FindingReadiness,
@@ -33,6 +35,7 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.market_data.contracts import DataQualityStatus
 from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SpotAnalysisTask,
     SpotAnalysisTaskReason,
     SpotAnalysisUnavailable,
 )
@@ -218,11 +221,89 @@ def adapt_rsi14_finding(
         method=SPOT_RSI_FINDING_METHOD,
         result_value=value.value,
         result_unit=series.unit,
-        provenance=(
-            VersionReference("indicator-metadata:rsi", series.metadata_version),
-            VersionReference("rsi", series.calculation_version),
+        provenance=tuple(
+            sorted(
+                {
+                    binding.regime_method,
+                    binding.regime_profile,
+                    VersionReference("indicator-metadata:rsi", series.metadata_version),
+                    VersionReference("rsi", series.calculation_version),
+                },
+                key=lambda item: (item.component, item.version),
+            )
         ),
     )
 
 
-__all__ = ["SPOT_RSI_FINDING_METHOD", "adapt_rsi14_finding"]
+def build_spot_rsi14_task(
+    *,
+    evidence_ids: tuple[UUID, ...],
+    evidence_by_id: Mapping[UUID, EvidenceItemV2],
+    manifest: AnalysisSnapshotV4,
+    resolved_binding: ResolvedSpotOHLCVBindingV4,
+    clock: Callable[[], datetime] | None = None,
+) -> SpotAnalysisTask:
+    """Bind RSI calculation and validation into one fan-out task.
+
+    The callback consumes only the exact already-resolved C-007 input. Its task
+    identity is stable for that manifest, binding, and selected source evidence;
+    the evaluation time is read when the bounded fan-out invokes it.
+    """
+    if (
+        type(manifest) is not AnalysisSnapshotV4
+        or type(resolved_binding) is not ResolvedSpotOHLCVBindingV4
+        or not isinstance(evidence_ids, tuple)
+        or any(type(item) is not UUID for item in evidence_ids)
+        or not isinstance(evidence_by_id, Mapping)
+        or (clock is not None and not callable(clock))
+    ):
+        raise ValueError("RSI fan-out task inputs are invalid")
+
+    ordered_evidence_ids = tuple(sorted(evidence_ids, key=str))
+    task_id = uuid5(
+        _IDENTITY_NAMESPACE,
+        "rsi14-task:"
+        + canonical_sha256(
+            {
+                "manifest_id": manifest.snapshot_id,
+                "manifest_sha256": manifest.content_sha256,
+                "binding_id": resolved_binding.binding.binding_id,
+                "binding_sha256": canonical_sha256(resolved_binding.binding),
+                "evidence_ids": ordered_evidence_ids,
+                "method": SPOT_RSI_FINDING_METHOD,
+                "metadata_version": "1",
+                "calculation_version": RSI_METHOD_VERSION,
+            }
+        ),
+    )
+    get_now = clock or (lambda: datetime.now(UTC))
+
+    def calculate_and_adapt() -> SpotMetaFinding | SpotAnalysisUnavailable:
+        series = calculate_rsi(
+            snapshot=resolved_binding.snapshot,
+            observations=resolved_binding.observations,
+            quality=resolved_binding.report,
+            period=14,
+            timeframe=resolved_binding.binding.timeframe,
+            sources=resolved_binding.sources,
+        )
+        return adapt_rsi14_finding(
+            series=series,
+            evidence_ids=ordered_evidence_ids,
+            evidence_by_id=evidence_by_id,
+            manifest=manifest,
+            resolved_binding=resolved_binding,
+            now=get_now(),
+        )
+
+    async def run() -> SpotMetaFinding | SpotAnalysisUnavailable:
+        return await asyncio.to_thread(calculate_and_adapt)
+
+    return SpotAnalysisTask(task_id, "spot-momentum", run)
+
+
+__all__ = [
+    "SPOT_RSI_FINDING_METHOD",
+    "adapt_rsi14_finding",
+    "build_spot_rsi14_task",
+]
