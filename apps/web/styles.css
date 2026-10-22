@@ -93,7 +93,12 @@ label { display: grid; gap: .4rem; font-weight: 700; font-size: .9rem; }
 .chart-container .candle-wick { stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .chart-container .candle-body { stroke-width: 1; }
 .chart-container .volume-bar { fill: #6697c5; opacity: .85; }
-.chart-container .legend-text { fill: #f5f7fa; font-size: 13px; }
+.chart-container .legend-text { fill: #f5f7fa; font-size: 12px; }
+.chart-container .price-axis-tick { fill: #d7e1ec; font-size: 12px; font-variant-numeric: tabular-nums; }
+.chart-container .chart-crosshair { stroke: #ffd166; stroke-width: 1.5; stroke-dasharray: 4 4; }
+.chart-container .chart-inspection-marker { fill: #ffd166; stroke: #090d13; stroke-width: 2; }
+.chart-container svg:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
+.chart-inspector { margin: 0; padding: .75rem 1rem; border-top: 1px solid #283646; color: #f5f7fa; font: 600 .9rem/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .empty-state { color: var(--muted); padding: 1.5rem; margin: 0; }
 .data-table { margin-top: 1rem; }
 summary { cursor: pointer; color: #ccecff; padding: .7rem 0; }
