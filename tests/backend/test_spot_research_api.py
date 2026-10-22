@@ -503,6 +503,8 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
     assert payload["spot_analysis"]["market-regime"]["reason_code"] == (
         "INSUFFICIENT_WARMUP"
     )
+    assert payload["analysis_fanout"]["status"] == "UNAVAILABLE"
+    assert payload["analysis_fanout"]["reason_code"] == "REGIME_UNAVAILABLE"
     assert repository.stored is not None
     expected_ema = calculate_moving_average(
         snapshot=repository.stored.snapshot,
@@ -721,6 +723,35 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
     assert regime["direction"] == "bullish-context"
     assert regime["confidence"] == "0"
     assert regime["compatible_strategy_families"] == []
+    fanout = payload["analysis_fanout"]
+    assert fanout["status"] == "AVAILABLE"
+    assert fanout["reason_code"] is None
+    assert fanout["manifest"]["contract_id"] == "C-007"
+    assert fanout["manifest"]["schema_version"] == "4"
+    assert fanout["manifest"]["snapshot_id"]
+    assert len(fanout["manifest"]["content_sha256"]) == 64
+    assert (
+        fanout["manifest"]["record"]["content_sha256"]
+        == fanout["manifest"]["content_sha256"]
+    )
+    assert fanout["quality_report"]["contract_id"] == "C-003"
+    assert fanout["quality_report"]["schema_version"] == "2"
+    assert len(fanout["evidence"]) == 3
+    assert len(fanout["outcomes"]) == 1
+    assert fanout["outcomes"][0]["domain"] == "spot-momentum"
+    assert fanout["outcomes"][0]["status"] == "COMPLETE"
+    finding = fanout["outcomes"][0]["finding"]
+    assert (
+        finding["result_value"]
+        == payload["indicators"]["rsi-14"]["result"]["points"][-1]["value"]["value"]
+    )
+    assert finding["result_unit"] == "percent"
+    assert fanout["independence_report"]["overall_dependence"] == (
+        "PARTIALLY_DEPENDENT"
+    )
+    assert (
+        fanout["independence_report"]["statistical_independence_established"] is False
+    )
     assert {dimension["name"] for dimension in regime["dimensions"]} == {
         "trend",
         "realized-volatility",
@@ -1304,6 +1335,14 @@ def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot
     assert read_payload["data_quality"] == refreshed_payload["data_quality"]
     assert read_payload["indicators"] == refreshed_payload["indicators"]
     assert read_payload["spot_analysis"] == refreshed_payload["spot_analysis"]
+    assert (
+        read_payload["analysis_fanout"]["manifest"]
+        == refreshed_payload["analysis_fanout"]["manifest"]
+    )
+    assert (
+        read_payload["analysis_fanout"]["outcomes"]
+        == refreshed_payload["analysis_fanout"]["outcomes"]
+    )
     assert read_payload["requested_as_of"] == "2026-10-09T05:00:00Z"
     assert repository.read_calls == 1
     assert len(provider_calls) == calls_after_refresh

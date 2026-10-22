@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar, cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, FastAPI, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -78,6 +78,10 @@ from trading_platform_api.market_data.quality import (
     assess_approved_spot_ohlcv_v2,
     assess_complete_binance_spot_batch,
     assess_data_quality,
+)
+from trading_platform_api.orchestration.spot_request_handoff import (
+    SpotRequestAnalysisUnavailable,
+    run_spot_analysis_request_handoff,
 )
 from trading_platform_api.spot_research_store import (
     MAX_READ_CANDLES,
@@ -290,6 +294,7 @@ class SpotResearchResponse(BaseModel):
     candles: tuple[SpotCandleView, ...]
     indicators: dict[str, SpotIndicatorView]
     spot_analysis: dict[str, SpotAnalysisView]
+    analysis_fanout: dict[str, Any]
     order_flow: SpotOrderFlowView
 
 
@@ -962,7 +967,7 @@ def _calculate_indicators(
     return outputs
 
 
-def _response(
+async def _response(
     *,
     snapshot: MarketSnapshot,
     quality: DataQualityReport,
@@ -976,6 +981,7 @@ def _response(
     persisted: bool,
     freshness_cutoff: datetime,
     temporal_context: str,
+    analysis_correlation_id: UUID,
 ) -> dict[str, Any]:
     source_ids = {item.source_record_id for item in sources}
     symbol = _SYMBOLS.get(cast(Instrument, snapshot.instrument_id))
@@ -1035,6 +1041,69 @@ def _response(
             # C-003 v1 remains the public contract; C-005 fails closed if its
             # separate in-memory v2 assessment cannot be reconstructed.
             regime_quality = None
+    if quality.status is not DataQualityStatus.VALID:
+        analysis_fanout: dict[str, Any] = {
+            "status": "UNAVAILABLE",
+            "reason_code": "QUALITY_NOT_VALID",
+            "correlation_id": str(analysis_correlation_id),
+            "manifest": None,
+            "quality_report": None,
+            "evidence": (),
+            "outcomes": (),
+            "independence_report": None,
+        }
+    elif stale:
+        analysis_fanout = {
+            "status": "UNAVAILABLE",
+            "reason_code": "STALE_FOR_SERVING_CUTOFF",
+            "correlation_id": str(analysis_correlation_id),
+            "manifest": None,
+            "quality_report": None,
+            "evidence": (),
+            "outcomes": (),
+            "independence_report": None,
+        }
+    else:
+        handoff = await run_spot_analysis_request_handoff(
+            snapshot=snapshot,
+            quality_v1=quality,
+            observations=observations,
+            sources=sources,
+            policy=policy,
+            timeframe=timeframe,
+            now=freshness_cutoff,
+            correlation_id=analysis_correlation_id,
+        )
+        if isinstance(handoff, SpotRequestAnalysisUnavailable):
+            analysis_fanout = {
+                "status": "UNAVAILABLE",
+                "reason_code": handoff.reason_code,
+                "correlation_id": str(analysis_correlation_id),
+                "manifest": None,
+                "quality_report": None,
+                "evidence": (),
+                "outcomes": (),
+                "independence_report": None,
+            }
+        else:
+            manifest = handoff.manifest
+            assessment = handoff.assessment
+            analysis_fanout = {
+                "status": "PARTIAL" if assessment.fanout.is_partial else "AVAILABLE",
+                "reason_code": None,
+                "correlation_id": str(assessment.fanout.correlation_id),
+                "manifest": {
+                    "contract_id": manifest.contract_id,
+                    "schema_version": manifest.schema_version,
+                    "snapshot_id": str(manifest.snapshot_id),
+                    "content_sha256": manifest.content_sha256,
+                    "record": _json_value(manifest),
+                },
+                "quality_report": _json_value(handoff.quality_report),
+                "evidence": _json_value(handoff.evidence),
+                "outcomes": _json_value(assessment.fanout.outcomes),
+                "independence_report": _json_value(assessment.independence_report),
+            }
     return {
         "instrument_id": snapshot.instrument_id,
         "symbol": symbol,
@@ -1078,6 +1147,7 @@ def _response(
             timeframe=timeframe,
             stale=stale,
         ),
+        "analysis_fanout": analysis_fanout,
         "order_flow": {
             "status": "UNAVAILABLE",
             "reason_code": "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE",
@@ -1391,7 +1461,9 @@ class SpotResearchService:
                             (time.monotonic() - persistence_started) * 1000, 2
                         ),
                     )
-            response = _response(
+            response = await _response(
+                # Request correlation text is normalized into a UUID for C-093
+                # without changing the existing HTTP correlation contract.
                 snapshot=snapshot,
                 quality=quality,
                 observations=batch.market_data,
@@ -1406,6 +1478,9 @@ class SpotResearchService:
                 persisted=persisted,
                 freshness_cutoff=self.clock().astimezone(UTC),
                 temporal_context="CURRENT",
+                analysis_correlation_id=uuid5(
+                    UUID("8e306d9a-6c92-589c-b025-35a8cc7ce39f"), correlation_id
+                ),
             )
             response["request_started_at"] = _json_value(now)
             return response
@@ -1461,6 +1536,7 @@ class SpotResearchService:
         timeframe: str,
         as_of: datetime | None,
         limit: int,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
         if as_of is not None and (as_of.tzinfo is None or as_of.utcoffset() is None):
             raise SpotResearchError(
@@ -1512,7 +1588,7 @@ class SpotResearchService:
                 detail=str(exc),
             ) from exc
         self._verify_stored(stored, instrument_id, timeframe)
-        response = _response(
+        response = await _response(
             snapshot=stored.snapshot,
             quality=stored.quality,
             observations=stored.observations,
@@ -1530,6 +1606,10 @@ class SpotResearchService:
                 "HISTORICAL"
                 if as_of is not None and freshness_cutoff < now
                 else "CURRENT"
+            ),
+            analysis_correlation_id=uuid5(
+                UUID("8e306d9a-6c92-589c-b025-35a8cc7ce39f"),
+                correlation_id or str(uuid4()),
             ),
         )
         response["requested_as_of"] = _json_value(as_of) if as_of is not None else None
@@ -1688,6 +1768,7 @@ def create_research_router() -> APIRouter:
             timeframe=timeframe,
             as_of=as_of,
             limit=limit,
+            correlation_id=request.state.correlation_id,
         )
 
     return router
