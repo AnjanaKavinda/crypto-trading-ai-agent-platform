@@ -772,7 +772,7 @@ function renderChart(snapshot, preferences) {
   svg.append(description);
   const priceSpan = priceMax - priceMin;
   const priceUnit = candles.at(-1).values.close.unit;
-  const formatPrice = (value) => `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(value)} ${priceUnit}`;
+  const formatPrice = (value) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(value);
   const priceY = (value) => priceTop + priceHeight - ((value - priceMin) / priceSpan) * priceHeight;
   for (const { fraction, value } of priceAxisTicks(priceMin, priceMax, 4)) {
     const y = priceTop + fraction * priceHeight;
