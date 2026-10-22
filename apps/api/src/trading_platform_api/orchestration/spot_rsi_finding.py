@@ -83,8 +83,9 @@ def adapt_rsi14_finding(
 ) -> SpotMetaFinding | SpotAnalysisUnavailable:
     """Map exact, resolved RSI14 evidence to a PARTIAL descriptive finding.
 
-    The caller must supply C-008 items already included in the exact resolved
-    C-007 binding. The adapter never creates evidence or lineage identifiers.
+    The caller must supply C-008 source items already included in the exact
+    resolved C-007 binding. Their observation coverage must equal the RSI
+    calculator inputs. The adapter never creates evidence or lineage IDs.
     """
     if type(series) is not RSISeries:
         return _unavailable(SpotAnalysisTaskReason.INVALID_INPUT)
@@ -143,8 +144,13 @@ def adapt_rsi14_finding(
     resolved_evidence = {item.evidence_id: item for item in resolved_binding.evidence}
     selected: list[EvidenceItemV2] = []
     expected_observations = set(series.input_market_data_ids)
-    expected_sources = {item.source_record_id for item in resolved_binding.sources}
-    for evidence_id in evidence_ids:
+    sources_by_observation = {
+        item.market_data_id: item.source_record_id
+        for item in resolved_binding.observations
+    }
+    covered_observations: set[UUID] = set()
+    covered_sources: set[UUID] = set()
+    for evidence_id in sorted(evidence_ids, key=str):
         item = evidence_by_id.get(evidence_id)
         if item is None or resolved_evidence.get(evidence_id) != item:
             return _unavailable(SpotAnalysisTaskReason.INPUT_UNAVAILABLE)
@@ -158,22 +164,23 @@ def adapt_rsi14_finding(
         except AnalysisV2ContractError:
             return _unavailable(SpotAnalysisTaskReason.INPUT_UNAVAILABLE)
         if (
-            item.method != VersionReference("rsi", series.calculation_version)
-            or item.value != str(value.value)
-            or item.unit != series.unit
-            or not {"rsi", "rsi14"}.intersection(item.feature_ids)
-            or set(item.binding_ids) != {binding.binding_id}
-            or set(item.observation_ids) != expected_observations
-            or set(item.source_record_ids) != expected_sources
+            item.method != binding.regime_method
+            or binding.regime_profile not in item.provenance
+            or not item.observation_ids
+            or not set(item.observation_ids).issubset(expected_observations)
+            or set(item.source_record_ids)
+            != {sources_by_observation[item_id] for item_id in item.observation_ids}
             or item.quality_status is not DataQualityStatus.VALID
             or not item.usable
-            or VersionReference("indicator-metadata:rsi", series.metadata_version)
-            not in item.provenance
-            or VersionReference("rsi", series.calculation_version)
-            not in item.provenance
         ):
             return _unavailable(SpotAnalysisTaskReason.INPUT_UNAVAILABLE)
         selected.append(item)
+        covered_observations.update(item.observation_ids)
+        covered_sources.update(item.source_record_ids)
+    if covered_observations != expected_observations or covered_sources != set(
+        sources_by_observation.values()
+    ):
+        return _unavailable(SpotAnalysisTaskReason.INPUT_UNAVAILABLE)
 
     direction, relation = _direction_and_relation(
         value.value, resolved_binding.regime.direction
@@ -192,6 +199,7 @@ def adapt_rsi14_finding(
             "metadata_version": series.metadata_version,
             "calculation_version": series.calculation_version,
             "value": value.value,
+            "unit": series.unit,
         }
     )
     finding_id = uuid5(_IDENTITY_NAMESPACE, identity_material)
@@ -208,6 +216,12 @@ def adapt_rsi14_finding(
         evidence_ids=selected_ids,
         input_binding_ids=(binding.binding_id,),
         method=SPOT_RSI_FINDING_METHOD,
+        result_value=value.value,
+        result_unit=series.unit,
+        provenance=(
+            VersionReference("indicator-metadata:rsi", series.metadata_version),
+            VersionReference("rsi", series.calculation_version),
+        ),
     )
 
 

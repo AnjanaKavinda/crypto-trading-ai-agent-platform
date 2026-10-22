@@ -18,6 +18,8 @@ from trading_platform_api.analysis.indicator_registry import (
 from trading_platform_api.analysis.volatility import VolatilityError, _ohlc
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
+    DataSourceRecord,
     MarketData,
     MarketSnapshot,
 )
@@ -166,8 +168,9 @@ def _inputs(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     timeframe: str,
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> tuple[tuple[tuple[Decimal, Decimal, Decimal], ...], str]:
     try:
         candles, price_unit = _ohlc(
@@ -175,6 +178,8 @@ def _inputs(
             observations=observations,
             quality=quality,
             timeframe=timeframe,
+            allow_c003_v2=type(quality) is DataQualityReportV2,
+            sources=sources,
         )
     except VolatilityError as exc:
         raise MomentumError(str(exc)) from exc
@@ -210,7 +215,7 @@ def _series_fields(
     parameters: tuple[tuple[str, int], ...],
     timeframe: str,
     snapshot: MarketSnapshot,
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     price_unit: str,
 ) -> dict[str, Any]:
     return {
@@ -257,10 +262,11 @@ def calculate_rsi(
     *,
     snapshot: MarketSnapshot,
     observations: tuple[MarketData, ...],
-    quality: DataQualityReport,
+    quality: DataQualityReport | DataQualityReportV2,
     period: int = 14,
     timeframe: str = "1m",
     metadata_version: str = "1",
+    sources: tuple[DataSourceRecord, ...] | None = None,
 ) -> RSISeries:
     """Calculate Wilder RSI with an arithmetic-mean seed and explicit warm-up."""
     metadata = _metadata("rsi", metadata_version, timeframe, (period,))
@@ -269,6 +275,7 @@ def calculate_rsi(
         observations=observations,
         quality=quality,
         timeframe=timeframe,
+        sources=sources,
     )
     closes = tuple(candle[2] for candle in candles)
     values: list[Decimal | None] = [None] * len(closes)
