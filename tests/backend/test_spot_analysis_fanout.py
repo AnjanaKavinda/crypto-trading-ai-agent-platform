@@ -213,6 +213,101 @@ def test_fanout_timeout_is_explicit_and_does_not_retry() -> None:
     assert calls == 1
 
 
+def test_fanout_deadline_returns_while_cancellation_resistant_cleanup_is_pending() -> (
+    None
+):
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    operation_tasks: list[asyncio.Task[object]] = []
+
+    async def cancellation_resistant() -> SpotMetaFinding:
+        operation = asyncio.current_task()
+        assert operation is not None
+        operation_tasks.append(operation)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await cleanup_release.wait()
+            cleanup_finished.set()
+            raise RuntimeError("late analysis cleanup detail")
+
+    async def exercise() -> None:
+        loop = asyncio.get_running_loop()
+        # Ensure a broken implementation that waits for cleanup still completes
+        # the test and fails the deadline assertion instead of hanging forever.
+        loop.call_later(0.4, cleanup_release.set)
+        started = loop.time()
+        result = await run_spot_analysis_fanout(
+            (_task("spot-trend", cancellation_resistant),),
+            correlation_id=uuid4(),
+            timeout_seconds=0.02,
+        )
+        elapsed = loop.time() - started
+
+        assert result.outcomes[0].status is SpotAnalysisTaskStatus.TIMED_OUT
+        assert result.outcomes[0].reason_code is SpotAnalysisTaskReason.ANALYSIS_TIMEOUT
+        assert elapsed < 0.2
+        await asyncio.wait_for(cleanup_started.wait(), timeout=0.2)
+        assert not cleanup_finished.is_set()
+        assert operation_tasks[0] in fanout_module._DETACHED_ANALYSIS_TASKS
+
+        cleanup_release.set()
+        await asyncio.wait_for(cleanup_finished.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert operation_tasks[0] not in fanout_module._DETACHED_ANALYSIS_TASKS
+
+    asyncio.run(exercise())
+
+
+def test_fanout_caller_cancellation_propagates_without_waiting_for_task_cleanup() -> (
+    None
+):
+    operation_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    operation_tasks: list[asyncio.Task[object]] = []
+
+    async def cancellation_resistant() -> SpotMetaFinding:
+        operation_started.set()
+        operation = asyncio.current_task()
+        assert operation is not None
+        operation_tasks.append(operation)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await cleanup_release.wait()
+            cleanup_finished.set()
+            return _finding("spot-trend")
+
+    async def exercise() -> None:
+        fanout = asyncio.create_task(
+            run_spot_analysis_fanout(
+                (_task("spot-trend", cancellation_resistant),),
+                correlation_id=uuid4(),
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.wait_for(operation_started.wait(), timeout=0.2)
+
+        fanout.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(fanout, timeout=0.2)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=0.2)
+        assert not cleanup_finished.is_set()
+        assert operation_tasks[0] in fanout_module._DETACHED_ANALYSIS_TASKS
+
+        cleanup_release.set()
+        await asyncio.wait_for(cleanup_finished.wait(), timeout=0.2)
+        await asyncio.sleep(0)
+        assert operation_tasks[0] not in fanout_module._DETACHED_ANALYSIS_TASKS
+
+    asyncio.run(exercise())
+
+
 def test_fanout_rejects_duplicate_domains_and_unbounded_concurrency() -> None:
     async def operation() -> SpotMetaFinding:
         return _finding("spot-trend")
