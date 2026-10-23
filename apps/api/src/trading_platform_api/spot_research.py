@@ -125,6 +125,20 @@ _SYMBOLS: dict[Instrument, str] = {
 }
 _Result = TypeVar("_Result")
 _LOG = logging.getLogger(__name__)
+_DETACHED_TIMEOUT_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _retain_timeout_task(task: asyncio.Task[Any]) -> None:
+    """Keep timed-out cleanup alive and consume its eventual exception."""
+
+    _DETACHED_TIMEOUT_TASKS.add(task)
+
+    def discard(completed: asyncio.Task[Any]) -> None:
+        _DETACHED_TIMEOUT_TASKS.discard(completed)
+        if not completed.cancelled():
+            completed.exception()
+
+    task.add_done_callback(discard)
 
 
 async def _await_cancellable(
@@ -138,26 +152,29 @@ async def _await_cancellable(
     timeout_status: int,
 ) -> _Result:
     deadline = asyncio.get_running_loop().time() + timeout_seconds
-    try:
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise SpotResearchError(
-                    status=timeout_status,
-                    code=timeout_code,
-                    title=timeout_title,
-                    detail=timeout_detail,
-                )
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            if not task.done():
+                task.cancel()
+            _retain_timeout_task(task)
+            raise SpotResearchError(
+                status=timeout_status,
+                code=timeout_code,
+                title=timeout_title,
+                detail=timeout_detail,
+            )
+        try:
             done, _ = await asyncio.wait((task,), timeout=min(0.1, remaining))
             if done:
                 return task.result()
             if await is_disconnected():
                 raise asyncio.CancelledError
-    except BaseException:
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        raise
+        except BaseException:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
 
 def _log_refresh_lifecycle(

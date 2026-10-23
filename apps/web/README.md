@@ -81,6 +81,12 @@ Proxy completion includes HTTP status and request duration;
 timeframe and limit are `null` there because the proxy does not inspect request
 bodies.
 
+When a provider or persistence deadline expires, the API requests cancellation
+and returns the existing timeout response without waiting indefinitely for a
+cancellation-resistant child to finish cleanup. That cleanup may complete later,
+but its late result is consumed only for task hygiene and is never returned as a
+successful refresh or accepted as a current snapshot.
+
 These local diagnostics omit request and market-data payloads, candle/source
 data, credentials, proxy secrets, authorization headers, environment values,
 and raw exception text. Error codes are fixed safe codes. Browser refresh

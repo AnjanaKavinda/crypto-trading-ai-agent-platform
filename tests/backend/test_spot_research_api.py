@@ -73,7 +73,9 @@ from trading_platform_api.market_data.quality import (
     validate_spot_ohlcv_quality_v2,
 )
 from trading_platform_api.spot_research import (
+    _DETACHED_TIMEOUT_TASKS,
     QualityPolicyTemplate,
+    SpotResearchError,
     SpotResearchService,
     _indicator_envelope,
     _json_value,
@@ -1884,6 +1886,57 @@ def test_provider_deadline_returns_504_and_cancels_provider_task(
     assert provider_terminal[0]["error_code"] == "PROVIDER_REQUEST_TIMEOUT"
 
 
+def test_provider_deadline_does_not_wait_for_cancellation_resistant_cleanup() -> None:
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    tasks: list[asyncio.Task[ProviderBatch]] = []
+
+    class CancellationResistantProvider:
+        async def fetch(self, _: MarketDataRequest) -> ProviderBatch:
+            task = asyncio.current_task()
+            assert task is not None
+            tasks.append(task)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_started.set()
+                await cleanup_release.wait()
+                cleanup_finished.set()
+                raise RuntimeError("late cleanup failure")
+
+    async def exercise() -> None:
+        research = SpotResearchService(
+            provider_settings=SOURCE_SETTINGS,
+            quality_policy=policy_template(),
+            repository=FakeRepository(),
+            provider_factory=lambda _: CancellationResistantProvider(),
+            clock=lambda: NOW,
+            provider_deadline_seconds=0.01,
+        )
+
+        with pytest.raises(SpotResearchError) as captured:
+            await research.refresh(
+                instrument_id=INSTRUMENT,
+                body=research_body(),
+                correlation_id="test-correlation",
+                is_disconnected=lambda: asyncio.sleep(0, result=False),
+            )
+
+        assert captured.value.status == 504
+        assert captured.value.code == "PROVIDER_REQUEST_TIMEOUT"
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        assert not cleanup_finished.is_set()
+        assert tasks[0] in _DETACHED_TIMEOUT_TASKS
+
+        cleanup_release.set()
+        await asyncio.wait_for(cleanup_finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert tasks[0] not in _DETACHED_TIMEOUT_TASKS
+
+    asyncio.run(exercise())
+
+
 def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
     spot_research_caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1924,6 +1977,61 @@ def test_persistence_deadline_returns_503_cancels_work_and_fails_closed(
     assert len(persistence_terminal) == 1
     assert persistence_terminal[0]["status"] == "FAILED"
     assert persistence_terminal[0]["error_code"] == "RESEARCH_PERSISTENCE_TIMEOUT"
+
+
+def test_persistence_deadline_does_not_wait_for_cancellation_resistant_cleanup() -> (
+    None
+):
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    tasks: list[asyncio.Task[None]] = []
+
+    class CancellationResistantRepository(FakeRepository):
+        async def persist(self, **_: object) -> None:
+            self.persist_calls += 1
+            task = asyncio.current_task()
+            assert task is not None
+            tasks.append(task)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_started.set()
+                await cleanup_release.wait()
+                cleanup_finished.set()
+
+    async def exercise() -> None:
+        repository = CancellationResistantRepository()
+        research = SpotResearchService(
+            provider_settings=SOURCE_SETTINGS,
+            quality_policy=policy_template(),
+            repository=repository,
+            provider_factory=lambda _: FakeProvider(SOURCE_SETTINGS, []),
+            clock=lambda: NOW,
+            persistence_deadline_seconds=0.01,
+        )
+
+        with pytest.raises(SpotResearchError) as captured:
+            await research.refresh(
+                instrument_id=INSTRUMENT,
+                body=research_body(),
+                correlation_id="test-correlation",
+                is_disconnected=lambda: asyncio.sleep(0, result=False),
+            )
+
+        assert captured.value.status == 503
+        assert captured.value.code == "RESEARCH_PERSISTENCE_TIMEOUT"
+        assert repository.persist_calls == 1
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        assert not cleanup_finished.is_set()
+        assert tasks[0] in _DETACHED_TIMEOUT_TASKS
+
+        cleanup_release.set()
+        await asyncio.wait_for(cleanup_finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert tasks[0] not in _DETACHED_TIMEOUT_TASKS
+
+    asyncio.run(exercise())
 
 
 def test_refresh_response_and_lifecycle_logs_share_validated_correlation_id(
