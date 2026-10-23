@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 from trading_platform_api.analysis.spot_meta_analysis import (
@@ -31,6 +32,22 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
 
 class SpotAnalysisFanoutError(ValueError):
     """Raised when a fan-out request exceeds its trusted bounds."""
+
+
+_DETACHED_ANALYSIS_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _retain_detached_analysis_task(task: asyncio.Task[Any]) -> None:
+    """Retain cancellation-resistant cleanup and consume any late exception."""
+
+    _DETACHED_ANALYSIS_TASKS.add(task)
+
+    def discard(completed: asyncio.Task[Any]) -> None:
+        _DETACHED_ANALYSIS_TASKS.discard(completed)
+        if not completed.cancelled():
+            completed.exception()
+
+    task.add_done_callback(discard)
 
 
 class SpotAnalysisTaskStatus(StrEnum):
@@ -203,10 +220,27 @@ async def run_spot_analysis_fanout(
     semaphore = asyncio.Semaphore(max_concurrency)
 
     async def execute(task: SpotAnalysisTask) -> SpotAnalysisTaskOutcome:
+        async def run_operation() -> SpotMetaFinding | SpotAnalysisUnavailable:
+            # Keep the semaphore inside the child task. If timed-out cleanup
+            # resists cancellation, it continues to consume its concurrency slot.
+            async with semaphore:
+                return await task.run()
+
+        operation = asyncio.create_task(run_operation())
         try:
-            async with asyncio.timeout(timeout_seconds):
-                async with semaphore:
-                    result = await task.run()
+            done, _ = await asyncio.wait((operation,), timeout=timeout_seconds)
+            if not done:
+                operation.cancel()
+                _retain_detached_analysis_task(operation)
+                return SpotAnalysisTaskOutcome(
+                    correlation_id,
+                    task.task_id,
+                    task.domain,
+                    SpotAnalysisTaskStatus.TIMED_OUT,
+                    None,
+                    SpotAnalysisTaskReason.ANALYSIS_TIMEOUT,
+                )
+            result = operation.result()
             if type(result) is SpotAnalysisUnavailable:
                 return SpotAnalysisTaskOutcome(
                     correlation_id,
@@ -233,16 +267,15 @@ async def run_spot_analysis_fanout(
                 result,
                 None,
             )
-        except TimeoutError:
-            return SpotAnalysisTaskOutcome(
-                correlation_id,
-                task.task_id,
-                task.domain,
-                SpotAnalysisTaskStatus.TIMED_OUT,
-                None,
-                SpotAnalysisTaskReason.ANALYSIS_TIMEOUT,
-            )
+        except asyncio.CancelledError:
+            if not operation.done():
+                operation.cancel()
+                _retain_detached_analysis_task(operation)
+            raise
         except Exception:
+            if not operation.done():
+                operation.cancel()
+                _retain_detached_analysis_task(operation)
             # Never expose arbitrary callback exception text to logs or callers.
             return SpotAnalysisTaskOutcome(
                 correlation_id,

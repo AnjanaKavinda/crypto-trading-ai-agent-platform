@@ -14,6 +14,14 @@ out, and never retries. Expected unavailable states use a bounded reason code
 such as `POLICY_REQUIRED` or `INSUFFICIENT_WARMUP`; malformed or mismatched
 findings fail as `INVALID_FINDING`. Callback exception text is not exposed.
 
+When a deadline expires, the runner requests cancellation and returns
+`TIMED_OUT` without waiting indefinitely for cancellation-resistant cleanup.
+The child task remains strongly referenced until it finishes, and any eventual
+exception is consumed without exposing its details. Its concurrency slot stays
+held during cleanup, so delayed cancellation cannot exceed the configured
+concurrency bound. Late results are discarded. Caller cancellation also
+propagates promptly after requesting child cancellation.
+
 ## Evidence and independence
 
 The fan-in preserves evidence IDs, input bindings, method, and finding identity
