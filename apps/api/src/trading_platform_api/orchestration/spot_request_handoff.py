@@ -8,6 +8,7 @@ from uuid import UUID, uuid5
 
 from trading_platform_api.analysis.contracts import (
     EvidenceItem,
+    MarketRegime,
     VersionReference,
 )
 from trading_platform_api.analysis.spot_market_regime import (
@@ -72,6 +73,7 @@ class SpotRequestAnalysisUnavailable:
 class SpotRequestAnalysisHandoff:
     manifest: AnalysisSnapshotV4
     quality_report: DataQualityReportV2
+    regime: MarketRegime
     evidence: tuple[EvidenceItemV2, ...]
     assessment: SpotAnalysisFanoutAssessment
 
@@ -128,6 +130,7 @@ def build_spot_analysis_manifest(
 ) -> tuple[
     AnalysisSnapshotV4,
     DataQualityReportV2,
+    MarketRegime,
     tuple[EvidenceItemV2, ...],
     tuple[ResolvedSpotOHLCVBindingV4, ...],
 ]:
@@ -293,7 +296,7 @@ def build_spot_analysis_manifest(
         regimes={regime_result.regime.regime_id: regime_result.regime},
         evidence={item.evidence_id: item for item in evidence},
     )
-    return manifest, quality_v2, evidence, resolved
+    return manifest, quality_v2, regime_result.regime, evidence, resolved
 
 
 async def run_spot_analysis_request_handoff(
@@ -309,14 +312,16 @@ async def run_spot_analysis_request_handoff(
 ) -> SpotRequestAnalysisHandoff | SpotRequestAnalysisUnavailable:
     """Resolve validated request inputs, then execute RSI and C-093 fan-in."""
     try:
-        manifest, quality_v2, evidence_items, resolved = build_spot_analysis_manifest(
-            snapshot=snapshot,
-            quality_v1=quality_v1,
-            observations=observations,
-            sources=sources,
-            policy=policy,
-            timeframe=timeframe,
-            now=now,
+        manifest, quality_v2, regime, evidence_items, resolved = (
+            build_spot_analysis_manifest(
+                snapshot=snapshot,
+                quality_v1=quality_v1,
+                observations=observations,
+                sources=sources,
+                policy=policy,
+                timeframe=timeframe,
+                now=now,
+            )
         )
     except SpotMarketRegimeError:
         return SpotRequestAnalysisUnavailable("REGIME_UNAVAILABLE")
@@ -351,7 +356,13 @@ async def run_spot_analysis_request_handoff(
         for outcome in assessment.fanout.outcomes
     ):
         return SpotRequestAnalysisUnavailable("ANALYSIS_TASK_FAILED")
-    return SpotRequestAnalysisHandoff(manifest, quality_v2, evidence_items, assessment)
+    return SpotRequestAnalysisHandoff(
+        manifest,
+        quality_v2,
+        regime,
+        evidence_items,
+        assessment,
+    )
 
 
 __all__ = [

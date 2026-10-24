@@ -17,7 +17,7 @@ decision scope as open.
 | OD-0005 | On-chain providers | Open | On-chain data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0006 | News/social providers and licensing | Open | Sentiment data and provenance; Chats 4, 5 | Human repository owner | — | — |
 | OD-0007 | Event-streaming technology | Open | Event contracts and platform architecture; Chats 2, 4 | Human repository owner | — | — |
-| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (relational foundation only); [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot tiers); [ADR-0006](../adr/ADR-0006-market-payload-archive-boundary.md) (accepted personal Spot payload boundary only); [Proposed ADR-0012](../adr/ADR-0012-proposed-personal-spot-analysis-lineage-retention.md) (analysis-record persistence proposal only; pending owner review) | — |
+| OD-0008 | Primary relational/time-series storage topology | Open | Persistence and auditability; Chats 2, 4, 10 | Human repository owner | [ADR-0003](../adr/ADR-0003-postgresql-sqlalchemy-alembic-foundation.md) (relational foundation only); [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot tiers); [ADR-0006](../adr/ADR-0006-market-payload-archive-boundary.md) (accepted personal Spot payload boundary only); [ADR-0012](../adr/ADR-0012-proposed-personal-spot-analysis-lineage-retention.md) (accepted personal Spot analysis-record persistence only; broader storage topology remains open) | — |
 | OD-0009 | Vector-memory technology and retention | Open | Learning and retention; Chats 10, 13 | Human repository owner | — | — |
 | OD-0010 | LLM provider/model routing policy | Resolved | AI governance and security; Chats 3, 10, 13 | Human repository owner | [ADR-0002](../adr/ADR-0002-vendor-neutral-llm-provider-model-routing.md) (Accepted) | 2026-09-06 |
 | OD-0011 | Backtesting engine implementation choice | Open | Quantitative validation; Chat 7 | Human repository owner | — | — |
@@ -26,7 +26,7 @@ decision scope as open.
 | OD-0014 | Secrets manager | Open | Secrets management and security; Chat 10 | Human repository owner | — | — |
 | OD-0015 | Notification providers including WhatsApp integration | Open | Human supervision and notifications; Chats 9, 11 | Human repository owner | — | — |
 | OD-0016 | Observability stack | Open | Auditability and observability; Chat 10 | Human repository owner | — | — |
-| OD-0017 | Production data-retention policy | Open | Data governance and auditability; Chats 4, 10, 13 | Human repository owner | [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot OHLCV policy only; production policy remains open); [Proposed ADR-0012](../adr/ADR-0012-proposed-personal-spot-analysis-lineage-retention.md) (personal Spot analysis-artifact retention proposal only; pending owner review) | — |
+| OD-0017 | Production data-retention policy | Open | Data governance and auditability; Chats 4, 10, 13 | Human repository owner | [ADR-0005](../adr/ADR-0005-personal-spot-market-history-retention.md) (bounded personal Spot OHLCV policy only; production policy remains open); [ADR-0012](../adr/ADR-0012-proposed-personal-spot-analysis-lineage-retention.md) (accepted personal Spot analysis-artifact retention only; broader data retention remains open) | — |
 | OD-0018 | Regional/legal operating constraints | Open | Product and deployment governance; Chats 1, 10 | Human repository owner | — | — |
 | OD-0019 | Multi-exchange portfolio aggregation | Open | Portfolio and exchange architecture; Chats 8, 9 | Human repository owner | — | — |
 | OD-0020 | Cross-exchange arbitrage scope | Open | Strategy and execution scope; Chats 6, 9 | Human repository owner | — | — |
@@ -93,6 +93,16 @@ compressed cold archive, and encrypted versioned off-device backups. This does
 not resolve production topology, time-series extensions, tenancy, or other
 data-kind storage.
 
+## OD-0008 / OD-0017 accepted analysis-lineage sub-decision
+
+On 2026-10-24 the human repository owner accepted
+[`ADR-0012`](../adr/ADR-0012-proposed-personal-spot-analysis-lineage-retention.md)
+for immutable C-003 v2, C-005 v1, C-007 v4, C-008 v2, and C-093 v1 analysis
+records in the existing local PostgreSQL lineage graph, with exact C-001/C-002/
+C-091 parent links. This is limited to single-user `PERSONAL_SPOT_RESEARCH`.
+It does not resolve broader storage topology, fixed analysis retention periods,
+production policy, or data domains beyond this Spot analysis closure.
+
 ## OD-0017 bounded accepted sub-decision
 
 On 2026-09-29 the human repository owner accepted
@@ -102,6 +112,13 @@ in immutable cold archive, and longer retention while an analysis, experiment
 or backtest references the inputs. Lineage references remain resolvable and
 must not be deleted by a cache TTL. Daily encrypted, versioned off-device
 backups are subject to the approved personal cost caps.
+
+On 2026-10-24 the human repository owner accepted
+[`ADR-0012`](../adr/ADR-0012-proposed-personal-spot-analysis-lineage-retention.md)
+for the exact request-scoped analysis closure in the one-user local
+`PERSONAL_SPOT_RESEARCH` profile. Its records remain while referenced by exact
+inputs or downstream retained records; this does not select a fixed duration,
+automatic purge, or retention rule for other data kinds.
 
 OD-0017 remains `Open` for production retention, other market-data kinds,
 customer data, audit/security records, and any changed operating or legal

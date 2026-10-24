@@ -1,14 +1,14 @@
-# ADR-0012: Proposed retention for personal Spot analysis lineage
+# ADR-0012: Retention for personal Spot analysis lineage
 
 ## Metadata
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-24 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
-| GitHub issue / PR | #74 / pending review PR |
+| Human approver | AnjanaKavinda (PR #412 merged 2026-10-24) |
+| GitHub issue / PR | #74 / #412 |
 | Open decision ID | OD-0008, OD-0017 (bounded personal Spot analysis-artifact scope only) |
 | Related ADRs | ADR-0003, ADR-0005, ADR-0006, ADR-0007 |
 | Supersedes / superseded by | — |
@@ -72,9 +72,8 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed:** Select Option B for the one-user, local `PERSONAL_SPOT_RESEARCH`
-profile only, subject to the retention rules below and human approval. Keep
-Option A as the behavior until this ADR is accepted.
+**Accepted:** Select Option B for the one-user, local
+`PERSONAL_SPOT_RESEARCH` profile only, subject to the retention rules below.
 
 1. Persist only the exact validated closure needed to reproduce the Spot
    analysis response: C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-093 v1, and
@@ -92,7 +91,7 @@ Option A as the behavior until this ADR is accepted.
 4. Retain each analysis record for at least as long as any exact input or
    downstream retained record refers to it. No cache TTL or automatic purge may
    remove a referenced record. Any broader fixed retention duration or deletion
-   workflow remains outside this proposal and requires a separate owner-approved
+   workflow remains outside this decision and requires a separate owner-approved
    decision.
 5. If a refresh's analysis closure cannot be persisted or verified, preserve
    the valid OHLCV refresh result but return an explicit analysis-persistence
@@ -112,7 +111,7 @@ customer-facing, cloud, or production storage policy.
 Option B is the smallest path that makes the exact refresh analysis replayable
 while preserving the approved local-first PostgreSQL foundation and existing
 immutable lineage model. Tying retention to exact dependency references avoids
-inventing a cache TTL for evidence. The proposal deliberately does not extend
+inventing a cache TTL for evidence. This decision does not extend
 ADR-0005's five-year OHLCV archive duration to analysis artifacts and does not
 choose an unapproved cold archive. Existing data-quality and freshness gates
 continue to control whether analysis may be served as current.
@@ -124,21 +123,18 @@ lineage.
 
 ## Consequences
 
-If accepted:
+Implementation authority is limited to this accepted personal Spot scope:
 
-- A separate implementation PR may add strict closed codec support, exact
+- The implementation PR adds strict closed codec support, exact
   parent/reference validation, append-only persistence, transactional
   refresh-path integration, and read-only resolution for existing snapshots.
 - Tests must cover exact round-trip and digest verification, missing/mismatched
   references, duplicate/idempotent append behavior, write failure, stale
   readback, legacy snapshots without a bundle, and that GET does not write.
-- No implementation may begin until this proposal is accepted by the human
-  repository owner. Production retention and data-domain expansion remain
-  unresolved.
+- Production retention and data-domain expansion remain unresolved.
 
-If rejected, keep request-scoped ephemeral analysis and do not implement the
-proposed persistence path. Issue #74 remains open for any separately approved
-non-persistent scope.
+Production retention and data-domain expansion remain unresolved. Issue #74
+remains open until its implementation acceptance criteria are satisfied.
 
 ## Contract and traceability impact
 
@@ -146,7 +142,7 @@ non-persistent scope.
 |---|---|
 | Playbook requirements | Chat 3: exact agent provenance and uncertainty; Chat 4: source and retention lifecycle; Chat 5: point-in-time analysis; Chat 10: audit and recovery. |
 | Cross-cutting artifacts | Evidence Graph; Version Registry; Audit/Traceability Matrix; Test Traceability Matrix; OD-0008 and OD-0017. |
-| Contracts / events | C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-093 v1 and existing C-001/C-002/C-091 parents; no semantic/version change proposed. |
+| Contracts / events | C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-093 v1 and existing C-001/C-002/C-091 parents; no semantic or version changes. |
 | Requirements traceability | Issue #74, bounded `PERSONAL_SPOT_RESEARCH` request-path analysis; PR #408 explicitly deferred durable lineage. |
 | Versioning / migration | Prefer existing append-only lineage tables; add only closed, version-pinned codecs/reference validation. Any required schema migration must be additive, reviewed, and preserve existing records. |
 
@@ -166,5 +162,5 @@ non-persistent scope.
 
 ## Approval record
 
-Pending human repository owner review. This proposal is not implementation
-authority until accepted.
+Accepted by the human repository owner through merge of PR #412 on 2026-10-24.
+This ADR authorizes only the personal local Spot analysis-lineage scope above.

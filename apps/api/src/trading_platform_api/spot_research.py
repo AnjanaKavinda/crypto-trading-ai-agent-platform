@@ -80,6 +80,7 @@ from trading_platform_api.market_data.quality import (
     assess_data_quality,
 )
 from trading_platform_api.orchestration.spot_request_handoff import (
+    SpotRequestAnalysisHandoff,
     SpotRequestAnalysisUnavailable,
     run_spot_analysis_request_handoff,
 )
@@ -87,6 +88,7 @@ from trading_platform_api.spot_research_store import (
     MAX_READ_CANDLES,
     SpotResearchSnapshotNotFound,
     SpotResearchStoreError,
+    StoredSpotAnalysis,
     StoredSpotSnapshot,
     policy_digest,
     policy_document,
@@ -332,6 +334,13 @@ class SpotResearchRepository(Protocol):
         quality: DataQualityReport,
         policy: DataQualityPolicy,
         timeframe: str,
+    ) -> None: ...
+
+    async def persist_analysis(
+        self,
+        *,
+        snapshot_id: str,
+        handoff: SpotRequestAnalysisHandoff,
     ) -> None: ...
 
     async def read_latest(
@@ -999,6 +1008,9 @@ async def _response(
     freshness_cutoff: datetime,
     temporal_context: str,
     analysis_correlation_id: UUID,
+    analysis_handoff: SpotRequestAnalysisHandoff | None = None,
+    stored_analysis: StoredSpotAnalysis | None = None,
+    analysis_unavailable_reason: str | None = None,
 ) -> dict[str, Any]:
     source_ids = {item.source_record_id for item in sources}
     symbol = _SYMBOLS.get(cast(Instrument, snapshot.instrument_id))
@@ -1080,47 +1092,40 @@ async def _response(
             "outcomes": (),
             "independence_report": None,
         }
-    else:
-        handoff = await run_spot_analysis_request_handoff(
-            snapshot=snapshot,
-            quality_v1=quality,
-            observations=observations,
-            sources=sources,
-            policy=policy,
-            timeframe=timeframe,
-            now=freshness_cutoff,
-            correlation_id=analysis_correlation_id,
+    elif analysis_handoff is not None:
+        analysis_fanout = _analysis_fanout_projection(
+            manifest=analysis_handoff.manifest,
+            quality_report=analysis_handoff.quality_report,
+            evidence=analysis_handoff.evidence,
+            outcomes=_json_value(analysis_handoff.assessment.fanout.outcomes),
+            independence_report=analysis_handoff.assessment.independence_report,
+            correlation_id=str(analysis_handoff.assessment.fanout.correlation_id),
+            partial=analysis_handoff.assessment.fanout.is_partial,
         )
-        if isinstance(handoff, SpotRequestAnalysisUnavailable):
-            analysis_fanout = {
-                "status": "UNAVAILABLE",
-                "reason_code": handoff.reason_code,
-                "correlation_id": str(analysis_correlation_id),
-                "manifest": None,
-                "quality_report": None,
-                "evidence": (),
-                "outcomes": (),
-                "independence_report": None,
-            }
-        else:
-            manifest = handoff.manifest
-            assessment = handoff.assessment
-            analysis_fanout = {
-                "status": "PARTIAL" if assessment.fanout.is_partial else "AVAILABLE",
-                "reason_code": None,
-                "correlation_id": str(assessment.fanout.correlation_id),
-                "manifest": {
-                    "contract_id": manifest.contract_id,
-                    "schema_version": manifest.schema_version,
-                    "snapshot_id": str(manifest.snapshot_id),
-                    "content_sha256": manifest.content_sha256,
-                    "record": _json_value(manifest),
-                },
-                "quality_report": _json_value(handoff.quality_report),
-                "evidence": _json_value(handoff.evidence),
-                "outcomes": _json_value(assessment.fanout.outcomes),
-                "independence_report": _json_value(assessment.independence_report),
-            }
+    elif stored_analysis is not None:
+        analysis_fanout = _analysis_fanout_projection(
+            manifest=stored_analysis.manifest,
+            quality_report=stored_analysis.quality_report,
+            evidence=stored_analysis.evidence,
+            outcomes=stored_analysis.outcomes,
+            independence_report=stored_analysis.independence_report,
+            correlation_id=stored_analysis.correlation_id,
+            partial=any(
+                item.get("status") != "COMPLETE" for item in stored_analysis.outcomes
+            ),
+        )
+    else:
+        analysis_fanout = {
+            "status": "UNAVAILABLE",
+            "reason_code": analysis_unavailable_reason
+            or "ANALYSIS_LINEAGE_NOT_PERSISTED",
+            "correlation_id": str(analysis_correlation_id),
+            "manifest": None,
+            "quality_report": None,
+            "evidence": (),
+            "outcomes": (),
+            "independence_report": None,
+        }
     return {
         "instrument_id": snapshot.instrument_id,
         "symbol": symbol,
@@ -1170,6 +1175,34 @@ async def _response(
             "reason_code": "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE",
             "result": None,
         },
+    }
+
+
+def _analysis_fanout_projection(
+    *,
+    manifest: Any,
+    quality_report: Any,
+    evidence: Any,
+    outcomes: Any,
+    independence_report: Any,
+    correlation_id: str,
+    partial: bool,
+) -> dict[str, Any]:
+    return {
+        "status": "PARTIAL" if partial else "AVAILABLE",
+        "reason_code": None,
+        "correlation_id": correlation_id,
+        "manifest": {
+            "contract_id": manifest.contract_id,
+            "schema_version": manifest.schema_version,
+            "snapshot_id": str(manifest.snapshot_id),
+            "content_sha256": manifest.content_sha256,
+            "record": _json_value(manifest),
+        },
+        "quality_report": _json_value(quality_report),
+        "evidence": _json_value(evidence),
+        "outcomes": _json_value(outcomes),
+        "independence_report": _json_value(independence_report),
     }
 
 
@@ -1478,6 +1511,46 @@ class SpotResearchService:
                             (time.monotonic() - persistence_started) * 1000, 2
                         ),
                     )
+            analysis_correlation_id = uuid5(
+                UUID("8e306d9a-6c92-589c-b025-35a8cc7ce39f"), correlation_id
+            )
+            analysis_handoff: SpotRequestAnalysisHandoff | None = None
+            analysis_unavailable_reason: str | None = None
+            if persisted:
+                handoff = await run_spot_analysis_request_handoff(
+                    snapshot=snapshot,
+                    quality_v1=quality,
+                    observations=batch.market_data,
+                    sources=batch.source_records,
+                    policy=policy,
+                    timeframe=body.timeframe,
+                    now=self.clock().astimezone(UTC),
+                    correlation_id=analysis_correlation_id,
+                )
+                if isinstance(handoff, SpotRequestAnalysisUnavailable):
+                    analysis_unavailable_reason = handoff.reason_code
+                else:
+                    try:
+                        await _await_cancellable(
+                            asyncio.create_task(
+                                self.repository.persist_analysis(
+                                    snapshot_id=str(snapshot.snapshot_id),
+                                    handoff=handoff,
+                                )
+                            ),
+                            is_disconnected=is_disconnected,
+                            timeout_seconds=self.persistence_deadline_seconds,
+                            timeout_status=503,
+                            timeout_code="ANALYSIS_PERSISTENCE_TIMEOUT",
+                            timeout_title="Analysis persistence timed out",
+                            timeout_detail="The exact analysis lineage missed its persistence deadline.",
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        analysis_unavailable_reason = "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                    else:
+                        analysis_handoff = handoff
             response = await _response(
                 # Request correlation text is normalized into a UUID for C-093
                 # without changing the existing HTTP correlation contract.
@@ -1495,9 +1568,9 @@ class SpotResearchService:
                 persisted=persisted,
                 freshness_cutoff=self.clock().astimezone(UTC),
                 temporal_context="CURRENT",
-                analysis_correlation_id=uuid5(
-                    UUID("8e306d9a-6c92-589c-b025-35a8cc7ce39f"), correlation_id
-                ),
+                analysis_correlation_id=analysis_correlation_id,
+                analysis_handoff=analysis_handoff,
+                analysis_unavailable_reason=analysis_unavailable_reason,
             )
             response["request_started_at"] = _json_value(now)
             return response
@@ -1627,6 +1700,13 @@ class SpotResearchService:
             analysis_correlation_id=uuid5(
                 UUID("8e306d9a-6c92-589c-b025-35a8cc7ce39f"),
                 correlation_id or str(uuid4()),
+            ),
+            stored_analysis=stored.analysis,
+            analysis_unavailable_reason=(
+                None
+                if stored.analysis is not None
+                else stored.analysis_unavailable_reason
+                or "ANALYSIS_LINEAGE_NOT_PERSISTED"
             ),
         )
         response["requested_as_of"] = _json_value(as_of) if as_of is not None else None

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any, cast
+from uuid import UUID
 
 from sqlalchemy import (
     CheckConstraint,
@@ -17,13 +18,19 @@ from sqlalchemy import (
     Integer,
     String,
     Table,
+    Text,
     select,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from trading_platform_api.analysis.contracts import MarketRegime
+from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
+from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
+from trading_platform_api.contracts.serialization import canonical_json_dumps
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
-from trading_platform_api.lineage.codec import LineageKey
+from trading_platform_api.lineage.codec import LineageError, LineageKey
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
@@ -31,6 +38,7 @@ from trading_platform_api.lineage.store import (
 from trading_platform_api.lineage.tables import metadata, records
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
+    DataQualityReportV2,
     DataQualityStatus,
     DataSourceRecord,
     MarketData,
@@ -38,6 +46,17 @@ from trading_platform_api.market_data.contracts import (
 )
 from trading_platform_api.market_data.providers import ProviderBatch, ProviderDataKind
 from trading_platform_api.market_data.quality import DataQualityPolicy, MetricBound
+from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SUPPORTED_SPOT_FINDING_DOMAINS,
+    SpotAnalysisFanoutAssessment,
+    SpotAnalysisFanoutResult,
+    SpotAnalysisTaskOutcome,
+    SpotAnalysisTaskReason,
+    SpotAnalysisTaskStatus,
+)
+from trading_platform_api.orchestration.spot_request_handoff import (
+    SpotRequestAnalysisHandoff,
+)
 from trading_platform_api.persistence.session import transactional_session
 
 MAX_READ_CANDLES = 501
@@ -124,6 +143,82 @@ spot_research_snapshots = Table(
     ),
 )
 
+spot_research_analysis = Table(
+    "spot_research_analysis",
+    metadata,
+    Column("snapshot_id", String(36), primary_key=True),
+    Column("quality_contract_id", String(5), nullable=False),
+    Column("quality_report_id", String(512), nullable=False),
+    Column("quality_version", String(512), nullable=False),
+    Column("regime_contract_id", String(5), nullable=False),
+    Column("regime_id", String(512), nullable=False),
+    Column("regime_version", String(512), nullable=False),
+    Column("manifest_contract_id", String(5), nullable=False),
+    Column("manifest_id", String(512), nullable=False),
+    Column("manifest_version", String(512), nullable=False),
+    Column("independence_contract_id", String(5), nullable=False),
+    Column("independence_report_id", String(512), nullable=False),
+    Column("independence_version", String(512), nullable=False),
+    Column("correlation_id", String(36), nullable=False),
+    Column("fanout_document", Text, nullable=False),
+    Column("fanout_sha256", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "quality_contract_id = 'C-003' AND quality_version = '2'",
+        name="ck_spot_analysis_quality_version",
+    ),
+    CheckConstraint(
+        "regime_contract_id = 'C-005' AND regime_version = '1'",
+        name="ck_spot_analysis_regime_version",
+    ),
+    CheckConstraint(
+        "manifest_contract_id = 'C-007' AND manifest_version = '4'",
+        name="ck_spot_analysis_manifest_version",
+    ),
+    CheckConstraint(
+        "independence_contract_id = 'C-093' AND independence_version = '1'",
+        name="ck_spot_analysis_independence_version",
+    ),
+    CheckConstraint(
+        "octet_length(fanout_document) <= 1000000",
+        name="ck_spot_analysis_fanout_size",
+    ),
+    CheckConstraint(
+        "fanout_sha256 ~ '^[0-9a-f]{64}$'",
+        name="ck_spot_analysis_fanout_digest",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id"],
+        ["spot_research_snapshots.snapshot_id"],
+        name="fk_spot_analysis_snapshot",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["quality_contract_id", "quality_report_id", "quality_version"],
+        [records.c.contract_id, records.c.record_id, records.c.version],
+        name="fk_spot_analysis_quality_lineage",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["regime_contract_id", "regime_id", "regime_version"],
+        [records.c.contract_id, records.c.record_id, records.c.version],
+        name="fk_spot_analysis_regime_lineage",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["manifest_contract_id", "manifest_id", "manifest_version"],
+        [records.c.contract_id, records.c.record_id, records.c.version],
+        name="fk_spot_analysis_manifest_lineage",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["independence_contract_id", "independence_report_id", "independence_version"],
+        [records.c.contract_id, records.c.record_id, records.c.version],
+        name="fk_spot_analysis_independence_lineage",
+        ondelete="RESTRICT",
+    ),
+)
+
 _TIMEFRAME_SECONDS = {
     "1m": 60,
     "5m": 300,
@@ -188,6 +283,19 @@ class StoredSpotSnapshot:
     policy_sha256: str
     timeframe: str
     adapter_version: str
+    analysis: StoredSpotAnalysis | None = None
+    analysis_unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredSpotAnalysis:
+    quality_report: DataQualityReportV2
+    regime: MarketRegime
+    manifest: AnalysisSnapshotV4
+    evidence: tuple[EvidenceItemV2, ...]
+    independence_report: AgentIndependenceReport
+    outcomes: tuple[dict[str, Any], ...]
+    correlation_id: str
 
 
 def policy_document(policy: DataQualityPolicy) -> dict[str, Any]:
@@ -361,6 +469,133 @@ class SqlAlchemySpotResearchStore:
                 )
             )
 
+    async def persist_analysis(
+        self,
+        *,
+        snapshot_id: str,
+        handoff: SpotRequestAnalysisHandoff,
+    ) -> None:
+        """Append the exact analysis closure for an already stored Spot snapshot."""
+        if (
+            type(snapshot_id) is not str
+            or not snapshot_id
+            or type(handoff) is not SpotRequestAnalysisHandoff
+            or type(handoff.manifest) is not AnalysisSnapshotV4
+            or type(handoff.quality_report) is not DataQualityReportV2
+            or type(handoff.regime) is not MarketRegime
+            or type(handoff.assessment) is not SpotAnalysisFanoutAssessment
+            or type(handoff.assessment.fanout) is not SpotAnalysisFanoutResult
+            or type(handoff.assessment.fanout.outcomes) is not tuple
+            or type(handoff.assessment.fanout.correlation_id) is not UUID
+            or type(handoff.assessment.independence_report)
+            is not AgentIndependenceReport
+            or not 1 <= len(handoff.assessment.fanout.outcomes) <= 13
+            or not all(
+                type(outcome) is SpotAnalysisTaskOutcome
+                and outcome.correlation_id == handoff.assessment.fanout.correlation_id
+                and outcome.domain in SUPPORTED_SPOT_FINDING_DOMAINS
+                for outcome in handoff.assessment.fanout.outcomes
+            )
+            or len({outcome.task_id for outcome in handoff.assessment.fanout.outcomes})
+            != len(handoff.assessment.fanout.outcomes)
+        ):
+            raise SpotResearchStoreError("Invalid bounded analysis lineage input.")
+        manifest = handoff.manifest
+        assessment = handoff.assessment
+        if (
+            str(manifest.bindings[0].market_snapshot.record_id) != snapshot_id
+            or str(handoff.quality_report.snapshot_id)
+            != manifest.bindings[0].market_snapshot.record_id
+            or assessment.independence_report.manifest_id != manifest.snapshot_id
+            or str(assessment.independence_report.snapshot_id)
+            != manifest.bindings[0].market_snapshot.record_id
+            or assessment.independence_report.quality_report_id
+            != handoff.quality_report.report_id
+        ):
+            raise SpotResearchStoreError(
+                "Analysis lineage does not match the persisted Spot snapshot."
+            )
+        regime_ref = manifest.bindings[0].regime
+        if regime_ref.contract_id != "C-005" or regime_ref.schema_version != "1":
+            raise SpotResearchStoreError("Unsupported C-005 lineage reference.")
+        regime_id = str(regime_ref.record_id)
+        try:
+            fanout_document = canonical_json_dumps(assessment.fanout.outcomes)
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise SpotResearchStoreError(
+                "Spot fan-out outcomes are not canonically serializable."
+            ) from exc
+        fanout_bytes = fanout_document.encode("utf-8")
+        if len(fanout_bytes) > 1_000_000:
+            raise SpotResearchStoreError(
+                "Spot fan-out outcomes exceed the storage bound."
+            )
+        fanout_sha256 = sha256(fanout_bytes).hexdigest()
+        report = assessment.independence_report
+        row_data = {
+            "snapshot_id": snapshot_id,
+            "quality_contract_id": "C-003",
+            "quality_report_id": str(handoff.quality_report.report_id),
+            "quality_version": "2",
+            "regime_contract_id": "C-005",
+            "regime_id": regime_id,
+            "regime_version": "1",
+            "manifest_contract_id": "C-007",
+            "manifest_id": str(manifest.snapshot_id),
+            "manifest_version": "4",
+            "independence_contract_id": "C-093",
+            "independence_report_id": str(report.report_id),
+            "independence_version": "1",
+            "correlation_id": str(assessment.fanout.correlation_id),
+            "fanout_document": fanout_document,
+            "fanout_sha256": fanout_sha256,
+            "created_at": datetime.now(UTC),
+        }
+        async with transactional_session(self._session_factory) as session:
+            if not isinstance(session, AsyncSession):
+                raise SpotResearchStoreError("A PostgreSQL async session is required.")
+            lineage = SqlAlchemyLineageStore(session, archive_store=self._archive_store)
+            try:
+                await lineage.append_personal_spot_analysis_record(
+                    handoff.quality_report
+                )
+                for evidence in handoff.evidence:
+                    await lineage.append_personal_spot_analysis_record(evidence)
+                await lineage.append_personal_spot_analysis_record(handoff.regime)
+                await lineage.append_personal_spot_analysis_record(manifest)
+                await lineage.append_personal_spot_analysis_record(report)
+            except LineageError as exc:
+                raise SpotResearchStoreError(
+                    "Spot analysis lineage failed exact reference validation."
+                ) from exc
+            statement = (
+                insert(spot_research_analysis)
+                .values(**row_data)
+                .on_conflict_do_nothing()
+                .returning(spot_research_analysis.c.snapshot_id)
+            )
+            inserted = (await session.execute(statement)).scalar_one_or_none()
+            if inserted is None:
+                existing = (
+                    (
+                        await session.execute(
+                            select(spot_research_analysis).where(
+                                spot_research_analysis.c.snapshot_id == snapshot_id
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if existing is None or any(
+                    existing[name] != value
+                    for name, value in row_data.items()
+                    if name != "created_at"
+                ):
+                    raise SpotResearchStoreError(
+                        "Snapshot already has a different immutable analysis closure."
+                    )
+
     async def read_latest(
         self,
         *,
@@ -467,6 +702,26 @@ class SqlAlchemySpotResearchStore:
                 )
             observations = cast(tuple[MarketData, ...], raw_observations)
             sources = cast(tuple[DataSourceRecord, ...], raw_sources)
+            analysis_row = (
+                (
+                    await session.execute(
+                        select(spot_research_analysis).where(
+                            spot_research_analysis.c.snapshot_id == row["snapshot_id"]
+                        )
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            analysis = None
+            analysis_unavailable_reason = None
+            if analysis_row is not None:
+                try:
+                    analysis = await self._read_analysis(
+                        lineage, analysis_row, snapshot_id=row["snapshot_id"]
+                    )
+                except SpotResearchStoreError:
+                    analysis_unavailable_reason = "ANALYSIS_LINEAGE_UNVERIFIABLE"
             return StoredSpotSnapshot(
                 snapshot=snapshot,
                 quality=quality,
@@ -476,4 +731,130 @@ class SqlAlchemySpotResearchStore:
                 policy_sha256=digest,
                 timeframe=timeframe,
                 adapter_version=row["adapter_version"],
+                analysis=analysis,
+                analysis_unavailable_reason=analysis_unavailable_reason,
             )
+
+    @staticmethod
+    async def _read_analysis(
+        lineage: SqlAlchemyLineageStore,
+        row: Any,
+        *,
+        snapshot_id: str,
+    ) -> StoredSpotAnalysis:
+        quality_key = LineageKey(
+            row["quality_contract_id"], row["quality_report_id"], row["quality_version"]
+        )
+        regime_key = LineageKey(
+            row["regime_contract_id"], row["regime_id"], row["regime_version"]
+        )
+        manifest_key = LineageKey(
+            row["manifest_contract_id"], row["manifest_id"], row["manifest_version"]
+        )
+        independence_key = LineageKey(
+            row["independence_contract_id"],
+            row["independence_report_id"],
+            row["independence_version"],
+        )
+        try:
+            resolved = await lineage.resolve(
+                (manifest_key, independence_key), maximum_records=2_000
+            )
+            quality = resolved[quality_key]
+            regime = resolved[regime_key]
+            manifest = resolved[manifest_key]
+            independence = resolved[independence_key]
+            if (
+                type(quality) is not DataQualityReportV2
+                or type(regime) is not MarketRegime
+                or type(manifest) is not AnalysisSnapshotV4
+                or type(independence) is not AgentIndependenceReport
+                or str(manifest.bindings[0].market_snapshot.record_id) != snapshot_id
+                or manifest.snapshot_id != UUID(row["manifest_id"])
+                or independence.report_id != UUID(row["independence_report_id"])
+                or independence.manifest_id != manifest.snapshot_id
+                or independence.regime_id != regime.regime_id
+                or independence.quality_report_id != quality.report_id
+                or quality.snapshot_id != UUID(snapshot_id)
+            ):
+                raise LineageError("Stored analysis closure identity mismatch.")
+            evidence = tuple(
+                resolved[
+                    LineageKey(
+                        "C-008", str(reference.record_id), reference.lineage_version
+                    )
+                ]
+                for reference in manifest.bindings[0].evidence
+            )
+            if not all(type(item) is EvidenceItemV2 for item in evidence):
+                raise LineageError("Stored C-008 evidence has an unsupported version.")
+            document = row["fanout_document"]
+            if (
+                type(document) is not str
+                or sha256(document.encode("utf-8")).hexdigest() != row["fanout_sha256"]
+            ):
+                raise LineageError("Stored fan-out outcome digest mismatch.")
+            outcomes = json.loads(document)
+            expected_fields = {
+                "correlation_id",
+                "task_id",
+                "domain",
+                "status",
+                "finding",
+                "reason_code",
+            }
+            if (
+                type(outcomes) is not list
+                or not 1 <= len(outcomes) <= 13
+                or any(
+                    type(item) is not dict or set(item) != expected_fields
+                    for item in outcomes
+                )
+                or any(
+                    item["correlation_id"] != row["correlation_id"] for item in outcomes
+                )
+                or len({item["task_id"] for item in outcomes}) != len(outcomes)
+                or any(
+                    type(item["task_id"]) is not str
+                    or type(item["domain"]) is not str
+                    or item["domain"] not in SUPPORTED_SPOT_FINDING_DOMAINS
+                    or type(item["status"]) is not str
+                    or item["status"]
+                    not in {status.value for status in SpotAnalysisTaskStatus}
+                    or (
+                        item["status"] == SpotAnalysisTaskStatus.COMPLETE.value
+                        and (
+                            item["reason_code"] is not None
+                            or type(item["finding"]) is not dict
+                            or item["finding"].get("domain") != item["domain"]
+                        )
+                    )
+                    or (
+                        item["status"] != SpotAnalysisTaskStatus.COMPLETE.value
+                        and (
+                            item["finding"] is not None
+                            or type(item["reason_code"]) is not str
+                            or item["reason_code"]
+                            not in {reason.value for reason in SpotAnalysisTaskReason}
+                        )
+                    )
+                    for item in outcomes
+                )
+            ):
+                raise LineageError("Stored fan-out outcomes are malformed.")
+            UUID(row["correlation_id"])
+            for item in outcomes:
+                UUID(item["task_id"])
+            return StoredSpotAnalysis(
+                quality_report=quality,
+                regime=regime,
+                manifest=manifest,
+                evidence=cast(tuple[EvidenceItemV2, ...], evidence),
+                independence_report=independence,
+                outcomes=tuple(outcomes),
+                correlation_id=row["correlation_id"],
+            )
+        except (KeyError, IndexError, ValueError, TypeError, LineageError) as exc:
+            raise SpotResearchStoreError(
+                "Persisted Spot analysis lineage failed exact verification."
+            ) from exc

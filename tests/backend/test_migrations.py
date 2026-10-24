@@ -53,6 +53,24 @@ def test_revision_graph_preserves_stable_empty_baseline_metadata() -> None:
     assert baseline_module.depends_on is None
 
 
+def test_spot_analysis_lineage_migration_is_head_and_not_destructively_reversible():
+    import pytest
+
+    script_directory = ScriptDirectory.from_config(_create_alembic_config())
+    revision = script_directory.get_revision("0008_spot_analysis_lineage")
+    assert revision is not None
+    assert revision.down_revision == "0007_strategy_registry"
+    migration_path = VERSIONS_DIR / "0008_spot_analysis_lineage.py"
+    spec = importlib.util.spec_from_file_location(
+        "spot_analysis_lineage_migration", migration_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(RuntimeError, match="Destructive downgrade is prohibited"):
+        module.downgrade()
+
+
 def test_baseline_upgrade_and_downgrade_are_reversible_no_ops() -> None:
     baseline_module = _load_baseline_module()
 
@@ -88,6 +106,10 @@ def test_offline_migration_sql_generation_succeeds_without_engine_creation(
 
     sql_output = output_buffer.getvalue().upper()
     assert "0001_PERSISTENCE_BASELINE" in sql_output
+    assert "0008_SPOT_ANALYSIS_LINEAGE" in sql_output
+    assert "CREATE TABLE SPOT_RESEARCH_ANALYSIS" in sql_output
+    assert "SPOT_RESEARCH_ANALYSIS_IMMUTABLE" in sql_output
+    assert "CK_LINEAGE_CONTRACT" in sql_output
     assert "BEGIN" in sql_output
     assert "COMMIT" in sql_output
 

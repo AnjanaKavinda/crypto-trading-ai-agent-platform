@@ -175,7 +175,7 @@ def test_postgresql_c003_versions_keep_separate_keys_and_v2_is_read_only(
                 store = SqlAlchemyLineageStore(session)
                 for record in (*sources, *observations, snapshot, legacy):
                     await store.append(record)
-                with pytest.raises(LineageError, match="writes are disabled"):
+                with pytest.raises(LineageError, match="bounded Spot persistence path"):
                     await store.append(current)
 
                 document = encode(current)

@@ -9,6 +9,10 @@ from enum import Enum
 from typing import Any, get_args, get_origin, get_type_hints
 from uuid import UUID
 
+from trading_platform_api.analysis.contracts import MarketRegime
+from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
+from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
 from trading_platform_api.contracts.serialization import (
     MAX_DOCUMENT_BYTES,
     canonical_sha256,
@@ -37,6 +41,10 @@ MODELS = {
     "C-101": HistoricalUniverse,
     "C-102": ObservationRevision,
     "C-103": ReconstructionManifest,
+    "C-005": MarketRegime,
+    "C-007": AnalysisSnapshotV4,
+    "C-008": EvidenceItemV2,
+    "C-093": AgentIndependenceReport,
 }
 
 
@@ -72,6 +80,14 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-003", str(record.report_id))
     if type(record) is DataQualityReportV2:
         return LineageKey("C-003", str(record.report_id), record.schema_version)
+    if type(record) is MarketRegime:
+        return LineageKey("C-005", str(record.regime_id), record.schema_version)
+    if type(record) is AnalysisSnapshotV4:
+        return LineageKey("C-007", str(record.snapshot_id), record.schema_version)
+    if type(record) is EvidenceItemV2:
+        return LineageKey("C-008", str(record.evidence_id), record.schema_version)
+    if type(record) is AgentIndependenceReport:
+        return LineageKey("C-093", str(record.report_id), record.schema_version)
     if type(record) is DataSourceRecord:
         return LineageKey("C-091", str(record.source_record_id))
     if type(record) is DatasetVersion:
@@ -163,6 +179,14 @@ def decode(document: str) -> object:
                 raise LineageError("Unsupported C-003 schema version.")
         else:
             model = MODELS[contract_id]
+            expected_version = {
+                "C-005": "1",
+                "C-007": "4",
+                "C-008": "2",
+                "C-093": "1",
+            }.get(contract_id)
+            if expected_version is not None and schema_version != expected_version:
+                raise LineageError("Unsupported analysis contract version.")
         payload = dict(envelope["payload"])
         payload.update(
             contract_id=contract_id,

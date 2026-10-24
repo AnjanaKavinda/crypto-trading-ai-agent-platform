@@ -374,7 +374,15 @@ def test_existing_validated_snapshot_writer_does_not_accept_v2() -> None:
     assert store.appended == []
 
 
-def test_generic_lineage_store_keeps_v2_writes_disabled() -> None:
+def test_generic_lineage_tracks_exact_v2_quality_dependencies() -> None:
+    quality = report()
+    refs = references(quality)
+    assert refs[0].key == LineageKey("C-002", str(quality.snapshot_id))
+    document = encode(quality)
+    assert encode(decode(document)) == document
+
+
+def test_generic_lineage_writer_keeps_analysis_contracts_scoped() -> None:
     store = object.__new__(SqlAlchemyLineageStore)
-    with pytest.raises(LineageError, match="writes are disabled"):
+    with pytest.raises(LineageError, match="bounded Spot persistence path"):
         asyncio.run(store.append(report()))
