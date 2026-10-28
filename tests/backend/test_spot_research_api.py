@@ -759,6 +759,9 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
     assert fanout["quality_report"]["contract_id"] == "C-003"
     assert fanout["quality_report"]["schema_version"] == "2"
     assert len(fanout["evidence"]) == 3
+    assert [item["evidence_id"] for item in fanout["evidence"]] == sorted(
+        item["evidence_id"] for item in fanout["evidence"]
+    )
     assert len(fanout["outcomes"]) == 1
     assert fanout["outcomes"][0]["domain"] == "spot-momentum"
     assert fanout["outcomes"][0]["status"] == "COMPLETE"
@@ -2484,6 +2487,10 @@ def test_lineage_append_and_dependency_resolution_budget_support_501_candles() -
 
     class RecordingLineageStore(SqlAlchemyLineageStore):
         async def append(self, record: object):
+            appended.append(record)
+            return key_for(record)
+
+        async def _append(self, record: object, *, use_savepoint: bool = True):
             appended.append(record)
             return key_for(record)
 

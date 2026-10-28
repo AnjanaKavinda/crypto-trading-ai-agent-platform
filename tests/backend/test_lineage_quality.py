@@ -30,6 +30,12 @@ class MemoryLineageStore(SqlAlchemyLineageStore):
         self.appended.append(record)
         return key_for(record)
 
+    async def _append(
+        self, record: object, *, use_savepoint: bool = True
+    ) -> LineageKey:
+        self.appended.append(record)
+        return key_for(record)
+
 
 def records_for_report(status: DataQualityStatus = DataQualityStatus.VALID):
     snapshot, observations, quality = evidence()

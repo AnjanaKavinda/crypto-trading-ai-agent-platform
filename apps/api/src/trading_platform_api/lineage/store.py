@@ -291,7 +291,17 @@ async def append_validated_market_snapshot(
             "Only an exact matching VALID quality snapshot can be persisted."
         )
     records_to_append = (*sources, *observations, snapshot, quality)
-    return tuple([await store.append(record) for record in records_to_append])
+    # This helper already owns one caller-managed transaction for an entirely
+    # validated batch. Avoid a savepoint per record: a 501-candle snapshot can
+    # contain more than one thousand lineage records, and the extra SAVEPOINT /
+    # RELEASE round trips can consume the bounded persistence deadline without
+    # adding isolation beyond the enclosing all-or-nothing transaction.
+    return tuple(
+        [
+            await store._append(record, use_savepoint=False)
+            for record in records_to_append
+        ]
+    )
 
 
 def _identity(key: LineageKey) -> dict[str, str]:
@@ -468,76 +478,89 @@ class SqlAlchemyLineageStore:
             raise LineageError("Record is outside the bounded Spot analysis closure.")
         return await self._append(record)
 
-    async def _append(self, record: object) -> LineageKey:
+    async def _append(
+        self, record: object, *, use_savepoint: bool = True
+    ) -> LineageKey:
         """Shared immutable insert implementation behind the bounded entry points."""
         key = key_for(record)
         document = encode(record)
         refs = await self._check_references(record)
-        async with self._session.begin_nested():
-            document_sha256 = sha256(document.encode("utf-8")).hexdigest()
-            evidence_sha256 = canonical_sha256(record)
-            is_market_payload = is_personal_spot_ohlcv(record)
-            statement = (
-                insert(records)
-                .values(
+        if use_savepoint:
+            async with self._session.begin_nested():
+                await self._insert(key, record, document, refs)
+        else:
+            await self._insert(key, record, document, refs)
+        return key
+
+    async def _insert(
+        self,
+        key: LineageKey,
+        record: object,
+        document: str,
+        refs: tuple[Reference, ...],
+    ) -> None:
+        """Insert one prevalidated record within the caller's transaction."""
+        document_sha256 = sha256(document.encode("utf-8")).hexdigest()
+        evidence_sha256 = canonical_sha256(record)
+        is_market_payload = is_personal_spot_ohlcv(record)
+        statement = (
+            insert(records)
+            .values(
+                **_identity(key),
+                document=None if is_market_payload else document,
+                document_sha256=document_sha256,
+                evidence_sha256=evidence_sha256,
+            )
+            .on_conflict_do_nothing()
+            .returning(records.c.record_id)
+        )
+        inserted = (await self._session.execute(statement)).scalar_one_or_none()
+        if inserted is None:
+            if encode(await self.get(key)) != document:
+                raise LineageError("Immutable identity already has different content.")
+            return
+        if is_market_payload:
+            await self._session.execute(
+                insert(market_payloads).values(
                     **_identity(key),
-                    document=None if is_market_payload else document,
+                    document=document,
                     document_sha256=document_sha256,
                     evidence_sha256=evidence_sha256,
                 )
-                .on_conflict_do_nothing()
-                .returning(records.c.record_id)
             )
-            inserted = (await self._session.execute(statement)).scalar_one_or_none()
-            if inserted is None:
-                if encode(await self.get(key)) != document:
-                    raise LineageError(
-                        "Immutable identity already has different content."
+            event_material = "|".join(
+                (
+                    key.contract_id,
+                    key.record_id,
+                    key.version,
+                    "HOT_WRITTEN",
+                    document_sha256,
+                )
+            )
+            await self._session.execute(
+                insert(payload_events).values(
+                    event_id=sha256(event_material.encode("utf-8")).hexdigest(),
+                    **_identity(key),
+                    event_type="HOT_WRITTEN",
+                    object_key=None,
+                    payload_sha256=document_sha256,
+                    occurred_at=datetime.now(UTC),
+                )
+            )
+        unique = {ref.key for ref in refs}
+        if unique:
+            await self._session.execute(
+                insert(links),
+                [
+                    dict(
+                        **_identity(key),
+                        target_contract_id=target.contract_id,
+                        target_record_id=target.record_id,
+                        target_version=target.version,
                     )
-            else:
-                if is_market_payload:
-                    await self._session.execute(
-                        insert(market_payloads).values(
-                            **_identity(key),
-                            document=document,
-                            document_sha256=document_sha256,
-                            evidence_sha256=evidence_sha256,
-                        )
-                    )
-                    event_material = "|".join(
-                        (
-                            key.contract_id,
-                            key.record_id,
-                            key.version,
-                            "HOT_WRITTEN",
-                            document_sha256,
-                        )
-                    )
-                    await self._session.execute(
-                        insert(payload_events).values(
-                            event_id=sha256(event_material.encode("utf-8")).hexdigest(),
-                            **_identity(key),
-                            event_type="HOT_WRITTEN",
-                            object_key=None,
-                            payload_sha256=document_sha256,
-                            occurred_at=datetime.now(UTC),
-                        )
-                    )
-                unique = {ref.key for ref in refs}
-                if unique:
-                    await self._session.execute(
-                        insert(links),
-                        [
-                            dict(
-                                **_identity(key),
-                                target_contract_id=target.contract_id,
-                                target_record_id=target.record_id,
-                                target_version=target.version,
-                            )
-                            for target in unique
-                        ],
-                    )
-        return key
+                    for target in unique
+                ],
+            )
 
     async def resolve(
         self, keys: tuple[LineageKey, ...], *, maximum_records: int = 2000

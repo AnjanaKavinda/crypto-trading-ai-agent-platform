@@ -1188,6 +1188,7 @@ def _analysis_fanout_projection(
     correlation_id: str,
     partial: bool,
 ) -> dict[str, Any]:
+    ordered_evidence = tuple(sorted(evidence, key=lambda item: str(item.evidence_id)))
     return {
         "status": "PARTIAL" if partial else "AVAILABLE",
         "reason_code": None,
@@ -1200,7 +1201,9 @@ def _analysis_fanout_projection(
             "record": _json_value(manifest),
         },
         "quality_report": _json_value(quality_report),
-        "evidence": _json_value(evidence),
+        # C-007 stores evidence references in identity order. Project both the
+        # refresh handoff and durable readback in that same canonical order.
+        "evidence": _json_value(ordered_evidence),
         "outcomes": _json_value(outcomes),
         "independence_report": _json_value(independence_report),
     }
