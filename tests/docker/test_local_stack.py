@@ -12,6 +12,7 @@ import re
 import secrets
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -556,14 +557,17 @@ class DisposableComposeProject:
 
 
 class LocalStackHarnessUnitTests(unittest.TestCase):
-    def test_docker_subprocess_output_uses_loss_tolerant_utf8(self) -> None:
-        completed = subprocess.CompletedProcess([], 0, "safe output", "")
-        with mock.patch(f"{__name__}.subprocess.run", return_value=completed) as run:
-            result = _run(["docker", "version"], operation="probe Docker")
+    def test_subprocess_output_replaces_invalid_utf8(self) -> None:
+        result = _run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(bytes([0x81]))",
+            ],
+            operation="verify subprocess output decoding",
+        )
 
-        self.assertEqual(result.stdout, "safe output")
-        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
-        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+        self.assertEqual(result.stdout, "\ufffd")
 
     def test_compose_project_name_is_unique_and_valid(self) -> None:
         project = _project_name()
