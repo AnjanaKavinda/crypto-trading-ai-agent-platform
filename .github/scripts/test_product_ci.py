@@ -2,7 +2,6 @@ import re
 import unittest
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "product-ci.yml"
 
@@ -47,9 +46,8 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("${{ secrets.", self.workflow)
 
     def test_docker_ci_is_disposable_and_offline(self) -> None:
-        harness = (REPOSITORY_ROOT / "tests" / "docker" / "test_local_stack.py").read_text(
-            encoding="utf-8"
-        )
+        harness_path = REPOSITORY_ROOT / "tests" / "docker" / "test_local_stack.py"
+        harness = harness_path.read_text(encoding="utf-8")
         self.assertIn("python tests/docker/test_local_stack.py", self.workflow)
         self.assertIn("_parse_env_example()", harness)
         self.assertIn('"--project-name"', harness)
