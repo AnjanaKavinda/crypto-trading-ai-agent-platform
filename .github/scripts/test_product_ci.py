@@ -37,8 +37,6 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
             "python -m mypy apps/api/src/trading_platform_api",
             "python -m pytest -q tests/backend",
             "python .github/scripts/test_product_ci.py",
-            "docker compose config --quiet",
-            "docker compose up --build --wait --wait-timeout 180",
             "python tests/docker/test_local_stack.py",
             "detect-secrets-hook --baseline .secrets.baseline",
         )
@@ -49,11 +47,29 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("${{ secrets.", self.workflow)
 
     def test_docker_ci_is_disposable_and_offline(self) -> None:
-        self.assertIn('Path(".env.example").read_text()', self.workflow)
-        self.assertIn("secrets.token_hex(32)", self.workflow)
-        self.assertIn("if: always()", self.workflow)
-        self.assertIn("docker compose down -v", self.workflow)
-        self.assertIn("rm -f .env", self.workflow)
+        harness = (REPOSITORY_ROOT / "tests" / "docker" / "test_local_stack.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("python tests/docker/test_local_stack.py", self.workflow)
+        self.assertIn("_parse_env_example()", harness)
+        self.assertIn('"--project-name"', harness)
+        self.assertIn('"--env-file"', harness)
+        self.assertIn('"127.0.0.1"', harness)
+        self.assertIn("_require_local_docker_endpoint", harness)
+        self.assertIn("_assert_project_empty", harness)
+        self.assertIn("_assert_owned_project", harness)
+        self.assertIn("_project_resources(self.project)", harness)
+        self.assertIn("TRADING_PLATFORM_BINANCE_SPOT_ENABLED", harness)
+        self.assertIn("COLLECTION_NOT_ENABLED", harness)
+        self.assertIn('"--volumes"', harness)
+        self.assertIn("RETAINED_PROJECT", harness)
+        self.assertIn("RETAINED_VOLUME", harness)
+        self.assertIn("_retained_inventory()", harness)
+        self.assertNotIn('Path(".env")', harness)
+        self.assertNotIn('Path(".env")', self.workflow)
+        self.assertNotIn("docker compose down -v", self.workflow)
+        self.assertNotIn("rm -f .env", self.workflow)
+        self.assertNotIn("docker system prune", harness)
 
 
 if __name__ == "__main__":
