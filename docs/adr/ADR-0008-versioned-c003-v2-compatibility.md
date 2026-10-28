@@ -125,15 +125,18 @@ and confirm it permits that state before emitting a report.
 
 No market-data provider, network, trading, signal, risk, approval, or execution
 behavior changes. Missing required evidence remains unavailable and fails
-closed. Unknown policy or schema versions reject. V2 writing remains disabled,
-live trading remains disabled, and `NO_TRADE` remains available.
+closed. Unknown policy or schema versions reject. General v2 writing remains
+disabled outside the later narrow personal Spot lineage exception recorded
+below. Live trading remains disabled, and `NO_TRADE` remains available.
 
 ## Approval record
 
 Accepted by `AnjanaKavinda`, human repository owner, on 2026-10-07 for the
 versioned C-003 v2 compatibility boundary and rollout sequence described here.
-V2 production, consumer migration, policy registry/producer implementation, and
-enabling v2 writes are not approved by this ADR.
+General v2 production, consumer migration, policy registry/producer
+implementation, and enabling general v2 writes are not approved by this ADR.
+The later ADR-0012 exception is limited to its exact personal Spot lineage
+closure.
 
 ## Subsequent owner-approved in-memory Spot OHLCV path
 
@@ -146,3 +149,15 @@ storage and historical bytes remain unchanged. The policy ID and thresholds
 remain those of `personal-binance-spot-ohlcv-v1`; the resolved v2 policy scope
 adds instrument, timeframe, window and cutoff. See issue #375 and the C-003
 domain/version registry entries for the implementation contract.
+
+## Subsequent owner-approved personal Spot lineage exception
+
+On 2026-10-24, the owner approved ADR-0012 by merging PR #412 for Issue #74.
+That later decision permits the exact C-003 v2 report to be appended only as
+part of the bounded personal local Spot analysis closure, after the existing
+Spot consumer has validated it. The associated C-005/C-007/C-008/C-093
+records and exact parent lineage are pinned and resolved as specified by
+ADR-0012. This does not enable general C-003 v2 writes, other producers,
+profiles, API projections, or change any C-003 schema/version semantics. The
+earlier broad write prohibition remains in force outside this approved narrow
+consumer path.

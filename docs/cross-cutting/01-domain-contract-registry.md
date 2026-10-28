@@ -146,10 +146,10 @@ evidence basis. Both use `wire-1`; the C-003 schema version selects the model.
 Schema `2` has lineage identity version `2`, while historical schema `1`
 records retain identity version `1` and their original digests.
 
-Schema `2` is decode/read compatibility only. No producer or analysis consumer
-is migrated here, and lineage writes remain disabled until receiving consumers
-are ready. A producer must resolve and validate the exact assessment-policy
-definition before producing a v2 report; unknown policy versions fail closed.
+Schema `2` was initially decode/read compatibility only. No general producer
+or analysis consumer is enabled by that compatibility boundary. A producer
+must resolve and validate the exact assessment-policy definition before
+producing a v2 report; unknown policy versions fail closed.
 
 Issue #375 adds the approved single-source Spot OHLCV C-003 schema-2 assessment
 as an in-memory report for the C-005 Spot regime path. It reuses the existing
@@ -157,9 +157,12 @@ as an in-memory report for the C-005 Spot regime path. It reuses the existing
 calculation, resolves timeframe/window/cutoff through the C-003 v2 policy
 registry, and binds every measured dimension to the canonical C-002 snapshot
 digest. C-003 schema-1 storage and response projection remain unchanged; v2
-lineage writes and persistence remain disabled. The C-005 regime evidence
-identifies the actual C-003 schema-2 report and policy. The policy does not
-assert independent-source comparison or provider truth.
+general lineage writes and persistence remain disabled. The C-005 regime
+evidence identifies the actual C-003 schema-2 report and policy. The policy
+does not assert independent-source comparison or provider truth. The later
+owner-approved ADR-0012 exception permits only the exact C-003 v2 closure for
+the personal local Spot analysis lineage path; see its issue-specific entry in
+the version registry. This does not enable other C-003 v2 producers or writers.
 
 ## Issue #341 — versioned order-flow analysis contracts
 

@@ -88,10 +88,12 @@ from trading_platform_api.spot_research_store import (
     SpotResearchSnapshotNotFound,
     SpotResearchStoreError,
     SqlAlchemySpotResearchStore,
+    StoredSpotAnalysis,
     StoredSpotSnapshot,
     decode_policy,
     policy_digest,
     policy_document,
+    spot_research_analysis,
     spot_research_snapshots,
     validate_approved_quality_policy,
 )
@@ -216,6 +218,7 @@ class FakeRepository:
         self.stored: StoredSpotSnapshot | None = None
         self.persist_calls = 0
         self.read_calls = 0
+        self.analysis_persist_calls = 0
 
     async def persist(
         self,
@@ -235,6 +238,23 @@ class FakeRepository:
             policy_sha256=policy_digest(policy_document(policy)),
             timeframe=timeframe,
             adapter_version="binance-spot-adapter-v1",
+        )
+
+    async def persist_analysis(self, *, snapshot_id: str, handoff) -> None:
+        self.analysis_persist_calls += 1
+        assert self.stored is not None
+        assert str(self.stored.snapshot.snapshot_id) == snapshot_id
+        self.stored = replace(
+            self.stored,
+            analysis=StoredSpotAnalysis(
+                quality_report=handoff.quality_report,
+                regime=handoff.regime,
+                manifest=handoff.manifest,
+                evidence=handoff.evidence,
+                independence_report=handoff.assessment.independence_report,
+                outcomes=tuple(_json_value(handoff.assessment.fanout.outcomes)),
+                correlation_id=str(handoff.assessment.fanout.correlation_id),
+            ),
         )
 
     async def read_latest(
@@ -739,6 +759,9 @@ def test_spot_market_regime_is_bound_and_exposes_only_profile_dimensions() -> No
     assert fanout["quality_report"]["contract_id"] == "C-003"
     assert fanout["quality_report"]["schema_version"] == "2"
     assert len(fanout["evidence"]) == 3
+    assert [item["evidence_id"] for item in fanout["evidence"]] == sorted(
+        item["evidence_id"] for item in fanout["evidence"]
+    )
     assert len(fanout["outcomes"]) == 1
     assert fanout["outcomes"][0]["domain"] == "spot-momentum"
     assert fanout["outcomes"][0]["status"] == "COMPLETE"
@@ -1308,6 +1331,41 @@ def test_persistence_failure_does_not_return_a_successful_current_snapshot() -> 
     assert repository.persist_calls == 0
 
 
+def test_analysis_persistence_failure_keeps_valid_candles_and_fails_analysis_closed():
+    class FailedAnalysisRepository(FakeRepository):
+        async def persist_analysis(self, **_: object) -> None:
+            raise RuntimeError("private database diagnostic")
+
+    research, calls, repository = service(
+        repository=FailedAnalysisRepository(),
+        quality_policy=policy_template(),
+    )
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
+        )
+        readback = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": "1m", "limit": 50},
+        )
+
+    assert refreshed.status_code == 200
+    assert refreshed.json()["persisted"] is True
+    assert refreshed.json()["data_quality"]["status"] == "VALID"
+    assert refreshed.json()["analysis_fanout"]["status"] == "UNAVAILABLE"
+    assert refreshed.json()["analysis_fanout"]["reason_code"] == (
+        "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+    )
+    assert "private database diagnostic" not in refreshed.text
+    assert readback.status_code == 200
+    assert readback.json()["analysis_fanout"]["reason_code"] == (
+        "ANALYSIS_LINEAGE_NOT_PERSISTED"
+    )
+    assert repository.persist_calls == 1
+    assert calls == [1]
+
+
 def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot() -> (
     None
 ):
@@ -1349,6 +1407,34 @@ def test_read_revalidates_exact_stored_policy_and_returns_point_in_time_snapshot
     assert repository.read_calls == 1
     assert len(provider_calls) == calls_after_refresh
     assert repository.persist_calls == persists_after_refresh
+    assert repository.analysis_persist_calls == 0
+
+
+def test_legacy_snapshot_without_analysis_bundle_remains_readable_but_unavailable():
+    research, calls, repository = service(quality_policy=policy_template())
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
+        )
+        assert repository.stored is not None
+        repository.stored = replace(repository.stored, analysis=None)
+        persisted_before_read = repository.analysis_persist_calls
+        readback = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": "1m", "limit": 50},
+        )
+
+    assert refreshed.status_code == 200
+    assert readback.status_code == 200
+    payload = readback.json()
+    assert payload["candles"]
+    assert payload["analysis_fanout"]["status"] == "UNAVAILABLE"
+    assert payload["analysis_fanout"]["reason_code"] == (
+        "ANALYSIS_LINEAGE_NOT_PERSISTED"
+    )
+    assert repository.analysis_persist_calls == persisted_before_read
+    assert calls == [1]
 
 
 def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
@@ -1512,10 +1598,141 @@ def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit
         "spot_analysis",
     ):
         assert payload[field] == expected[field]
+    if expected["analysis_fanout"]["status"] in {"AVAILABLE", "PARTIAL"}:
+        assert payload["analysis_fanout"] == expected["analysis_fanout"]
+    if timeframe == "1m" and limit == 50:
+        assert expected["analysis_fanout"]["status"] == "AVAILABLE"
+        assert payload["analysis_fanout"] == expected["analysis_fanout"]
     assert payload["timeframe"] == timeframe
     assert len(payload["candles"]) == limit
     assert payload["persisted"] is True
     assert calls == [1]
+
+
+def test_store_read_keeps_candles_when_analysis_closure_cannot_be_verified(
+    persisted_service, monkeypatch
+):
+    research, calls, _, now = persisted_service
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(timeframe="1m", limit=50, now=now),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+
+        async def reject_analysis_closure(*_args, **_kwargs):
+            raise SpotResearchStoreError("private lineage diagnostic")
+
+        monkeypatch.setattr(
+            SqlAlchemySpotResearchStore,
+            "_read_analysis",
+            staticmethod(reject_analysis_closure),
+        )
+        read = client.get(
+            f"/api/research/spot/{INSTRUMENT}/candles",
+            params={"timeframe": "1m", "limit": 50},
+        )
+
+    assert read.status_code == 200, read.text
+    payload = read.json()
+    assert payload["candles"]
+    assert payload["analysis_fanout"]["status"] == "UNAVAILABLE"
+    assert payload["analysis_fanout"]["reason_code"] == (
+        "ANALYSIS_LINEAGE_UNVERIFIABLE"
+    )
+    assert "private lineage diagnostic" not in read.text
+    assert calls == [1]
+
+
+def test_store_analysis_append_is_idempotent_and_rejects_conflicting_retry(
+    persisted_service, monkeypatch
+):
+    research, calls, repository, now = persisted_service
+    captured = []
+    append_analysis = repository.persist_analysis
+
+    async def capture_analysis(*, snapshot_id: str, handoff) -> None:
+        captured.append((snapshot_id, handoff))
+        await append_analysis(snapshot_id=snapshot_id, handoff=handoff)
+
+    monkeypatch.setattr(repository, "persist_analysis", capture_analysis)
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(timeframe="1m", limit=50, now=now),
+        )
+
+    assert refreshed.status_code == 200, refreshed.text
+    assert len(captured) == 1
+    snapshot_id, handoff = captured[0]
+    asyncio.run(append_analysis(snapshot_id=snapshot_id, handoff=handoff))
+
+    outcome = handoff.assessment.fanout.outcomes[0]
+    assert outcome.finding is not None
+    changed_strength = next(
+        strength
+        for strength in type(outcome.finding.evidence_strength)
+        if strength is not outcome.finding.evidence_strength
+    )
+    changed_finding = replace(outcome.finding, evidence_strength=changed_strength)
+    changed_outcome = replace(outcome, finding=changed_finding)
+    changed_fanout = replace(handoff.assessment.fanout, outcomes=(changed_outcome,))
+    changed_assessment = replace(handoff.assessment, fanout=changed_fanout)
+    changed_handoff = replace(handoff, assessment=changed_assessment)
+    with pytest.raises(SpotResearchStoreError, match="different immutable analysis"):
+        asyncio.run(append_analysis(snapshot_id=snapshot_id, handoff=changed_handoff))
+
+    assert calls == [1]
+
+
+def test_store_analysis_read_rejects_fanout_digest_tampering(
+    persisted_service,
+):
+    research, calls, repository, now = persisted_service
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(timeframe="1m", limit=50, now=now),
+        )
+    assert refreshed.status_code == 200, refreshed.text
+    assert calls == [1]
+
+    async def verify_tampered_digest() -> None:
+        async with repository._session_factory() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(spot_research_analysis).where(
+                            spot_research_analysis.c.snapshot_id
+                            == refreshed.json()["snapshot_id"]
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            tampered_row = dict(row)
+            tampered_row["fanout_sha256"] = "0" * 64
+            with pytest.raises(
+                SpotResearchStoreError, match="failed exact verification"
+            ):
+                await repository._read_analysis(
+                    SqlAlchemyLineageStore(session),
+                    tampered_row,
+                    snapshot_id=refreshed.json()["snapshot_id"],
+                )
+            missing_parent_row = dict(row)
+            missing_parent_row["manifest_id"] = str(uuid4())
+            with pytest.raises(
+                SpotResearchStoreError, match="failed exact verification"
+            ):
+                await repository._read_analysis(
+                    SqlAlchemyLineageStore(session),
+                    missing_parent_row,
+                    snapshot_id=refreshed.json()["snapshot_id"],
+                )
+
+    asyncio.run(verify_tampered_digest())
 
 
 async def persist_fixture(repository, *, timeframe, limit, now):
@@ -2270,6 +2487,10 @@ def test_lineage_append_and_dependency_resolution_budget_support_501_candles() -
 
     class RecordingLineageStore(SqlAlchemyLineageStore):
         async def append(self, record: object):
+            appended.append(record)
+            return key_for(record)
+
+        async def _append(self, record: object, *, use_savepoint: bool = True):
             appended.append(record)
             return key_for(record)
 

@@ -183,7 +183,7 @@ class LocalStackAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(
             database("SELECT version_num FROM alembic_version"),
-            "0007_strategy_registry",
+            "0008_spot_analysis_lineage",
         )
         # This is an infrastructure probe, not fabricated market/research data.
         database("CREATE TABLE docker_ci_persistence_probe (id integer PRIMARY KEY)")

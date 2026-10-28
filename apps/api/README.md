@@ -516,6 +516,23 @@ other analysis not in #53–#56/#66 are not exposed by this projection. The
 read-model additions do not change shared C-001/C-002/C-003/C-005/C-008/C-012
 schemas or the existing `SpotIndicatorView`.
 
+### Durable request-scoped analysis lineage (Issue #74, ADR-0012)
+
+An explicit successful refresh appends its exact C-003 v2 quality report,
+C-005 regime, C-007 v4 manifest, C-008 v2 evidence, C-093 v1 dependence
+report, and fan-out outcomes to the existing local append-only lineage store.
+Their exact C-001/C-002/C-091 parents remain linked and digest-checked. The
+snapshot association is immutable. A GET resolves that stored closure without
+writing or rebuilding the saved lineage closure, then applies the
+current/as-of freshness gate before serving it. Other deterministic read-model
+projections continue to follow their existing calculation and freshness rules.
+Stale snapshots continue to return candles with analysis
+unavailable. Legacy snapshots without the association remain valid candle data
+and report `ANALYSIS_LINEAGE_NOT_PERSISTED`; GET does not backfill them. If the
+analysis append fails, the already persisted valid OHLCV snapshot remains
+usable and the response reports `ANALYSIS_PERSISTENCE_UNAVAILABLE`. Unsupported,
+corrupt, or mismatched lineage fails closed.
+
 ### Spot adversarial context binding (Issue [#68](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/68))
 
 `analysis.spot_adversarial.build_spot_market_context_v5()` accepts a typed

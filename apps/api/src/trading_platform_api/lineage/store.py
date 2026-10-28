@@ -10,6 +10,10 @@ from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from trading_platform_api.analysis.contracts import MarketRegime
+from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
+from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
 from trading_platform_api.lineage.codec import (
@@ -66,6 +70,118 @@ def references(record: object) -> tuple[Reference, ...]:
             )
             for item in record.dimensions
             if item.evidence_reference is not None
+        )
+    if type(record) is MarketRegime:
+        result.extend(
+            Reference(LineageKey("C-008", str(item), "2"))
+            for item in record.evidence_ids
+        )
+    if type(record) is EvidenceItemV2:
+        result.extend(
+            Reference(LineageKey("C-001", str(item))) for item in record.observation_ids
+        )
+        result.extend(
+            Reference(LineageKey("C-091", str(item)))
+            for item in record.source_record_ids
+        )
+    if type(record) is AnalysisSnapshotV4:
+        for binding in record.bindings:
+            result.append(
+                Reference(
+                    LineageKey(
+                        binding.market_snapshot.contract_id,
+                        binding.market_snapshot.record_id,
+                        binding.market_snapshot.lineage_version,
+                    ),
+                    binding.market_snapshot.content_sha256,
+                )
+            )
+            result.append(
+                Reference(
+                    LineageKey(
+                        binding.data_quality_report.contract_id,
+                        binding.data_quality_report.record_id,
+                        binding.data_quality_report.lineage_version,
+                    ),
+                    binding.data_quality_report.content_sha256,
+                )
+            )
+            for observation_source in binding.observations:
+                for reference in (
+                    observation_source.observation,
+                    observation_source.source,
+                ):
+                    result.append(
+                        Reference(
+                            LineageKey(
+                                reference.contract_id,
+                                reference.record_id,
+                                reference.lineage_version,
+                            ),
+                            reference.content_sha256,
+                        )
+                    )
+            for source in binding.source_records:
+                result.append(
+                    Reference(
+                        LineageKey(
+                            source.contract_id,
+                            source.record_id,
+                            source.lineage_version,
+                        ),
+                        source.content_sha256,
+                    )
+                )
+            result.append(
+                Reference(
+                    LineageKey(
+                        binding.regime.contract_id,
+                        str(binding.regime.record_id),
+                        binding.regime.lineage_version,
+                    ),
+                    binding.regime.content_sha256,
+                )
+            )
+            result.extend(
+                Reference(
+                    LineageKey(
+                        item.contract_id, str(item.record_id), item.lineage_version
+                    ),
+                    item.content_sha256,
+                )
+                for item in binding.evidence
+            )
+    if type(record) is AgentIndependenceReport:
+        result.extend(
+            (
+                Reference(
+                    LineageKey(
+                        "C-002",
+                        str(record.snapshot_id),
+                        record.snapshot_lineage_version,
+                    ),
+                    record.snapshot_sha256,
+                ),
+                Reference(
+                    LineageKey(
+                        "C-007",
+                        str(record.manifest_id),
+                        record.manifest_lineage_version,
+                    ),
+                ),
+                Reference(
+                    LineageKey("C-005", str(record.regime_id), "1"),
+                    record.regime_sha256,
+                ),
+                Reference(
+                    LineageKey(
+                        "C-003",
+                        str(record.quality_report_id),
+                        record.quality_report_lineage_version,
+                    ),
+                    record.quality_report_sha256,
+                ),
+            )
         )
     if type(record) is MarketData:
         result.append(Reference(LineageKey("C-091", str(record.source_record_id))))
@@ -175,7 +291,17 @@ async def append_validated_market_snapshot(
             "Only an exact matching VALID quality snapshot can be persisted."
         )
     records_to_append = (*sources, *observations, snapshot, quality)
-    return tuple([await store.append(record) for record in records_to_append])
+    # This helper already owns one caller-managed transaction for an entirely
+    # validated batch. Avoid a savepoint per record: a 501-candle snapshot can
+    # contain more than one thousand lineage records, and the extra SAVEPOINT /
+    # RELEASE round trips can consume the bounded persistence deadline without
+    # adding isolation beyond the enclosing all-or-nothing transaction.
+    return tuple(
+        [
+            await store._append(record, use_savepoint=False)
+            for record in records_to_append
+        ]
+    )
 
 
 def _identity(key: LineageKey) -> dict[str, str]:
@@ -189,6 +315,14 @@ def _where(key: LineageKey, table=records):
 
 
 class SqlAlchemyLineageStore:
+    _PERSONAL_SPOT_ANALYSIS_TYPES = (
+        DataQualityReportV2,
+        MarketRegime,
+        AnalysisSnapshotV4,
+        EvidenceItemV2,
+        AgentIndependenceReport,
+    )
+
     def __init__(
         self,
         session: AsyncSession,
@@ -313,82 +447,120 @@ class SqlAlchemyLineageStore:
                     or target.ingestion_time > record.ingestion_time
                 ):
                     raise LineageError("Incompatible revision ancestry.")
+            if type(record) is AgentIndependenceReport:
+                manifest_key = LineageKey(
+                    "C-007", str(record.manifest_id), record.manifest_lineage_version
+                )
+                manifest = (
+                    await self.get(manifest_key)
+                    if resolved is None
+                    else resolved[manifest_key]
+                )
+                if type(manifest) is not AnalysisSnapshotV4 or not any(
+                    binding.binding_id == record.binding_id
+                    and canonical_sha256(binding) == record.binding_sha256
+                    for binding in manifest.bindings
+                ):
+                    raise LineageError("C-093 binding reference differs from C-007.")
         return refs
 
     async def append(self, record: object) -> LineageKey:
         """Insert or verify an identical retry; never commit the caller's session."""
-        if type(record) is DataQualityReportV2:
+        if type(record) in self._PERSONAL_SPOT_ANALYSIS_TYPES:
             raise LineageError(
-                "C-003 schema v2 writes are disabled pending consumer readiness."
+                "Analysis lineage writes require the bounded Spot persistence path."
             )
+        return await self._append(record)
+
+    async def append_personal_spot_analysis_record(self, record: object) -> LineageKey:
+        """Append one record for the explicitly approved personal Spot closure."""
+        if type(record) not in self._PERSONAL_SPOT_ANALYSIS_TYPES:
+            raise LineageError("Record is outside the bounded Spot analysis closure.")
+        return await self._append(record)
+
+    async def _append(
+        self, record: object, *, use_savepoint: bool = True
+    ) -> LineageKey:
+        """Shared immutable insert implementation behind the bounded entry points."""
         key = key_for(record)
         document = encode(record)
         refs = await self._check_references(record)
-        async with self._session.begin_nested():
-            document_sha256 = sha256(document.encode("utf-8")).hexdigest()
-            evidence_sha256 = canonical_sha256(record)
-            is_market_payload = is_personal_spot_ohlcv(record)
-            statement = (
-                insert(records)
-                .values(
+        if use_savepoint:
+            async with self._session.begin_nested():
+                await self._insert(key, record, document, refs)
+        else:
+            await self._insert(key, record, document, refs)
+        return key
+
+    async def _insert(
+        self,
+        key: LineageKey,
+        record: object,
+        document: str,
+        refs: tuple[Reference, ...],
+    ) -> None:
+        """Insert one prevalidated record within the caller's transaction."""
+        document_sha256 = sha256(document.encode("utf-8")).hexdigest()
+        evidence_sha256 = canonical_sha256(record)
+        is_market_payload = is_personal_spot_ohlcv(record)
+        statement = (
+            insert(records)
+            .values(
+                **_identity(key),
+                document=None if is_market_payload else document,
+                document_sha256=document_sha256,
+                evidence_sha256=evidence_sha256,
+            )
+            .on_conflict_do_nothing()
+            .returning(records.c.record_id)
+        )
+        inserted = (await self._session.execute(statement)).scalar_one_or_none()
+        if inserted is None:
+            if encode(await self.get(key)) != document:
+                raise LineageError("Immutable identity already has different content.")
+            return
+        if is_market_payload:
+            await self._session.execute(
+                insert(market_payloads).values(
                     **_identity(key),
-                    document=None if is_market_payload else document,
+                    document=document,
                     document_sha256=document_sha256,
                     evidence_sha256=evidence_sha256,
                 )
-                .on_conflict_do_nothing()
-                .returning(records.c.record_id)
             )
-            inserted = (await self._session.execute(statement)).scalar_one_or_none()
-            if inserted is None:
-                if encode(await self.get(key)) != document:
-                    raise LineageError(
-                        "Immutable identity already has different content."
+            event_material = "|".join(
+                (
+                    key.contract_id,
+                    key.record_id,
+                    key.version,
+                    "HOT_WRITTEN",
+                    document_sha256,
+                )
+            )
+            await self._session.execute(
+                insert(payload_events).values(
+                    event_id=sha256(event_material.encode("utf-8")).hexdigest(),
+                    **_identity(key),
+                    event_type="HOT_WRITTEN",
+                    object_key=None,
+                    payload_sha256=document_sha256,
+                    occurred_at=datetime.now(UTC),
+                )
+            )
+        unique = {ref.key for ref in refs}
+        if unique:
+            await self._session.execute(
+                insert(links),
+                [
+                    dict(
+                        **_identity(key),
+                        target_contract_id=target.contract_id,
+                        target_record_id=target.record_id,
+                        target_version=target.version,
                     )
-            else:
-                if is_market_payload:
-                    await self._session.execute(
-                        insert(market_payloads).values(
-                            **_identity(key),
-                            document=document,
-                            document_sha256=document_sha256,
-                            evidence_sha256=evidence_sha256,
-                        )
-                    )
-                    event_material = "|".join(
-                        (
-                            key.contract_id,
-                            key.record_id,
-                            key.version,
-                            "HOT_WRITTEN",
-                            document_sha256,
-                        )
-                    )
-                    await self._session.execute(
-                        insert(payload_events).values(
-                            event_id=sha256(event_material.encode("utf-8")).hexdigest(),
-                            **_identity(key),
-                            event_type="HOT_WRITTEN",
-                            object_key=None,
-                            payload_sha256=document_sha256,
-                            occurred_at=datetime.now(UTC),
-                        )
-                    )
-                unique = {ref.key for ref in refs}
-                if unique:
-                    await self._session.execute(
-                        insert(links),
-                        [
-                            dict(
-                                **_identity(key),
-                                target_contract_id=target.contract_id,
-                                target_record_id=target.record_id,
-                                target_version=target.version,
-                            )
-                            for target in unique
-                        ],
-                    )
-        return key
+                    for target in unique
+                ],
+            )
 
     async def resolve(
         self, keys: tuple[LineageKey, ...], *, maximum_records: int = 2000

@@ -151,12 +151,12 @@ version `1`, while schema 2 uses version `2`. The existing key/unique constraint
 already includes `version`, so there is no DDL, rewrite, backfill, or v1
 reinterpretation.
 
-This release provides codec and lineage read compatibility only. V2 writes,
-producers, and analysis-consumer migration remain disabled/deferred. Before a
-producer is added, it must resolve an exact recognized assessment-policy ID
-and version and verify any `NOT_APPLICABLE` permission. Revalidate every
-receiving reader, add consumer dimension-required checks, and independently
-review/approve enabling v2 writes before rollout.
+This release provided codec and lineage read compatibility only. General v2
+writes, producers, and analysis-consumer migration remain disabled/deferred.
+Before any producer is added, it must resolve an exact recognized
+assessment-policy ID and version and verify any `NOT_APPLICABLE` permission.
+Revalidate every receiving reader, add consumer dimension-required checks, and
+independently review/approve enabling writes for that consumer before rollout.
 
 ### Issue #375 — in-memory Spot OHLCV producer and C-005 consumer
 
@@ -174,9 +174,10 @@ snapshot, policy scope and assessment time.
 The C-005 Spot regime, moving-average and realized-volatility gates validate
 the exact resolved C-003 schema-2 report and reject mismatched snapshot,
 source membership, policy, timeframe, window, cutoff or digest evidence. C-003
-schema-1 serialization, persisted lineage and API quality projection remain
-unchanged. This does not enable C-003 schema-2 persistence or generic lineage
-writes.
+schema-1 serialization and API quality projection remain unchanged. General
+C-003 schema-2 persistence and generic lineage writes remain disabled; a
+later, narrow personal Spot analysis-lineage exception is recorded under
+Issue #74 below.
 
 ## Issue #341 — C-006/C-007/C-008 schema 2 and C-104
 
@@ -348,6 +349,18 @@ held issues #39–#43 are unchanged.
 
 Shared source, observation, or binding evidence records `PARTIALLY_DEPENDENT`;
 shared windows/methods/agent/model/prompt also record partial dependence.
+
+## Issue #74 — durable personal Spot analysis lineage
+
+Merged PR #412 accepted ADR-0012. Its implementation scope enables only the
+exact personal, local Spot refresh closure: C-003 schema/lineage `2/2`, C-005
+`1/1`, C-007 `4/4`, C-008 `2/2`, and C-093 `1/1`, with the exact C-002/C-001/
+C-091 parents already present in the append-only lineage graph. The refresh
+path writes the immutable analysis association; GET resolves it read-only and
+revalidates current freshness. Existing snapshots without the association and
+stale/corrupt/mismatched closures remain analysis-unavailable. This exception
+does not authorize general C-003 v2 writes, additional profiles, or any
+strategy, risk, approval, paper/testnet execution, or live-trading behavior.
 No observed overlap is `UNKNOWN`, never `INDEPENDENT`. These are categorical
 evidence-overlap labels, not estimates of statistical correlation. Distinct
 feature names, methods, agents, models, or prompts cannot establish
