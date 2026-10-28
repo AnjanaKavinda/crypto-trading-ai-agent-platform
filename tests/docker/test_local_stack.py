@@ -47,6 +47,8 @@ def _run(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except FileNotFoundError:
@@ -113,7 +115,7 @@ def _docker_output(
         timeout=timeout,
         operation=operation,
     )
-    return result.stdout.strip()
+    return (result.stdout or "").strip()
 
 
 class DisposableComposeProject:
@@ -200,7 +202,7 @@ class DisposableComposeProject:
             env=self._child_env,
             operation=operation,
         )
-        return result.stdout.strip()
+        return (result.stdout or "").strip()
 
     def start(self) -> None:
         self._may_have_resources = True
@@ -477,7 +479,7 @@ class DisposableComposeProject:
             labels_raw = _docker_output(
                 "inspect",
                 "--format",
-                "{{index .Config.Labels \"com.docker.compose.project\"}}",
+                '{{index .Config.Labels "com.docker.compose.project"}}',
                 container_id,
                 operation="verify disposable container ownership",
             )
@@ -491,7 +493,7 @@ class DisposableComposeProject:
                 "network",
                 "inspect",
                 "--format",
-                "{{index .Labels \"com.docker.compose.project\"}}",
+                '{{index .Labels "com.docker.compose.project"}}',
                 network_id,
                 operation="verify disposable network ownership",
             )
@@ -505,7 +507,7 @@ class DisposableComposeProject:
                 "volume",
                 "inspect",
                 "--format",
-                "{{index .Labels \"com.docker.compose.project\"}}",
+                '{{index .Labels "com.docker.compose.project"}}',
                 volume_name,
                 operation="verify disposable volume ownership",
             )
@@ -528,7 +530,7 @@ class DisposableComposeProject:
             "volume",
             "inspect",
             "--format",
-            "{{index .Labels \"com.docker.compose.project\"}}",
+            '{{index .Labels "com.docker.compose.project"}}',
             volume_name,
             operation="verify isolated PostgreSQL volume ownership",
         )
@@ -554,6 +556,15 @@ class DisposableComposeProject:
 
 
 class LocalStackHarnessUnitTests(unittest.TestCase):
+    def test_docker_subprocess_output_uses_loss_tolerant_utf8(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "safe output", "")
+        with mock.patch(f"{__name__}.subprocess.run", return_value=completed) as run:
+            result = _run(["docker", "version"], operation="probe Docker")
+
+        self.assertEqual(result.stdout, "safe output")
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+
     def test_compose_project_name_is_unique_and_valid(self) -> None:
         project = _project_name()
         self.assertNotEqual(project, RETAINED_PROJECT)
@@ -570,7 +581,9 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 _require_local_docker_endpoint(endpoint)
 
-    def test_compose_commands_always_use_the_isolated_project_and_settings(self) -> None:
+    def test_compose_commands_always_use_the_isolated_project_and_settings(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory(prefix="spot-compose-args-") as temp:
             settings = Path(temp) / "compose.env"
             stack = DisposableComposeProject()
@@ -590,7 +603,9 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
         self.assertIn("--file", command)
         self.assertNotEqual(stack.project, RETAINED_PROJECT)
 
-    def test_compose_child_environment_removes_project_and_setting_overrides(self) -> None:
+    def test_compose_child_environment_removes_project_and_setting_overrides(
+        self,
+    ) -> None:
         setting_names = {"LOCAL_WEB_PORT", "POSTGRES_PASSWORD"}
         with mock.patch.dict(
             os.environ,
@@ -678,12 +693,8 @@ class LocalStackAcceptanceTests(unittest.TestCase):
                 self.assertEqual(
                     stack.inspect(service)["State"]["Health"]["Status"], "healthy"
                 )
-            web_networks = set(
-                stack.inspect("web")["NetworkSettings"]["Networks"]
-            )
-            db_networks = set(
-                stack.inspect("postgres")["NetworkSettings"]["Networks"]
-            )
+            web_networks = set(stack.inspect("web")["NetworkSettings"]["Networks"])
+            db_networks = set(stack.inspect("postgres")["NetworkSettings"]["Networks"])
             self.assertFalse(web_networks & db_networks)
 
             postgres = stack.inspect("postgres")
@@ -740,9 +751,7 @@ class LocalStackAcceptanceTests(unittest.TestCase):
                 headers={
                     "Content-Type": "application/json",
                     "Origin": origin,
-                    "X-Correlation-ID": (
-                        "00000000-0000-4000-8000-000000000360"
-                    ),
+                    "X-Correlation-ID": ("00000000-0000-4000-8000-000000000360"),
                 },
                 method="POST",
             )
