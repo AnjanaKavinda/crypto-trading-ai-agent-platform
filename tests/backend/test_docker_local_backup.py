@@ -76,7 +76,7 @@ def _restore_configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
     env.write_text(
         env.read_text(encoding="utf-8")
-        + "TRADING_PLATFORM_PG_RESTORE_SERVICE=trading_restore_owned\n",
+        + "TRADING_PLATFORM_PG_RESTORE_SERVICE=trading_restore_owned\n",  # pragma: allowlist secret
         encoding="utf-8",
     )
     service.chmod(0o600)
