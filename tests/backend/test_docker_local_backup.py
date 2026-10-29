@@ -22,6 +22,51 @@ from trading_platform_api.lineage.docker_local_backup import (
 )
 
 
+def _protect_windows_test_file(path: Path) -> None:
+    """Give a synthetic Windows secret file the production-required ACL."""
+    if os.name != "nt":
+        return
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$path = $env:TRADING_PLATFORM_TEST_PROTECTED_FILE
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$acl = Get-Acl -LiteralPath $path
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($rule in @($acl.Access)) {
+    [void]$acl.RemoveAccessRuleSpecific($rule)
+}
+foreach ($sid in @($currentSid, 'S-1-5-18', 'S-1-5-32-544')) {
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$acl.AddAccessRule($rule)
+}
+Set-Acl -LiteralPath $path -AclObject $acl
+"""
+    environment = os.environ.copy()
+    environment["TRADING_PLATFORM_TEST_PROTECTED_FILE"] = str(path.resolve())
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+    )
+    if result.returncode:
+        raise AssertionError("Could not protect the synthetic Windows test file ACL.")
+
+
 def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     archive = tmp_path / "archive"
     backup = tmp_path / "backups"
@@ -35,6 +80,7 @@ def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         encoding="utf-8",
     )
     service.chmod(0o600)
+    _protect_windows_test_file(service)
     env = tmp_path / "backup.env"
     env.write_text(
         f"DATABASE_URL=postgresql+asyncpg://research:{password}@127.0.0.1:5432/source\n"
@@ -47,6 +93,7 @@ def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         encoding="utf-8",
     )
     env.chmod(0o600)
+    _protect_windows_test_file(env)
     return env, service, archive, backup
 
 
@@ -367,6 +414,7 @@ def test_posix_backup_files_require_exact_0600(tmp_path: Path) -> None:
 def test_windows_backup_acl_accepts_owner_protected_temp_file(tmp_path: Path) -> None:
     protected = tmp_path / "protected.env"
     protected.write_text("safe=value\n", encoding="utf-8")
+    _protect_windows_test_file(protected)
     _validate_protected_file(protected)
 
 
@@ -374,6 +422,7 @@ def test_windows_backup_acl_accepts_owner_protected_temp_file(tmp_path: Path) ->
 def test_windows_backup_acl_rejects_broad_everyone_access(tmp_path: Path) -> None:
     protected = tmp_path / "protected.env"
     protected.write_text("safe=value\n", encoding="utf-8")
+    _protect_windows_test_file(protected)
     result = subprocess.run(
         ["icacls.exe", str(protected), "/grant", "*S-1-1-0:R"],
         capture_output=True,
