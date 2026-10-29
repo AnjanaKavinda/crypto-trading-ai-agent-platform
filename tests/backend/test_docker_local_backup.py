@@ -26,45 +26,36 @@ def _protect_windows_test_file(path: Path) -> None:
     """Give a synthetic Windows secret file the production-required ACL."""
     if os.name != "nt":
         return
-    script = r"""
-$ErrorActionPreference = 'Stop'
-$path = $env:TRADING_PLATFORM_TEST_PROTECTED_FILE
-$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$acl = Get-Acl -LiteralPath $path
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($rule in @($acl.Access)) {
-    [void]$acl.RemoveAccessRuleSpecific($rule)
-}
-foreach ($sid in @($currentSid, 'S-1-5-18', 'S-1-5-32-544')) {
-    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
-        $sid,
-        [Security.AccessControl.FileSystemRights]::FullControl,
-        [Security.AccessControl.AccessControlType]::Allow
-    )
-    [void]$acl.AddAccessRule($rule)
-}
-Set-Acl -LiteralPath $path -AclObject $acl
-"""
-    environment = os.environ.copy()
-    environment["TRADING_PLATFORM_TEST_PROTECTED_FILE"] = str(path.resolve())
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ],
+    identity = subprocess.run(
+        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
         check=False,
         capture_output=True,
-        env=environment,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
+    )
+    if identity.returncode:
+        raise AssertionError("Could not identify the Windows test account SID.")
+    current_sid = identity.stdout.rsplit(",", 1)[-1].strip().strip('"')
+    if not current_sid.startswith("S-"):
+        raise AssertionError("Windows test account SID was not returned.")
+    result = subprocess.run(
+        ["icacls.exe", str(path), "/inheritance:r"],
+        check=False,
+        capture_output=True,
         timeout=10,
     )
     if result.returncode:
-        raise AssertionError("Could not protect the synthetic Windows test file ACL.")
+        raise AssertionError("Could not remove inherited Windows test file ACLs.")
+    for sid in (current_sid, "S-1-5-18", "S-1-5-32-544"):
+        result = subprocess.run(
+            ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode:
+            raise AssertionError("Could not set the Windows test file ACL.")
 
 
 def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
