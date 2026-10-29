@@ -109,12 +109,22 @@ def test_windows_file_protection_does_not_require_privileged_owner_reset(
     protected.write_text("safe=value\n", encoding="utf-8")
     identity = subprocess.CompletedProcess([], 0, "S-1-5-21-1000\n", "")
     success = subprocess.CompletedProcess([], 0, b"", b"")
-    with patch(
-        "trading_platform_api.lineage.docker_local_backup.subprocess.run",
-        side_effect=[identity, success, success, success, success],
-    ) as run:
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._windows_acl_environment",
+            return_value={"PSModulePath": "isolated-windows-powershell-modules"},
+        ) as acl_environment,
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.subprocess.run",
+            side_effect=[identity, success, success, success, success],
+        ) as run,
+    ):
         _protect_windows_file(protected)
 
+    assert run.call_args_list[0].kwargs["env"] == {
+        "PSModulePath": "isolated-windows-powershell-modules"
+    }
+    acl_environment.assert_called_once()
     acl_commands = [call.args[0] for call in run.call_args_list[1:]]
     assert all("/setowner" not in command for command in acl_commands)
     assert [command[2] for command in acl_commands] == [
