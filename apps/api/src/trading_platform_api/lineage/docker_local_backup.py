@@ -132,9 +132,7 @@ def _protect_windows_file(path: Path) -> None:
             "Windows backup file ACL could not be restricted."
         ) from None
     if result.returncode:
-        raise DockerBackupError(
-            "Windows backup file ACL could not be restricted."
-        )
+        raise DockerBackupError("Windows backup file ACL could not be restricted.")
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
