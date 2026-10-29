@@ -6,6 +6,7 @@ networks, and database volume. It never reads or writes the repository's .env.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -76,7 +77,14 @@ def _parse_env_example(path: Path = ENV_EXAMPLE) -> dict[str, str]:
         key, separator, value = line.partition("=")
         if not separator or not key.strip():
             raise ValueError("The documented local settings example is malformed.")
-        values[key.strip()] = value
+        normalized_value = value.strip()
+        if (
+            len(normalized_value) >= 2
+            and normalized_value[0] == normalized_value[-1]
+            and normalized_value[0] in {"'", '"'}
+        ):
+            normalized_value = normalized_value[1:-1]
+        values[key.strip()] = normalized_value
     return values
 
 
@@ -130,6 +138,8 @@ class DisposableComposeProject:
             raise RuntimeError("Generated Compose project name is unsafe.")
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         self.settings_path: Path | None = None
+        self.backup_settings_path: Path | None = None
+        self.restore_database: str | None = None
         self._setting_names: set[str] = set()
         self._child_env: dict[str, str] = {}
         self._may_have_resources = False
@@ -143,6 +153,8 @@ class DisposableComposeProject:
         try:
             self.settings_path = Path(self._temporary.name) / "compose.env"
             self._write_temporary_settings(self.settings_path)
+            self.backup_settings_path = Path(self._temporary.name) / "backup.env"
+            self._write_temporary_backup_settings(self.backup_settings_path)
             self._child_env = _compose_child_environment(self._setting_names)
             self.compose("config", "--quiet", operation="validate isolated Compose")
         except Exception:
@@ -246,18 +258,44 @@ class DisposableComposeProject:
         return data[0]
 
     def database(self, sql: str) -> str:
+        return self.database_in("spot_research", sql)
+
+    def database_in(self, database: str, sql: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", database):
+            raise RuntimeError("Refusing an invalid isolated database name.")
         return self.compose(
             "exec",
             "--no-TTY",
             "postgres",
             "sh",
             "-c",
-            'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" '
-            '-d "$POSTGRES_DB" -Atc "$1"',
+            'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1" -Atc "$2"',
             "--",
+            database,
             sql,
             operation="query isolated test database",
         )
+
+    def lineage_backup(self, operation: str, object_key: str | None = None) -> str:
+        if self.backup_settings_path is None:
+            raise RuntimeError("Isolated backup settings are unavailable.")
+        command = [
+            sys.executable,
+            "-m",
+            "trading_platform_api.lineage.docker_local_backup",
+            "--project",
+            self.project,
+            "--config",
+            str(self.backup_settings_path),
+            operation,
+        ]
+        if object_key is not None:
+            command.append(object_key)
+        return _run(
+            command,
+            env=self._child_env,
+            operation=f"run isolated {operation} backup worker",
+        ).stdout.strip()
 
     def restart_preserving_volume(self, volume_name: str) -> None:
         self._assert_owned_project(self.project)
@@ -374,6 +412,57 @@ class DisposableComposeProject:
             # The file contains generated disposable settings only. Compose
             # receives its explicit path; no owner configuration is involved.
             pass
+
+    def _write_temporary_backup_settings(self, path: Path) -> None:
+        if self.settings_path is None:
+            raise RuntimeError(
+                "Compose settings must be generated before backup settings."
+            )
+        compose_values = _parse_env_example(self.settings_path)
+        root = path.parent
+        archive_root = root / "archive"
+        backup_root = root / "bundles"
+        archive_root.mkdir()
+        backup_root.mkdir()
+        service_path = root / "pg_service.conf"
+        restore_database = f"trading_restore_{secrets.token_hex(4)}"
+        self.restore_database = restore_database
+        user = compose_values["POSTGRES_USER"]
+        database = compose_values["POSTGRES_DB"]
+        password = compose_values["POSTGRES_PASSWORD"]
+        service_path.write_text(
+            f"[source]\nhost=127.0.0.1\nport=5432\ndbname={database}\n"
+            f"user={user}\npassword={password}\n\n"
+            f"[{restore_database}]\nhost=127.0.0.1\nport=5432\n"
+            f"dbname={restore_database}\nuser={user}\npassword={password}\n",
+            encoding="utf-8",
+        )
+        key_id = "acceptance-test"
+        key = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+        backup_values = {
+            "DATABASE_URL": (
+                f"postgresql+asyncpg://{user}:{password}@127.0.0.1:5432/{database}"
+            ),
+            "TRADING_PLATFORM_LOCAL_ARCHIVE_ROOT": (f'"{archive_root.as_posix()}"'),
+            "TRADING_PLATFORM_LOCAL_BACKUP_ROOT": (f'"{backup_root.as_posix()}"'),
+            "TRADING_PLATFORM_LOCAL_ENCRYPTION_ACTIVE_KEY_ID": key_id,
+            "TRADING_PLATFORM_LOCAL_ENCRYPTION_KEYS_JSON": json.dumps(
+                {key_id: key}, separators=(",", ":")
+            ),
+            "TRADING_PLATFORM_PG_SERVICE_FILE": f'"{service_path.as_posix()}"',
+            "TRADING_PLATFORM_PG_DUMP_SERVICE": "source",
+            "TRADING_PLATFORM_PG_RESTORE_SERVICE": restore_database,
+        }
+        self._setting_names.update(backup_values)
+        path.write_text(
+            "".join(f"{name}={value}\n" for name, value in backup_values.items()),
+            encoding="utf-8",
+        )
+        for protected_file in (path, service_path):
+            try:
+                protected_file.chmod(0o600)
+            except OSError:
+                pass
 
     def _retained_inventory(self) -> dict[str, str]:
         containers = _docker_output(
@@ -848,6 +937,39 @@ class LocalStackAcceptanceTests(unittest.TestCase):
             )
             stack.database("DROP TABLE docker_ci_persistence_probe")
             self.assertEqual(json.loads(get("/api/health"))["status"], "HEALTHY")
+
+            stack.database(
+                "CREATE TABLE docker_ci_backup_probe (id integer PRIMARY KEY)"
+            )
+            stack.database("INSERT INTO docker_ci_backup_probe VALUES (42)")
+            backup_result = stack.lineage_backup("backup")
+            backup_match = re.search(
+                r"Backup verified: key=([^ ]+) sha256=([0-9a-f]{64})",
+                backup_result,
+            )
+            if backup_match is None:
+                self.fail("The isolated backup runner did not report verified output.")
+            object_key = backup_match.group(1)
+            backup_values = _parse_env_example(stack.backup_settings_path)
+            bundle_path = Path(backup_values["TRADING_PLATFORM_LOCAL_BACKUP_ROOT"])
+            encrypted_bundle = bundle_path / object_key
+            self.assertTrue(encrypted_bundle.is_file())
+            self.assertTrue(encrypted_bundle.read_bytes().startswith(b"TPB2ENC1"))
+
+            if stack.restore_database is None:
+                self.fail("The isolated restore database name was not generated.")
+            stack.database(f'CREATE DATABASE "{stack.restore_database}"')
+            restore_result = stack.lineage_backup("restore", object_key)
+            self.assertRegex(
+                restore_result, r"^Restore completed: sha256=[0-9a-f]{64}$"
+            )
+            self.assertEqual(
+                stack.database_in(
+                    stack.restore_database,
+                    "SELECT id FROM docker_ci_backup_probe",
+                ),
+                "42",
+            )
 
 
 if __name__ == "__main__":

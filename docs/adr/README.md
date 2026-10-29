@@ -22,7 +22,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0010 | [Versioned C-019/C-006 Spot adversarial path](ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md) | Accepted | 2026-10-19 | Platform Architect / AnjanaKavinda (explicit owner approval) | OD-0025 (resolved) | C-019 schema 2, C-006 schema 5 | — | — |
 | ADR-0011 | [Proposed Binance USDⓈ-M personal derivatives-data scope](ADR-0011-proposed-binance-usdm-personal-derivatives-scope.md) | Proposed | 2026-10-20 | Platform Architect / human approval pending | OD-0002, OD-0004 (remain Open) | No change proposed | — | — |
 | ADR-0012 | [Retention for personal Spot analysis lineage](ADR-0012-proposed-personal-spot-analysis-lineage-retention.md) | Accepted | 2026-10-24 | Platform Architect / AnjanaKavinda (PR #412 merge) | OD-0008, OD-0017 (bounded personal Spot analysis artifacts only; broader decisions remain Open) | C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-093 v1 (no semantic changes) | — | — |
-| ADR-0013 | [Proposed Windows backups through the private Docker network](ADR-0013-proposed-windows-private-network-backup-runner.md) | Proposed | 2026-10-29 | Platform Architect / human approval pending | OD-0026 | No contract changes proposed | — | — |
+| ADR-0013 | [Windows backups through the private Docker network](ADR-0013-proposed-windows-private-network-backup-runner.md) | Accepted | 2026-10-29 | Platform Architect / AnjanaKavinda (PR #418 merge) | OD-0026 (resolved) | No contract changes | — | — |
 
 ## Creating an ADR
 

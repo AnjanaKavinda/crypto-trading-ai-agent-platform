@@ -4,6 +4,7 @@
 !apps/api/
 !apps/api/README.md
 !apps/api/Dockerfile
+!apps/api/Dockerfile.backup
 !apps/api/alembic.ini
 !apps/api/src/
 !apps/api/src/**/

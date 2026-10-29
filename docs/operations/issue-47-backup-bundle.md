@@ -1,5 +1,9 @@
 # Issue #47 local backup operations
 
+For the Windows/Docker Desktop one-shot worker and its protected external
+configuration workflow, see
+[Windows backup and restore through Docker Desktop](windows-docker-local-backup.md).
+
 Phase 1 uses a local deployment and local filesystems. The backup directory
 must be separate from the archive directory. This is a recovery copy on the
 same machine, not off-device disaster recovery. Cloud storage, subscriptions,
