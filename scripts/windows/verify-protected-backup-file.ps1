@@ -38,5 +38,6 @@ try {
     exit 0
 }
 catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
     exit 7
 }
