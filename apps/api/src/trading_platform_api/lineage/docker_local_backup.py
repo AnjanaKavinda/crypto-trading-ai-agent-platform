@@ -75,10 +75,12 @@ class DockerBackupError(RuntimeError):
         *,
         stage: str = "validation",
         code: str = "BACKUP_VALIDATION_FAILED",
+        resource: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.code = code
+        self.resource = resource
 
 
 @contextlib.contextmanager
@@ -449,10 +451,24 @@ def _run_docker(arguments: list[str], *, timeout: int) -> str:
         code = (
             "BACKUP_WORKER_FAILED" if arguments[0] == "run" else "DOCKER_COMMAND_FAILED"
         )
+        resource: str | None = None
+        if arguments[0] == "run":
+            diagnostic = re.search(
+                r"^RESTORE_DRILL_DIAGNOSTIC stage=cleanup "
+                r"code=RESTORE_DATABASE_REMAINS "
+                r"resource=(trading_restore_[a-z0-9_]{1,47})$",
+                result.stderr or "",
+                re.MULTILINE,
+            )
+            if diagnostic is not None:
+                stage = "cleanup"
+                code = "RESTORE_DATABASE_REMAINS"
+                resource = diagnostic.group(1)
         raise DockerBackupError(
             "Docker command failed; output was suppressed to protect local settings.",
             stage=stage,
             code=code,
+            resource=resource,
         )
     return (result.stdout or "").strip()
 
@@ -648,7 +664,7 @@ def _worker_user() -> str:
 
 @contextlib.contextmanager
 def _worker_environment_file(
-    values: dict[str, str], restore_service: str | None
+    values: dict[str, str], restore_service: str | None, drill_id: str | None = None
 ) -> Iterator[Path]:
     worker_values = {
         "DATABASE_URL": values["DATABASE_URL"],
@@ -665,6 +681,8 @@ def _worker_environment_file(
     }
     if restore_service is not None:
         worker_values["TRADING_PLATFORM_PG_RESTORE_SERVICE"] = restore_service
+    if drill_id is not None:
+        worker_values["TRADING_PLATFORM_RESTORE_DRILL_ID"] = drill_id
     if any("\n" in value or "\r" in value for value in worker_values.values()):
         raise DockerBackupError(
             "Backup worker settings contain unsupported line breaks."
@@ -748,9 +766,10 @@ def run_backup(
         raise DockerBackupError(
             "Only spot-research or a disposable spot-test-* project is supported."
         )
-    if operation not in {"backup", "restore"} or (operation == "restore") != bool(
-        object_key
-    ):
+    restore_operations = {"restore", "restore-drill"}
+    if operation not in {"backup", *restore_operations} or (
+        operation in restore_operations
+    ) != bool(object_key):
         raise DockerBackupError("Backup operation is invalid.")
     if project == _RETAINED_PROJECT and confirm_retained_project != _RETAINED_PROJECT:
         raise DockerBackupError(
@@ -762,7 +781,9 @@ def run_backup(
         )
 
     values, archive, backups, service_file, _dump_service, restore_service = (
-        _validate_settings(config_path, operation)
+        _validate_settings(
+            config_path, "restore" if operation in restore_operations else operation
+        )
     )
     _require_local_docker()
     postgres_id, _container = _inspect_postgres(project, values)
@@ -781,7 +802,11 @@ def run_backup(
     )
     run_id = uuid.uuid4().hex
     container_name = f"lineage-backup-{run_id[:20]}"
-    with _worker_environment_file(values, restore_service) as worker_env_file:
+    with _worker_environment_file(
+        values,
+        restore_service,
+        run_id if operation == "restore-drill" else None,
+    ) as worker_env_file:
         command = [
             "run",
             "--rm",
@@ -810,7 +835,7 @@ def run_backup(
             _BACKUP_IMAGE,
             operation,
         ]
-        if operation == "restore":
+        if operation in restore_operations:
             command.append(object_key or "")
         try:
             output = _run_docker(command, timeout=_COMMAND_TIMEOUT)
@@ -853,6 +878,11 @@ def _parser() -> argparse.ArgumentParser:
         "restore", help="restore to an empty disposable trading_restore_* database"
     )
     restore.add_argument("object_key")
+    drill = operations.add_parser(
+        "restore-drill",
+        help="create, verify, and remove one owned trading_restore_* database",
+    )
+    drill.add_argument("object_key")
     return parser
 
 
@@ -867,8 +897,9 @@ def main() -> None:
             confirm_retained_project=arguments.confirm_retained_project,
         )
     except DockerBackupError as exc:
+        resource = f" resource={exc.resource}" if exc.resource is not None else ""
         print(
-            f"LOCAL_BACKUP_DIAGNOSTIC stage={exc.stage} code={exc.code}",
+            f"LOCAL_BACKUP_DIAGNOSTIC stage={exc.stage} code={exc.code}{resource}",
             file=sys.stderr,
         )
         _parser().exit(2, "local Docker backup failed; details suppressed.\n")

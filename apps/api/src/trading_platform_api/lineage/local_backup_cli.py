@@ -10,11 +10,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -24,7 +26,7 @@ from trading_platform_api.lineage.archive_storage import (
     LocalFilesystemObjectStore,
 )
 from trading_platform_api.lineage.backups import BackupLimits
-from trading_platform_api.lineage.codec import LineageError
+from trading_platform_api.lineage.codec import LineageError, LineageKey
 from trading_platform_api.lineage.local_backups import (
     LocalBackupError,
     create_local_backup,
@@ -33,6 +35,8 @@ from trading_platform_api.lineage.local_backups import (
 from trading_platform_api.lineage.payload_retention import (
     remove_archived_hot_payloads,
 )
+from trading_platform_api.lineage.store import SqlAlchemyLineageStore
+from trading_platform_api.lineage.tables import records
 from trading_platform_api.persistence.config import load_database_settings
 from trading_platform_api.persistence.session import (
     create_async_engine_instance,
@@ -41,6 +45,17 @@ from trading_platform_api.persistence.session import (
 
 _SERVICE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,63}$")
 _RESTORE_PREFIX = "trading_restore_"
+_RESTORE_DATABASE = re.compile(r"^trading_restore_[a-z0-9_]{1,47}$")
+_DRILL_MARKER_PREFIX = "trading-platform-restore-drill:"
+_LINEAGE_RESOLUTION_LIMIT = 2000
+
+
+class RestoreDrillCleanupError(LocalBackupError):
+    """An invocation-owned restore database could not be safely removed."""
+
+    def __init__(self, database: str) -> None:
+        super().__init__("Restore-drill cleanup failed; details suppressed.")
+        self.database = database
 
 
 def _local_roots() -> tuple[Path, Path]:
@@ -217,6 +232,158 @@ def _restore_with_pg_restore(service_name: str, dump: bytes) -> None:
             )
 
 
+def _run_database_utility(binary_name: str, arguments: list[str]) -> None:
+    binary = shutil.which(binary_name)
+    if binary is None:
+        raise LocalBackupError(f"{binary_name} is required for a restore drill.")
+    environment = os.environ.copy()
+    environment["PGSERVICEFILE"] = os.environ["TRADING_PLATFORM_PG_SERVICE_FILE"]
+    result = subprocess.run(
+        [binary, "--no-password", *arguments],
+        env=environment,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    if result.returncode:
+        raise LocalBackupError(
+            f"{binary_name} failed during the disposable restore lifecycle."
+        )
+
+
+async def _database_identity(database: str) -> tuple[bool, str | None]:
+    settings = load_database_settings()
+    engine = create_async_engine_instance(settings)
+    try:
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT pg_catalog.shobj_description(oid, 'pg_database') AS marker "
+                        "FROM pg_catalog.pg_database WHERE datname = :database"
+                    ),
+                    {"database": database},
+                )
+            ).one_or_none()
+            return (False, None) if row is None else (True, row.marker)
+    finally:
+        await engine.dispose()
+
+
+async def _mark_database(database: str, marker: str) -> None:
+    # Values are constrained to lowercase ASCII/hex before interpolation.
+    if not _RESTORE_DATABASE.fullmatch(database) or not re.fullmatch(
+        rf"{re.escape(_DRILL_MARKER_PREFIX)}[0-9a-f]{{32}}", marker
+    ):
+        raise LocalBackupError("Restore-drill ownership marker is invalid.")
+    settings = load_database_settings()
+    engine = create_async_engine_instance(settings).execution_options(
+        isolation_level="AUTOCOMMIT"
+    )
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(
+                text(f"COMMENT ON DATABASE \"{database}\" IS '{marker}'")
+            )
+    finally:
+        await engine.dispose()
+
+
+@asynccontextmanager
+async def _owned_restore_database():
+    """Create and remove exactly one invocation-marked disposable database."""
+    source_service = _validate_dump_service()
+    restore_service = _validate_restore_service()
+    target = _service_config(restore_service).get("dbname", "")
+    if not _RESTORE_DATABASE.fullmatch(target):
+        raise LocalBackupError("Restore database name is not safely bounded.")
+    source_database = make_url(load_database_settings().database_url).database
+    if not source_database or target == source_database:
+        raise LocalBackupError("Restore target must differ from the source database.")
+    exists, _ = await _database_identity(target)
+    if exists:
+        raise LocalBackupError(
+            "Restore target already exists; refusing to overwrite it."
+        )
+
+    drill_id = os.environ.get("TRADING_PLATFORM_RESTORE_DRILL_ID", uuid.uuid4().hex)
+    if not re.fullmatch(r"[0-9a-f]{32}", drill_id):
+        raise LocalBackupError("Restore-drill invocation identity is invalid.")
+    marker = _DRILL_MARKER_PREFIX + drill_id
+    created = False
+    marked = False
+    try:
+        _run_database_utility(
+            "createdb",
+            [f"--maintenance-db=service={source_service}", target],
+        )
+        created = True
+        await _mark_database(target, marker)
+        marked = True
+        exists, observed = await _database_identity(target)
+        if not exists or observed != marker:
+            raise LocalBackupError("Restore-drill ownership marker was not persisted.")
+        yield target
+    finally:
+        if created:
+            exists, observed = await _database_identity(target)
+            if not marked or not exists or observed != marker:
+                raise RestoreDrillCleanupError(target)
+            try:
+                _run_database_utility(
+                    "dropdb",
+                    [
+                        "--force",
+                        f"--maintenance-db=service={source_service}",
+                        target,
+                    ],
+                )
+            except LocalBackupError:
+                raise RestoreDrillCleanupError(target) from None
+            exists, _ = await _database_identity(target)
+            if exists:
+                raise RestoreDrillCleanupError(target)
+
+
+async def _verify_restored_lineage(target_database: str) -> int:
+    """Resolve a bounded set of restored C-001 and analysis lineage roots."""
+    settings = load_database_settings()
+    target_url = make_url(settings.database_url).set(database=target_database)
+    target_settings = replace(
+        settings, database_url=target_url.render_as_string(hide_password=False)
+    )
+    engine = create_async_engine_instance(target_settings)
+    archive_root, _ = _local_roots()
+    root_contracts = ("C-001", "C-003", "C-005", "C-007", "C-008", "C-093")
+    try:
+        sessions = create_async_session_factory(engine)
+        async with sessions() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        records.c.contract_id,
+                        records.c.record_id,
+                        records.c.version,
+                    )
+                    .where(records.c.contract_id.in_(root_contracts))
+                    .limit(_LINEAGE_RESOLUTION_LIMIT + 1)
+                )
+            ).all()
+            if len(rows) > _LINEAGE_RESOLUTION_LIMIT:
+                raise LocalBackupError(
+                    "Restored lineage exceeds the drill read budget."
+                )
+            keys = tuple(LineageKey(*row) for row in rows)
+            store = SqlAlchemyLineageStore(
+                session, archive_store=LocalFilesystemObjectStore(archive_root)
+            )
+            if keys:
+                await store.resolve(keys, maximum_records=_LINEAGE_RESOLUTION_LIMIT)
+            return sum(key.contract_id == "C-001" for key in keys)
+    finally:
+        await engine.dispose()
+
+
 async def _backup() -> tuple[str, str]:
     archive_root, backup_root = _local_roots()
     service = _validate_dump_service()
@@ -261,6 +428,14 @@ async def _restore(object_key: str) -> str:
         restore_database=restore_database,
         limits=BackupLimits(),
     )
+
+
+async def _restore_drill(object_key: str) -> tuple[str, str, int]:
+    """Create, verify, and remove one owned disposable restore database."""
+    async with _owned_restore_database() as target_database:
+        digest = await _restore(object_key)
+        resolved_c001 = await _verify_restored_lineage(target_database)
+        return digest, target_database, resolved_c001
 
 
 async def _remove_hot_payloads_from_database(
@@ -337,6 +512,11 @@ def main() -> None:
         "restore", help="restore into a disposable local PostgreSQL database"
     )
     restore_parser.add_argument("object_key")
+    drill_parser = subparsers.add_parser(
+        "restore-drill",
+        help="create, verify, and remove one owned disposable restore database",
+    )
+    drill_parser.add_argument("object_key")
     prune_parser = subparsers.add_parser(
         "prune-hot",
         help="manually back up, restore-check, then remove one eligible cold batch",
@@ -356,12 +536,26 @@ def main() -> None:
         elif arguments.command == "restore":
             digest = asyncio.run(_restore(arguments.object_key))
             print(f"Restore completed: sha256={digest}")
+        elif arguments.command == "restore-drill":
+            digest, database, resolved = asyncio.run(
+                _restore_drill(arguments.object_key)
+            )
+            print(
+                "Restore drill verified and cleaned: "
+                f"database={database} sha256={digest} resolved_c001={resolved}"
+            )
         else:
             object_key, digest, count = asyncio.run(_prune_hot(arguments.object_key))
             print(
                 f"Hot payload removal verified: backup={object_key} "
                 f"sha256={digest} removed={count}"
             )
+    except RestoreDrillCleanupError as exc:
+        parser.exit(
+            2,
+            "RESTORE_DRILL_DIAGNOSTIC stage=cleanup "
+            f"code=RESTORE_DATABASE_REMAINS resource={exc.database}\n",
+        )
     except (
         LineageError,
         LocalBackupError,

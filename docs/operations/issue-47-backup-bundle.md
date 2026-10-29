@@ -62,21 +62,31 @@ failures. Do not delete a prior backup until a later restore has been checked.
 
 ## Restore drill
 
-Create an empty, disposable local PostgreSQL database whose name starts with
-`trading_restore_`. Add a loopback libpq service with the same prefix and set
-`TRADING_PLATFORM_PG_RESTORE_SERVICE` to its service name. Then run:
+On Windows/Docker Desktop, choose a previously absent database name beginning
+with `trading_restore_`, add its loopback libpq service, and set
+`TRADING_PLATFORM_PG_RESTORE_SERVICE`. Do not create or drop the database
+manually. Use the documented Docker operator lifecycle:
 
-```sh
-python -m trading_platform_api.lineage.local_backup_cli restore daily/YYYY/MM/DD/backup-id.zip
+```powershell
+.venv\Scripts\python.exe -m trading_platform_api.lineage.docker_local_backup `
+  --project <exact-compose-project> `
+  --config <external-protected-backup.env> `
+  --confirm-retained-project <exact-compose-project> `
+  restore-drill daily/YYYY/MM/DD/backup-id.zip
 ```
 
-The command verifies the complete bundle before restoring archive objects and
-calling `pg_restore`. It never creates, drops, or selects a database outside
-the required disposable `trading_restore_*` target. The target must be empty;
-the command checks this before running `pg_restore` and refuses to overwrite
-user relations. After restoration, run the lineage resolver against restored
-C-001 keys and verify referenced analysis inputs resolve before treating the
-restore as proven.
+For disposable `spot-test-*` projects, omit the retained-project confirmation.
+The command requires an absent target, creates only that target, marks it with
+the drill invocation identity, verifies the complete bundle before restoring,
+and runs bounded C-001 and analysis-input resolution through
+`SqlAlchemyLineageStore.resolve`. It verifies the marker again before dropping
+only the database it created. A pre-existing target is never overwritten or
+dropped. The bundle and key remain retained.
+
+If verification fails, scoped cleanup is attempted. An ownership mismatch or
+drop failure fails closed and reports the exact remaining disposable database;
+do not use broad cleanup. The Windows lifecycle and recovery rules are detailed
+in [Windows backup and restore through Docker Desktop](windows-docker-local-backup.md).
 
 Product CI runs this flow against separate disposable local PostgreSQL source
 and restore databases. It uses the actual encrypted backup and restore

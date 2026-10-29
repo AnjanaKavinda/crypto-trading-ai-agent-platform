@@ -142,22 +142,39 @@ healthy PostgreSQL container, and prints the verified bundle key and digest.
 Accept a backup only when the command succeeds. Preserve the resulting bundle
 and its decryption keys.
 
-To restore, first create an empty database whose name starts with
-`trading_restore_` in the same disposable/local PostgreSQL deployment and add
-its matching protected libpq service section. Set
-`TRADING_PLATFORM_PG_RESTORE_SERVICE` in the config, then run:
+For an operator restore drill, choose a previously absent database name that
+starts with `trading_restore_` and add its matching protected libpq service
+section. Do not create the database yourself. Set
+`TRADING_PLATFORM_PG_RESTORE_SERVICE` in the config, then run the lifecycle
+command against a bundle that the preceding backup command reported verified:
 
 ```powershell
 .venv\Scripts\python.exe -m trading_platform_api.lineage.docker_local_backup `
   --project <exact-compose-project> `
   --config <external-protected-backup.env> `
-  restore <verified-bundle-key>
+  --confirm-retained-project <exact-compose-project> `
+  restore-drill <verified-bundle-key>
 ```
 
-The existing restore CLI verifies the encrypted bundle before restoration and
-refuses a non-empty or non-`trading_restore_*` target. The runner accepts only
-the selected local Docker project and its healthy, unpublished PostgreSQL
-service. It never runs the `prune-hot` command.
+Omit `--confirm-retained-project` for a disposable `spot-test-*` project. For
+`spot-research`, the exact repeated project value is mandatory and constitutes
+only target confirmation; separate owner authorization is still required.
+
+The drill validates the selected healthy, unpublished PostgreSQL service and
+requires the target to be absent and different from the source. It creates the
+target, records an invocation-specific database comment, verifies the complete
+encrypted bundle and referenced archive objects, restores the dump, and uses
+the bounded `SqlAlchemyLineageStore.resolve` path to verify restored C-001 and
+analysis-input lineage. It then rechecks the ownership comment and drops only
+that database. The bundle and encryption key remain in place.
+
+If the target already exists, the command refuses it without modification. If
+restore or lineage verification fails, cleanup still runs. If the ownership
+comment cannot be proven or dropping the target fails, cleanup fails closed and
+reports the exact remaining `trading_restore_*` database; inspect that database
+before any later operator action and never substitute a broad cleanup command.
+The one-shot worker is removed through its independently labelled cleanup path.
+The runner never invokes migrations or the `prune-hot` command.
 
 ## Retained data boundary
 
