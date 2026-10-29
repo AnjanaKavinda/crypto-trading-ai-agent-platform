@@ -88,39 +88,8 @@ jobs:
       - name: Run native web regression tests
         run: node --test tests/frontend/*.test.mjs
 
-      - name: Configure disposable offline Docker-local settings
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import secrets
-          path = Path(".env")
-          assert not path.exists(), "Do not overwrite local settings"
-          content = Path(".env.example").read_text()
-          content = content.replace("POSTGRES_PASSWORD=\n", "POSTGRES_PASSWORD=" + secrets.token_hex(24) + "\n")
-          content = content.replace("LOCAL_PROXY_SECRET=\n", "LOCAL_PROXY_SECRET=" + secrets.token_hex(32) + "\n")
-          path.write_text(content)
-          path.chmod(0o600)
-          PY
-
-      - name: Validate Compose and build local research images
-        run: |
-          docker compose config --quiet
-          docker compose up --build --wait --wait-timeout 180
-
-      - name: Verify offline local stack and volume persistence
+      - name: Verify isolated offline Docker-local stack and volume persistence
         run: python tests/docker/test_local_stack.py
-
-      - name: Show Docker status on failure
-        if: failure()
-        run: |
-          docker compose ps --all
-          docker compose logs --no-color --tail 100
-
-      - name: Remove disposable CI stack and settings
-        if: always()
-        run: |
-          docker compose down -v
-          rm -f .env
 
       - name: Reject new repository secrets
         run: git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
