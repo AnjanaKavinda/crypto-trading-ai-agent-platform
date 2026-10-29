@@ -57,6 +57,8 @@ def _protect_windows_test_file(path: Path) -> None:
         )
         if result.returncode:
             raise AssertionError("Could not set the Windows test file ACL.")
+    environment = os.environ.copy()
+    environment.pop("PSModulePath", None)
     verification = subprocess.run(
         [
             "powershell.exe",
@@ -72,6 +74,7 @@ def _protect_windows_test_file(path: Path) -> None:
         ],
         check=False,
         capture_output=True,
+        env=environment,
         timeout=10,
     )
     if verification.returncode:
