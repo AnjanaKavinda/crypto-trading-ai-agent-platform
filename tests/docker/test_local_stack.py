@@ -768,7 +768,7 @@ class LocalStackAcceptanceTests(unittest.TestCase):
                 disabled.exception.headers.get("X-Correlation-ID"),
                 "00000000-0000-4000-8000-000000000360",
             )
-            canary = "secret-canary-not-a-valid-uuid"  # pragma: allowlist secret
+            canary = "invalid-correlation-canary-not-a-valid-uuid"
             invalid_refresh = Request(
                 origin + f"/api/research/spot/{instrument}/refresh",
                 data=body,
