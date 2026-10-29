@@ -1052,17 +1052,19 @@ class LocalStackAcceptanceTests(unittest.TestCase):
 
             if stack.restore_database is None:
                 self.fail("The isolated restore database name was not generated.")
-            stack.database(f'CREATE DATABASE "{stack.restore_database}"')
-            restore_result = stack.lineage_backup("restore", object_key)
+            restore_result = stack.lineage_backup("restore-drill", object_key)
             self.assertRegex(
-                restore_result, r"^Restore completed: sha256=[0-9a-f]{64}$"
+                restore_result,
+                rf"^Restore drill verified and cleaned: "
+                rf"database={re.escape(stack.restore_database)} "
+                rf"sha256=[0-9a-f]{{64}} resolved_c001=[0-9]+$",
             )
             self.assertEqual(
-                stack.database_in(
-                    stack.restore_database,
-                    "SELECT id FROM docker_ci_backup_probe",
+                stack.database(
+                    "SELECT count(*) FROM pg_database "
+                    f"WHERE datname = '{stack.restore_database}'"
                 ),
-                "42",
+                "0",
             )
 
 

@@ -18,6 +18,7 @@ from trading_platform_api.lineage.docker_local_backup import (
     _protect_windows_file,
     _read_env_file,
     _require_local_docker,
+    _run_docker,
     _validate_protected_file,
     _validate_settings,
     _worker_user,
@@ -60,6 +61,26 @@ def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
     env.chmod(0o600)
     _protect_windows_test_file(env)
+    return env, service, archive, backup
+
+
+def _restore_configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    env, service, archive, backup = _configuration(tmp_path)
+    password = "test" + "-password"  # pragma: allowlist secret
+    service.write_text(
+        service.read_text(encoding="utf-8")
+        + "\n[trading_restore_owned]\nhost=127.0.0.1\nport=5432\n"
+        + "dbname=trading_restore_owned\nuser=research\n"
+        + f"password={password}\n",
+        encoding="utf-8",
+    )
+    env.write_text(
+        env.read_text(encoding="utf-8")
+        + "TRADING_PLATFORM_PG_RESTORE_SERVICE=trading_restore_owned\n",
+        encoding="utf-8",
+    )
+    service.chmod(0o600)
+    env.chmod(0o600)
     return env, service, archive, backup
 
 
@@ -196,6 +217,61 @@ def test_main_emits_only_stable_diagnostic_fields(
     assert private_detail not in captured.err
 
 
+def test_worker_cleanup_diagnostic_allows_only_validated_database_name() -> None:
+    stderr = (
+        "private raw output\n"
+        "RESTORE_DRILL_DIAGNOSTIC stage=cleanup "
+        "code=RESTORE_DATABASE_REMAINS resource=trading_restore_owned\n"
+    )
+    result = subprocess.CompletedProcess([], 2, "private stdout", stderr)
+    with patch(
+        "trading_platform_api.lineage.docker_local_backup.subprocess.run",
+        return_value=result,
+    ):
+        with pytest.raises(DockerBackupError) as failure:
+            _run_docker(["run", "image"], timeout=10)
+
+    assert failure.value.stage == "cleanup"
+    assert failure.value.code == "RESTORE_DATABASE_REMAINS"
+    assert failure.value.resource == "trading_restore_owned"
+    assert "private" not in str(failure.value)
+
+
+def test_main_reports_allowlisted_cleanup_resource(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._parser"
+        ) as parser_factory,
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.run_backup",
+            side_effect=DockerBackupError(
+                "private detail",
+                stage="cleanup",
+                code="RESTORE_DATABASE_REMAINS",
+                resource="trading_restore_owned",
+            ),
+        ),
+    ):
+        parser = parser_factory.return_value
+        parser.parse_args.return_value = SimpleNamespace(
+            project="spot-test-safe",
+            config=Path("protected.env"),
+            operation="restore-drill",
+            object_key="verified.zip",
+            confirm_retained_project=None,
+        )
+        parser.exit.side_effect = SystemExit(2)
+        with pytest.raises(SystemExit, match="2"):
+            main()
+
+    assert capsys.readouterr().err == (
+        "LOCAL_BACKUP_DIAGNOSTIC stage=cleanup "
+        "code=RESTORE_DATABASE_REMAINS resource=trading_restore_owned\n"
+    )
+
+
 def test_settings_require_external_file_and_reject_duplicate_keys(
     tmp_path: Path,
 ) -> None:
@@ -262,6 +338,64 @@ def test_restore_service_is_optional_for_backup_configuration(tmp_path: Path) ->
     env, _, _, _ = _configuration(tmp_path)
     values = _read_env_file(env)
     assert "TRADING_PLATFORM_PG_RESTORE_SERVICE" not in values
+
+
+def test_restore_drill_rejects_source_target_alias_before_docker(
+    tmp_path: Path,
+) -> None:
+    env, service, _, _ = _restore_configuration(tmp_path)
+    service.write_text(
+        service.read_text(encoding="utf-8").replace(
+            "dbname=trading_restore_owned", "dbname=source"
+        ),
+        encoding="utf-8",
+    )
+    service.chmod(0o600)
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._validate_protected_file"
+        ),
+        patch("trading_platform_api.lineage.docker_local_backup._run_docker") as docker,
+    ):
+        with pytest.raises(DockerBackupError, match=r"trading_restore_\*"):
+            run_backup("spot-test-safe", env, "restore-drill", "verified.zip")
+    docker.assert_not_called()
+
+
+def test_restore_drill_passes_invocation_identity_only_to_worker(
+    tmp_path: Path,
+) -> None:
+    env, _, _, _ = _restore_configuration(tmp_path)
+    postgres = _postgres_inspect("spot-test-safe")
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._validate_protected_file"
+        ),
+        patch("trading_platform_api.lineage.docker_local_backup._require_local_docker"),
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._inspect_postgres",
+            return_value=("a" * 64, postgres),
+        ),
+        patch("trading_platform_api.lineage.docker_local_backup.uuid.uuid4") as uuid4,
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._run_docker",
+            side_effect=[
+                "",
+                "Restore drill verified and cleaned: database=trading_restore_owned "
+                + f"sha256={'b' * 64} resolved_c001=1",
+                "",
+            ],
+        ) as docker,
+    ):
+        uuid4.return_value.hex = "a" * 32
+        output = run_backup("spot-test-safe", env, "restore-drill", "verified.zip")
+
+    assert output.startswith("Restore drill verified and cleaned")
+    run_args = docker.call_args_list[1].args[0]
+    assert run_args[-2:] == ["restore-drill", "verified.zip"]
+    worker_env = Path(run_args[run_args.index("--env-file") + 1])
+    # The temporary file is gone after the runner exits; its path never enters output.
+    assert not worker_env.exists()
 
 
 def test_remote_docker_context_is_rejected_even_with_local_host_override() -> None:

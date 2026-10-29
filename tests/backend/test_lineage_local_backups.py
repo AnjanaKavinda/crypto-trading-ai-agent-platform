@@ -3,12 +3,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sys
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from trading_platform_api.lineage import local_backup_cli
 from trading_platform_api.lineage.backups import BackupBundleError, verify_backup_bundle
 from trading_platform_api.lineage.local_backup_cli import (
+    RestoreDrillCleanupError,
+    _owned_restore_database,
+    _restore_drill,
     _validate_restore_service,
     main,
 )
@@ -201,3 +207,209 @@ def test_prune_hot_cli_requires_explicit_confirmation(
     with pytest.raises(SystemExit) as result:
         main()
     assert result.value.code == 2
+
+
+def test_restore_drill_refuses_preexisting_target() -> None:
+    async def check() -> None:
+        section = {"dbname": "trading_restore_owned"}
+        with (
+            patch.object(
+                local_backup_cli, "_validate_dump_service", return_value="source"
+            ),
+            patch.object(
+                local_backup_cli,
+                "_validate_restore_service",
+                return_value="trading_restore_owned",
+            ),
+            patch.object(local_backup_cli, "_service_config", return_value=section),
+            patch.object(local_backup_cli, "load_database_settings") as settings,
+            patch.object(
+                local_backup_cli,
+                "_database_identity",
+                new=AsyncMock(return_value=(True, None)),
+            ),
+            patch.object(local_backup_cli, "_run_database_utility") as utility,
+        ):
+            settings.return_value.database_url = (
+                "postgresql+asyncpg://user@127.0.0.1/source"
+            )
+            with pytest.raises(LocalBackupError, match="already exists"):
+                async with _owned_restore_database():
+                    pass
+        utility.assert_not_called()
+
+    asyncio.run(check())
+
+
+def test_restore_drill_creates_marks_and_removes_only_owned_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def check() -> None:
+        target = "trading_restore_owned"
+        marker = "trading-platform-restore-drill:" + "a" * 32
+        section = {"dbname": target}
+        monkeypatch.setenv("TRADING_PLATFORM_RESTORE_DRILL_ID", "a" * 32)
+        with (
+            patch.object(
+                local_backup_cli, "_validate_dump_service", return_value="source"
+            ),
+            patch.object(
+                local_backup_cli,
+                "_validate_restore_service",
+                return_value=target,
+            ),
+            patch.object(local_backup_cli, "_service_config", return_value=section),
+            patch.object(local_backup_cli, "load_database_settings") as settings,
+            patch.object(
+                local_backup_cli,
+                "_database_identity",
+                new=AsyncMock(
+                    side_effect=[
+                        (False, None),
+                        (True, marker),
+                        (True, marker),
+                        (False, None),
+                    ]
+                ),
+            ),
+            patch.object(local_backup_cli, "_mark_database", new=AsyncMock()) as mark,
+            patch.object(local_backup_cli, "_run_database_utility") as utility,
+        ):
+            settings.return_value.database_url = (
+                "postgresql+asyncpg://user@127.0.0.1/source"
+            )
+            async with _owned_restore_database() as observed:
+                assert observed == target
+        mark.assert_awaited_once_with(target, marker)
+        assert utility.call_args_list[0].args == (
+            "createdb",
+            ["--maintenance-db=service=source", target],
+        )
+        assert utility.call_args_list[1].args == (
+            "dropdb",
+            ["--force", "--maintenance-db=service=source", target],
+        )
+
+    asyncio.run(check())
+
+
+def test_restore_drill_cleanup_fails_closed_on_marker_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def check() -> None:
+        target = "trading_restore_owned"
+        marker = "trading-platform-restore-drill:" + "a" * 32
+        monkeypatch.setenv("TRADING_PLATFORM_RESTORE_DRILL_ID", "a" * 32)
+        with (
+            patch.object(
+                local_backup_cli, "_validate_dump_service", return_value="source"
+            ),
+            patch.object(
+                local_backup_cli, "_validate_restore_service", return_value=target
+            ),
+            patch.object(
+                local_backup_cli, "_service_config", return_value={"dbname": target}
+            ),
+            patch.object(local_backup_cli, "load_database_settings") as settings,
+            patch.object(
+                local_backup_cli,
+                "_database_identity",
+                new=AsyncMock(
+                    side_effect=[
+                        (False, None),
+                        (True, marker),
+                        (True, "different-owner"),
+                    ]
+                ),
+            ),
+            patch.object(local_backup_cli, "_mark_database", new=AsyncMock()),
+            patch.object(local_backup_cli, "_run_database_utility") as utility,
+        ):
+            settings.return_value.database_url = (
+                "postgresql+asyncpg://user@127.0.0.1/source"
+            )
+            with pytest.raises(RestoreDrillCleanupError) as failure:
+                async with _owned_restore_database():
+                    pass
+        assert failure.value.database == target
+        assert utility.call_count == 1
+
+    asyncio.run(check())
+
+
+def test_restore_drill_reports_exact_target_when_drop_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def check() -> None:
+        target = "trading_restore_owned"
+        marker = "trading-platform-restore-drill:" + "a" * 32
+        monkeypatch.setenv("TRADING_PLATFORM_RESTORE_DRILL_ID", "a" * 32)
+        with (
+            patch.object(
+                local_backup_cli, "_validate_dump_service", return_value="source"
+            ),
+            patch.object(
+                local_backup_cli, "_validate_restore_service", return_value=target
+            ),
+            patch.object(
+                local_backup_cli, "_service_config", return_value={"dbname": target}
+            ),
+            patch.object(local_backup_cli, "load_database_settings") as settings,
+            patch.object(
+                local_backup_cli,
+                "_database_identity",
+                new=AsyncMock(
+                    side_effect=[
+                        (False, None),
+                        (True, marker),
+                        (True, marker),
+                    ]
+                ),
+            ),
+            patch.object(local_backup_cli, "_mark_database", new=AsyncMock()),
+            patch.object(
+                local_backup_cli,
+                "_run_database_utility",
+                side_effect=[None, LocalBackupError("private drop failure")],
+            ),
+        ):
+            settings.return_value.database_url = (
+                "postgresql+asyncpg://user@127.0.0.1/source"
+            )
+            with pytest.raises(RestoreDrillCleanupError) as failure:
+                async with _owned_restore_database():
+                    pass
+        assert failure.value.database == target
+
+    asyncio.run(check())
+
+
+def test_restore_drill_verifies_lineage_before_owned_cleanup() -> None:
+    async def check() -> None:
+        events: list[str] = []
+
+        @asynccontextmanager
+        async def owned():
+            events.append("created")
+            yield "trading_restore_owned"
+            events.append("cleaned")
+
+        async def restore(_key: str) -> str:
+            events.append("restored")
+            return "b" * 64
+
+        async def verify(database: str) -> int:
+            assert database == "trading_restore_owned"
+            events.append("resolved")
+            return 3
+
+        with (
+            patch.object(local_backup_cli, "_owned_restore_database", owned),
+            patch.object(local_backup_cli, "_restore", restore),
+            patch.object(local_backup_cli, "_verify_restored_lineage", verify),
+        ):
+            result = await _restore_drill("verified.zip")
+        assert result == ("b" * 64, "trading_restore_owned", 3)
+        assert events == ["created", "restored", "resolved", "cleaned"]
+
+    asyncio.run(check())
