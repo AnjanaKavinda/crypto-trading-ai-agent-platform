@@ -106,61 +106,31 @@ def _windows_acl_environment() -> dict[str, str]:
 
 
 def _protect_windows_file(path: Path) -> None:
-    """Restrict access to the existing owner, SYSTEM, and Administrators."""
-    identity = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(_ACL_CHECK),
-            "-Path",
-            str(path.resolve()),
-            "-ReportOwner",
-        ],
-        check=False,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        env=_windows_acl_environment(),
-        timeout=_DOCKER_PREFLIGHT_TIMEOUT,
-    )
-    if identity.returncode:
-        raise DockerBackupError("Windows backup file owner could not be identified.")
-    owner_sid = identity.stdout.strip()
-    if not re.fullmatch(r"S-[0-9-]+", owner_sid):
-        raise DockerBackupError("Windows backup file owner could not be identified.")
-    commands = [
-        ("remove-inheritance", ["icacls.exe", str(path), "/inheritance:r"]),
-        *(
-            (
-                f"grant-{category}",
-                ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"],
-            )
-            for category, sid in (
-                ("owner", owner_sid),
-                ("system", "S-1-5-18"),
-                ("administrators", "S-1-5-32-544"),
-            )
-        ),
-    ]
-    for stage, command in commands:
-        try:
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                timeout=_DOCKER_PREFLIGHT_TIMEOUT,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            raise DockerBackupError(
-                f"Windows backup ACL stage failed: {stage}."
-            ) from None
-        if result.returncode:
-            raise DockerBackupError(f"Windows backup ACL stage failed: {stage}.")
+    """Restrict the file DACL to its existing owner, SYSTEM, and Administrators."""
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(_ACL_CHECK),
+                "-Path",
+                str(path.resolve()),
+                "-Protect",
+            ],
+            check=False,
+            capture_output=True,
+            env=_windows_acl_environment(),
+            timeout=_DOCKER_PREFLIGHT_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise DockerBackupError("Windows backup file ACL could not be restricted.") from None
+    if result.returncode:
+        raise DockerBackupError("Windows backup file ACL could not be restricted.")
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
