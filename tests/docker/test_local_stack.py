@@ -1052,17 +1052,37 @@ class LocalStackAcceptanceTests(unittest.TestCase):
 
             if stack.restore_database is None:
                 self.fail("The isolated restore database name was not generated.")
-            restore_result = stack.lineage_backup("restore-drill", object_key)
+            # Keep the existing data-readback assertion: a successful restore
+            # command alone does not prove that the known backup row is present.
+            restore_database = stack.restore_database
+            stack.database(f'CREATE DATABASE "{restore_database}"')
+            try:
+                restore_result = stack.lineage_backup("restore", object_key)
+                self.assertRegex(
+                    restore_result, r"^Restore completed: sha256=[0-9a-f]{64}$"
+                )
+                self.assertEqual(
+                    stack.database_in(
+                        restore_database,
+                        "SELECT id FROM docker_ci_backup_probe",
+                    ),
+                    "42",
+                )
+            finally:
+                stack.database(f'DROP DATABASE IF EXISTS "{restore_database}"')
+
+            # Separately verify the new create/mark/resolve/drop lifecycle.
+            drill_result = stack.lineage_backup("restore-drill", object_key)
             self.assertRegex(
-                restore_result,
+                drill_result,
                 rf"^Restore drill verified and cleaned: "
-                rf"database={re.escape(stack.restore_database)} "
+                rf"database={re.escape(restore_database)} "
                 rf"sha256=[0-9a-f]{{64}} resolved_c001=[0-9]+$",
             )
             self.assertEqual(
                 stack.database(
                     "SELECT count(*) FROM pg_database "
-                    f"WHERE datname = '{stack.restore_database}'"
+                    f"WHERE datname = '{restore_database}'"
                 ),
                 "0",
             )
