@@ -107,7 +107,7 @@ def test_windows_file_protection_does_not_require_privileged_owner_reset(
 ) -> None:
     protected = tmp_path / "protected.env"
     protected.write_text("safe=value\n", encoding="utf-8")
-    identity = subprocess.CompletedProcess([], 0, '"local-user","S-1-5-21-1000"\n', "")
+    identity = subprocess.CompletedProcess([], 0, "S-1-5-21-1000\n", "")
     success = subprocess.CompletedProcess([], 0, b"", b"")
     with patch(
         "trading_platform_api.lineage.docker_local_backup.subprocess.run",
@@ -123,6 +123,36 @@ def test_windows_file_protection_does_not_require_privileged_owner_reset(
         "/grant:r",
         "/grant:r",
     ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL validation requires Windows")
+@pytest.mark.parametrize(
+    ("returncode", "expected_code"),
+    [
+        (2, "WINDOWS_ACL_NOT_REGULAR_FILE"),
+        (3, "WINDOWS_ACL_OWNER_INVALID"),
+        (4, "WINDOWS_ACL_DENY_RULE"),
+        (5, "WINDOWS_ACL_UNAPPROVED_PRINCIPAL"),
+        (6, "WINDOWS_ACL_OWNER_ACCESS_MISSING"),
+        (7, "WINDOWS_ACL_CHECK_FAILED"),
+        (9, "WINDOWS_ACL_UNKNOWN_FAILURE"),
+    ],
+)
+def test_windows_acl_validator_exit_codes_are_safely_mapped(
+    tmp_path: Path, returncode: int, expected_code: str
+) -> None:
+    protected = tmp_path / "protected.env"
+    protected.write_text("safe=value\n", encoding="utf-8")
+    result = subprocess.CompletedProcess([], returncode, b"private", b"private")
+    with patch(
+        "trading_platform_api.lineage.docker_local_backup.subprocess.run",
+        return_value=result,
+    ):
+        with pytest.raises(DockerBackupError) as failure:
+            _validate_protected_file(protected)
+
+    assert failure.value.code == expected_code
+    assert "private" not in str(failure.value)
 
 
 def test_main_emits_only_stable_diagnostic_fields(

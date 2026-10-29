@@ -37,7 +37,11 @@ BACKUP_DIAGNOSTIC_PATTERN = re.compile(
     r"SETTINGS_ACL_INVALID|SERVICE_FILE_ACL_INVALID|PATH_VALIDATION_FAILED|"
     r"DATABASE_URL_INVALID|"
     r"PG_SERVICE_INVALID|ENCRYPTION_CONFIG_INVALID|DOCKER_CLI_UNAVAILABLE|"
-    r"DOCKER_COMMAND_TIMEOUT|DOCKER_COMMAND_FAILED|BACKUP_WORKER_FAILED)"
+    r"DOCKER_COMMAND_TIMEOUT|DOCKER_COMMAND_FAILED|BACKUP_WORKER_FAILED|"
+    r"WINDOWS_ACL_NOT_REGULAR_FILE|WINDOWS_ACL_OWNER_INVALID|"
+    r"WINDOWS_ACL_DENY_RULE|WINDOWS_ACL_UNAPPROVED_PRINCIPAL|"
+    r"WINDOWS_ACL_OWNER_ACCESS_MISSING|WINDOWS_ACL_CHECK_FAILED|"
+    r"WINDOWS_ACL_UNKNOWN_FAILURE)"
 )
 
 
@@ -690,13 +694,13 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
         self.assertEqual(result.stdout, "\ufffd")
 
     def test_backup_diagnostic_allows_only_fixed_stage_and_code(self) -> None:
-        secret = "sensitive-value-must-not-appear"
+        sentinel = "fixture-output-must-not-appear"
         completed = subprocess.CompletedProcess(
             [],
             2,
-            secret,
+            sentinel,
             "LOCAL_BACKUP_DIAGNOSTIC stage=worker-execution "
-            f"code=BACKUP_WORKER_FAILED\nraw={secret}",
+            f"code=BACKUP_WORKER_FAILED\nraw={sentinel}",
         )
         with (
             mock.patch(f"{__name__}.subprocess.run", return_value=completed),
@@ -711,7 +715,7 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
                 accept_backup_diagnostic=True,
             )
 
-        self.assertNotIn(secret, str(failure.exception))
+        self.assertNotIn(sentinel, str(failure.exception))
 
     def test_backup_diagnostic_rejects_unrecognized_values(self) -> None:
         completed = subprocess.CompletedProcess(

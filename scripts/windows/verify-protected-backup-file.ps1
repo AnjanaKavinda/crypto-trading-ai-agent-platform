@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string] $Path
+    [string] $Path,
+
+    [switch] $ReportOwner
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,14 +13,17 @@ try {
         exit 2
     }
 
-    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $acl = Get-Acl -LiteralPath $item.FullName
     $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($ownerSid -ne $currentSid) {
+    if ([string]::IsNullOrWhiteSpace($ownerSid)) {
         exit 3
     }
+    if ($ReportOwner) {
+        Write-Output $ownerSid
+        exit 0
+    }
 
-    $allowedSids = @($currentSid, 'S-1-5-18', 'S-1-5-32-544')
+    $allowedSids = @($ownerSid, 'S-1-5-18', 'S-1-5-32-544')
     $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
     foreach ($rule in $rules) {
         if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) {
@@ -30,7 +35,7 @@ try {
     }
 
     if (-not ($rules | Where-Object {
-        $_.IdentityReference.Value -eq $currentSid -and
+        $_.IdentityReference.Value -eq $ownerSid -and
         ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadData)
     })) {
         exit 6

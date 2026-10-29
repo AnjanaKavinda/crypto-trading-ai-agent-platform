@@ -56,6 +56,14 @@ _REQUIRED_ENV_KEYS = {
     "TRADING_PLATFORM_PG_DUMP_SERVICE",
 }
 _ALLOWED_ENV_KEYS = _REQUIRED_ENV_KEYS | {"TRADING_PLATFORM_PG_RESTORE_SERVICE"}
+_WINDOWS_ACL_ERROR_CODES = {
+    2: "WINDOWS_ACL_NOT_REGULAR_FILE",
+    3: "WINDOWS_ACL_OWNER_INVALID",
+    4: "WINDOWS_ACL_DENY_RULE",
+    5: "WINDOWS_ACL_UNAPPROVED_PRINCIPAL",
+    6: "WINDOWS_ACL_OWNER_ACCESS_MISSING",
+    7: "WINDOWS_ACL_CHECK_FAILED",
+}
 
 
 class DockerBackupError(RuntimeError):
@@ -100,7 +108,19 @@ def _windows_acl_environment() -> dict[str, str]:
 def _protect_windows_file(path: Path) -> None:
     """Restrict access to the existing owner, SYSTEM, and Administrators."""
     identity = subprocess.run(
-        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(_ACL_CHECK),
+            "-Path",
+            str(path.resolve()),
+            "-ReportOwner",
+        ],
         check=False,
         capture_output=True,
         encoding="utf-8",
@@ -109,8 +129,8 @@ def _protect_windows_file(path: Path) -> None:
     )
     if identity.returncode:
         raise DockerBackupError("Windows backup file owner could not be identified.")
-    current_sid = identity.stdout.rsplit(",", 1)[-1].strip().strip('"')
-    if not re.fullmatch(r"S-[0-9-]+", current_sid):
+    owner_sid = identity.stdout.strip()
+    if not re.fullmatch(r"S-[0-9-]+", owner_sid):
         raise DockerBackupError("Windows backup file owner could not be identified.")
     commands = [
         ("remove-inheritance", ["icacls.exe", str(path), "/inheritance:r"]),
@@ -120,7 +140,7 @@ def _protect_windows_file(path: Path) -> None:
                 ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"],
             )
             for category, sid in (
-                ("owner", current_sid),
+                ("owner", owner_sid),
                 ("system", "S-1-5-18"),
                 ("administrators", "S-1-5-32-544"),
             )
@@ -233,7 +253,13 @@ def _validate_protected_file(path: Path) -> None:
                 "Windows backup file protection could not be verified."
             ) from None
         if result.returncode:
-            raise DockerBackupError("Windows backup file ACL is not owner-restricted.")
+            code = _WINDOWS_ACL_ERROR_CODES.get(
+                result.returncode, "WINDOWS_ACL_UNKNOWN_FAILURE"
+            )
+            raise DockerBackupError(
+                "Windows backup file ACL is not owner-restricted.",
+                code=code,
+            )
     elif path.stat().st_mode & 0o777 != 0o600:
         raise DockerBackupError("Backup files must have mode 0600 on this host.")
 
