@@ -61,6 +61,56 @@ class DockerBackupError(RuntimeError):
     """A safe local Docker backup or restore could not be performed."""
 
 
+def _windows_acl_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    # Do not let a parent pwsh process make Windows PowerShell 5.1 load PowerShell 7 modules.
+    environment["PSModulePath"] = str(
+        Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "Modules"
+    )
+    return environment
+
+
+def _protect_windows_file(path: Path) -> None:
+    """Replace inherited access with the current owner, SYSTEM, and Administrators."""
+    identity = subprocess.run(
+        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+        check=False,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_DOCKER_PREFLIGHT_TIMEOUT,
+    )
+    if identity.returncode:
+        raise DockerBackupError("Windows backup file owner could not be identified.")
+    current_sid = identity.stdout.rsplit(",", 1)[-1].strip().strip('"')
+    if not re.fullmatch(r"S-[0-9-]+", current_sid):
+        raise DockerBackupError("Windows backup file owner could not be identified.")
+    commands = [["icacls.exe", str(path), "/inheritance:r"]]
+    commands.append(["icacls.exe", str(path), "/setowner", f"*{current_sid}"])
+    commands.extend(
+        ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"]
+        for sid in (current_sid, "S-1-5-18", "S-1-5-32-544")
+    )
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                timeout=_DOCKER_PREFLIGHT_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise DockerBackupError(
+                "Windows backup file ACL could not be restricted."
+            ) from None
+        if result.returncode:
+            raise DockerBackupError("Windows backup file ACL could not be restricted.")
+
+
 def _read_env_file(path: Path) -> dict[str, str]:
     if path.is_symlink() or not path.is_file():
         raise DockerBackupError("Backup settings file is unavailable.")
@@ -128,16 +178,6 @@ def _validate_protected_file(path: Path) -> None:
     if os.name == "nt":
         if not _ACL_CHECK.is_file():
             raise DockerBackupError("Windows backup ACL validation is unavailable.")
-        environment = os.environ.copy()
-        # A parent pwsh process can pass PowerShell 7 module paths to Windows
-        # PowerShell 5.1, preventing Microsoft.PowerShell.Security from loading.
-        environment["PSModulePath"] = str(
-            Path(os.environ.get("SystemRoot", r"C:\Windows"))
-            / "System32"
-            / "WindowsPowerShell"
-            / "v1.0"
-            / "Modules"
-        )
         try:
             result = subprocess.run(
                 [
@@ -154,7 +194,7 @@ def _validate_protected_file(path: Path) -> None:
                 ],
                 check=False,
                 capture_output=True,
-                env=environment,
+                env=_windows_acl_environment(),
                 timeout=_DOCKER_PREFLIGHT_TIMEOUT,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -576,9 +616,14 @@ def _worker_environment_file(
             encoding="utf-8",
         )
         try:
-            env_file.chmod(0o600)
+            if os.name == "nt":
+                _protect_windows_file(env_file)
+            else:
+                env_file.chmod(0o600)
         except OSError:
-            pass
+            raise DockerBackupError(
+                "Backup worker settings file could not be protected."
+            ) from None
         _validate_protected_file(env_file)
         yield env_file
 
