@@ -125,6 +125,7 @@ def _protect_windows_file(path: Path) -> None:
         capture_output=True,
         encoding="utf-8",
         errors="replace",
+        env=_windows_acl_environment(),
         timeout=_DOCKER_PREFLIGHT_TIMEOUT,
     )
     if identity.returncode:
