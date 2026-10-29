@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from trading_platform_api.lineage.docker_local_backup import (
+    _ACL_CHECK,
     _REPO_ROOT,
     COMPOSE_FILE,
     DockerBackupError,
@@ -56,6 +57,28 @@ def _protect_windows_test_file(path: Path) -> None:
         )
         if result.returncode:
             raise AssertionError("Could not set the Windows test file ACL.")
+    verification = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(_ACL_CHECK),
+            "-Path",
+            str(path.resolve()),
+        ],
+        check=False,
+        capture_output=True,
+        timeout=10,
+    )
+    if verification.returncode:
+        raise AssertionError(
+            "Synthetic Windows test file failed ACL verification "
+            f"(check {verification.returncode})."
+        )
 
 
 def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
