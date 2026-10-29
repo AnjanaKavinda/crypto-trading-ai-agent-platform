@@ -30,6 +30,15 @@ RETAINED_VOLUME = "spot-research_research-data"
 COMMAND_TIMEOUT_SECONDS = 180
 DOCKER_PREFLIGHT_TIMEOUT_SECONDS = 10
 PROJECT_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
+BACKUP_DIAGNOSTIC_PATTERN = re.compile(
+    r"LOCAL_BACKUP_DIAGNOSTIC "
+    r"stage=(validation|docker-invocation|worker-execution) "
+    r"code=(BACKUP_VALIDATION_FAILED|SETTINGS_SCHEMA_INVALID|"
+    r"SETTINGS_ACL_INVALID|SERVICE_FILE_ACL_INVALID|PATH_VALIDATION_FAILED|"
+    r"DATABASE_URL_INVALID|"
+    r"PG_SERVICE_INVALID|ENCRYPTION_CONFIG_INVALID|DOCKER_CLI_UNAVAILABLE|"
+    r"DOCKER_COMMAND_TIMEOUT|DOCKER_COMMAND_FAILED|BACKUP_WORKER_FAILED)"
+)
 
 
 def _run(
@@ -39,6 +48,7 @@ def _run(
     env: dict[str, str] | None = None,
     timeout: int = COMMAND_TIMEOUT_SECONDS,
     operation: str,
+    accept_backup_diagnostic: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a Docker command without echoing arguments, output, or settings."""
     try:
@@ -61,8 +71,14 @@ def _run(
             "no retry was attempted."
         ) from None
     if result.returncode:
+        diagnostic = ""
+        if accept_backup_diagnostic:
+            matches = BACKUP_DIAGNOSTIC_PATTERN.findall(result.stderr or "")
+            if len(matches) == 1:
+                stage, code = matches[0]
+                diagnostic = f"; stage={stage}; code={code}"
         raise RuntimeError(
-            f"{operation} failed with exit code {result.returncode}; "
+            f"{operation} failed with exit code {result.returncode}{diagnostic}; "
             "command output is suppressed to avoid exposing local settings."
         )
     return result
@@ -112,6 +128,21 @@ def _compose_child_environment(setting_names: set[str]) -> dict[str, str]:
         if key.startswith("COMPOSE_") or key in setting_names:
             env.pop(key, None)
     return env
+
+
+def _protect_disposable_backup_file(path: Path) -> None:
+    """Apply the production protection policy to a disposable harness file."""
+    if os.name != "nt":
+        path.chmod(0o600)
+        return
+    source_root = str(ROOT / "apps" / "api" / "src")
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    from trading_platform_api.lineage.docker_local_backup import (  # noqa: PLC0415
+        _protect_windows_file,
+    )
+
+    _protect_windows_file(path)
 
 
 def _docker_output(
@@ -291,10 +322,13 @@ class DisposableComposeProject:
         ]
         if object_key is not None:
             command.append(object_key)
+        worker_env = self._child_env.copy()
+        worker_env["PYTHONPATH"] = str(ROOT / "apps" / "api" / "src")
         return _run(
             command,
-            env=self._child_env,
+            env=worker_env,
             operation=f"run isolated {operation} backup worker",
+            accept_backup_diagnostic=True,
         ).stdout.strip()
 
     def restart_preserving_volume(self, volume_name: str) -> None:
@@ -459,10 +493,7 @@ class DisposableComposeProject:
             encoding="utf-8",
         )
         for protected_file in (path, service_path):
-            try:
-                protected_file.chmod(0o600)
-            except OSError:
-                pass
+            _protect_disposable_backup_file(protected_file)
 
     def _retained_inventory(self) -> dict[str, str]:
         containers = _docker_output(
@@ -658,6 +689,50 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
 
         self.assertEqual(result.stdout, "\ufffd")
 
+    def test_backup_diagnostic_allows_only_fixed_stage_and_code(self) -> None:
+        secret = "sensitive-value-must-not-appear"
+        completed = subprocess.CompletedProcess(
+            [],
+            2,
+            secret,
+            "LOCAL_BACKUP_DIAGNOSTIC stage=worker-execution "
+            f"code=BACKUP_WORKER_FAILED\nraw={secret}",
+        )
+        with (
+            mock.patch(f"{__name__}.subprocess.run", return_value=completed),
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"stage=worker-execution; code=BACKUP_WORKER_FAILED",
+            ) as failure,
+        ):
+            _run(
+                ["safe-placeholder"],
+                operation="run isolated backup worker",
+                accept_backup_diagnostic=True,
+            )
+
+        self.assertNotIn(secret, str(failure.exception))
+
+    def test_backup_diagnostic_rejects_unrecognized_values(self) -> None:
+        completed = subprocess.CompletedProcess(
+            [],
+            2,
+            "",
+            "LOCAL_BACKUP_DIAGNOSTIC stage=private-path code=SECRET_VALUE",
+        )
+        with (
+            mock.patch(f"{__name__}.subprocess.run", return_value=completed),
+            self.assertRaises(RuntimeError) as failure,
+        ):
+            _run(
+                ["safe-placeholder"],
+                operation="run isolated backup worker",
+                accept_backup_diagnostic=True,
+            )
+
+        self.assertNotIn("private-path", str(failure.exception))
+        self.assertNotIn("SECRET_VALUE", str(failure.exception))
+
     def test_compose_project_name_is_unique_and_valid(self) -> None:
         project = _project_name()
         self.assertNotEqual(project, RETAINED_PROJECT)
@@ -695,6 +770,21 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
         self.assertIn("--project-directory", command)
         self.assertIn("--file", command)
         self.assertNotEqual(stack.project, RETAINED_PROJECT)
+
+    def test_backup_worker_imports_source_from_current_checkout(self) -> None:
+        stack = DisposableComposeProject()
+        stack.backup_settings_path = Path("temporary-backup.env")
+        stack._child_env = {"PYTHONPATH": "stale-installed-source"}
+        with mock.patch(
+            f"{__name__}._run",
+            return_value=subprocess.CompletedProcess([], 0, "ok", ""),
+        ) as run:
+            stack.lineage_backup("backup")
+
+        self.assertEqual(
+            run.call_args.kwargs["env"]["PYTHONPATH"],
+            str(ROOT / "apps" / "api" / "src"),
+        )
 
     def test_compose_child_environment_removes_project_and_setting_overrides(
         self,

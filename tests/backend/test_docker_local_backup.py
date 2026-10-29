@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -18,7 +19,9 @@ from trading_platform_api.lineage.docker_local_backup import (
     _read_env_file,
     _require_local_docker,
     _validate_protected_file,
+    _validate_settings,
     _worker_user,
+    main,
     run_backup,
 )
 
@@ -99,6 +102,65 @@ def test_worker_identity_matches_host_bind_mount_access() -> None:
         assert _worker_user() == f"{os.getuid()}:{os.getgid()}"
 
 
+def test_windows_file_protection_does_not_require_privileged_owner_reset(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "protected.env"
+    protected.write_text("safe=value\n", encoding="utf-8")
+    identity = subprocess.CompletedProcess([], 0, '"local-user","S-1-5-21-1000"\n', "")
+    success = subprocess.CompletedProcess([], 0, b"", b"")
+    with patch(
+        "trading_platform_api.lineage.docker_local_backup.subprocess.run",
+        side_effect=[identity, success, success, success, success],
+    ) as run:
+        _protect_windows_file(protected)
+
+    acl_commands = [call.args[0] for call in run.call_args_list[1:]]
+    assert all("/setowner" not in command for command in acl_commands)
+    assert [command[2] for command in acl_commands] == [
+        "/inheritance:r",
+        "/grant:r",
+        "/grant:r",
+        "/grant:r",
+    ]
+
+
+def test_main_emits_only_stable_diagnostic_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    private_detail = "private-path-and-credential"
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._parser"
+        ) as parser_factory,
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.run_backup",
+            side_effect=DockerBackupError(
+                private_detail,
+                stage="worker-execution",
+                code="BACKUP_WORKER_FAILED",
+            ),
+        ),
+    ):
+        parser = parser_factory.return_value
+        parser.parse_args.return_value = SimpleNamespace(
+            project="spot-test-safe",
+            config=Path("protected.env"),
+            operation="backup",
+            confirm_retained_project=None,
+        )
+        parser.exit.side_effect = SystemExit(2)
+        with pytest.raises(SystemExit, match="2"):
+            main()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "LOCAL_BACKUP_DIAGNOSTIC stage=worker-execution code=BACKUP_WORKER_FAILED\n"
+    )
+    assert private_detail not in captured.err
+
+
 def test_settings_require_external_file_and_reject_duplicate_keys(
     tmp_path: Path,
 ) -> None:
@@ -110,6 +172,55 @@ def test_settings_require_external_file_and_reject_duplicate_keys(
     duplicate.chmod(0o600)
     with pytest.raises(DockerBackupError, match="repeats"):
         _read_env_file(duplicate)
+
+
+def test_validation_boundaries_have_stable_categories(tmp_path: Path) -> None:
+    env, _, archive, _ = _configuration(tmp_path)
+    original = env.read_text(encoding="utf-8")
+    env.write_text(f"{original}DATABASE_URL=duplicate\n", encoding="utf-8")
+    with pytest.raises(DockerBackupError) as schema_failure:
+        _validate_settings(env, "backup")
+    assert schema_failure.value.code == "SETTINGS_SCHEMA_INVALID"
+    env.write_text(original, encoding="utf-8")
+
+    with patch(
+        "trading_platform_api.lineage.docker_local_backup._validate_protected_file",
+        side_effect=DockerBackupError("private ACL detail"),
+    ):
+        with pytest.raises(DockerBackupError) as acl_failure:
+            _validate_settings(env, "backup")
+    assert acl_failure.value.code == "SETTINGS_ACL_INVALID"
+
+    with patch(
+        "trading_platform_api.lineage.docker_local_backup._validate_protected_file",
+        side_effect=[None, DockerBackupError("private service ACL detail")],
+    ):
+        with pytest.raises(DockerBackupError) as service_acl_failure:
+            _validate_settings(env, "backup")
+    assert service_acl_failure.value.code == "SERVICE_FILE_ACL_INVALID"
+
+    missing = tmp_path / "missing-archive"
+    env.write_text(
+        env.read_text(encoding="utf-8").replace(str(archive), str(missing)),
+        encoding="utf-8",
+    )
+    with pytest.raises(DockerBackupError) as path_failure:
+        _validate_settings(env, "backup")
+    assert path_failure.value.code == "PATH_VALIDATION_FAILED"
+
+    encryption_dir = tmp_path / "encryption"
+    encryption_dir.mkdir()
+    env, _, _, _ = _configuration(encryption_dir)
+    env.write_text(
+        env.read_text(encoding="utf-8").replace(
+            "ENCRYPTION_ACTIVE_KEY_ID=test-key",
+            "ENCRYPTION_ACTIVE_KEY_ID=missing-key",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(DockerBackupError) as encryption_failure:
+        _validate_settings(env, "backup")
+    assert encryption_failure.value.code == "ENCRYPTION_CONFIG_INVALID"
 
 
 def test_restore_service_is_optional_for_backup_configuration(tmp_path: Path) -> None:
@@ -154,8 +265,9 @@ def test_source_configuration_is_validated_before_docker_invocation(
     with patch(
         "trading_platform_api.lineage.docker_local_backup._run_docker"
     ) as docker:
-        with pytest.raises(DockerBackupError, match="worker loopback"):
+        with pytest.raises(DockerBackupError, match="worker loopback") as failure:
             run_backup("spot-test-safe", env, "backup")
+    assert failure.value.code == "DATABASE_URL_INVALID"
     docker.assert_not_called()
 
 
@@ -173,8 +285,11 @@ def test_service_file_rejects_hostaddr_override_before_docker(
     with patch(
         "trading_platform_api.lineage.docker_local_backup._run_docker"
     ) as docker:
-        with pytest.raises(DockerBackupError, match="unsupported connection options"):
+        with pytest.raises(
+            DockerBackupError, match="unsupported connection options"
+        ) as failure:
             run_backup("spot-test-safe", env, "backup")
+    assert failure.value.code == "PG_SERVICE_INVALID"
     docker.assert_not_called()
 
 

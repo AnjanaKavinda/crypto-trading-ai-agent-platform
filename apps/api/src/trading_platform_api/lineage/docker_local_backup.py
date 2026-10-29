@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -60,6 +61,28 @@ _ALLOWED_ENV_KEYS = _REQUIRED_ENV_KEYS | {"TRADING_PLATFORM_PG_RESTORE_SERVICE"}
 class DockerBackupError(RuntimeError):
     """A safe local Docker backup or restore could not be performed."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str = "validation",
+        code: str = "BACKUP_VALIDATION_FAILED",
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.code = code
+
+
+@contextlib.contextmanager
+def _validation_boundary(code: str) -> Iterator[None]:
+    """Attach one stable category without changing the internal failure detail."""
+    try:
+        yield
+    except DockerBackupError as exc:
+        if exc.stage == "validation" and exc.code == "BACKUP_VALIDATION_FAILED":
+            exc.code = code
+        raise
+
 
 def _windows_acl_environment() -> dict[str, str]:
     environment = os.environ.copy()
@@ -75,7 +98,7 @@ def _windows_acl_environment() -> dict[str, str]:
 
 
 def _protect_windows_file(path: Path) -> None:
-    """Replace inherited access with the current owner, SYSTEM, and Administrators."""
+    """Restrict access to the existing owner, SYSTEM, and Administrators."""
     identity = subprocess.run(
         ["whoami.exe", "/user", "/fo", "csv", "/nh"],
         check=False,
@@ -89,13 +112,21 @@ def _protect_windows_file(path: Path) -> None:
     current_sid = identity.stdout.rsplit(",", 1)[-1].strip().strip('"')
     if not re.fullmatch(r"S-[0-9-]+", current_sid):
         raise DockerBackupError("Windows backup file owner could not be identified.")
-    commands = [["icacls.exe", str(path), "/inheritance:r"]]
-    commands.append(["icacls.exe", str(path), "/setowner", f"*{current_sid}"])
-    commands.extend(
-        ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"]
-        for sid in (current_sid, "S-1-5-18", "S-1-5-32-544")
-    )
-    for command in commands:
+    commands = [
+        ("remove-inheritance", ["icacls.exe", str(path), "/inheritance:r"]),
+        *(
+            (
+                f"grant-{category}",
+                ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"],
+            )
+            for category, sid in (
+                ("owner", current_sid),
+                ("system", "S-1-5-18"),
+                ("administrators", "S-1-5-32-544"),
+            )
+        ),
+    ]
+    for stage, command in commands:
         try:
             result = subprocess.run(
                 command,
@@ -105,10 +136,10 @@ def _protect_windows_file(path: Path) -> None:
             )
         except (OSError, subprocess.TimeoutExpired):
             raise DockerBackupError(
-                "Windows backup file ACL could not be restricted."
+                f"Windows backup ACL stage failed: {stage}."
             ) from None
         if result.returncode:
-            raise DockerBackupError("Windows backup file ACL could not be restricted.")
+            raise DockerBackupError(f"Windows backup ACL stage failed: {stage}.")
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -244,94 +275,112 @@ def _service_section(
 def _validate_settings(
     config_path: Path, operation: str
 ) -> tuple[dict[str, str], Path, Path, Path, str, str | None]:
-    config_path = config_path.expanduser()
-    if config_path.is_symlink() or not config_path.is_file():
-        raise DockerBackupError("Backup settings file is unavailable.")
-    config_path = config_path.resolve(strict=True)
-    if (
-        _REPO_ROOT.resolve() == config_path
-        or _REPO_ROOT.resolve() in config_path.parents
-    ):
-        raise DockerBackupError(
-            "Backup settings must be stored outside the repository."
+    with _validation_boundary("SETTINGS_SCHEMA_INVALID"):
+        config_path = config_path.expanduser()
+        if config_path.is_symlink() or not config_path.is_file():
+            raise DockerBackupError("Backup settings file is unavailable.")
+        config_path = config_path.resolve(strict=True)
+        if (
+            _REPO_ROOT.resolve() == config_path
+            or _REPO_ROOT.resolve() in config_path.parents
+        ):
+            raise DockerBackupError(
+                "Backup settings must be stored outside the repository."
+            )
+        values = _read_env_file(config_path)
+    with _validation_boundary("SETTINGS_ACL_INVALID"):
+        _validate_protected_file(config_path)
+    with _validation_boundary("PATH_VALIDATION_FAILED"):
+        archive = _resolve_external_path(
+            values["TRADING_PLATFORM_LOCAL_ARCHIVE_ROOT"], directory=True
         )
-    _validate_protected_file(config_path)
-    values = _read_env_file(config_path)
-    archive = _resolve_external_path(
-        values["TRADING_PLATFORM_LOCAL_ARCHIVE_ROOT"], directory=True
-    )
-    backups = _resolve_external_path(
-        values["TRADING_PLATFORM_LOCAL_BACKUP_ROOT"], directory=True
-    )
-    if archive == backups or archive in backups.parents or backups in archive.parents:
-        raise DockerBackupError(
-            "Archive and backup roots must be separate and non-nested."
+        backups = _resolve_external_path(
+            values["TRADING_PLATFORM_LOCAL_BACKUP_ROOT"], directory=True
         )
-    service_file = _resolve_external_path(
-        values["TRADING_PLATFORM_PG_SERVICE_FILE"], directory=False
-    )
-    _validate_protected_file(service_file)
-    try:
-        url = make_url(values["DATABASE_URL"])
-    except Exception:
-        raise DockerBackupError("DATABASE_URL is invalid.") from None
-    if (
-        url.drivername != "postgresql+asyncpg"
-        or url.host not in _LOOPBACK_HOSTS
-        or url.password is None
-        or (url.port or _POSTGRES_PORT) != _POSTGRES_PORT
-        or url.query
-        or not url.database
-        or not url.username
-    ):
-        raise DockerBackupError(
-            "DATABASE_URL must include credentials and target worker loopback on port 5432."
+        if (
+            archive == backups
+            or archive in backups.parents
+            or backups in archive.parents
+        ):
+            raise DockerBackupError(
+                "Archive and backup roots must be separate and non-nested."
+            )
+        service_file = _resolve_external_path(
+            values["TRADING_PLATFORM_PG_SERVICE_FILE"], directory=False
         )
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read(service_file, encoding="utf-8")
-    except (OSError, configparser.Error):
-        raise DockerBackupError(
-            "PostgreSQL service configuration is invalid."
-        ) from None
-    dump_name = values["TRADING_PLATFORM_PG_DUMP_SERVICE"]
-    restore_name: str | None = values.get("TRADING_PLATFORM_PG_RESTORE_SERVICE")
-    allowed_services = {dump_name}
-    if restore_name:
-        allowed_services.add(restore_name)
-    if parser.defaults() or set(parser.sections()) != allowed_services:
-        raise DockerBackupError(
-            "PostgreSQL service file must contain only configured backup services."
-        )
-    for service in parser.sections():
-        if any(key.startswith("include") for key in parser[service]):
-            raise DockerBackupError("PostgreSQL service-file includes are not allowed.")
-    dump = _service_section(parser, dump_name)
-    _validate_service_target(dump, url.database, url.username, url.password)
-    try:
-        ClientSideEncryption.from_environment(values, prefix="TRADING_PLATFORM_LOCAL")
-    except (ArchiveStorageError, ValueError, TypeError):
-        raise DockerBackupError(
-            "Backup encryption key configuration is invalid."
-        ) from None
+    with _validation_boundary("SERVICE_FILE_ACL_INVALID"):
+        _validate_protected_file(service_file)
+    with _validation_boundary("DATABASE_URL_INVALID"):
+        try:
+            url = make_url(values["DATABASE_URL"])
+        except Exception:
+            raise DockerBackupError("DATABASE_URL is invalid.") from None
+        if (
+            url.drivername != "postgresql+asyncpg"
+            or url.host not in _LOOPBACK_HOSTS
+            or url.password is None
+            or (url.port or _POSTGRES_PORT) != _POSTGRES_PORT
+            or url.query
+            or not url.database
+            or not url.username
+        ):
+            raise DockerBackupError(
+                "DATABASE_URL must include credentials and target worker loopback on port 5432."
+            )
+    with _validation_boundary("PG_SERVICE_INVALID"):
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read(service_file, encoding="utf-8")
+        except (OSError, configparser.Error):
+            raise DockerBackupError(
+                "PostgreSQL service configuration is invalid."
+            ) from None
+        dump_name = values["TRADING_PLATFORM_PG_DUMP_SERVICE"]
+        restore_name: str | None = values.get("TRADING_PLATFORM_PG_RESTORE_SERVICE")
+        allowed_services = {dump_name}
+        if restore_name:
+            allowed_services.add(restore_name)
+        if parser.defaults() or set(parser.sections()) != allowed_services:
+            raise DockerBackupError(
+                "PostgreSQL service file must contain only configured backup services."
+            )
+        for service in parser.sections():
+            if any(key.startswith("include") for key in parser[service]):
+                raise DockerBackupError(
+                    "PostgreSQL service-file includes are not allowed."
+                )
+        dump = _service_section(parser, dump_name)
+        _validate_service_target(dump, url.database, url.username, url.password)
+    with _validation_boundary("ENCRYPTION_CONFIG_INVALID"):
+        try:
+            ClientSideEncryption.from_environment(
+                values, prefix="TRADING_PLATFORM_LOCAL"
+            )
+        except (ArchiveStorageError, ValueError, TypeError):
+            raise DockerBackupError(
+                "Backup encryption key configuration is invalid."
+            ) from None
     if operation == "restore":
-        if not restore_name:
-            raise DockerBackupError(
-                "A disposable PostgreSQL restore service is required."
+        with _validation_boundary("PG_SERVICE_INVALID"):
+            if not restore_name:
+                raise DockerBackupError(
+                    "A disposable PostgreSQL restore service is required."
+                )
+            restore = _service_section(parser, restore_name)
+            target_database = restore.get("dbname", "")
+            if not restore_name.startswith(
+                "trading_restore_"
+            ) or not target_database.startswith("trading_restore_"):
+                raise DockerBackupError(
+                    "Restore is allowed only to a trading_restore_* database."
+                )
+            if target_database == url.database:
+                raise DockerBackupError(
+                    "Restore target must differ from the source database."
+                )
+            _validate_service_target(
+                restore, target_database, url.username, url.password
             )
-        restore = _service_section(parser, restore_name)
-        target_database = restore.get("dbname", "")
-        if not restore_name.startswith(
-            "trading_restore_"
-        ) or not target_database.startswith("trading_restore_"):
-            raise DockerBackupError(
-                "Restore is allowed only to a trading_restore_* database."
-            )
-        if target_database == url.database:
-            raise DockerBackupError(
-                "Restore target must differ from the source database."
-            )
-        _validate_service_target(restore, target_database, url.username, url.password)
     return values, archive, backups, service_file, dump_name, restore_name
 
 
@@ -385,14 +434,26 @@ def _run_docker(arguments: list[str], *, timeout: int) -> str:
             timeout=timeout,
         )
     except FileNotFoundError:
-        raise DockerBackupError("Docker CLI is not available on PATH.") from None
+        raise DockerBackupError(
+            "Docker CLI is not available on PATH.",
+            stage="docker-invocation",
+            code="DOCKER_CLI_UNAVAILABLE",
+        ) from None
     except subprocess.TimeoutExpired:
         raise DockerBackupError(
-            "Docker command timed out; output was suppressed."
+            "Docker command timed out; output was suppressed.",
+            stage="docker-invocation",
+            code="DOCKER_COMMAND_TIMEOUT",
         ) from None
     if result.returncode:
+        stage = "worker-execution" if arguments[0] == "run" else "docker-invocation"
+        code = (
+            "BACKUP_WORKER_FAILED" if arguments[0] == "run" else "DOCKER_COMMAND_FAILED"
+        )
         raise DockerBackupError(
-            "Docker command failed; output was suppressed to protect local settings."
+            "Docker command failed; output was suppressed to protect local settings.",
+            stage=stage,
+            code=code,
         )
     return (result.stdout or "").strip()
 
@@ -807,7 +868,11 @@ def main() -> None:
             confirm_retained_project=arguments.confirm_retained_project,
         )
     except DockerBackupError as exc:
-        _parser().exit(2, f"local Docker backup failed: {exc}\n")
+        print(
+            f"LOCAL_BACKUP_DIAGNOSTIC stage={exc.stage} code={exc.code}",
+            file=sys.stderr,
+        )
+        _parser().exit(2, "local Docker backup failed; details suppressed.\n")
     if result:
         print(result)
 
