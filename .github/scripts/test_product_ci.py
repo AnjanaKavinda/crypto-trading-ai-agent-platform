@@ -14,6 +14,9 @@ class ProductCiWorkflowContractTests(unittest.TestCase):
     def test_stable_job_and_least_privilege_permissions(self) -> None:
         self.assertRegex(self.workflow, r"(?m)^  product-ci:\s*$")
         self.assertRegex(self.workflow, r"(?m)^    name: product-ci\s*$")
+        self.assertRegex(self.workflow, r"(?m)^  windows-backup-security:\s*$")
+        self.assertRegex(self.workflow, r"(?m)^    runs-on: windows-latest\s*$")
+        self.assertIn("tests/backend/test_docker_local_backup.py", self.workflow)
         self.assertRegex(
             self.workflow,
             r"(?ms)^permissions:\s*\n  contents: read\s*(?:\n\n|$)",

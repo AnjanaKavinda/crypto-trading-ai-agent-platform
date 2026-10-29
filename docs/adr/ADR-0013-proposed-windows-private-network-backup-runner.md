@@ -4,11 +4,11 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-10-29 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
-| GitHub issue / PR | [#414](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/414) |
+| Human approver | AnjanaKavinda (PR #418 merge) |
+| GitHub issue / PR | [#414](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/414), [#418](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/pull/418) |
 | Open decision ID | OD-0026 |
 | Related ADRs | ADR-0007, ADR-0009 |
 | Supersedes / superseded by | — |
@@ -75,7 +75,8 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed: select Option B.** This proposal permits an explicitly invoked,
+**Select Option B.** The human repository owner accepted this bounded decision
+by merging PR #418 on 2026-10-29. It permits an explicitly invoked,
 short-lived backup/restore worker attached only to the existing local Compose
 database network. PostgreSQL remains without host-published ports and is not
 reachable from the host LAN. The host and Docker-daemon administrator remain
@@ -88,16 +89,21 @@ The worker must:
    any backup or restore operation; reject mismatches without fallback.
 2. Run only through an explicit operator command. It must not start with the
    application, run migrations, refresh market data, or schedule itself.
-3. Use a Windows-protected external configuration file. Validate its ACLs
+3. Share only the validated PostgreSQL container's network namespace. On
+   POSIX hosts, run with the caller's numeric UID/GID so created bundles remain
+   operator-owned. On Windows, run as root only inside the isolated Linux
+   container, with Linux capabilities dropped and privilege escalation
+   disabled; this does not grant Windows Administrator access.
+4. Use a Windows-protected external configuration file. Validate its ACLs
    before use, mount it read-only, and stage required files in a private
    container temporary filesystem with restrictive permissions. Secrets must
    not appear in command-line arguments, source control, or logs.
-4. Preserve Issue #47's encrypted immutable bundle, full readback and digest
+5. Preserve Issue #47's encrypted immutable bundle, full readback and digest
    verification, archive-reference validation, key retention, and restore
    checks.
-5. Restore only to an empty, explicitly disposable `trading_restore_*`
+6. Restore only to an empty, explicitly disposable `trading_restore_*`
    database; fail closed on any other target or non-empty target.
-6. Be exercised only against disposable source and restore data in this issue.
+7. Be exercised only against disposable source and restore data in this issue.
    It must not back up, restore, migrate, reset, or alter the retained
    `spot-research` database or volume.
 
@@ -157,5 +163,5 @@ volumes.
 
 ## Approval record
 
-Pending human repository-owner review. This proposal is not implementation
-authority until accepted by the owner.
+Accepted by AnjanaKavinda, human repository owner, by merging PR #418 on
+2026-10-29. Implementation may proceed within the stated limits.
