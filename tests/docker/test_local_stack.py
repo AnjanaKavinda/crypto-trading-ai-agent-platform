@@ -617,7 +617,7 @@ class LocalStackHarnessUnitTests(unittest.TestCase):
                 "COMPOSE_PROJECT_NAME": RETAINED_PROJECT,
                 "COMPOSE_FILE": "compose.yaml",
                 "LOCAL_WEB_PORT": "5173",
-                "POSTGRES_PASSWORD": "must-not-be-used",
+                "POSTGRES_PASSWORD": "must-not-be-used",  # pragma: allowlist secret
                 "DOCKER_CONTEXT": "desktop-linux",
             },
             clear=False,
@@ -768,7 +768,7 @@ class LocalStackAcceptanceTests(unittest.TestCase):
                 disabled.exception.headers.get("X-Correlation-ID"),
                 "00000000-0000-4000-8000-000000000360",
             )
-            canary = "invalid-correlation-canary-not-a-valid-uuid"
+            canary = "secret-canary-not-a-valid-uuid"  # pragma: allowlist secret
             invalid_refresh = Request(
                 origin + f"/api/research/spot/{instrument}/refresh",
                 data=body,
