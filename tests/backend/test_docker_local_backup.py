@@ -48,6 +48,14 @@ def _protect_windows_test_file(path: Path) -> None:
     )
     if result.returncode:
         raise AssertionError("Could not remove inherited Windows test file ACLs.")
+    result = subprocess.run(
+        ["icacls.exe", str(path), "/setowner", f"*{current_sid}"],
+        check=False,
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode:
+        raise AssertionError("Could not set the Windows test file owner.")
     for sid in (current_sid, "S-1-5-18", "S-1-5-32-544"):
         result = subprocess.run(
             ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"],
