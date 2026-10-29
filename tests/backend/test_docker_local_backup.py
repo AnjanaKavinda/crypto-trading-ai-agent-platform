@@ -75,9 +75,10 @@ def _protect_windows_test_file(path: Path) -> None:
         timeout=10,
     )
     if verification.returncode:
+        diagnostic = verification.stderr.decode("utf-8", errors="replace").strip()
         raise AssertionError(
             "Synthetic Windows test file failed ACL verification "
-            f"(check {verification.returncode})."
+            f"(check {verification.returncode}): {diagnostic}"
         )
 
 
