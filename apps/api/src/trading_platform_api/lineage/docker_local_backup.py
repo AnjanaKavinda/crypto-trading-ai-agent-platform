@@ -131,7 +131,13 @@ def _validate_protected_file(path: Path) -> None:
         environment = os.environ.copy()
         # A parent pwsh process can pass PowerShell 7 module paths to Windows
         # PowerShell 5.1, preventing Microsoft.PowerShell.Security from loading.
-        environment.pop("PSModulePath", None)
+        environment["PSModulePath"] = str(
+            Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            / "System32"
+            / "WindowsPowerShell"
+            / "v1.0"
+            / "Modules"
+        )
         try:
             result = subprocess.run(
                 [
