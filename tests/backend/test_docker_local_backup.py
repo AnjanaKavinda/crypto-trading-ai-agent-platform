@@ -9,12 +9,12 @@ from unittest.mock import patch
 
 import pytest
 from trading_platform_api.lineage.docker_local_backup import (
-    _ACL_CHECK,
     _REPO_ROOT,
     COMPOSE_FILE,
     DockerBackupError,
     _inspect_postgres,
     _parse_env_value,
+    _protect_windows_file,
     _read_env_file,
     _require_local_docker,
     _validate_protected_file,
@@ -27,76 +27,7 @@ def _protect_windows_test_file(path: Path) -> None:
     """Give a synthetic Windows secret file the production-required ACL."""
     if os.name != "nt":
         return
-    identity = subprocess.run(
-        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
-        check=False,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
-    )
-    if identity.returncode:
-        raise AssertionError("Could not identify the Windows test account SID.")
-    current_sid = identity.stdout.rsplit(",", 1)[-1].strip().strip('"')
-    if not current_sid.startswith("S-"):
-        raise AssertionError("Windows test account SID was not returned.")
-    result = subprocess.run(
-        ["icacls.exe", str(path), "/inheritance:r"],
-        check=False,
-        capture_output=True,
-        timeout=10,
-    )
-    if result.returncode:
-        raise AssertionError("Could not remove inherited Windows test file ACLs.")
-    result = subprocess.run(
-        ["icacls.exe", str(path), "/setowner", f"*{current_sid}"],
-        check=False,
-        capture_output=True,
-        timeout=10,
-    )
-    if result.returncode:
-        raise AssertionError("Could not set the Windows test file owner.")
-    for sid in (current_sid, "S-1-5-18", "S-1-5-32-544"):
-        result = subprocess.run(
-            ["icacls.exe", str(path), "/grant:r", f"*{sid}:(F)"],
-            check=False,
-            capture_output=True,
-            timeout=10,
-        )
-        if result.returncode:
-            raise AssertionError("Could not set the Windows test file ACL.")
-    environment = os.environ.copy()
-    environment["PSModulePath"] = str(
-        Path(os.environ.get("SystemRoot", r"C:\Windows"))
-        / "System32"
-        / "WindowsPowerShell"
-        / "v1.0"
-        / "Modules"
-    )
-    verification = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(_ACL_CHECK),
-            "-Path",
-            str(path.resolve()),
-        ],
-        check=False,
-        capture_output=True,
-        env=environment,
-        timeout=10,
-    )
-    if verification.returncode:
-        diagnostic = verification.stderr.decode("utf-8", errors="replace").strip()
-        raise AssertionError(
-            "Synthetic Windows test file failed ACL verification "
-            f"(check {verification.returncode}): {diagnostic}"
-        )
+    _protect_windows_file(path)
 
 
 def _configuration(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
