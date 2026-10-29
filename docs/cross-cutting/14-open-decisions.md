@@ -35,6 +35,7 @@ decision scope as open.
 | OD-0023 | Live-trading production readiness criteria | Open | Release gates and safety; Chats 1, 9, 10, 12 | Human repository owner | — | — |
 | OD-0024 | Authoritative-source precedence and stale historical path correction | Open | Repository governance; Issues 001–002 | Human repository owner | — | — |
 | OD-0025 | Additive C-019/C-006 Spot adversarial schema and lineage path | Resolved | Contract compatibility; issue #379, downstream issue #68 | Human repository owner | [ADR-0010](../adr/ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md) (accepted Option A; implementation authority after merge) | 2026-10-19 |
+| OD-0026 | Windows/Docker Desktop backup access to the private Compose PostgreSQL service | Open | Local backup/restore transport and protected configuration; Issue #414 | Human repository owner | [Proposed ADR-0013](../adr/ADR-0013-proposed-windows-private-network-backup-runner.md) (one-shot private-network runner proposed; owner decision pending) | — |
 
 ## Open-state decision analysis
 
