@@ -128,6 +128,10 @@ def _validate_protected_file(path: Path) -> None:
     if os.name == "nt":
         if not _ACL_CHECK.is_file():
             raise DockerBackupError("Windows backup ACL validation is unavailable.")
+        environment = os.environ.copy()
+        # A parent pwsh process can pass PowerShell 7 module paths to Windows
+        # PowerShell 5.1, preventing Microsoft.PowerShell.Security from loading.
+        environment.pop("PSModulePath", None)
         try:
             result = subprocess.run(
                 [
@@ -144,6 +148,7 @@ def _validate_protected_file(path: Path) -> None:
                 ],
                 check=False,
                 capture_output=True,
+                env=environment,
                 timeout=_DOCKER_PREFLIGHT_TIMEOUT,
             )
         except (OSError, subprocess.TimeoutExpired):
