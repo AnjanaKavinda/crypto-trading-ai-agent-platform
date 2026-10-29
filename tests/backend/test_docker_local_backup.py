@@ -102,12 +102,11 @@ def test_worker_identity_matches_host_bind_mount_access() -> None:
         assert _worker_user() == f"{os.getuid()}:{os.getgid()}"
 
 
-def test_windows_file_protection_does_not_require_privileged_owner_reset(
+def test_windows_file_protection_uses_isolated_powershell_and_exact_acl_policy(
     tmp_path: Path,
 ) -> None:
     protected = tmp_path / "protected.env"
-    protected.write_text("safe=value\n", encoding="utf-8")
-    identity = subprocess.CompletedProcess([], 0, "S-1-5-21-1000\n", "")
+    protected.write_text("safe=value\\n", encoding="utf-8")
     success = subprocess.CompletedProcess([], 0, b"", b"")
     with (
         patch(
@@ -116,23 +115,19 @@ def test_windows_file_protection_does_not_require_privileged_owner_reset(
         ) as acl_environment,
         patch(
             "trading_platform_api.lineage.docker_local_backup.subprocess.run",
-            side_effect=[identity, success, success, success, success],
+            return_value=success,
         ) as run,
     ):
         _protect_windows_file(protected)
 
-    assert run.call_args_list[0].kwargs["env"] == {
+    command = run.call_args.args[0]
+    assert command[0] == "powershell.exe"
+    assert command[-1] == "-Protect"
+    assert "icacls.exe" not in command
+    assert run.call_args.kwargs["env"] == {
         "PSModulePath": "isolated-windows-powershell-modules"
     }
     acl_environment.assert_called_once()
-    acl_commands = [call.args[0] for call in run.call_args_list[1:]]
-    assert all("/setowner" not in command for command in acl_commands)
-    assert [command[2] for command in acl_commands] == [
-        "/inheritance:r",
-        "/grant:r",
-        "/grant:r",
-        "/grant:r",
-    ]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL validation requires Windows")
