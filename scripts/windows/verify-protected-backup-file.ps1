@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $Path,
 
-    [switch] $ReportOwner
+    [switch] $Protect
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,9 +18,29 @@ try {
     if ([string]::IsNullOrWhiteSpace($ownerSid)) {
         exit 3
     }
-    if ($ReportOwner) {
-        Write-Output $ownerSid
-        exit 0
+
+    if ($Protect) {
+        # Preserve the existing owner. Replace all inherited and explicit ACEs,
+        # then grant only the owner, SYSTEM, and Administrators.
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.Access)) {
+            [void] $acl.RemoveAccessRuleSpecific($rule)
+        }
+
+        $allowedSids = @($ownerSid, 'S-1-5-18', 'S-1-5-32-544')
+        foreach ($sid in $allowedSids) {
+            $identity = [Security.Principal.SecurityIdentifier]::new($sid)
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $identity,
+                [Security.AccessControl.FileSystemRights]::FullControl,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            [void] $acl.AddAccessRule($rule)
+        }
+
+        Set-Acl -LiteralPath $item.FullName -AclObject $acl
+        $acl = Get-Acl -LiteralPath $item.FullName
+        $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     }
 
     $allowedSids = @($ownerSid, 'S-1-5-18', 'S-1-5-32-544')
