@@ -58,7 +58,13 @@ def _protect_windows_test_file(path: Path) -> None:
         if result.returncode:
             raise AssertionError("Could not set the Windows test file ACL.")
     environment = os.environ.copy()
-    environment.pop("PSModulePath", None)
+    environment["PSModulePath"] = str(
+        Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "Modules"
+    )
     verification = subprocess.run(
         [
             "powershell.exe",
