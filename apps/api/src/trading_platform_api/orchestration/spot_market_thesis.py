@@ -182,7 +182,9 @@ def _case(
     )
     return SpotThesisCase(
         direction=direction,
-        state=(ThesisCaseState.AVAILABLE if supporting else ThesisCaseState.UNAVAILABLE),
+        state=(
+            ThesisCaseState.AVAILABLE if supporting else ThesisCaseState.UNAVAILABLE
+        ),
         supporting_component_ids=tuple(item.component_id for item in supporting),
         supporting_evidence_ids=_ordered_evidence(supporting),
         contradictory_component_ids=tuple(item.component_id for item in contradictory),
