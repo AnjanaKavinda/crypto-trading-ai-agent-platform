@@ -433,3 +433,19 @@ permitted. No strategy eligibility, signal qualification, validation, risk,
 approval, order, or execution authority is added. Issue #68 remains blocked
 until this contract implementation is merged; its producer/consumer work remains
 separately bounded.
+
+## Issue #428 — direct-owner governance provenance
+
+| Governance artifact | Version | Compatibility and binding |
+|---|---:|---|
+| Dispatched-agent reviewer request | `1.0` | Existing request shape remains unchanged and requires agent role plus the governed implementation session. |
+| Direct-owner reviewer request | `1.1` | Explicit `DIRECT_OWNER`, `github-user:<controller>` implementation identity, and controller identity; no agent role or agent session fields. Binds repository, linked issue, PR, exact head, `dev` base, derived review tier, bounded context, and required checks. |
+| Dispatched-agent review provenance | `1.2` | Existing artifact signature and implementation-session semantics remain unchanged. |
+| Direct-owner review provenance | `1.3` | Additive signed artifact with explicit origin, owner/controller identity, `dev` base, linked issue, PR/head, derived tier, current-head independent reviewer identity/session, producer/run, timestamp, disposition, and typed review evidence. R1 binds a trusted current-head GitHub review; R2/R3 bind the existing model result and handoff. Agent-only fields are forbidden. |
+
+Consumers select owner provenance only when the authenticated PR author is the
+configured controller and require schema `1.3`; they do not infer owner origin
+from missing agent fields. Both origins require current-head review, successful
+configured deterministic checks, substantive governance validation, and human
+merge authority. Synchronizing a PR head invalidates prior provenance. No
+historical `1.2` artifact is migrated or rewritten.

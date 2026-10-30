@@ -4,8 +4,10 @@ Implements the Model Routing & AI Usage Governance V1.1 "Implementation
 handoff" prerequisite (see
 ``docs/copilot-team/03-github-workflow/MODEL-ROUTING-GOVERNANCE-V1.1.md``,
 section 7): a separately approved producer that emits evidence bound to the
-review ID, current PR head SHA, reviewer identity, reviewer session,
-implementer session, review tier, and producer identity.
+review ID, current PR head SHA, reviewer identity/session, review tier, and
+producer identity. Dispatched-agent schema 1.2 retains its required
+implementer session; direct-owner schema 1.3 binds an explicit owner origin
+and identity without inventing an agent session.
 
 Trust model
 -----------
@@ -54,6 +56,7 @@ from typing import Any, Iterable, Mapping
 from orchestrator import AppendOnlyAudit, GovernanceError, REVIEW_TIERS
 
 PROVENANCE_SCHEMA_VERSION = "1.2"
+DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION = "1.3"
 
 # Fields bound into the signed payload. Order is irrelevant (the payload is
 # serialized with sorted keys) but every field listed here is mandatory.
@@ -83,6 +86,21 @@ REQUIRED_FIELDS = (
     "diff_reference",
     "execution_handoff_signature",
 )
+
+# Schema 1.2 is the immutable dispatched-agent format. Schema 1.3 adds an
+# explicit owner origin and deliberately has no agent/session fields.
+DIRECT_OWNER_FIELDS = tuple(
+    field for field in REQUIRED_FIELDS if field != "implementer_session_id"
+) + ("implementation_origin", "implementation_identity", "controller_identity",
+     "base_branch", "review_evidence_kind", "review_evidence_id")
+DIRECT_OWNER_REQUIRED_FIELDS = tuple(
+    field for field in DIRECT_OWNER_FIELDS
+    if field not in {"provider_execution_ref", "provider_model", "execution_handoff_signature"}
+)
+PROVENANCE_FIELDS_BY_VERSION = {
+    PROVENANCE_SCHEMA_VERSION: REQUIRED_FIELDS,
+    DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION: DIRECT_OWNER_FIELDS,
+}
 
 DISPOSITIONS = ("approved", "changes-requested", "blocked")
 
@@ -291,6 +309,94 @@ def resolve_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
             "required_review_tier": required_tier, **best}
 
 
+def resolve_direct_owner_review_evidence(*, pr: Mapping[str, Any], issue: Mapping[str, Any],
+                                         reviews: Iterable[Mapping[str, Any]],
+                                         reviewer_configuration: Mapping[str, Any],
+                                         controller: str,
+                                         implementation_identity: str,
+                                         expected_base: str = "dev") -> dict:
+    """Resolve configured independent review for an explicitly owner-authored PR."""
+    head_sha = str(pr.get("head_sha") or "")
+    author = str(pr.get("author") or "")
+    base = str(pr.get("base") or "")
+    if not head_sha or not controller or author != controller or base != expected_base:
+        raise GovernanceError("direct-owner PR origin, head, or base is invalid")
+    if implementation_identity != f"github-user:{controller}":
+        raise GovernanceError("direct-owner implementation identity is invalid")
+    issue_id = extract_linked_issue(pr.get("body") or "")
+    if issue.get("state") != "open" or int(issue.get("number", -1)) != issue_id:
+        raise GovernanceError("direct-owner linked issue is not the expected open issue")
+    required_tier = required_review_tier_from_labels(issue.get("labels", []))
+    rank = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
+    # GitHub returns a history of reviews. Resolve each reviewer's latest
+    # submitted state before evaluating it; an earlier approval must not
+    # survive a later request for changes or dismissal.
+    latest_by_reviewer: dict[str, Mapping[str, Any]] = {}
+    for item in reviews:
+        if not isinstance(item, Mapping):
+            continue
+        login = str((item.get("user") or {}).get("login") or "")
+        if not login:
+            continue
+        previous = latest_by_reviewer.get(login)
+        item_key = (str(item.get("submitted_at") or ""), int(item.get("id") or 0))
+        previous_key = ((str(previous.get("submitted_at") or ""),
+                         int(previous.get("id") or 0)) if previous else ("", 0))
+        if previous is None or item_key > previous_key:
+            latest_by_reviewer[login] = item
+
+    best: dict | None = None
+    for item in latest_by_reviewer.values():
+        login = str((item.get("user") or {}).get("login") or "")
+        config = reviewer_configuration.get(login)
+        if not login or login == controller or not isinstance(config, Mapping):
+            continue
+        session_id = config.get("session_id")
+        tier = config.get("tier")
+        if (not isinstance(session_id, str) or not session_id.strip()
+                or tier not in REVIEW_TIERS or rank[tier] < rank[required_tier]
+                or session_id in {controller, implementation_identity}
+                or str(item.get("commit_id") or "") != head_sha):
+            continue
+        disposition = _REVIEW_STATE_DISPOSITIONS.get(str(item.get("state") or "").upper())
+        if disposition is None:
+            continue
+        review_identity = {
+            "id": item.get("id"), "login": login,
+            "commit_id": item.get("commit_id"), "state": item.get("state"),
+            "submitted_at": item.get("submitted_at"),
+            "body_sha256": hashlib.sha256(str(item.get("body") or "").encode()).hexdigest(),
+        }
+        evidence_digest = hashlib.sha256(json.dumps(
+            review_identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        candidate = {
+            "review_id": item.get("id"),
+            "review_execution_id": f"github-review-{item.get('id')}",
+            "reviewer_identity": login,
+            "reviewer_session_id": session_id,
+            "review_tier": required_tier,
+            "disposition": disposition,
+            "submitted_at": item.get("submitted_at") or "",
+            "review_evidence_kind": "GITHUB_REVIEW",
+            "review_evidence_id": str(item.get("id") or ""),
+            "result_integrity_hash": evidence_digest,
+            "provider_execution_ref": "",
+            "provider_model": "",
+            "execution_handoff_signature": "",
+        }
+        candidate_key = (1 if disposition == "changes-requested" else 0, rank[required_tier],
+                         str(candidate["submitted_at"]))
+        if best is None or candidate_key > best["_key"]:
+            candidate["_key"] = candidate_key
+            best = candidate
+    if best is None:
+        raise GovernanceError(
+            "no current-head independent review at the required tier was found")
+    best.pop("_key", None)
+    return {"issue_id": issue_id, "head_sha": head_sha,
+            "required_review_tier": required_tier, **best}
+
+
 class StaleProvenanceError(GovernanceError):
     """Raised when a provenance artifact no longer matches the current PR head."""
 
@@ -298,7 +404,10 @@ class StaleProvenanceError(GovernanceError):
 def _canonical_payload(artifact: Mapping[str, Any]) -> bytes:
     import json
 
-    body = {key: artifact[key] for key in REQUIRED_FIELDS if key in artifact}
+    fields = PROVENANCE_FIELDS_BY_VERSION.get(str(artifact.get("schema_version")))
+    if fields is None:
+        raise GovernanceError("provenance artifact schema version is unsupported")
+    body = {key: artifact[key] for key in fields if key in artifact}
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -375,10 +484,100 @@ def build_artifact(*, repository: str, pr_number: int, issue_id: int, review_id:
     return artifact
 
 
+def build_direct_owner_artifact(*, repository: str, pr_number: int, issue_id: int,
+                                review_id: Any, head_sha: str, base_branch: str,
+                                reviewer_identity: str, reviewer_session_id: str,
+                                implementation_identity: str, controller_identity: str,
+                                required_review_tier: str, review_tier: str,
+                                producer_identity: str, producer_run_id: str,
+                                controller_policy_version: str, disposition: str,
+                                secret: str, reviewer_role: str = "",
+                                timestamp: float | None = None,
+                                review_execution_id: str | None = None,
+                                result_integrity_hash: str | None = None,
+                                provider_execution_ref: str = "",
+                                provider_model: str = "",
+                                request_integrity_hash: str = "",
+                                diff_reference: str = "",
+                                execution_handoff_signature: str = "",
+                                review_evidence_kind: str = "MODEL",
+                                review_evidence_id: str = "") -> dict:
+    """Build signed 1.3 provenance for direct-owner implementation."""
+    implementation_identity = str(implementation_identity).strip()
+    controller_identity = str(controller_identity).strip()
+    if (not controller_identity or implementation_identity !=
+            f"github-user:{controller_identity}" or reviewer_identity == controller_identity
+            or reviewer_session_id in {controller_identity, implementation_identity}):
+        raise GovernanceError("direct-owner implementation identity is invalid")
+    if not all(isinstance(value, str) and value.strip() for value in
+               (repository, head_sha, base_branch, reviewer_identity, reviewer_session_id,
+                producer_identity, producer_run_id, controller_policy_version)):
+        raise GovernanceError("provenance artifact fields are incomplete")
+    if base_branch != "dev":
+        raise GovernanceError("direct-owner provenance requires the dev base branch")
+    if required_review_tier not in REVIEW_TIERS or review_tier != required_review_tier:
+        raise GovernanceError("direct-owner review tier is invalid or insufficient")
+    if disposition not in DISPOSITIONS:
+        raise GovernanceError("provenance artifact disposition is invalid")
+    if review_evidence_kind not in {"MODEL", "GITHUB_REVIEW"}:
+        raise GovernanceError("direct-owner review evidence kind is invalid")
+    effective_review_execution_id = review_execution_id or f"review-{review_id}"
+    if not review_evidence_id:
+        review_evidence_id = str(effective_review_execution_id)
+    if review_evidence_kind == "MODEL" and not all(
+            (provider_execution_ref, provider_model, execution_handoff_signature)):
+        raise GovernanceError("model review evidence is incomplete")
+    if review_evidence_kind == "MODEL" and str(review_evidence_id) != str(
+            effective_review_execution_id):
+        raise GovernanceError("model review evidence identity is inconsistent")
+    if review_evidence_kind == "GITHUB_REVIEW" and any(
+            (provider_execution_ref, provider_model, execution_handoff_signature)):
+        raise GovernanceError("GitHub review evidence cannot claim model execution")
+    artifact = {
+        "schema_version": DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION,
+        "repository": repository,
+        "pr_number": int(pr_number),
+        "issue_id": int(issue_id),
+        "review_id": review_id,
+        "head_sha": head_sha,
+        "reviewer_identity": reviewer_identity,
+        "reviewer_session_id": reviewer_session_id,
+        "reviewer_role": reviewer_role or "unclassified-reviewer",
+        "required_review_tier": required_review_tier,
+        "review_tier": review_tier,
+        "producer_identity": producer_identity,
+        "producer_run_id": producer_run_id,
+        "controller_policy_version": controller_policy_version,
+        "timestamp": float(timestamp) if timestamp is not None else time.time(),
+        "disposition": disposition,
+        "review_execution_id": effective_review_execution_id,
+        "result_integrity_hash": result_integrity_hash or "",
+        "provider_execution_ref": provider_execution_ref,
+        "provider_model": provider_model,
+        "request_integrity_hash": request_integrity_hash,
+        "diff_reference": diff_reference,
+        "execution_handoff_signature": execution_handoff_signature,
+        "implementation_origin": "DIRECT_OWNER",
+        "implementation_identity": implementation_identity,
+        "controller_identity": controller_identity,
+        "base_branch": base_branch,
+        "review_evidence_kind": review_evidence_kind,
+        "review_evidence_id": str(review_evidence_id),
+    }
+    if not all(artifact.get(field) not in (None, "")
+               for field in DIRECT_OWNER_REQUIRED_FIELDS):
+        raise GovernanceError("direct-owner provenance artifact fields are incomplete")
+    artifact["integrity_signature"] = sign_artifact(artifact, secret)
+    return artifact
+
+
 def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
                      expected_pr_number: int, expected_issue_id: int,
                      expected_head_sha: str, expected_producer_identity: str,
-                     controller: str, implementer_session_id: str,
+                    controller: str, implementer_session_id: str = "",
+                    expected_implementation_origin: str = "GOVERNED_AGENT",
+                    expected_implementation_identity: str = "",
+                    expected_base_branch: str = "dev",
                      max_age_seconds: float = 24 * 3600,
                      require_approved: bool = True) -> dict:
     """Verify a producer artifact and return a normalized governed review.
@@ -392,12 +591,30 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
     """
     if not isinstance(artifact, Mapping):
         raise GovernanceError("provenance artifact must be an object")
-    missing = [key for key in REQUIRED_FIELDS
+    schema_version = str(artifact.get("schema_version") or "")
+    artifact_fields = PROVENANCE_FIELDS_BY_VERSION.get(schema_version)
+    if artifact_fields is None:
+        raise GovernanceError("provenance artifact schema version is unsupported")
+    required_fields = (DIRECT_OWNER_REQUIRED_FIELDS
+                       if schema_version == DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION
+                       else REQUIRED_FIELDS)
+    missing = [key for key in required_fields
                if key not in artifact or artifact[key] in (None, "")]
     if missing or not artifact.get("integrity_signature"):
         raise GovernanceError("provenance artifact is missing required fields")
-    if artifact.get("schema_version") != PROVENANCE_SCHEMA_VERSION:
-        raise GovernanceError("provenance artifact schema version is unsupported")
+    if schema_version == PROVENANCE_SCHEMA_VERSION:
+        if expected_implementation_origin != "GOVERNED_AGENT":
+            raise GovernanceError("agent provenance cannot authorize a direct-owner PR")
+        if any(key in artifact for key in (
+                "implementation_origin", "implementation_identity", "controller_identity")):
+            raise GovernanceError("schema 1.2 artifact contains unsupported origin fields")
+    elif expected_implementation_origin != "DIRECT_OWNER":
+        raise GovernanceError("direct-owner provenance cannot authorize an agent PR")
+    else:
+        if any(key in artifact for key in ("implementer_session_id", "agent_role", "dispatch_key")):
+            raise GovernanceError("direct-owner provenance contains agent-only fields")
+        if set(artifact) != set(DIRECT_OWNER_FIELDS) | {"integrity_signature"}:
+            raise GovernanceError("direct-owner provenance contains unsupported fields")
     signature = str(artifact.get("integrity_signature"))
     expected_signature = sign_artifact(artifact, secret)
     if not hmac.compare_digest(signature, expected_signature):
@@ -414,13 +631,42 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
         raise GovernanceError("provenance artifact was not created by the trusted producer")
     reviewer = str(artifact["reviewer_identity"])
     reviewer_session = str(artifact["reviewer_session_id"])
-    implementer_session = str(artifact["implementer_session_id"])
-    if implementer_session != str(implementer_session_id):
-        raise GovernanceError(
-            "provenance artifact implementer session does not match the PR")
-    if reviewer_session == implementer_session:
-        raise GovernanceError(
-            "reviewer must be independent from the implementing session")
+    if schema_version == PROVENANCE_SCHEMA_VERSION:
+        implementer_session = str(artifact["implementer_session_id"])
+        if implementer_session != str(implementer_session_id):
+            raise GovernanceError(
+                "provenance artifact implementer session does not match the PR")
+        if reviewer_session == implementer_session:
+            raise GovernanceError(
+                "reviewer must be independent from the implementing session")
+        implementation_origin = "GOVERNED_AGENT"
+        implementation_identity = f"agent-session:{implementer_session}"
+    else:
+        implementation_origin = str(artifact["implementation_origin"])
+        implementation_identity = str(artifact["implementation_identity"])
+        owner_identity = str(artifact["controller_identity"])
+        if (implementation_origin != "DIRECT_OWNER"
+                or owner_identity != str(controller)
+                or implementation_identity != f"github-user:{owner_identity}"
+                or (expected_implementation_identity and
+                    implementation_identity != expected_implementation_identity)
+                or str(artifact["base_branch"]) != expected_base_branch
+                or reviewer_session == implementation_identity):
+            raise GovernanceError("direct-owner provenance identity or base binding is invalid")
+        evidence_kind = artifact.get("review_evidence_kind")
+        if evidence_kind == "MODEL":
+            if not all(artifact.get(key) for key in (
+                    "provider_execution_ref", "provider_model", "execution_handoff_signature")):
+                raise GovernanceError("direct-owner model review evidence is incomplete")
+            if str(artifact.get("review_evidence_id")) != str(artifact.get("review_execution_id")):
+                raise GovernanceError("direct-owner model review evidence identity is invalid")
+        elif evidence_kind == "GITHUB_REVIEW":
+            if (str(artifact.get("review_evidence_id")) != str(artifact.get("review_id"))
+                    or any(artifact.get(key) for key in (
+                        "provider_execution_ref", "provider_model", "execution_handoff_signature"))):
+                raise GovernanceError("direct-owner GitHub review evidence is invalid")
+        else:
+            raise GovernanceError("direct-owner review evidence kind is unsupported")
     if reviewer == str(controller) or reviewer_session == str(controller):
         raise GovernanceError("reviewer must be independent from the controller")
     if artifact["disposition"] not in DISPOSITIONS:
@@ -465,6 +711,17 @@ def verify_artifact(artifact: Any, *, secret: str, expected_repository: str,
         "request_integrity_hash": artifact.get("request_integrity_hash"),
         "diff_reference": artifact.get("diff_reference"),
         "execution_handoff_signature": artifact.get("execution_handoff_signature"),
+        "implementation_origin": implementation_origin,
+        "implementation_identity": implementation_identity,
+        "controller_identity": (artifact.get("controller_identity")
+                                if schema_version == DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION
+                                else str(controller)),
+        "base_branch": (artifact.get("base_branch")
+                        if schema_version == DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION
+                        else expected_base_branch),
+        "review_evidence_kind": (artifact.get("review_evidence_kind")
+                                 if schema_version == DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION
+                                 else "GOVERNED_AGENT"),
     }
 
 

@@ -329,14 +329,18 @@ def validate_review_tier(reviews: Iterable[Mapping[str, Any]], *, head_sha: str,
                          required_tier: str, author: str, controller: str,
                          authorized_reviewers: Iterable[str],
                          implementer_session_id: str = "",
-                         authorized_reviewer_sessions: Mapping[str, str] | None = None) -> bool:
+                         authorized_reviewer_sessions: Mapping[str, str] | None = None,
+                         implementation_identity: str = "",
+                         direct_owner: bool = False) -> bool:
     if required_tier not in REVIEW_TIERS:
         raise GovernanceError("unknown review tier")
     rank = {tier: index for index, tier in enumerate(REVIEW_TIERS)}
     if not any(review_is_current(review, head_sha, author=author, controller=controller,
                              authorized_reviewers=authorized_reviewers,
                              implementer_session_id=implementer_session_id,
-                             authorized_reviewer_sessions=authorized_reviewer_sessions)
+                             authorized_reviewer_sessions=authorized_reviewer_sessions,
+                             implementation_identity=implementation_identity,
+                             direct_owner=direct_owner)
                and rank.get(str(review.get("review_tier")), -1) >= rank[required_tier]
                for review in reviews):
         raise GovernanceError("required current-head independent review tier is missing")
@@ -616,7 +620,9 @@ def can_dispatch(key: str, active_keys: Iterable[str]) -> bool:
 def review_is_current(review: Mapping[str, Any], head_sha: str, *, author: str,
                       controller: str, authorized_reviewers: Iterable[str] = (),
                       implementer_session_id: str = "",
-                      authorized_reviewer_sessions: Mapping[str, str] | None = None) -> bool:
+                      authorized_reviewer_sessions: Mapping[str, str] | None = None,
+                      implementation_identity: str = "",
+                      direct_owner: bool = False) -> bool:
     reviewer = review.get("user")
     session = str(review.get("reviewer_session_id") or "")
     configured_session = (authorized_reviewer_sessions or {}).get(str(reviewer), "")
@@ -625,6 +631,11 @@ def review_is_current(review: Mapping[str, Any], head_sha: str, *, author: str,
         if authorized_reviewer_sessions is not None
         else str(reviewer) not in {author, controller}
     )
+    if direct_owner:
+        identity_independent = (identity_independent and
+                                str(reviewer) not in {author, controller} and
+                                (not implementation_identity or
+                                 session != implementation_identity))
     return (review.get("state") == "APPROVED" and review.get("commit_id") == head_sha
             and isinstance(reviewer, str) and bool(reviewer.strip())
             and reviewer in set(authorized_reviewers)
@@ -752,7 +763,8 @@ def validate_issue(issue: Mapping[str, Any], *, catalog: Mapping[int, Any] | Non
 def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "dev",
                 required_checks: Iterable[str] = (), reviews: Iterable[Mapping[str, Any]] = (),
                 controller: str = "controller", high_risk_text: str = "",
-                required_reviewer_roles: Iterable[str] = (), governed_high_risk: bool = False) -> bool:
+                required_reviewer_roles: Iterable[str] = (), governed_high_risk: bool = False,
+                direct_owner: bool = False) -> bool:
     """Validate a linked PR without granting approval or merge authority."""
     if pr.get("issue_id") != issue_id or pr.get("base") != expected_base or not pr.get("head_sha"):
         raise GovernanceError("PR relationship, base branch, or head SHA is invalid")
@@ -760,7 +772,7 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
     if any(conclusions.get(name) != "success" for name in required_checks):
         raise GovernanceError("required check is missing or unsuccessful")
     reviews = list(reviews)
-    if pr.get("required_review_tier") == "R1":
+    if pr.get("required_review_tier") == "R1" and not direct_owner:
         if not any(review.get("state") == "APPROVED"
                    and review.get("commit_id") == pr["head_sha"]
                    and review.get("user") == controller
@@ -781,7 +793,9 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
                                   authorized_reviewers=pr.get("authorized_reviewers", ()),
                                   implementer_session_id=pr.get("implementer_session_id", ""),
                                   authorized_reviewer_sessions=pr.get(
-                                      "authorized_reviewer_sessions"))
+                                      "authorized_reviewer_sessions"),
+                                  implementation_identity=pr.get("implementation_identity", ""),
+                                  direct_owner=direct_owner)
                for review in reviews):
         raise GovernanceError("current-head independent approval is required")
     required_tier = pr.get("required_review_tier")
@@ -792,6 +806,8 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
             authorized_reviewers=pr.get("authorized_reviewers", ()),
             implementer_session_id=pr.get("implementer_session_id", ""),
             authorized_reviewer_sessions=pr.get("authorized_reviewer_sessions"),
+            implementation_identity=pr.get("implementation_identity", ""),
+            direct_owner=direct_owner,
         )
     if high_risk_review_required(high_risk_text, governed=governed_high_risk):
         roles = {review.get("role") for review in reviews
@@ -800,7 +816,10 @@ def validate_pr(pr: Mapping[str, Any], *, issue_id: int, expected_base: str = "d
                                       authorized_reviewers=pr.get("authorized_reviewers", ()),
                                       implementer_session_id=pr.get("implementer_session_id", ""),
                                       authorized_reviewer_sessions=pr.get(
-                                          "authorized_reviewer_sessions"))}
+                                          "authorized_reviewer_sessions"),
+                                      implementation_identity=pr.get(
+                                          "implementation_identity", ""),
+                                      direct_owner=direct_owner)}
         if not set(required_reviewer_roles).issubset(roles):
             raise GovernanceError("high-risk reviewer escalation is incomplete")
     return True

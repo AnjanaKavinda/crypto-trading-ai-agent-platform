@@ -4,8 +4,9 @@ from pathlib import Path
 import unittest
 
 from independent_reviewer import (
-    CATEGORIES, SEVERITIES, ReviewerExecutionError, assert_current_head, build_request,
-    extract_allowed_paths_from_issue, integrity_hash, sign_execution_handoff,
+    CATEGORIES, SEVERITIES, ReviewerExecutionError, assert_current_head,
+    build_direct_owner_request, build_request, extract_allowed_paths_from_issue,
+    integrity_hash, request_from_mapping, sign_execution_handoff,
 )
 from review_provenance import derive_current_dispatch_key
 from openai_reviewer_adapter import OpenAIReviewerAdapter, TransientProviderError
@@ -90,7 +91,7 @@ class IndependentReviewerTests(unittest.TestCase):
                     "governed-independent-review.yml").read_text()
         self.assertIn("Resolve one open dev PR by exact head", workflow)
         self.assertNotIn("workflow_run.pull_requests[0]", workflow)
-        self.assertIn('workflows: ["Governance CI"]', workflow)
+        self.assertIn('workflows: ["Governance CI", "Product CI"]', workflow)
         self.assertIn("vars.GOVERNED_PILOT_ENABLED == 'true'", workflow)
         self.assertIn("GOVERNED_PILOT_ISSUES", workflow)
         self.assertIn("canonical_issue, _ = resolve_canonical_number", workflow)
@@ -101,7 +102,10 @@ class IndependentReviewerTests(unittest.TestCase):
         self.assertIn("Re-verify exact current PR head immediately before AI review", workflow)
         self.assertIn("Re-verify current head after artifact construction", workflow)
         self.assertIn("--attestation /tmp/reviewer-result-attestation.json", workflow)
-        self.assertIn("/tmp/reviewer-request.json /tmp/reviewer-result-attestation.json", workflow)
+        self.assertIn("/tmp/reviewer-result-attestation.json > /tmp/review-artifact.json", workflow)
+        self.assertIn("if: needs.classify-r1.outputs.tier != 'R1'", workflow)
+        self.assertIn("review_evidence_kind ==", (Path(__file__).with_name("review_provenance.py")
+                                                     .read_text(encoding="utf-8")))
 
     def test_payload_uses_bounded_current_chat_contract(self):
         adapter = OpenAIReviewerAdapter(
@@ -420,6 +424,53 @@ Expected paths (create/modify only when needed):
             review_producer.resolve_execution_evidence(
                 result=tampered, original_request=request,
                 execution_handoff=handoff, handoff_secret="signing-secret", **kwargs)
+
+    def test_direct_owner_request_is_versioned_and_contains_no_agent_identity(self):
+        request = build_direct_owner_request(
+            repository="o/r", pr_number=431, head_sha="owner-head", base_branch="dev",
+            github_issue_id=80, canonical_issue_id=80, implementation_origin="DIRECT_OWNER",
+            implementation_identity="github-user:owner", controller_identity="owner",
+            reviewer_role="QA/Security Reviewer", required_review_tier="R2",
+            capability_tier="strong-coding-reasoning", context_pack_id="context-owner",
+            context_pack_version="v1.1", allowed_paths=(".github/**",),
+            forbidden_paths=("secrets/**",), changed_files=(".github/scripts/x.py",),
+            diff_reference="sha256:owner-diff", required_checks=("Product CI", "Governance CI"),
+            safety_invariants=("no-auto-merge", "manual-owner-merge"),
+            controller_policy_version="v1.3")
+        self.assertEqual(request.schema_version, "1.1")
+        self.assertEqual(request.implementation_origin, "DIRECT_OWNER")
+        self.assertFalse(hasattr(request, "agent_role"))
+        self.assertFalse(hasattr(request, "implementation_session_id"))
+        decoded = request_from_mapping(request.__dict__)
+        self.assertEqual(decoded.integrity_hash, request.integrity_hash)
+        malformed = dict(request.__dict__, implementation_session_id="copilot-session")
+        with self.assertRaises(TypeError):
+            request_from_mapping(malformed)
+        invalid_values = dict(request.__dict__)
+        invalid_values.pop("integrity_hash")
+        invalid_values["implementation_origin"] = "GOVERNED_AGENT"
+        with self.assertRaises(ReviewerExecutionError):
+            build_direct_owner_request(**invalid_values)
+
+    def test_direct_owner_review_evidence_requires_configured_non_owner_current_head(self):
+        kwargs = dict(
+            pr={"number": 431, "repository": "o/r", "head_sha": "owner-head",
+                "base": "dev", "body": "Closes #80", "author": "owner", "state": "open"},
+            issue={"number": 80, "state": "open", "labels": []},
+            reviewer_configuration={"reviewer-bot": {"tier": "R2", "session_id": "review-session"}},
+            controller="owner", implementation_identity="github-user:owner")
+        review = {"id": 1, "user": {"login": "reviewer-bot"}, "commit_id": "owner-head",
+                  "state": "APPROVED", "submitted_at": "2026-10-30T00:00:00Z"}
+        evidence = review_producer.resolve_direct_owner_review_evidence(
+            reviews=[review], **kwargs)
+        self.assertEqual(evidence["required_review_tier"], "R2")
+        for invalid in (
+                {**review, "user": {"login": "owner"}},
+                {**review, "commit_id": "old-head"},
+        ):
+            with self.assertRaises(Exception):
+                review_producer.resolve_direct_owner_review_evidence(
+                    reviews=[invalid], **kwargs)
 
 
 if __name__ == "__main__":
