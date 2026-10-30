@@ -3,7 +3,9 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import tempfile
+import textwrap
 from hashlib import sha256
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -1061,10 +1063,78 @@ class GovernanceTests(unittest.TestCase):
                      "promote-dev-to-main.yml").read_text(encoding="utf-8")
         codeowners = (Path(__file__).parents[1] / "CODEOWNERS").read_text(encoding="utf-8")
         self.assertIn("* @AnjanaKavinda", codeowners)
-        self.assertIn("Governed PRs must not be authored by the final human reviewer", workflow)
+        self.assertIn('if [ "$PR_AUTHOR" = "$CONTROLLER" ]; then', workflow)
+        self.assertIn(
+            "Approved owner-authored PR path; independent-review request is not applicable.",
+            workflow)
         self.assertIn("requested_reviewers", workflow)
         self.assertIn("reviewers[]=$CONTROLLER", promotion)
         self.assertIn("actions/create-github-app-token@v2", promotion)
+
+    def test_v11_owner_authored_governance_path_skips_self_request_only(self):
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        reviewer_gate = workflow.split("- name: Enforce mandatory human reviewer separation", 1)[1]
+        reviewer_gate = reviewer_gate.split("- name: Validate main promotion shape", 1)[0]
+
+        self.assertIn('if [ "$PR_AUTHOR" = "$CONTROLLER" ]; then', reviewer_gate)
+        self.assertIn("Approved owner-authored PR path", reviewer_gate)
+        self.assertIn("else\n            gh api --method POST", reviewer_gate)
+        self.assertIn('test "$CONTROLLER" = "AnjanaKavinda"', reviewer_gate)
+        self.assertNotIn("exit 1", reviewer_gate)
+
+        # Owner authorship only skips the self-reviewer request. The governed
+        # lifecycle and pending gate still run, and no workflow merge path exists.
+        self.assertIn("run: python .github/scripts/transition-pr.py", workflow)
+        self.assertIn("Publish pending final governance gate", workflow)
+        self.assertIn("state=pending -f context=governance-gate", workflow)
+        self.assertIn("Human merge remains final authority", workflow)
+        self.assertNotIn("gh pr merge", workflow)
+        self.assertNotIn("enable-auto-merge", workflow)
+
+        script_start = reviewer_gate.index("        run: |\n") + len("        run: |\n")
+        script = textwrap.dedent(reviewer_gate[script_start:])
+        script = script.replace("${{ github.repository }}", "owner/repository")
+        with tempfile.TemporaryDirectory() as temp:
+            gh_log = Path(temp) / "gh.log"
+            gh = Path(temp) / "gh"
+            gh.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GH_TEST_LOG\"\n",
+                encoding="utf-8")
+            gh.chmod(0o755)
+            env = {
+                **os.environ,
+                "PATH": f"{temp}:{os.environ['PATH']}",
+                "GH_TEST_LOG": str(gh_log),
+                "CONTROLLER": "AnjanaKavinda",
+                "PR_NUMBER": "123",
+            }
+
+            owner = subprocess.run(
+                ["bash", "-e", "-c", script], env={**env, "PR_AUTHOR": "AnjanaKavinda"},
+                check=False, capture_output=True, text=True)
+            self.assertEqual(owner.returncode, 0, owner.stderr)
+            self.assertIn("Approved owner-authored PR path", owner.stdout)
+            self.assertFalse(gh_log.exists(), "owner must not be requested as reviewer")
+
+            non_owner = subprocess.run(
+                ["bash", "-e", "-c", script], env={**env, "PR_AUTHOR": "agent-bot"},
+                check=False, capture_output=True, text=True)
+            self.assertEqual(non_owner.returncode, 0, non_owner.stderr)
+            self.assertIn("reviewers[]=AnjanaKavinda", gh_log.read_text(encoding="utf-8"))
+
+    def test_v11_main_promotion_shape_remains_dev_only_without_auto_merge(self):
+        workflow = (Path(__file__).parents[1] / "workflows" /
+                    "copilot-pr-governance.yml").read_text(encoding="utf-8")
+        promotion = (Path(__file__).parents[1] / "workflows" /
+                     "promote-dev-to-main.yml").read_text(encoding="utf-8")
+
+        self.assertIn("github.event.pull_request.base.ref == 'main'", workflow)
+        self.assertIn('test "$PR_HEAD" = "dev"', workflow)
+        self.assertIn('gh pr create --base main --head dev', promotion)
+        self.assertIn("mandatory human reviewer was not requested", promotion)
+        self.assertNotIn("gh pr merge", promotion)
+        self.assertNotIn("enable-auto-merge", promotion)
 
     def test_v11_pr_governance_lifecycle_uses_central_issue_parser(self):
         workflow = (Path(__file__).parents[1] / "workflows" /
