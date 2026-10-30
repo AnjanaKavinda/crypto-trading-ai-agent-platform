@@ -4,8 +4,8 @@
 
 **Scope:** The smallest C-066 schema and producer needed for the current
 `PERSONAL_SPOT_RESEARCH` path. This record captures the approved contract
-meaning and implementation boundaries. It does not add runtime behavior or
-close Issue #77.
+meaning and implementation boundaries. The bounded runtime implementation is
+tracked separately; Issue #77 remains open for broader full-platform readiness.
 
 ## Approved C-066 meaning
 
@@ -84,6 +84,7 @@ They add no provider, risk, approval, or execution authority.
 | #78 | May later test C-066-related failure or instrumentation behavior where relevant. |
 | Wave 1 checkpoint | Resolve #77 before final Wave 1 checkpoint validation. |
 
-This PR remains documentation-only. It records the approved meaning and impact
-for a later bounded runtime implementation; it adds no C-066 runtime code,
-does not modify unrelated contracts, and does not close Issue #77.
+Schema 1 implements this bounded meaning for the current
+`PERSONAL_SPOT_RESEARCH` result-validation path. Runtime records are typed and
+returned in memory; they are not persisted. Issue #77 remains open for broader
+full-platform readiness and is required before the final Wave 1 checkpoint.

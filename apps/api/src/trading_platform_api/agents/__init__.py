@@ -1,7 +1,14 @@
 from trading_platform_api.agents.contracts import (
+    AGENT_EVALUATION_METHOD_ID,
+    AGENT_EVALUATION_METHOD_VERSION,
     CONTRACT_SCHEMA_VERSION,
     AgentContractError,
     AgentDefinition,
+    AgentEvaluation,
+    AgentEvaluationFailureClass,
+    AgentEvaluationOutcome,
+    AgentEvaluationSchemaState,
+    AgentGroundingState,
     AgentPermissionProfile,
     AgentResult,
     AgentResultStatus,
@@ -14,6 +21,9 @@ from trading_platform_api.agents.contracts import (
     ModelRoute,
     ModelRoutingDecision,
     ModelRoutingPolicy,
+)
+from trading_platform_api.agents.evaluation import (
+    build_agent_evaluation,
 )
 from trading_platform_api.agents.memory_retrieval import (
     MAX_MEMORY_CONTEXT_ITEMS,
@@ -61,6 +71,11 @@ __all__ = [
     "CONTRACT_SCHEMA_VERSION",
     "AgentContractError",
     "AgentDefinition",
+    "AgentEvaluation",
+    "AgentEvaluationFailureClass",
+    "AgentEvaluationOutcome",
+    "AgentEvaluationSchemaState",
+    "AgentGroundingState",
     "AgentPermissionDecision",
     "AgentPermissionEnforcementError",
     "AgentPermissionProfile",
@@ -81,6 +96,8 @@ __all__ = [
     "ModelRoutingDecision",
     "ModelRoutingError",
     "ModelRoutingPolicy",
+    "AGENT_EVALUATION_METHOD_ID",
+    "AGENT_EVALUATION_METHOD_VERSION",
     "MAX_MEMORY_CONTEXT_ITEMS",
     "MemoryContextCandidate",
     "MemoryContextSource",
@@ -104,4 +121,5 @@ __all__ = [
     "revoke_agent_tool_access",
     "retrieve_memory_context",
     "validate_agent_result",
+    "build_agent_evaluation",
 ]

@@ -86,7 +86,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-063 | AgentPermissionProfile | Security Governance | Orchestrator, Safety, Approval | Machine-enforceable least-privilege runtime grant bound to role/mode and constrained by `AgentPermissionPolicy`. |
 | C-064 | AgentToolAccess | Orchestrator Security | Runtime Agent Shell, Audit | Tool grant is explicit, scoped, revocable, and never implies execution authority. |
 | C-065 | AgentHandoff | Orchestrator | Downstream Agents, Audit, Learning | Handoff preserves provenance, unresolved risks, and bounded responsibilities. |
-| C-066 | AgentEvaluation | Evaluation | Governance, Learning, Orchestrator | Evaluation is evidence-based and cannot directly modify production execution/risk behavior. |
+| C-066 | AgentEvaluation | Evaluation | Governance, Learning, Orchestrator | Evaluation is evidence-based and cannot directly modify production execution/risk behavior. Schema 1 is one evaluation per C-062 result; see the Version Registry for the bounded PERSONAL_SPOT_RESEARCH implementation. |
 | C-067 | ModelRoutingDecision | Model Governance | Runtime Agent Router, Audit, Safety | Model/provider choice must be explicit, attributable, and policy-compliant. |
 | C-068 | FibonacciAssessment | Technical Analysis | MarketContext, Strategy | Fibonacci findings are reproducible from deterministic inputs and include invalidation context. |
 | C-069 | AnalyticalUncertainty | Analysis | Strategy, UX, Safety | Uncertainty must be explicit and cannot be converted into trade authority. |

@@ -84,7 +84,7 @@ def _result(*, status: AgentResultStatus = AgentResultStatus.COMPLETE) -> AgentR
         supporting_evidence_ids=(evidence_id,),
         contradicting_evidence_ids=(),
         unresolved_risks=("insufficient independent evidence",)
-        if status is AgentResultStatus.NO_TRADE
+        if status in (AgentResultStatus.NO_TRADE, AgentResultStatus.INSUFFICIENT_DATA)
         else (),
         output=output,
     )
@@ -114,6 +114,7 @@ def test_graph_validates_output_and_preserves_checkpoint_provenance() -> None:
     state = asyncio.run(
         run_spot_result_graph(
             graph,
+            expectation=_expectation(value),
             correlation_id=correlation_id,
             agent_result=value,
             thread_id=str(value.task_id),
@@ -125,6 +126,8 @@ def test_graph_validates_output_and_preserves_checkpoint_provenance() -> None:
     assert state["correlation_id"] == correlation_id
     assert state["validated_at"].tzinfo is UTC
     assert state["validation_error"] is None
+    assert state["agent_evaluation"].result_id == value.result_id
+    assert state["agent_evaluation"].schema_state.value == "VALID"
     checkpoint = graph.get_state({"configurable": {"thread_id": str(value.task_id)}})
     assert checkpoint.values["correlation_id"] == correlation_id
 
@@ -138,6 +141,7 @@ def test_graph_keeps_no_trade_as_a_valid_terminal_state() -> None:
     state = asyncio.run(
         run_spot_result_graph(
             graph,
+            expectation=_expectation(value),
             correlation_id=uuid4(),
             agent_result=value,
             thread_id=str(value.task_id),
@@ -158,6 +162,7 @@ def test_graph_rejects_result_outside_trusted_task_binding() -> None:
     state = asyncio.run(
         run_spot_result_graph(
             graph,
+            expectation=_expectation(expected),
             correlation_id=uuid4(),
             agent_result=untrusted,
             thread_id=str(expected.task_id),
@@ -190,6 +195,7 @@ def test_timeout_returns_a_correlated_fail_closed_state() -> None:
     state = asyncio.run(
         run_spot_result_graph(
             SlowGraph(),
+            expectation=_expectation(value),
             correlation_id=correlation_id,
             agent_result=value,
             thread_id=str(value.task_id),
@@ -200,6 +206,8 @@ def test_timeout_returns_a_correlated_fail_closed_state() -> None:
     assert state["status"] == "TIMED_OUT"
     assert state["correlation_id"] == correlation_id
     assert state["agent_result"] is value
+    assert state["agent_evaluation"].outcome.value == "TIMED_OUT"
+    assert state["agent_evaluation"].schema_state.value == "UNKNOWN"
 
     with pytest.raises(ValueError, match="registered agent output allowlist"):
         build_spot_result_graph(
