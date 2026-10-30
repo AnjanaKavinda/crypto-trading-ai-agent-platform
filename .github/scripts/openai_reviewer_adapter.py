@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from independent_reviewer import (
-    CAPABILITY_TIERS, CATEGORIES, DISPOSITIONS, SEVERITIES, Finding, IndependentReviewerAdapter,
+    CAPABILITY_TIERS, CATEGORIES, DISPOSITIONS, SEVERITIES,
+    DirectOwnerReviewerExecutionRequest, Finding, IndependentReviewerAdapter,
     ReviewerExecutionError, ReviewerExecutionRequest, ReviewerExecutionResult,
     integrity_hash,
 )
@@ -362,12 +363,12 @@ class OpenAIReviewerAdapter(IndependentReviewerAdapter):
                                           "result_integrity_hash": integrity_hash(body)})
 
 
-def as_safe_dict(request: ReviewerExecutionRequest) -> dict[str, Any]:
-    return {
+def as_safe_dict(request: ReviewerExecutionRequest | DirectOwnerReviewerExecutionRequest) -> dict[str, Any]:
+    common = {
         "schema_version": request.schema_version, "repository": request.repository,
         "pr_number": request.pr_number, "head_sha": request.head_sha,
         "base_branch": request.base_branch, "github_issue_id": request.github_issue_id,
-        "canonical_issue_id": request.canonical_issue_id, "agent_role": request.agent_role,
+        "canonical_issue_id": request.canonical_issue_id,
         "reviewer_role": request.reviewer_role, "required_review_tier": request.required_review_tier,
         "capability_tier": request.capability_tier, "context_pack_id": request.context_pack_id,
         "context_pack_version": request.context_pack_version, "allowed_paths": request.allowed_paths,
@@ -375,3 +376,10 @@ def as_safe_dict(request: ReviewerExecutionRequest) -> dict[str, Any]:
         "diff_reference": request.diff_reference, "required_checks": request.required_checks,
         "safety_invariants": request.safety_invariants,
     }
+    if isinstance(request, DirectOwnerReviewerExecutionRequest):
+        common.update({"implementation_origin": request.implementation_origin,
+                       "implementation_identity": request.implementation_identity,
+                       "controller_identity": request.controller_identity})
+    else:
+        common["agent_role"] = request.agent_role
+    return common

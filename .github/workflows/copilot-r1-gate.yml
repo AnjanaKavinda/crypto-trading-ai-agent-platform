@@ -62,19 +62,42 @@ jobs:
         id: classify
         if: steps.fetch.outcome == 'success'
         continue-on-error: true
+        env:
+          CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, sys
+          import json, os, sys
           sys.path.insert(0, '.github/scripts')
           from review_provenance import required_review_tier_from_labels
           issue = json.load(open('.governance/r1/issue.json'))
           print("tier=" + required_review_tier_from_labels(issue.get("labels", [])))
+          pr = json.load(open('.governance/r1/pr.json'))
+          controller = os.environ.get('CONTROLLER', '')
+          owner_direct = bool(controller and (pr.get('user') or {}).get('login') == controller)
+          print('owner_direct=' + str(owner_direct).lower())
           PY
       - name: Leave non-R1 review untouched
         if: steps.classify.outcome == 'success' && steps.classify.outputs.tier != 'R1'
         run: echo "Linked issue is not R1; this workflow performs no governance status writes."
+      - name: Leave direct-owner R1 to signed independent review
+        if: steps.classify.outcome == 'success' && steps.classify.outputs.owner_direct == 'true'
+        run: echo "Direct-owner reviews use signed independent provenance; the owner cannot approve their own implementation."
+      - name: Invalidate owner gate when independent R1 review is dismissed
+        if: >-
+          github.event_name == 'pull_request_review' &&
+          github.event.action == 'dismissed' &&
+          steps.classify.outcome == 'success' &&
+          steps.classify.outputs.owner_direct == 'true' &&
+          steps.classify.outputs.tier == 'R1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(jq -r .head.sha .governance/r1/pr.json)"
+          gh api --method POST "repos/${{ github.repository }}/statuses/$head" \
+            -f state=pending -f context=governance-gate \
+            -f description='Independent R1 review was dismissed; fresh current-head review required'
       - name: Leave R1 pending before approval and on invalidation
-        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1'
+        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1' && steps.classify.outputs.owner_direct != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -84,7 +107,7 @@ jobs:
             -f description='R1 requires current-head AnjanaKavinda approval and deterministic checks'
       - name: Publish trusted R1 result
         id: evaluate
-        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1'
+        if: steps.fetch.outcome == 'success' && steps.classify.outcome == 'success' && steps.classify.outputs.tier == 'R1' && steps.classify.outputs.owner_direct != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

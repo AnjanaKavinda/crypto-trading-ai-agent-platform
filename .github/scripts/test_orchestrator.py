@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from orchestrator import *
 import review_provenance
+import owner_pr_lifecycle
 
 spec = importlib.util.spec_from_file_location(
     "pr_governance", Path(__file__).with_name("run-pr-governance.py"))
@@ -944,6 +945,36 @@ class GovernanceTests(unittest.TestCase):
                 with self.assertRaises(GovernanceError):
                     transition_pr.verified_review_result(pr, 195)
 
+    def test_direct_owner_github_review_artifact_needs_no_model_result_file(self):
+        producer = "o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev"
+        artifact = review_provenance.build_direct_owner_artifact(
+            repository="o/r", pr_number=431, issue_id=80, review_id=900,
+            head_sha="owner-head", base_branch="dev", reviewer_identity="reviewer",
+            reviewer_session_id="review-session", implementation_identity="github-user:owner",
+            controller_identity="owner", required_review_tier="R1", review_tier="R1",
+            producer_identity=producer, producer_run_id="run-1",
+            controller_policy_version="v1.3", disposition="approved",
+            secret="signing-secret", result_integrity_hash="github-review-digest",
+            request_integrity_hash="request-digest", diff_reference="sha256:owner-diff",
+            review_evidence_kind="GITHUB_REVIEW", review_evidence_id="900")
+        pr = {"number": 431, "user": {"login": "owner"},
+              "base": {"ref": "dev"}, "head": {"sha": "owner-head"}}
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_path = Path(temp) / "artifact.json"
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+            env = {
+                "GITHUB_REPOSITORY": "o/r",
+                "GOVERNED_REVIEW_ARTIFACT_FILE": str(artifact_path),
+                "GOVERNANCE_PROVENANCE_SIGNING_KEY": "signing-secret",
+                "GOVERNED_PROVENANCE_PRODUCER": producer,
+                "GOVERNED_CONTROLLER": "owner",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                result = transition_pr.verified_review_result(pr, 80)
+        self.assertEqual(result["disposition"], "approved")
+        self.assertEqual(result["head_sha"], "owner-head")
+        self.assertEqual(result["review_id"], 900)
+
     def test_transition_audit_requires_dispatch_bound_review_tier(self):
         payload = {
             "agent_role": "Platform Architect",
@@ -983,6 +1014,244 @@ class GovernanceTests(unittest.TestCase):
         with self.assertRaises(GovernanceError):
             transition_pr.transition_review_tier({"review_tier": "R9"})
 
+    def test_direct_owner_provenance_v13_is_explicit_and_compatible(self):
+        artifact = review_provenance.build_direct_owner_artifact(
+            repository="owner/repository", pr_number=431, issue_id=80,
+            review_id=901, head_sha="head-current", base_branch="dev",
+            reviewer_identity="reviewer-bot", reviewer_session_id="review-session",
+            implementation_identity="github-user:owner",
+            controller_identity="owner", required_review_tier="R2", review_tier="R2",
+            producer_identity="owner/repository/.github/workflows/review.yml@refs/heads/dev",
+            producer_run_id="run-55", controller_policy_version="v1.3",
+            disposition="approved", secret="signing-secret",
+            result_integrity_hash="result-hash", provider_execution_ref="provider-ref",
+            provider_model="model-r2", request_integrity_hash="request-hash",
+            diff_reference="sha256:diff", execution_handoff_signature="handoff-signature")
+        self.assertEqual(artifact["schema_version"], "1.3")
+        self.assertEqual(artifact["implementation_origin"], "DIRECT_OWNER")
+        self.assertEqual(artifact["implementation_identity"], "github-user:owner")
+        self.assertNotIn("agent_role", artifact)
+        self.assertNotIn("implementer_session_id", artifact)
+        self.assertNotIn("dispatch_key", artifact)
+        verified = review_provenance.verify_artifact(
+            artifact, secret="signing-secret", expected_repository="owner/repository",
+            expected_pr_number=431, expected_issue_id=80,
+            expected_head_sha="head-current",
+            expected_producer_identity=artifact["producer_identity"], controller="owner",
+            expected_implementation_origin="DIRECT_OWNER",
+            expected_implementation_identity="github-user:owner",
+            expected_base_branch="dev")
+        self.assertEqual(verified["implementation_origin"], "DIRECT_OWNER")
+        self.assertEqual(verified["review_tier"], "R2")
+
+        agent_artifact = review_provenance.build_artifact(
+            repository="owner/repository", pr_number=430, issue_id=80, review_id=900,
+            head_sha="agent-head", reviewer_identity="reviewer-bot",
+            reviewer_session_id="review-session", implementer_session_id="agent-session",
+            required_review_tier="R2", review_tier="R2",
+            producer_identity="owner/repository/review.yml@refs/heads/dev",
+            producer_run_id="run-54", controller_policy_version="v1.2",
+            disposition="approved", secret="signing-secret")
+        self.assertEqual(agent_artifact["schema_version"], "1.2")
+        self.assertEqual(review_provenance.verify_artifact(
+            agent_artifact, secret="signing-secret", expected_repository="owner/repository",
+            expected_pr_number=430, expected_issue_id=80, expected_head_sha="agent-head",
+            expected_producer_identity=agent_artifact["producer_identity"], controller="owner",
+            implementer_session_id="agent-session")["implementation_origin"], "GOVERNED_AGENT")
+
+    def test_direct_owner_provenance_rejects_tampering_stale_and_malformed_origin(self):
+        artifact = review_provenance.build_direct_owner_artifact(
+            repository="o/r", pr_number=9, issue_id=8, review_id=7, head_sha="head-1",
+            base_branch="dev", reviewer_identity="reviewer", reviewer_session_id="review-session",
+            implementation_identity="github-user:owner", controller_identity="owner",
+            required_review_tier="R1", review_tier="R1", producer_identity="producer",
+            producer_run_id="run", controller_policy_version="v1.3", disposition="approved",
+            secret="signing-secret", result_integrity_hash="result", provider_execution_ref="ref",
+            provider_model="model", request_integrity_hash="request", diff_reference="diff",
+            execution_handoff_signature="handoff")
+        kwargs = dict(secret="signing-secret", expected_repository="o/r", expected_pr_number=9,
+                      expected_issue_id=8, expected_head_sha="head-1",
+                      expected_producer_identity="producer", controller="owner",
+                      expected_implementation_origin="DIRECT_OWNER",
+                      expected_implementation_identity="github-user:owner")
+        tampered = dict(artifact, implementation_identity="github-user:other")
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(tampered, **kwargs)
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(artifact, **{**kwargs, "expected_head_sha": "head-2"})
+        with self.assertRaises(GovernanceError):
+            review_provenance.verify_artifact(
+                dict(artifact, implementation_origin="UNKNOWN"), **kwargs)
+        with self.assertRaises(GovernanceError):
+            review_provenance.build_direct_owner_artifact(
+                repository="o/r", pr_number=9, issue_id=8, review_id=7, head_sha="head-1",
+                base_branch="dev", reviewer_identity="owner", reviewer_session_id="review-session",
+                implementation_identity="github-user:owner", controller_identity="owner",
+                required_review_tier="R1", review_tier="R1", producer_identity="producer",
+                producer_run_id="run", controller_policy_version="v1.3", disposition="approved",
+                secret="signing-secret")
+
+    def test_direct_owner_r1_uses_signed_current_head_github_review_evidence(self):
+        pr = {"number": 431, "repository": "o/r", "head_sha": "owner-head",
+              "base": "dev", "body": "Closes #80", "author": "owner", "state": "open"}
+        issue = {"number": 80, "state": "open", "labels": [{"name": "type:test"}]}
+        review = {"id": 900, "user": {"login": "reviewer"},
+                  "commit_id": "owner-head", "state": "APPROVED",
+                  "submitted_at": "2026-10-30T00:00:00Z", "body": "Reviewed current diff."}
+        evidence = review_provenance.resolve_direct_owner_review_evidence(
+            pr=pr, issue=issue, reviews=[review],
+            reviewer_configuration={"reviewer": {"tier": "R1", "session_id": "review-session"}},
+            controller="owner", implementation_identity="github-user:owner")
+        artifact = review_provenance.build_direct_owner_artifact(
+            repository="o/r", pr_number=431, issue_id=80, review_id=evidence["review_id"],
+            head_sha=evidence["head_sha"], base_branch="dev",
+            reviewer_identity=evidence["reviewer_identity"],
+            reviewer_session_id=evidence["reviewer_session_id"],
+            implementation_identity="github-user:owner", controller_identity="owner",
+            required_review_tier=evidence["required_review_tier"],
+            review_tier=evidence["review_tier"], producer_identity="producer",
+            producer_run_id="run-1", controller_policy_version="v1.3",
+            disposition=evidence["disposition"], secret="signing-secret",
+            result_integrity_hash=evidence["result_integrity_hash"],
+            request_integrity_hash="request-hash", diff_reference="sha256:current-diff",
+            review_evidence_kind=evidence["review_evidence_kind"],
+            review_evidence_id=evidence["review_evidence_id"],
+            provider_execution_ref=evidence["provider_execution_ref"],
+            provider_model=evidence["provider_model"],
+            execution_handoff_signature=evidence["execution_handoff_signature"])
+        verified = review_provenance.verify_artifact(
+            artifact, secret="signing-secret", expected_repository="o/r",
+            expected_pr_number=431, expected_issue_id=80, expected_head_sha="owner-head",
+            expected_producer_identity="producer", controller="owner",
+            expected_implementation_origin="DIRECT_OWNER",
+            expected_implementation_identity="github-user:owner",
+            expected_base_branch="dev")
+        self.assertEqual(verified["review_evidence_kind"], "GITHUB_REVIEW")
+        self.assertEqual(artifact["provider_model"], "")
+        self.assertEqual(artifact["execution_handoff_signature"], "")
+
+        newer = {**review, "id": 901, "state": "CHANGES_REQUESTED",
+                 "submitted_at": "2026-10-30T00:01:00Z"}
+        latest = review_provenance.resolve_direct_owner_review_evidence(
+            pr=pr, issue=issue, reviews=[review, newer],
+            reviewer_configuration={"reviewer": {"tier": "R1", "session_id": "review-session"}},
+            controller="owner", implementation_identity="github-user:owner")
+        self.assertEqual(latest["disposition"], "changes-requested")
+        dismissed = {**newer, "id": 902, "state": "DISMISSED",
+                     "submitted_at": "2026-10-30T00:02:00Z"}
+        with self.assertRaises(GovernanceError):
+            review_provenance.resolve_direct_owner_review_evidence(
+                pr=pr, issue=issue, reviews=[review, dismissed],
+                reviewer_configuration={"reviewer": {"tier": "R1", "session_id": "review-session"}},
+                controller="owner", implementation_identity="github-user:owner")
+
+    def test_direct_owner_lifecycle_binds_owner_head_without_dispatch(self):
+        pr = {"number": 431, "state": "open", "merged": False,
+              "body": "Closes #80", "user": {"login": "owner"},
+              "base": {"ref": "dev", "repo": {"full_name": "o/r"}},
+              "head": {"sha": "head-1", "repo": {"full_name": "o/r"}}}
+        issue = {"number": 80, "state": "open", "labels": []}
+        binding = owner_pr_lifecycle.validate_direct_owner_pr(
+            pr, issue, repository="o/r", controller="owner", target_state="workflow:review",
+            event_action="opened", comments=[])
+        self.assertEqual(binding["issue_id"], 80)
+        self.assertIsNone(binding["previous"])
+        first = owner_pr_lifecycle.make_owner_record(
+            repository="o/r", pr_number=431, issue_id=80, head_sha="head-1",
+            base_branch="dev", controller="owner", state="workflow:review",
+            event_action="opened")
+        comment = {"id": 1, "user": {"login": "github-actions[bot]"},
+                   "body": owner_pr_lifecycle.OWNER_MARKER + "\n" +
+                           owner_pr_lifecycle.OWNER_RECORD_PREFIX + json.dumps(first),
+                   "created_at": "2026-10-30T00:00:00Z"}
+        pr["head"]["sha"] = "head-2"
+        rebound = owner_pr_lifecycle.validate_direct_owner_pr(
+            pr, issue, repository="o/r", controller="owner", target_state="workflow:review",
+            event_action="synchronize", comments=[comment])
+        self.assertEqual(rebound["head_sha"], "head-2")
+        self.assertFalse(owner_pr_lifecycle.owner_record_matches(
+            first, repository="o/r", pr_number=431, issue_id=80, head_sha="head-2",
+            base_branch="dev", controller="owner"))
+        pr["body"] = "Closes #80 and resolves #81"
+        with self.assertRaises(GovernanceError):
+            owner_pr_lifecycle.validate_direct_owner_pr(
+                pr, issue, repository="o/r", controller="owner", target_state="workflow:review",
+                event_action="synchronize", comments=[comment])
+        pr["body"] = "Closes #80"
+        pr["user"]["login"] = "contributor"
+        with self.assertRaises(GovernanceError):
+            owner_pr_lifecycle.validate_direct_owner_pr(
+                pr, issue, repository="o/r", controller="owner", target_state="workflow:review",
+                event_action="synchronize", comments=[comment])
+
+    def test_direct_owner_transition_enters_review_without_dispatch_or_agent_audit(self):
+        pr = {"number": 431, "state": "open", "merged": False,
+              "body": "Closes #80", "user": {"login": "owner"},
+              "base": {"ref": "dev", "repo": {"full_name": "o/r"}},
+              "head": {"sha": "head-1", "repo": {"full_name": "o/r"}}}
+        issue = {"number": 80, "state": "open", "labels": []}
+        with patch.object(transition_pr, "api") as mocked_api:
+            result = transition_pr.direct_owner_transition(
+                pr=pr, issue_record=issue, comments=[], repository="o/r",
+                issue_number="80", target="workflow:review", controller="owner",
+                event_action="opened")
+        self.assertEqual(result, 0)
+        serialized_calls = "\n".join(" ".join(map(str, call.args)) for call in mocked_api.call_args_list)
+        self.assertIn("labels[]=workflow:review", serialized_calls)
+        self.assertIn(owner_pr_lifecycle.OWNER_MARKER, serialized_calls)
+        self.assertNotIn("dispatch_key", serialized_calls)
+        self.assertNotIn("append_governance_event", serialized_calls)
+
+    def test_direct_owner_substantive_lifecycle_failure_blocks(self):
+        pr = {"number": 431, "state": "open", "merged": False,
+              "body": "Closes #80", "user": {"login": "owner"},
+              "base": {"ref": "dev", "repo": {"full_name": "o/r"}},
+              "head": {"sha": "head-1", "repo": {"full_name": "o/r"}}}
+        issue = {"number": 80, "state": "open", "labels": []}
+        record = owner_pr_lifecycle.make_owner_record(
+            repository="o/r", pr_number=431, issue_id=80, head_sha="head-1",
+            base_branch="dev", controller="owner", state="workflow:review",
+            event_action="opened")
+        comment = {"id": 1, "user": {"login": "github-actions[bot]"},
+                   "body": owner_pr_lifecycle.OWNER_MARKER + "\n" +
+                           owner_pr_lifecycle.OWNER_RECORD_PREFIX + json.dumps(record)}
+        with patch.object(transition_pr, "api") as mocked_api:
+            with patch.object(transition_pr, "verified_review_result", return_value=None):
+                result = transition_pr.direct_owner_transition(
+                    pr=pr, issue_record=issue, comments=[comment], repository="o/r",
+                    issue_number="80", target="workflow:ready-to-merge",
+                    controller="owner", event_action="workflow_run")
+        self.assertEqual(result, 1)
+        mocked_api.assert_not_called()
+
+    def test_direct_owner_r1_requires_configured_non_owner_current_head_and_checks(self):
+        pr = {"issue_id": 80, "base": "dev", "head_sha": "owner-head",
+              "author": "owner", "implementation_identity": "github-user:owner",
+              "checks": {"product-ci": "success", "governance-ci": "success"},
+              "required_review_tier": "R1", "authorized_reviewers": ["reviewer-bot"],
+              "authorized_reviewer_sessions": {"reviewer-bot": "review-session"}}
+        review = {"state": "APPROVED", "commit_id": "owner-head", "user": "reviewer-bot",
+                  "reviewer_session_id": "review-session", "review_tier": "R1",
+                  "independent": True}
+        self.assertTrue(validate_pr(
+            pr, issue_id=80, required_checks=("product-ci", "governance-ci"),
+            reviews=(review,), controller="owner", direct_owner=True))
+        owner_review = {**review, "user": "owner", "reviewer_session_id": "owner"}
+        with self.assertRaises(GovernanceError):
+            validate_pr(pr, issue_id=80, required_checks=("product-ci", "governance-ci"),
+                        reviews=(owner_review,), controller="owner", direct_owner=True)
+        with self.assertRaises(GovernanceError):
+            validate_pr({**pr, "checks": {"product-ci": "failure", "governance-ci": "success"}},
+                        issue_id=80, required_checks=("product-ci", "governance-ci"),
+                        reviews=(review,), controller="owner", direct_owner=True)
+
+    def test_direct_owner_requires_product_and_governance_checks_only_on_owner_path(self):
+        configured = ["governance-ci"]
+        self.assertEqual(pr_governance.required_check_names(configured, direct_owner=True),
+                         ["governance-ci", "product-ci"])
+        self.assertEqual(pr_governance.required_check_names(configured, direct_owner=False),
+                         ["governance-ci"])
+
     def test_v11_automation_v1_production_wiring_is_present(self):
         issue_source = (Path(__file__).with_name("orchestrate-issue.py")
                         .read_text(encoding="utf-8"))
@@ -990,6 +1259,8 @@ class GovernanceTests(unittest.TestCase):
                           "copilot-issue-orchestrator.yml").read_text(encoding="utf-8")
         review_workflow = (Path(__file__).parents[1] / "workflows" /
                            "governed-independent-review.yml").read_text(encoding="utf-8")
+        r1_workflow = (Path(__file__).parents[1] / "workflows" /
+                       "copilot-r1-gate.yml").read_text(encoding="utf-8")
         pr_workflow = (Path(__file__).parents[1] / "workflows" /
                        "copilot-pr-governance.yml").read_text(encoding="utf-8")
         transition_source = (Path(__file__).with_name("transition-pr.py")
@@ -1002,7 +1273,7 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("governed automation is disabled by the global kill switch", issue_source)
         self.assertIn("GOVERNED_PILOT_ISSUES", issue_source)
         self.assertIn("GOVERNED_PILOT_ISSUES:", issue_workflow)
-        self.assertIn('workflows: ["Governance CI"]', review_workflow)
+        self.assertIn('workflows: ["Governance CI", "Product CI"]', review_workflow)
         self.assertIn("governance-gate", review_workflow)
         self.assertIn("GOVERNED_REVIEW_ARTIFACT_FILE", review_workflow)
         self.assertIn("run-pr-governance.py", review_workflow)
@@ -1020,6 +1291,17 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("trusted_correction_actors", transition_source)
         self.assertIn('GOVERNED_PILOT_ENABLED', transition_source)
         self.assertIn('GOVERNED_PILOT_ISSUES', transition_source)
+        self.assertIn("owner_checks_ready", review_workflow)
+        self.assertIn("'product-ci', 'governance-ci'", review_workflow)
+        self.assertIn("unset GOVERNED_REVIEW_RESULT_FILE", review_workflow)
+        self.assertIn("github.event.workflow_run.name == 'Governance CI'", review_workflow)
+        self.assertIn("owner_review_final", review_workflow)
+        self.assertIn("github.event.workflow_run.head_sha", review_workflow)
+        self.assertIn("pull_request_review:", review_workflow)
+        self.assertIn("needs.classify-r1.outputs.tier != 'R1'", review_workflow)
+        self.assertIn("/tmp/reviewer-request.json > /tmp/review-artifact.json", review_workflow)
+        self.assertIn("steps.classify.outputs.owner_direct != 'true'", r1_workflow)
+        self.assertIn("Leave direct-owner R1 to signed independent review", r1_workflow)
         self.assertIn("CORRECTION_READY", transition_source)
         self.assertNotIn("COPILOT_ASSIGNMENT_TOKEN", transition_source)
         self.assertIn("DISPATCH_READY", issue_source)
@@ -1093,7 +1375,6 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("Human merge remains final authority", workflow)
         self.assertNotIn("gh pr merge", workflow)
         self.assertNotIn("enable-auto-merge", workflow)
-
         script_start = reviewer_gate.index("        run: |\n") + len("        run: |\n")
         script = textwrap.dedent(reviewer_gate[script_start:])
         script = script.replace("${{ github.repository }}", "owner/repository")
