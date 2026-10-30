@@ -19,8 +19,8 @@ from trading_platform_api.analysis.contracts import (
     EvidenceRelation,
 )
 from trading_platform_api.analysis.versioned_contracts_v4 import (
-    ConfluenceComponentV2,
     ConflictAssessmentV3,
+    ConfluenceComponentV2,
 )
 from trading_platform_api.orchestration.spot_debate import (
     SpotDebateConclusion,
