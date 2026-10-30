@@ -49,10 +49,7 @@ CONTRACT_PACKAGES = (
     "safety",
     "learning",
 )
-DEFERRED_CONTRACTS = {
-    "C-065": "AgentHandoff",
-    "C-066": "AgentEvaluation",
-}
+DEFERRED_CONTRACTS = {"C-065": "AgentHandoff"}
 REFERENCE_ONLY_TYPES = {
     ValidationReference: "C-028",
     AgentIndependenceReference: "C-093",
@@ -154,7 +151,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
     assert set(registry) == {f"C-{number:03d}" for number in range(1, 105)}
     assert len(set(registry.values())) == 104
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 102
+    assert len(owners) == 103
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
@@ -168,6 +165,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
     assert owners["C-061"] is AgentDefinition
     assert owners["C-063"].__name__ == "AgentPermissionProfile"
     assert owners["C-064"].__name__ == "AgentToolAccess"
+    assert owners["C-066"].__name__ == "AgentEvaluation"
 
 
 def test_every_canonical_owner_has_stable_v1_schema_metadata() -> None:

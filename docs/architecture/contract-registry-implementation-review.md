@@ -28,8 +28,11 @@ The domain registry contains exactly C-001–C-100 with unique IDs and names.
   registry review.
 - At the time of this review, C-061–C-067 were deferred to their Phase 05
   orchestration owners. Issue #69 subsequently implemented C-067
-  `ModelRoutingDecision`; C-061–C-066 remain deferred. This historical review
-  does not replace the current canonical owner/contract tests.
+  `ModelRoutingDecision`; C-061–C-066 remained deferred at the time of this
+  historical review. Issue #77 subsequently implemented C-066
+  `AgentEvaluation` schema 1 for the bounded PERSONAL_SPOT_RESEARCH path. C-065
+  remains deferred. This historical review does not replace current canonical
+  owner/contract tests.
 - Full C-093 `AgentIndependenceReport` remains intentionally deferred to the
   later confluence/independence implementation. Phase 02 exposes only a bounded
   reference to that future report.

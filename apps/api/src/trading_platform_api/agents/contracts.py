@@ -8,10 +8,13 @@ from enum import StrEnum
 from typing import ClassVar
 from uuid import UUID
 
+from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.risk import ContractReference
 from trading_platform_api.safety import AgentPermissionPolicy
 
 CONTRACT_SCHEMA_VERSION = "1"
+AGENT_EVALUATION_METHOD_ID = "personal-spot-c062-result-validation"
+AGENT_EVALUATION_METHOD_VERSION = "1"
 _SENSITIVE = re.compile(
     r"(?i)(api[-_ ]?key|authorization|password|secret|token)\s*[:=]|"
     r"\bbearer\s+\S+|://[^/\s:@]+:[^/\s@]+@"
@@ -44,6 +47,33 @@ class AgentResultStatus(StrEnum):
     PARTIAL = "PARTIAL"
     NO_TRADE = "NO_TRADE"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
+class AgentEvaluationOutcome(StrEnum):
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+    REJECTED_INVALID = "REJECTED_INVALID"
+
+
+class AgentEvaluationSchemaState(StrEnum):
+    VALID = "VALID"
+    INVALID = "INVALID"
+    UNKNOWN = "UNKNOWN"
+
+
+class AgentEvaluationFailureClass(StrEnum):
+    OUTPUT_SCHEMA_INVALID = "OUTPUT_SCHEMA_INVALID"
+    RESULT_VALIDATION_REJECTED = "RESULT_VALIDATION_REJECTED"
+    EVALUATION_TIMEOUT = "EVALUATION_TIMEOUT"
+    EVALUATION_FAILURE = "EVALUATION_FAILURE"
+
+
+class AgentGroundingState(StrEnum):
+    REFERENCES_VALIDATED = "REFERENCES_VALIDATED"
+    NO_REFERENCES = "NO_REFERENCES"
+    INVALID_REFERENCES = "INVALID_REFERENCES"
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,6 +523,190 @@ class ModelRoutingDecision:
         _positive_int("max_input_tokens", self.max_input_tokens)
         _positive_int("max_output_tokens", self.max_output_tokens)
         _non_negative_decimal("max_request_cost_usd", self.max_request_cost_usd)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentEvaluation:
+    """C-066 schema 1: one bounded evaluation for one C-062 result."""
+
+    evaluation_id: UUID
+    result_contract_id: str = field(default="C-062", init=False)
+    result_id: UUID
+    result_schema_version: str
+    task_id: UUID
+    context_id: UUID
+    correlation_id: UUID
+    trace_id: UUID
+    agent_id: str
+    agent_version: str
+    routing_decision_ref: ContractReference
+    provider_id: str
+    model_id: str
+    model_version: str
+    prompt_id: str
+    prompt_version: str
+    output_contract_id: str | None
+    output_schema_version: str | None
+    evaluation_method_id: str
+    evaluation_method_version: str
+    environment: DeploymentEnvironment
+    mode: OperatingMode
+    started_at: datetime
+    ended_at: datetime
+    evaluated_at: datetime
+    duration_ms: int | None
+    outcome: AgentEvaluationOutcome
+    result_status: AgentResultStatus
+    schema_state: AgentEvaluationSchemaState
+    failure_classification: AgentEvaluationFailureClass | None
+    supporting_evidence_ids: tuple[UUID, ...]
+    contradicting_evidence_ids: tuple[UUID, ...]
+    grounding_state: AgentGroundingState
+    calibration_refs: tuple[ContractReference, ...] = ()
+    reliability_refs: tuple[ContractReference, ...] = ()
+    contract_id: str = field(default="C-066", init=False)
+    schema_version: str = field(default="1", init=False)
+
+    __contract_id__: ClassVar[str] = "C-066"
+
+    def __post_init__(self) -> None:
+        for name in (
+            "evaluation_id",
+            "result_id",
+            "task_id",
+            "context_id",
+            "correlation_id",
+            "trace_id",
+        ):
+            if not isinstance(getattr(self, name), UUID):
+                raise AgentContractError(f"{name} must be a UUID.")
+        if (
+            not isinstance(self.routing_decision_ref, ContractReference)
+            or self.routing_decision_ref.contract_id != "C-067"
+            or self.routing_decision_ref.schema_version != "1"
+        ):
+            raise AgentContractError("routing_decision_ref must target C-067 schema 1.")
+        _text("result_schema_version", self.result_schema_version)
+        if self.result_schema_version != "1":
+            raise AgentContractError("C-066 schema 1 requires C-062 schema 1.")
+        for name in ("agent_id", "agent_version", "evaluation_method_id"):
+            _text(name, getattr(self, name))
+        _text("evaluation_method_version", self.evaluation_method_version)
+        if (
+            self.evaluation_method_id != AGENT_EVALUATION_METHOD_ID
+            or self.evaluation_method_version != AGENT_EVALUATION_METHOD_VERSION
+        ):
+            raise AgentContractError("C-066 evaluation method/version is unknown.")
+        for name in (
+            "provider_id",
+            "model_id",
+            "model_version",
+            "prompt_id",
+            "prompt_version",
+        ):
+            _text(name, getattr(self, name))
+        if (self.output_contract_id is None) != (self.output_schema_version is None):
+            raise AgentContractError(
+                "output contract identity and schema version must be paired."
+            )
+        if self.output_contract_id is not None:
+            if re.fullmatch(r"C-[0-9]{3}", self.output_contract_id) is None:
+                raise AgentContractError("output_contract_id must match C-###.")
+            _text("output_schema_version", self.output_schema_version)
+        if not isinstance(self.environment, DeploymentEnvironment):
+            raise AgentContractError("environment must be a DeploymentEnvironment.")
+        if not isinstance(self.mode, OperatingMode):
+            raise AgentContractError("mode must be an OperatingMode.")
+        if self.mode is not OperatingMode.RESEARCH:
+            raise AgentContractError("C-066 schema 1 is limited to research mode.")
+        for name in ("outcome", "result_status", "schema_state", "grounding_state"):
+            if not isinstance(
+                getattr(self, name),
+                {
+                    "outcome": AgentEvaluationOutcome,
+                    "result_status": AgentResultStatus,
+                    "schema_state": AgentEvaluationSchemaState,
+                    "grounding_state": AgentGroundingState,
+                }[name],
+            ):
+                raise AgentContractError(f"{name} must use its registered enum.")
+        if self.failure_classification is not None and not isinstance(
+            self.failure_classification, AgentEvaluationFailureClass
+        ):
+            raise AgentContractError(
+                "failure_classification must use its registered enum."
+            )
+        if self.outcome is AgentEvaluationOutcome.COMPLETED:
+            if (
+                self.schema_state is not AgentEvaluationSchemaState.VALID
+                or self.failure_classification is not None
+            ):
+                raise AgentContractError(
+                    "completed evaluations require valid schema and no failure."
+                )
+        elif self.outcome is AgentEvaluationOutcome.TIMED_OUT:
+            if (
+                self.failure_classification
+                is not AgentEvaluationFailureClass.EVALUATION_TIMEOUT
+                or self.schema_state is not AgentEvaluationSchemaState.UNKNOWN
+            ):
+                raise AgentContractError(
+                    "timed-out evaluations require timeout and unknown schema state."
+                )
+        elif self.outcome is AgentEvaluationOutcome.FAILED:
+            if (
+                self.failure_classification
+                is not AgentEvaluationFailureClass.EVALUATION_FAILURE
+            ):
+                raise AgentContractError(
+                    "failed evaluations require the evaluation failure class."
+                )
+        elif self.failure_classification is None:
+            raise AgentContractError("rejected evaluations require a failure class.")
+        if self.duration_ms is not None and (
+            isinstance(self.duration_ms, bool)
+            or not isinstance(self.duration_ms, int)
+            or self.duration_ms < 0
+        ):
+            raise AgentContractError(
+                "duration_ms must be a non-negative integer when known."
+            )
+        for name in ("supporting_evidence_ids", "contradicting_evidence_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or any(
+                not isinstance(item, UUID) for item in values
+            ):
+                raise AgentContractError(f"{name} must be a tuple of UUIDs.")
+            if len(set(values)) != len(values):
+                raise AgentContractError(f"{name} must not contain duplicates.")
+        for name in ("calibration_refs", "reliability_refs"):
+            references = getattr(self, name)
+            if not isinstance(references, tuple) or any(
+                not isinstance(item, ContractReference) for item in references
+            ):
+                raise AgentContractError(f"{name} must be a tuple of contract refs.")
+            if any(item.contract_id not in {"C-031", "C-052"} for item in references):
+                raise AgentContractError(
+                    f"{name} may reference only approved C-031/C-052 evidence."
+                )
+            if len(set(references)) != len(references):
+                raise AgentContractError(f"{name} must not contain duplicates.")
+        started = _utc("started_at", self.started_at)
+        ended = _utc("ended_at", self.ended_at)
+        evaluated = _utc("evaluated_at", self.evaluated_at)
+        if self.duration_ms is not None:
+            if started > ended or ended > evaluated:
+                raise AgentContractError(
+                    "duration_ms requires ordered route/result/evaluation timestamps."
+                )
+            expected_duration_ms = int((ended - started).total_seconds() * 1000)
+            if self.duration_ms != expected_duration_ms:
+                raise AgentContractError(
+                    "duration_ms must match the route-to-result timestamp interval."
+                )
+        object.__setattr__(self, "started_at", started)
+        object.__setattr__(self, "ended_at", ended)
+        object.__setattr__(self, "evaluated_at", evaluated)
 
 
 @dataclass(frozen=True, slots=True)
