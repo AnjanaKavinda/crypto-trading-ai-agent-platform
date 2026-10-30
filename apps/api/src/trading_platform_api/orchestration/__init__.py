@@ -12,6 +12,13 @@ from trading_platform_api.orchestration.spot_analysis_fanout import (
     run_spot_analysis_fanout,
     run_spot_analysis_fanout_with_independence,
 )
+from trading_platform_api.orchestration.spot_debate import (
+    SpotDebateConclusion,
+    SpotDebateError,
+    SpotDebateResult,
+    SpotThesisBranch,
+    compose_spot_debate,
+)
 from trading_platform_api.orchestration.spot_results import (
     SpotResultState,
     build_spot_result_graph,
@@ -38,4 +45,9 @@ __all__ = [
     "run_spot_analysis_fanout",
     "run_spot_analysis_fanout_with_independence",
     "run_spot_result_graph",
+    "SpotDebateConclusion",
+    "SpotDebateError",
+    "SpotDebateResult",
+    "SpotThesisBranch",
+    "compose_spot_debate",
 ]
