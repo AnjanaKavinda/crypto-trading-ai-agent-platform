@@ -19,6 +19,16 @@ from trading_platform_api.orchestration.spot_debate import (
     SpotThesisBranch,
     compose_spot_debate,
 )
+from trading_platform_api.orchestration.spot_market_thesis import (
+    SpotMarketThesis,
+    SpotMarketThesisError,
+    SpotThesisCase,
+    ThesisAssumptionState,
+    ThesisCaseState,
+    ThesisInvalidationCandidate,
+    ThesisInvalidationState,
+    compose_spot_market_thesis,
+)
 from trading_platform_api.orchestration.spot_results import (
     SpotResultState,
     build_spot_result_graph,
@@ -50,4 +60,12 @@ __all__ = [
     "SpotDebateResult",
     "SpotThesisBranch",
     "compose_spot_debate",
+    "SpotMarketThesis",
+    "SpotMarketThesisError",
+    "SpotThesisCase",
+    "ThesisAssumptionState",
+    "ThesisCaseState",
+    "ThesisInvalidationCandidate",
+    "ThesisInvalidationState",
+    "compose_spot_market_thesis",
 ]
