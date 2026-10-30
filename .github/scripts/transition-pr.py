@@ -14,8 +14,11 @@ from orchestrator import (STATES, AppendOnlyAudit, GovernanceError, append_gover
                           build_launch_prompt, resolve_agent, safe_content, transition_escalation,
                           validate_transition)
 from independent_reviewer import integrity_hash
+import review_provenance
 from review_provenance import extract_linked_issue
 from review_provenance import derive_current_dispatch_key, verify_artifact
+from owner_pr_lifecycle import (OWNER_MARKER, OWNER_RECORD_PREFIX, OWNER_STATES,
+                                make_owner_record, validate_direct_owner_pr)
 
 _dispatch_spec = importlib.util.spec_from_file_location(
     "orchestrate_issue", Path(__file__).with_name("orchestrate-issue.py"))
@@ -178,10 +181,11 @@ def verified_review_result(pr: dict, issue_id: int) -> dict | None:
     result_path = os.environ.get("GOVERNED_REVIEW_RESULT_FILE", "")
     if not artifact_path and not result_path:
         return None
-    if not artifact_path or not result_path:
+    if not artifact_path:
         raise GovernanceError("signed review disposition inputs are incomplete")
     artifact = json.loads(Path(artifact_path).read_text(encoding="utf-8"))
-    result = json.loads(Path(result_path).read_text(encoding="utf-8"))
+    direct_owner = (pr.get("user", {}).get("login") ==
+                    os.environ.get("GOVERNED_CONTROLLER", ""))
     verified = verify_artifact(
         artifact,
         secret=os.environ.get("GOVERNANCE_PROVENANCE_SIGNING_KEY", ""),
@@ -191,9 +195,30 @@ def verified_review_result(pr: dict, issue_id: int) -> dict | None:
         expected_head_sha=pr["head"]["sha"],
         expected_producer_identity=os.environ.get("GOVERNED_PROVENANCE_PRODUCER", ""),
         controller=os.environ.get("GOVERNED_CONTROLLER", ""),
-        implementer_session_id=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""),
+        implementer_session_id=("" if direct_owner else os.environ.get(
+            "GOVERNED_IMPLEMENTER_SESSION", "")),
+        expected_implementation_origin=("DIRECT_OWNER" if direct_owner else "GOVERNED_AGENT"),
+        expected_implementation_identity=(
+            f"github-user:{os.environ.get('GOVERNED_CONTROLLER', '')}" if direct_owner else ""),
+        expected_base_branch=(pr.get("base") or {}).get("ref", ""),
         require_approved=False,
     )
+    if not result_path:
+        # R1 direct-owner review is an actual current-head GitHub review, not
+        # a model execution. Its signed provenance is the complete disposition
+        # record; requiring a fabricated model result would misstate origin.
+        if (not direct_owner
+                or artifact.get("schema_version") !=
+                review_provenance.DIRECT_OWNER_PROVENANCE_SCHEMA_VERSION
+                or artifact.get("review_evidence_kind") != "GITHUB_REVIEW"):
+            raise GovernanceError("structured signed review result is unavailable")
+        return {
+            "disposition": artifact["disposition"],
+            "head_sha": artifact["head_sha"],
+            "result_integrity_hash": artifact["result_integrity_hash"],
+            "review_id": artifact["review_id"],
+        }
+    result = json.loads(Path(result_path).read_text(encoding="utf-8"))
     body = dict(result)
     claimed_hash = str(body.pop("result_integrity_hash", ""))
     if (not claimed_hash or integrity_hash(body) != claimed_hash or
@@ -214,6 +239,90 @@ def transition_review_tier(dispatch_payload: dict) -> str:
     return tier
 
 
+def event_action_from_environment() -> str:
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        return ""
+    try:
+        value = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise GovernanceError("GitHub event payload is invalid") from error
+    return str(value.get("action") or "")
+
+
+def direct_owner_transition(*, pr: dict, issue_record: dict, comments: list[dict],
+                            repository: str, issue_number: str, target: str,
+                            controller: str, event_action: str) -> int:
+    """Run the truthful owner lifecycle without dispatch or agent audit fields."""
+    root = f"repos/{repository}"
+    try:
+        binding = validate_direct_owner_pr(
+            pr, issue_record, repository=repository, controller=controller,
+            target_state=target, event_action=event_action, comments=comments)
+        previous = binding.get("previous")
+        signed_result = None
+        if target in {"workflow:ready-to-merge", "workflow:changes-requested"}:
+            signed_result = verified_review_result(pr, binding["issue_id"])
+            if signed_result is None or signed_result.get("disposition") != binding.get(
+                    "expected_disposition"):
+                raise GovernanceError("current-head signed review disposition is required")
+        elif target == "workflow:human-decision-required" and pr.get("state") == "open":
+            signed_result = verified_review_result(pr, binding["issue_id"])
+            if signed_result is None or signed_result.get("disposition") != "blocked":
+                raise GovernanceError("current-head blocked review disposition is required")
+        elif target == "workflow:review" and event_action not in {
+                "opened", "reopened", "synchronize"}:
+            raise GovernanceError("direct-owner review event is invalid")
+
+        labels = {item.get("name") for item in issue_record.get("labels", [])}
+        current_states = labels & set(STATES)
+        if len(current_states) > 1:
+            raise GovernanceError("issue has conflicting workflow state labels")
+        current = next(iter(current_states), "")
+        allowed_current = {"", "workflow:ready", *OWNER_STATES}
+        if current not in allowed_current:
+            raise GovernanceError("issue state belongs to a different lifecycle")
+        if (target != "workflow:review" and previous is not None
+                and current != previous.get("state")):
+            raise GovernanceError("issue state does not match the current owner binding")
+        if target == "workflow:review":
+            if current == "workflow:complete":
+                raise GovernanceError("completed owner lifecycle cannot be reopened")
+            if current == "workflow:blocked" and event_action != "reopened":
+                raise GovernanceError("blocked owner lifecycle requires an explicit reopen")
+        elif target == "workflow:ready-to-merge" and current != "workflow:review":
+            raise GovernanceError("owner approval requires the review state")
+        elif target == "workflow:changes-requested" and current not in {
+                "workflow:review", "workflow:changes-requested"}:
+            raise GovernanceError("owner changes-requested transition is invalid")
+        elif target == "workflow:human-decision-required" and current not in {
+                "workflow:review", "workflow:changes-requested", "workflow:ready-to-merge",
+                "workflow:human-decision-required"}:
+            raise GovernanceError("owner human-decision transition is invalid")
+
+        for state in current_states:
+            if state != target:
+                api("--method", "DELETE", f"{root}/issues/{issue_number}/labels/{state}")
+        if current != target:
+            api("--method", "POST", f"{root}/issues/{issue_number}/labels",
+                "-f", f"labels[]={target}")
+        if target != "workflow:review" or not previous or previous.get("head_sha") != binding[
+                "head_sha"] or previous.get("state") != "workflow:review":
+            record = make_owner_record(
+                repository=repository, pr_number=int(pr["number"]),
+                issue_id=binding["issue_id"], head_sha=binding["head_sha"],
+                base_branch="dev", controller=controller, state=target,
+                event_action=event_action)
+            api("--method", "POST", f"{root}/issues/{issue_number}/comments", "-f",
+                "body=" + OWNER_MARKER + "\n" + OWNER_RECORD_PREFIX +
+                json.dumps(record, sort_keys=True, separators=(",", ":")))
+        if target == "workflow:complete" and issue_record.get("state") == "open":
+            api("--method", "PATCH", f"{root}/issues/{issue_number}", "-f", "state=closed")
+        return 0
+    except (GovernanceError, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return blocked("direct-owner governance transition evidence is invalid")
+
+
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     pr_number = os.environ["PR_NUMBER"]
@@ -229,6 +338,16 @@ def main() -> int:
     comments = api(f"{root}/issues/{issue}/comments")
     issue_record = api(f"{root}/issues/{issue}")
     issue_labels = {label["name"] for label in issue_record.get("labels", [])}
+    controller = os.environ.get("GOVERNED_CONTROLLER", "")
+    if controller and pr.get("user", {}).get("login") == controller:
+        try:
+            event_action = event_action_from_environment()
+        except GovernanceError:
+            return blocked("required governance evidence or state validation failed")
+        return direct_owner_transition(
+            pr=pr, issue_record=issue_record, comments=comments,
+            repository=repository, issue_number=issue, target=target,
+            controller=controller, event_action=event_action)
     trusted_dispatch_comments = [item for item in comments
                                 if item.get("user", {}).get("login") == "github-actions[bot]"
                                 and MARKER in item.get("body", "")

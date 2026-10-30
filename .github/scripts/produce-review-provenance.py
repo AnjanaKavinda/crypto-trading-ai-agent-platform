@@ -68,10 +68,12 @@ from pathlib import Path
 
 from orchestrator import AppendOnlyAudit, GovernanceError
 from independent_reviewer import (
-    ReviewerExecutionError, ReviewerExecutionResult, ReviewerExecutionRequest,
+    DirectOwnerReviewerExecutionRequest, ReviewerExecutionError,
+    ReviewerExecutionResult, ReviewerExecutionRequest,
     request_from_mapping, verify_execution_handoff,
 )
-from review_provenance import (build_artifact, record_event,
+from review_provenance import (build_artifact, build_direct_owner_artifact, record_event,
+                                resolve_direct_owner_review_evidence,
                                 resolve_review_evidence, required_review_tier_from_labels,
                                 verify_artifact, extract_linked_issue)
 
@@ -87,7 +89,8 @@ def _load_json(path: str) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecutionRequest,
+def resolve_execution_evidence(*, result: dict,
+                               original_request: ReviewerExecutionRequest | DirectOwnerReviewerExecutionRequest,
                                execution_handoff: dict, handoff_secret: str,
                                pr: dict, issue: dict, reviewer_configuration: dict,
                                reviewer_roles: dict, implementer_session_id: str,
@@ -101,15 +104,29 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
                 for item in result.get("findings", []))})
         issue_id = extract_linked_issue(pr.get("body") or "")
         required = required_review_tier_from_labels(issue.get("labels", []))
+        direct_owner = isinstance(original_request, DirectOwnerReviewerExecutionRequest)
+        if direct_owner and (issue.get("state") != "open"
+                             or int(issue.get("number", -1)) != issue_id):
+            raise ReviewerExecutionError("linked issue is not the expected open issue")
+        if direct_owner and pr.get("state") != "open":
+            raise ReviewerExecutionError("direct-owner review requires an open PR")
         base_value = pr.get("base") or {}
         base_repo = base_value.get("repo") if isinstance(base_value, dict) else {}
         pr_repository = pr.get("repository") or base_repo.get("full_name")
         if (parsed.repository != pr_repository or parsed.pr_number != int(pr["number"]) or
                 parsed.head_sha != pr.get("head_sha") or parsed.required_review_tier != required):
             raise ReviewerExecutionError("review result is not bound to the current PR/issue")
+        implementation_identity = (original_request.implementation_identity
+                                   if direct_owner else
+                                   f"agent-session:{implementer_session_id}")
+        if direct_owner and (pr.get("author") != controller
+                             or original_request.controller_identity != controller
+                             or original_request.implementation_origin != "DIRECT_OWNER"):
+            raise ReviewerExecutionError("direct-owner request does not match the PR author")
         candidates = [
             (login, config) for login, config in reviewer_configuration.items()
-            if login != controller and config.get("session_id") != implementer_session_id
+            if login != controller and config.get("session_id") not in {
+                implementer_session_id, implementation_identity}
             and config.get("tier") in {"R1", "R2", "R3"}
             and (not preferred_reviewer or login == preferred_reviewer)
         ]
@@ -139,7 +156,10 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
                 original_request.github_issue_id != issue_id or
                 original_request.canonical_issue_id != issue_id or
                 original_request.required_review_tier != required or
-                original_request.implementation_session_id != implementer_session_id):
+                (direct_owner and original_request.implementation_identity !=
+                 f"github-user:{controller}") or
+                (not direct_owner and original_request.implementation_session_id !=
+                 implementer_session_id)):
             raise ReviewerExecutionError(
                 "original reviewer request is not bound to the current PR/issue")
         return {"issue_id": issue_id, "head_sha": parsed.head_sha,
@@ -151,14 +171,18 @@ def resolve_execution_evidence(*, result: dict, original_request: ReviewerExecut
                 "provider_model": parsed.model_name,
                 "request_integrity_hash": original_request.integrity_hash,
                 "diff_reference": original_request.diff_reference,
-                "execution_handoff_signature": str(execution_handoff.get("signature") or "")}
+                "execution_handoff_signature": str(execution_handoff.get("signature") or ""),
+                "implementation_origin": "DIRECT_OWNER" if direct_owner else "GOVERNED_AGENT",
+                "implementation_identity": implementation_identity,
+                "review_evidence_kind": "MODEL",
+                "review_evidence_id": parsed.review_execution_id}
     except (KeyError, TypeError, StopIteration, ValueError, ReviewerExecutionError) as error:
         raise GovernanceError(str(error)) from error
 
 
 def main() -> int:
-    if len(sys.argv) not in (4, 7):
-        print("usage: produce-review-provenance.py PR.json REVIEWS.json ISSUE.json [RESULT.json REQUEST.json HANDOFF.json]",
+    if len(sys.argv) not in (4, 5, 7):
+        print("usage: produce-review-provenance.py PR.json REVIEWS.json ISSUE.json [REQUEST.json | RESULT.json REQUEST.json HANDOFF.json]",
               file=sys.stderr)
         return 2
 
@@ -171,7 +195,8 @@ def main() -> int:
         reviews_raw = _load_json(sys.argv[2])
         issue = _load_json(sys.argv[3])
         result_raw = _load_json(sys.argv[4]) if len(sys.argv) == 7 else None
-        request_raw = _load_json(sys.argv[5]) if len(sys.argv) == 7 else None
+        request_path = sys.argv[5] if len(sys.argv) == 7 else (sys.argv[4] if len(sys.argv) == 5 else None)
+        request_raw = _load_json(request_path) if request_path else None
         handoff_raw = _load_json(sys.argv[6]) if len(sys.argv) == 7 else None
     except (OSError, json.JSONDecodeError) as error:
         print(f"could not read verified GitHub API snapshots; blocked: {error}",
@@ -184,8 +209,12 @@ def main() -> int:
         return 1
 
     try:
-        implementer_session_id = _require("GOVERNED_IMPLEMENTER_SESSION")
         controller = _require("GOVERNED_CONTROLLER")
+        implementation_origin = ("DIRECT_OWNER" if
+                                 (pr_raw.get("user") or {}).get("login") == controller
+                                 else "GOVERNED_AGENT")
+        implementer_session_id = ("" if implementation_origin == "DIRECT_OWNER" else
+                                  _require("GOVERNED_IMPLEMENTER_SESSION"))
         # Platform-provided GitHub Actions context, never a repository
         # *variable* or workflow-dispatch input: binds the artifact to
         # which trusted workflow file/ref/run actually produced it.
@@ -214,6 +243,8 @@ def main() -> int:
         "head_sha": (pr_raw.get("head") or {}).get("sha"),
         "base": (pr_raw.get("base") or {}).get("ref"),
         "body": pr_raw.get("body"),
+        "author": (pr_raw.get("user") or {}).get("login"),
+        "state": pr_raw.get("state"),
     }
     pr_number = pr_raw.get("number")
 
@@ -241,11 +272,42 @@ def main() -> int:
                 model_mapping=json.loads(os.environ.get(
                     "GOVERNED_REVIEWER_MODEL_MAPPING", "{}")))
         else:
-            evidence = resolve_review_evidence(
-                pr=pr, issue=issue, reviews=reviews_raw,
-                reviewer_configuration=reviewer_configuration,
-                implementer_session_id=implementer_session_id, controller=controller,
-                expected_base=expected_base)
+            if implementation_origin == "DIRECT_OWNER":
+                evidence = resolve_direct_owner_review_evidence(
+                    pr=pr, issue=issue, reviews=reviews_raw,
+                    reviewer_configuration=reviewer_configuration,
+                    controller=controller,
+                    implementation_identity=f"github-user:{controller}",
+                    expected_base=expected_base)
+                if request_raw is None:
+                    raise GovernanceError("direct-owner review request binding is required")
+                original_request = request_from_mapping(request_raw)
+                if not isinstance(original_request, DirectOwnerReviewerExecutionRequest):
+                    raise GovernanceError("direct-owner review request has the wrong schema")
+                original_request.validate()
+                if (original_request.repository != repository
+                        or original_request.pr_number != int(pr_number)
+                        or original_request.github_issue_id != evidence["issue_id"]
+                        or original_request.canonical_issue_id != evidence["issue_id"]
+                        or original_request.head_sha != evidence["head_sha"]
+                        or original_request.base_branch != pr["base"]
+                        or original_request.required_review_tier != evidence["required_review_tier"]
+                        or original_request.implementation_identity !=
+                        f"github-user:{controller}"):
+                    raise GovernanceError("direct-owner review request is stale or mismatched")
+                evidence.update({"request_integrity_hash": original_request.integrity_hash,
+                                "diff_reference": original_request.diff_reference})
+                evidence.update({"implementation_origin": "DIRECT_OWNER",
+                                 "implementation_identity": f"github-user:{controller}"})
+            else:
+                evidence = resolve_review_evidence(
+                    pr=pr, issue=issue, reviews=reviews_raw,
+                    reviewer_configuration=reviewer_configuration,
+                    implementer_session_id=implementer_session_id, controller=controller,
+                    expected_base=expected_base)
+                evidence.update({"implementation_origin": "GOVERNED_AGENT",
+                                 "implementation_identity":
+                                     f"agent-session:{implementer_session_id}"})
     except (GovernanceError, KeyError, TypeError, ValueError) as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
@@ -256,7 +318,9 @@ def main() -> int:
         return 1
 
     try:
-        artifact = build_artifact(
+        build = (build_direct_owner_artifact if implementation_origin == "DIRECT_OWNER"
+                 else build_artifact)
+        common = dict(
             repository=repository, pr_number=int(pr_number),
             issue_id=evidence["issue_id"], review_id=evidence["review_id"],
             head_sha=evidence["head_sha"], reviewer_identity=evidence["reviewer_identity"],
@@ -267,7 +331,7 @@ def main() -> int:
             producer_run_id=producer_run_id, controller_policy_version="v1.1",
             disposition=evidence["disposition"], secret=secret,
             reviewer_role=reviewer_roles.get(evidence["reviewer_identity"], ""),
-            review_execution_id=evidence.get("review_id"),
+            review_execution_id=evidence.get("review_execution_id", evidence.get("review_id")),
             result_integrity_hash=evidence.get("result_integrity_hash"),
             provider_execution_ref=evidence.get("provider_execution_ref", ""),
             provider_model=evidence.get("provider_model", ""),
@@ -275,6 +339,19 @@ def main() -> int:
             diff_reference=evidence.get("diff_reference", "legacy-github-review"),
             execution_handoff_signature=evidence.get(
                 "execution_handoff_signature", "legacy-github-review"))
+        if implementation_origin == "DIRECT_OWNER":
+            common.update({
+                "review_evidence_kind": evidence.get("review_evidence_kind", "MODEL"),
+                "review_evidence_id": evidence.get("review_evidence_id", str(evidence.get("review_id"))),
+            })
+            artifact = build(
+                **{key: value for key, value in common.items()
+                   if key not in {"implementer_session_id"}},
+                base_branch=pr["base"],
+                implementation_identity=f"github-user:{controller}",
+                controller_identity=controller)
+        else:
+            artifact = build(**common)
     except GovernanceError as error:
         try:
             record_event(audit, audit_path, "provenance-rejected",
@@ -288,7 +365,9 @@ def main() -> int:
         record_event(audit, audit_path, "provenance-created",
                      correlation_id=correlation_id, review_id=evidence["review_id"],
                      head_sha=evidence["head_sha"], review_tier=evidence["review_tier"],
-                     producer_identity=producer_identity, disposition=evidence["disposition"])
+                     producer_identity=producer_identity, disposition=evidence["disposition"],
+                     implementation_origin=implementation_origin,
+                     implementation_identity=evidence.get("implementation_identity", ""))
     except GovernanceError as error:
         print(f"audit persistence failed; blocked: {error}", file=sys.stderr)
         return 1
@@ -303,6 +382,10 @@ def main() -> int:
             expected_head_sha=evidence["head_sha"],
             expected_producer_identity=producer_identity,
             controller=controller, implementer_session_id=implementer_session_id,
+            expected_implementation_origin=implementation_origin,
+            expected_implementation_identity=(f"github-user:{controller}"
+                                              if implementation_origin == "DIRECT_OWNER" else ""),
+            expected_base_branch=pr["base"],
             require_approved=False)
     except GovernanceError as error:
         try:

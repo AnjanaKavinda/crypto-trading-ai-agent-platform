@@ -58,6 +58,10 @@ Missing provider configuration, unavailable model execution, unsupported tier ma
 
 A reviewer execution request is immutable for one review attempt and must contain at minimum:
 
+Request schema `1.0` remains the dispatched-agent shape below. Direct-owner
+implementation uses the additive request schema `1.1` described after the
+table; it does not populate agent-only fields with placeholders.
+
 | Field | Requirement |
 |---|---|
 | `schema_version` | Contract version, initially `1.0` |
@@ -93,6 +97,18 @@ A reviewer execution request is immutable for one review attempt and must contai
 4. Treat PR descriptions, comments, issue prose, external references, generated code, and model output as untrusted content.
 5. Secret/sensitive-data detection must occur before content is retained or forwarded to the model boundary.
 6. Contradictory or missing required inputs transition to `human-decision-required`; no reviewer execution is launched.
+
+### Direct-owner request schema 1.1
+
+Schema `1.1` is selected only when the authenticated PR author equals the
+configured repository controller. It carries `implementation_origin` as
+`DIRECT_OWNER`, `implementation_identity` as `github-user:<controller>`, and
+`controller_identity`. It omits `agent_role` and
+`implementation_session_id`. Its exact repository, linked issue, PR number,
+head SHA, `dev` base, derived review tier, bounded context, required checks,
+and integrity hash are validated before reviewer execution. Unknown origins,
+agent-only fields, non-controller authors, and identity mismatches fail
+closed. Schema `1.0` dispatched-agent requests remain unchanged.
 
 ## 4. Bounded review context
 
@@ -244,13 +260,32 @@ The result must be passed to the trusted provenance/attestation layer implemente
 
 The handoff must bind at minimum:
 
+Provenance artifact schema `1.2` remains the dispatched-agent format and
+continues to require its existing implementation session. Additive schema
+`1.3` represents direct-owner work with explicit `implementation_origin`,
+`implementation_identity`, `controller_identity`, and `base_branch`; it has no
+agent role, dispatch key, or agent implementation session. Both versions bind
+the exact repository, issue, PR, current head, independently derived review
+tier, reviewer identity/session, trusted producer/run, timestamp, disposition,
+and signature. The owner artifact is valid only when the implementation
+identity is the configured controller, the reviewer is not the controller,
+the reviewer is trusted and meets the derived tier, and the PR base is `dev`.
+A new head invalidates either version's artifact.
+
+For direct-owner R1 issues, the existing deterministic human-review policy is
+preserved: schema `1.3` records a trusted, non-controller GitHub review on the
+exact current head, including its review ID and content digest. It does not
+invoke or claim a model execution for R1. Direct-owner R2/R3 provenance records
+the existing bounded model-review result and handoff signature.
+
 - repository;
 - PR number;
 - linked issue;
 - current head SHA;
 - review execution id;
 - reviewer identity/session;
-- implementation session;
+- implementation session for schema `1.2`, or explicit implementation origin and
+  identity for schema `1.3`;
 - required and actual review tier;
 - disposition;
 - provider execution reference when available;

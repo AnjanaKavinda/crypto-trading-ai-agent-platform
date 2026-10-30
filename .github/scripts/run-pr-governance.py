@@ -10,6 +10,16 @@ from typing import Mapping
 from orchestrator import AppendOnlyAudit, GovernanceError, validate_pr, validate_reviewer_configuration
 import review_provenance
 
+DIRECT_OWNER_REQUIRED_CHECKS = {"product-ci", "governance-ci"}
+
+
+def required_check_names(configured: list[str], *, direct_owner: bool) -> list[str]:
+    """Return configured checks, adding the direct-owner contract gates only."""
+    required = set(configured)
+    if direct_owner:
+        required.update(DIRECT_OWNER_REQUIRED_CHECKS)
+    return sorted(name for name in required if name)
+
 
 def normalize_checks(status: dict, check_runs: dict) -> dict[str, str]:
     checks = {item["context"]: (item.get("state") or "pending").lower()
@@ -126,9 +136,14 @@ def main() -> int:
     repository_full_name = pr.get("base", {}).get("repo", {}).get("full_name") or os.environ.get(
         "GITHUB_REPOSITORY", "")
     pr_number = pr.get("number")
+    author = (pr.get("user") or {}).get("login", "")
+    controller = os.environ.get("GOVERNED_CONTROLLER", "")
+    direct_owner = bool(controller and author == controller)
     pr = {"issue_id": None, "base": pr.get("base", {}).get("ref"),
           "head_sha": pr.get("head", {}).get("sha"),
-          "author": pr.get("user", {}).get("login"), "body": pr.get("body")}
+          "author": author, "body": pr.get("body"),
+          "implementation_origin": "DIRECT_OWNER" if direct_owner else "GOVERNED_AGENT",
+          "implementation_identity": f"github-user:{controller}" if direct_owner else ""}
     try:
         reviewer_roles = json.loads(os.environ.get("GOVERNED_REVIEWER_ROLES", "{}"))
         reviewer_configuration = json.loads(
@@ -159,7 +174,7 @@ def main() -> int:
     pr["authorized_reviewers"] = [name for name in
                                   os.environ.get("GOVERNED_REVIEWERS", "").split(",") if name]
     try:
-        if pr["required_review_tier"] == "R1":
+        if pr["required_review_tier"] == "R1" and not direct_owner:
             configured_reviewers, configured_sessions = [], {}
         else:
             configured_reviewers, configured_sessions = validate_reviewer_configuration(
@@ -167,16 +182,28 @@ def main() -> int:
     except GovernanceError as error:
         print(f"missing trusted reviewer-tier configuration; blocked: {error}", file=sys.stderr)
         return 1
-    if pr["required_review_tier"] != "R1" and set(pr["authorized_reviewers"]) != set(configured_reviewers):
+    if direct_owner:
+        configured_reviewers = [name for name in configured_reviewers if name != controller]
+        configured_sessions = {name: session for name, session in configured_sessions.items()
+                               if name != controller}
+        if not configured_reviewers:
+            print("direct-owner review requires configured non-controller reviewers", file=sys.stderr)
+            return 1
+        pr["direct_owner"] = True
+    if ((pr["required_review_tier"] != "R1" or direct_owner)
+            and set(pr["authorized_reviewers"]) != set(configured_reviewers)):
         print("reviewer allowlist and reviewer-tier configuration disagree; blocked",
               file=sys.stderr)
         return 1
     pr["authorized_reviewer_sessions"] = configured_sessions
-    pr["implementer_session_id"] = os.environ.get("GOVERNED_IMPLEMENTER_SESSION", "")
-    if not pr["implementer_session_id"]:
+    pr["implementer_session_id"] = ("" if direct_owner else os.environ.get(
+        "GOVERNED_IMPLEMENTER_SESSION", ""))
+    if not direct_owner and not pr["implementer_session_id"]:
         print("missing trusted implementer session configuration; blocked", file=sys.stderr)
         return 1
-    required = [name for name in os.environ.get("REQUIRED_CHECKS", "").split(",") if name]
+    required = required_check_names(
+        [name for name in os.environ.get("REQUIRED_CHECKS", "").split(",") if name],
+        direct_owner=direct_owner)
     required_roles = [role for role in os.environ.get(
         "REQUIRED_REVIEWER_ROLES", "").split(",") if role]
     controller = os.environ.get("GOVERNED_CONTROLLER")
@@ -203,7 +230,10 @@ def main() -> int:
                 expected_pr_number=pr_number, expected_issue_id=pr["issue_id"],
                 expected_head_sha=pr["head_sha"],
                 expected_producer_identity=producer_identity, controller=controller,
-                implementer_session_id=pr["implementer_session_id"])
+                implementer_session_id=pr["implementer_session_id"],
+                expected_implementation_origin=pr["implementation_origin"],
+                expected_implementation_identity=pr["implementation_identity"],
+                expected_base_branch=pr["base"])
         except GovernanceError as error:
             print(f"{error}; blocked", file=sys.stderr)
             return 1
@@ -216,7 +246,8 @@ def main() -> int:
                     controller=controller,
                     high_risk_text=pr.get("body") or "",
                     required_reviewer_roles=required_roles,
-                    governed_high_risk=pr["governed_high_risk"])
+                    governed_high_risk=pr["governed_high_risk"],
+                    direct_owner=direct_owner)
     except (GovernanceError, KeyError, ValueError) as error:
         print(f"governance blocked: {error}", file=sys.stderr)
         try:
