@@ -74,8 +74,10 @@ def assert_current_head(expected_head: str, actual_head: str) -> None:
         raise ReviewerExecutionError("PR head changed during independent review execution")
 
 
-def request_from_mapping(raw: Mapping[str, Any]) -> "ReviewerExecutionRequest":
-    return ReviewerExecutionRequest(
+def request_from_mapping(raw: Mapping[str, Any]) -> "ReviewerExecutionRequest | DirectOwnerReviewerExecutionRequest":
+    request_type = (DirectOwnerReviewerExecutionRequest
+                    if raw.get("schema_version") == "1.1" else ReviewerExecutionRequest)
+    return request_type(
         **{**raw, "allowed_paths": tuple(raw["allowed_paths"]),
            "forbidden_paths": tuple(raw["forbidden_paths"]),
            "changed_files": tuple(raw["changed_files"]),
@@ -223,6 +225,61 @@ class ReviewerExecutionRequest:
 
 
 @dataclass(frozen=True)
+class DirectOwnerReviewerExecutionRequest:
+    """Version 1.1 request with explicit owner origin and no agent fields."""
+    schema_version: str
+    repository: str
+    pr_number: int
+    head_sha: str
+    base_branch: str
+    github_issue_id: int
+    canonical_issue_id: int
+    implementation_origin: str
+    implementation_identity: str
+    controller_identity: str
+    reviewer_role: str
+    required_review_tier: str
+    capability_tier: str
+    context_pack_id: str
+    context_pack_version: str
+    review_execution_id: str
+    allowed_paths: tuple[str, ...]
+    forbidden_paths: tuple[str, ...]
+    changed_files: tuple[str, ...]
+    diff_reference: str
+    required_checks: tuple[str, ...]
+    safety_invariants: tuple[str, ...]
+    controller_policy_version: str
+    created_at: str
+    integrity_hash: str
+
+    def validate(self) -> None:
+        if (self.schema_version != "1.1" or self.implementation_origin != "DIRECT_OWNER"
+                or not self.repository or not self.head_sha or self.base_branch != "dev"):
+            raise ReviewerExecutionError("direct-owner request origin or binding is invalid")
+        if (not self.controller_identity or self.implementation_identity !=
+                f"github-user:{self.controller_identity}"):
+            raise ReviewerExecutionError("direct-owner identity is invalid")
+        if self.required_review_tier not in REVIEW_TIERS:
+            raise ReviewerExecutionError("direct-owner review tier is invalid")
+        if self.capability_tier not in CAPABILITY_TIERS or not self.review_execution_id:
+            raise ReviewerExecutionError("direct-owner review execution is invalid")
+        if not self.context_pack_id or not self.context_pack_version:
+            raise ReviewerExecutionError("bounded context pack is required")
+        if not self.allowed_paths or not self.changed_files or not self.required_checks:
+            raise ReviewerExecutionError("review scope/checks are incomplete")
+        validate_changed_path_scope(self.changed_files, self.allowed_paths, self.forbidden_paths)
+        if self.review_execution_id == self.implementation_identity:
+            raise ReviewerExecutionError("reviewer and implementation identities must differ")
+        minimum = {"R1": "economical-fast", "R2": "strong-coding-reasoning",
+                   "R3": "premium-strongest-available"}[self.required_review_tier]
+        if CAPABILITY_TIERS.index(self.capability_tier) < CAPABILITY_TIERS.index(minimum):
+            raise ReviewerExecutionError("review capability is below the required tier")
+        if self.integrity_hash != request_integrity(self):
+            raise ReviewerExecutionError("review request integrity validation failed")
+
+
+@dataclass(frozen=True)
 class ReviewerExecutionResult:
     schema_version: str
     review_execution_id: str
@@ -283,7 +340,7 @@ def integrity_hash(value: Any) -> str:
                              default=list).encode()).hexdigest()
 
 
-def request_integrity(request: ReviewerExecutionRequest) -> str:
+def request_integrity(request: Any) -> str:
     body = asdict(request)
     body.pop("integrity_hash", None)
     return integrity_hash(body)
@@ -300,6 +357,22 @@ def build_request(**values: Any) -> ReviewerExecutionRequest:
     request = ReviewerExecutionRequest(**values, integrity_hash="")
     request = ReviewerExecutionRequest(**{**asdict(request),
                                           "integrity_hash": request_integrity(request)})
+    request.validate()
+    return request
+
+
+def build_direct_owner_request(**values: Any) -> DirectOwnerReviewerExecutionRequest:
+    values = dict(values)
+    values.setdefault("schema_version", "1.1")
+    values.setdefault("implementation_origin", "DIRECT_OWNER")
+    values.setdefault("review_execution_id", "review-" + uuid.uuid4().hex)
+    values.setdefault("created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    for key in ("allowed_paths", "forbidden_paths", "changed_files",
+                "required_checks", "safety_invariants"):
+        values[key] = tuple(values.get(key, ()))
+    request = DirectOwnerReviewerExecutionRequest(**values, integrity_hash="")
+    request = DirectOwnerReviewerExecutionRequest(
+        **{**asdict(request), "integrity_hash": request_integrity(request)})
     request.validate()
     return request
 
