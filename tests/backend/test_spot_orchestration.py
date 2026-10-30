@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -219,3 +219,164 @@ def test_timeout_returns_a_correlated_fail_closed_state() -> None:
             ),
             checkpointer=None,
         )
+
+
+def test_result_graph_rejects_c061_c067_tool_and_schema_mismatches() -> None:
+    @dataclass(frozen=True)
+    class UnsupportedOutputV2:
+        contract_id: str = "C-069"
+        schema_version: str = "2"
+
+    valid = _result()
+    expectation = _expectation(valid)
+    variants = (
+        replace(valid, agent_id="unregistered-agent"),
+        replace(valid, agent_version="2"),
+        replace(
+            valid,
+            routing_decision=replace(valid.routing_decision, provider_id="other"),
+        ),
+        replace(
+            valid,
+            routing_decision=replace(valid.routing_decision, model_id="other"),
+        ),
+        replace(
+            valid,
+            routing_decision=replace(valid.routing_decision, prompt_version="2"),
+        ),
+        replace(valid, tool_access_ids=(uuid4(),)),
+        replace(valid, output=UnsupportedOutputV2()),
+        replace(valid, output="malformed provider output"),
+    )
+
+    for candidate in variants:
+        graph = build_spot_result_graph(
+            expectation=expectation, checkpointer=None, clock=lambda: NOW
+        )
+        state = asyncio.run(
+            run_spot_result_graph(
+                graph,
+                expectation=expectation,
+                correlation_id=uuid4(),
+                trace_id=uuid4(),
+                agent_result=candidate,
+                thread_id=str(valid.task_id),
+                clock=lambda: NOW,
+            )
+        )
+
+        assert state["status"] == "REJECTED"
+        assert state["agent_result"] is candidate
+        assert state["agent_evaluation"].outcome.value == "REJECTED_INVALID"
+        assert state["agent_evaluation"].result_status is candidate.status
+
+
+def test_graph_requires_registered_c061_agent_and_version_at_build_time() -> None:
+    valid = _result()
+    for identity in ({"agent_id": "other-agent"}, {"agent_version": "2"}):
+        with pytest.raises(ValueError, match="registered PERSONAL_SPOT_RESEARCH"):
+            build_spot_result_graph(
+                expectation=replace(_expectation(valid), **identity),
+                checkpointer=None,
+            )
+
+
+def test_no_typed_c062_means_no_graph_run_or_c066_evaluation() -> None:
+    class CountingGraph:
+        calls = 0
+
+        async def ainvoke(self, _state: object, *, config: object) -> object:
+            self.calls += 1
+            return {}
+
+    value = _result()
+    graph = CountingGraph()
+    with pytest.raises(ValueError, match="typed C-062"):
+        asyncio.run(
+            run_spot_result_graph(
+                graph,
+                expectation=_expectation(value),
+                correlation_id=uuid4(),
+                trace_id=uuid4(),
+                agent_result=None,  # type: ignore[arg-type]
+                thread_id=str(value.task_id),
+            )
+        )
+
+    assert graph.calls == 0
+
+
+def test_result_graph_caller_cancellation_propagates() -> None:
+    async def exercise() -> None:
+        started = asyncio.Event()
+
+        class BlockingGraph:
+            async def ainvoke(self, _state: object, *, config: object) -> object:
+                started.set()
+                await asyncio.Event().wait()
+
+        value = _result()
+        task = asyncio.create_task(
+            run_spot_result_graph(
+                BlockingGraph(),
+                expectation=_expectation(value),
+                correlation_id=uuid4(),
+                trace_id=uuid4(),
+                agent_result=value,
+                thread_id=str(value.task_id),
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.2)
+
+    asyncio.run(exercise())
+
+
+def test_checkpoint_replay_revalidates_and_preserves_new_identity() -> None:
+    async def exercise() -> None:
+        value = _result()
+        expectation = _expectation(value)
+        graph = build_spot_result_graph(
+            expectation=expectation,
+            checkpointer=InMemorySaver(),
+            clock=lambda: NOW,
+        )
+        correlation_id, trace_id = uuid4(), uuid4()
+        first = await run_spot_result_graph(
+            graph,
+            expectation=expectation,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
+            agent_result=value,
+            thread_id=str(value.task_id),
+            clock=lambda: NOW,
+        )
+
+        changed = replace(value, task_id=uuid4(), context_id=uuid4())
+        replay_correlation, replay_trace = uuid4(), uuid4()
+        replay = await run_spot_result_graph(
+            graph,
+            expectation=expectation,
+            correlation_id=replay_correlation,
+            trace_id=replay_trace,
+            agent_result=changed,
+            thread_id=str(value.task_id),
+            clock=lambda: NOW,
+        )
+
+        assert first["status"] == "ACCEPTED"
+        assert first["correlation_id"] == correlation_id
+        assert first["trace_id"] == trace_id
+        assert first["agent_result"].task_id == value.task_id
+        assert first["agent_result"].context_id == value.context_id
+        assert replay["status"] == "REJECTED"
+        assert replay["agent_result"] is changed
+        assert replay["agent_result"].task_id == changed.task_id
+        assert replay["agent_result"].context_id == changed.context_id
+        assert replay["correlation_id"] == replay_correlation
+        assert replay["trace_id"] == replay_trace
+        assert replay["agent_evaluation"].outcome.value == "REJECTED_INVALID"
+
+    asyncio.run(exercise())
