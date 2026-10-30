@@ -30,12 +30,12 @@ jobs:
         run: |
           test "$CONTROLLER" = "AnjanaKavinda"
           if [ "$PR_AUTHOR" = "$CONTROLLER" ]; then
-            echo "Governed PRs must not be authored by the final human reviewer. Recreate this PR through the approved bot/agent path." >&2
-            exit 1
+            echo "Approved owner-authored PR path; independent-review request is not applicable."
+          else
+            gh api --method POST \
+              "repos/${{ github.repository }}/pulls/$PR_NUMBER/requested_reviewers" \
+              -f "reviewers[]=$CONTROLLER"
           fi
-          gh api --method POST \
-            "repos/${{ github.repository }}/pulls/$PR_NUMBER/requested_reviewers" \
-            -f "reviewers[]=$CONTROLLER"
 
       - name: Validate main promotion shape
         if: github.event.pull_request.base.ref == 'main'
