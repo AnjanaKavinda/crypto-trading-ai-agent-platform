@@ -63,6 +63,28 @@ evaluation, risk calculation, approval, or execution authority. A future
 agent-generated thesis workflow would need its own registered prompts/routes
 and separately validated C-062 outputs before it could feed this handoff.
 
+## Market thesis projection
+
+Issue #83 adds `compose_spot_market_thesis` as a deterministic projection of
+the validated debate result. Bull, bear, and base/neutral cases are distinct
+typed branches. A branch is available only when its exact C-009 direction has
+supporting evidence; contradictory-only and absent branches remain unavailable.
+Neutral evidence is never inferred from a missing directional branch.
+
+The thesis retains the original debate envelope, including its exact C-006
+context, task/context/correlation/trace IDs, C-010 conflicts, C-019 findings,
+C-069 uncertainties, and C-093 dependence report. C-019 failure conditions are
+preserved verbatim as unassigned invalidation candidates because the approved
+inputs do not bind each one to a particular thesis branch. Assumptions are
+explicitly marked as not supplied by the approved inputs; none are inferred
+from evidence or narrative. The thesis uses the upstream expiry and adds no
+new freshness window.
+
+The projection is compatible with `NO_TRADE` and does not create strategy
+setups, candidates, signals, risk decisions, approvals, or execution authority.
+It does not produce narrative text, probabilities, expected returns, or
+profitability claims.
+
 ## Deliberately deferred
 
 This first slice validates one completed analyst result; it does not yet launch

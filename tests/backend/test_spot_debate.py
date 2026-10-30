@@ -78,6 +78,14 @@ from trading_platform_api.orchestration.spot_debate import (
     _thesis_branches,
     compose_spot_debate,
 )
+from trading_platform_api.orchestration.spot_market_thesis import (
+    SpotMarketThesisError,
+    ThesisAssumptionState,
+    ThesisCaseState,
+    ThesisInvalidationState,
+    _case,
+    compose_spot_market_thesis,
+)
 from trading_platform_api.orchestration.spot_request_handoff import (
     build_spot_analysis_manifest,
 )
@@ -857,3 +865,111 @@ def test_public_composition_preserves_no_trade_and_insufficient_evidence(
     assert result.conclusion is expected
     assert result.agent_result.status is status
     assert result.agent_evaluation.result_status is status
+
+
+def test_market_thesis_preserves_all_cases_and_exact_wave_one_evidence() -> None:
+    envelope = _envelope()
+    debate = _compose(envelope)
+
+    thesis = compose_spot_market_thesis(debate, now=NOW)
+
+    assert thesis.bullish.state is ThesisCaseState.AVAILABLE
+    assert thesis.bearish.state is ThesisCaseState.AVAILABLE
+    assert thesis.base.state is ThesisCaseState.UNAVAILABLE
+    assert thesis.base.supporting_evidence_ids == ()
+    assert thesis.bullish.supporting_evidence_ids == debate.bullish.evidence_ids
+    assert thesis.bearish.supporting_evidence_ids == debate.bearish.evidence_ids
+    assert thesis.source_debate is debate
+    assert thesis.unresolved_conflicts
+    assert thesis.unresolved_conflicts is debate.market_context.conflicts
+    assert thesis.unresolved_uncertainties is debate.market_context.uncertainties
+    assert thesis.critic_contradictory_evidence_ids == (
+        debate.market_context.adversarial.contradictory_evidence_ids
+    )
+    assert thesis.expires_at == debate.expires_at
+    assert thesis.no_trade_compatible
+    assert all(
+        item.state is ThesisInvalidationState.UNASSIGNED
+        and item.source_contract_id == "C-019"
+        and item.source_assessment_id == debate.market_context.adversarial.assessment_id
+        for item in thesis.invalidation_candidates
+    )
+    assert thesis.invalidation_candidates
+    assert thesis.bullish.assumptions == ()
+    assert thesis.bearish.assumptions == ()
+    assert thesis.base.assumptions == ()
+    assert all(
+        case.assumptions_state is ThesisAssumptionState.NOT_PROVIDED_BY_APPROVED_INPUTS
+        for case in (thesis.bullish, thesis.bearish, thesis.base)
+    )
+
+
+def test_neutral_case_requires_explicit_neutral_supporting_evidence() -> None:
+    neutral = _component(30, AnalyticalDirection.NEUTRAL, _id(31))
+
+    base = _case((neutral,), AnalyticalDirection.NEUTRAL)
+    contradictory = replace(
+        _component(32, AnalyticalDirection.NEUTRAL, _id(33)),
+        relation=EvidenceRelation.CONTRADICTING,
+    )
+    unsupported = _case((contradictory,), AnalyticalDirection.NEUTRAL)
+
+    assert base.state is ThesisCaseState.AVAILABLE
+    assert base.supporting_component_ids == (_id(30),)
+    assert base.supporting_evidence_ids == (_id(31),)
+    assert unsupported.state is ThesisCaseState.UNAVAILABLE
+    assert unsupported.contradictory_evidence_ids == (_id(33),)
+
+
+def test_both_directional_cases_remain_unavailable_without_support() -> None:
+    components = (
+        replace(
+            _component(34, AnalyticalDirection.BULLISH, _id(35)),
+            relation=EvidenceRelation.CONTRADICTING,
+        ),
+        replace(
+            _component(36, AnalyticalDirection.BEARISH, _id(37)),
+            relation=EvidenceRelation.CONTRADICTING,
+        ),
+    )
+
+    bullish = _case(components, AnalyticalDirection.BULLISH)
+    bearish = _case(components, AnalyticalDirection.BEARISH)
+
+    assert bullish.state is ThesisCaseState.UNAVAILABLE
+    assert bearish.state is ThesisCaseState.UNAVAILABLE
+    assert bullish.supporting_evidence_ids == bearish.supporting_evidence_ids == ()
+    assert bullish.contradictory_evidence_ids == (_id(35),)
+    assert bearish.contradictory_evidence_ids == (_id(37),)
+
+
+def test_market_thesis_composition_is_deterministic_and_no_trade_compatible() -> None:
+    envelope = _envelope(AgentResultStatus.NO_TRADE)
+    debate = _compose(envelope)
+
+    first = compose_spot_market_thesis(debate, now=NOW)
+    second = compose_spot_market_thesis(debate, now=NOW)
+
+    assert first == second
+    assert first.thesis_id == second.thesis_id
+    assert first.decision_state is SpotDebateConclusion.NO_TRADE
+    assert first.no_trade_compatible
+    assert first.source_debate.agent_result is debate.agent_result
+
+
+@pytest.mark.parametrize(
+    "identity", ("context_id", "task_id", "correlation_id", "trace_id")
+)
+def test_market_thesis_rejects_mismatched_identity(identity: str) -> None:
+    debate = _compose(_envelope())
+    changed = replace(debate, **{identity: uuid4()})
+
+    with pytest.raises(SpotMarketThesisError, match="identity or C-006 binding"):
+        compose_spot_market_thesis(changed, now=NOW)
+
+
+def test_market_thesis_rejects_expired_debate() -> None:
+    debate = _compose(_envelope())
+
+    with pytest.raises(SpotMarketThesisError, match="current and unexpired"):
+        compose_spot_market_thesis(debate, now=debate.expires_at)
