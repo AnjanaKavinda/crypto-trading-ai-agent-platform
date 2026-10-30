@@ -33,6 +33,11 @@ from trading_platform_api.strategy.registry import (
     validate_semantic_version,
 )
 from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegistryStore
+from trading_platform_api.strategy.setup_detection import (
+    SetupDetectionEvaluation,
+    SetupDetectionOutcome,
+    evaluate_strategy_setup,
+)
 
 __all__ = [
     *_contracts_all,
@@ -60,6 +65,9 @@ __all__ = [
     "StrategyRegistry",
     "StrategyRegistryError",
     "TransitionResult",
+    "SetupDetectionEvaluation",
+    "SetupDetectionOutcome",
+    "evaluate_strategy_setup",
     "semantic_version_is_greater",
     "strategy_version_content_sha256",
     "validate_semantic_version",
