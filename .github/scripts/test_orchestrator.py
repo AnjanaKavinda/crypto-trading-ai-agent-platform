@@ -1088,6 +1088,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("run: python .github/scripts/transition-pr.py", workflow)
         self.assertIn("Publish pending final governance gate", workflow)
         self.assertIn("state=pending -f context=governance-gate", workflow)
+        self.assertIn("needs.track-review.result == 'failure'", workflow)
+        self.assertIn("state=failure -f context=governance-gate", workflow)
         self.assertIn("Human merge remains final authority", workflow)
         self.assertNotIn("gh pr merge", workflow)
         self.assertNotIn("enable-auto-merge", workflow)
