@@ -41,6 +41,28 @@ deployment must provide a saver with the required durability, access controls,
 and retention behavior before claiming restart recovery. The graph requires a
 LangGraph `thread_id` for checkpoint correlation.
 
+## Debate and critic handoff
+
+Issue #75 composes one validated C-062 result and its exact C-066 evaluation
+with the existing C-006 v5 Spot context. `compose_spot_debate` revalidates the
+C-062 task/context/agent/route/evidence/schema bindings, requires the completed
+C-066 record to bind the same result and correlation/trace identities, and
+reuses the C-006/C-007/C-008/C-019 validators plus the C-093 owner registry.
+
+The orchestration-local result carries separate bullish and bearish branches
+made only from C-009's typed directional components and exact evidence IDs. It
+retains C-010 conflicts, C-019 counter-thesis/contradictory evidence/failure
+conditions, C-069 uncertainty, and C-093 dependence data through the original
+validated C-006 object. Missing directional evidence stays unavailable. A
+categorical unresolved conclusion preserves mixed evidence and first-class
+`NO_TRADE`; it does not vote, score, infer probability, or choose a winner.
+
+This is a deterministic composition step, not three agent invocations. It adds
+no prompt or model calls, side effects, canonical contract/version, strategy
+evaluation, risk calculation, approval, or execution authority. A future
+agent-generated thesis workflow would need its own registered prompts/routes
+and separately validated C-062 outputs before it could feed this handoff.
+
 ## Deliberately deferred
 
 This first slice validates one completed analyst result; it does not yet launch
