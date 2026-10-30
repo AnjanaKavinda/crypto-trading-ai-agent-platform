@@ -244,7 +244,35 @@ def test_lifecycle_profile_mode_and_condition_results_are_enforced() -> None:
         is EligibilityState.NOT_ELIGIBLE
     )
 
-    deprecated = replace(case[2], c021_lifecycle=StrategyLifecycle.RETIRED)
+    artifact_rolled_back = replace(
+        case[2], artifact_lifecycle=ArtifactVersionLifecycle.ROLLED_BACK
+    )
+    context = replace(case[3], strategy=artifact_rolled_back)
+    condition = evaluate_strategy_conditions(artifact_rolled_back, context)
+    assert (
+        _evaluate(
+            case,
+            strategy=artifact_rolled_back,
+            condition_context=context,
+            condition_evaluation=condition,
+        ).state
+        is EligibilityState.NOT_ELIGIBLE
+    )
+
+    rolled_back = replace(case[2], c021_lifecycle=StrategyLifecycle.ROLLED_BACK)
+    context = replace(case[3], strategy=rolled_back)
+    condition = evaluate_strategy_conditions(rolled_back, context)
+    assert (
+        _evaluate(
+            case,
+            strategy=rolled_back,
+            condition_context=context,
+            condition_evaluation=condition,
+        ).state
+        is EligibilityState.NOT_ELIGIBLE
+    )
+
+    deprecated = replace(case[2], availability=StrategyAvailability.DEPRECATED)
     context = replace(case[3], strategy=deprecated)
     condition = evaluate_strategy_conditions(deprecated, context)
     assert (

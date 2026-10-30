@@ -289,6 +289,7 @@ def _validate_provenance(
         != (manifest.asset, manifest.instrument_id, manifest.analysis_cutoff)
         or context.adversarial.analysis_snapshot != context.analysis_snapshot
         or context.adversarial.timeframe != manifest.timeframe
+        or manifest.asset != resolved.snapshot.instrument_id.split("-", maxsplit=1)[0]
         or context.evidence_ids != manifest.evidence_ids
         or context.regime != resolved.regime
         or context.confluence.input_snapshot_id != manifest.snapshot_id
