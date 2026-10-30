@@ -58,6 +58,21 @@ an executable test has already been implemented.
 | TB-012 | Implementation slices preserve contracts, versioning, required checks, and release gates. | Definition of done; contract-breaking-change and secrets rows |
 | TB-013 | Learning is append-only/traceable, cannot execute or auto-promote, and distinguishes actual outcomes from counterfactuals. | Permission matrix; learning/governance requirements |
 
+## Market Intelligence architecture mapping
+
+The proposed Market Intelligence Fabric extends the baseline; it does not create a new Playbook chat or imply that a runtime capability is complete.
+
+| Concern | Traceability | Current authority and control |
+|---|---|---|
+| Fabric placement and provider/agent boundary | RT-002, RT-003, RT-004 | Existing C-001/C-002/C-003 handoff, provider adapters, permission matrix, and data-quality controls |
+| Source lineage, comparison, freshness, and conflict | RT-004, RT-005 | C-003 and C-091/C-092 evidence; preserve source identity and explicit disagreement |
+| Analysis-only interpretation and MarketIntelligenceSnapshot concept | RT-003, RT-005 | Existing C-006/C-007/C-008 and domain assessment contracts remain canonical; the named snapshot is conceptual until separately governed |
+| Strategy, qualification, and NO_TRADE | RT-006, RT-007 | Existing C-021–C-026 and Chat 7 validation remain authoritative |
+| Risk, approval, and execution boundaries | RT-008, RT-009 | Existing deterministic risk, permission, state-machine, and human approval controls are unchanged |
+| Learning and feature-value evaluation | RT-013 | Outcomes remain factual/provenance-bound; learning cannot directly change production behavior |
+
+Design details and owner direction are recorded in [Market Intelligence Fabric](../architecture/market-intelligence-fabric.md), proposed ADR-0014, and Wave 0 issue #421. CoinGlass is an architectural supplementary source role only; OD-0002/OD-0004, provider terms, and actual ingestion remain unresolved. No `docs/playbook/**` content was changed.
+
 ## Baseline usage and status
 
 Every implementation issue must reference the applicable `RT-###` row(s),
