@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -213,7 +214,12 @@ async def invoke_provider(
         raise ModelRoutingError("provider adapter does not match the routing decision.")
 
     try:
-        response = await provider.generate(request)
+        async with asyncio.timeout((decision.expires_at - instant).total_seconds()):
+            response = await provider.generate(request)
+    except TimeoutError:
+        raise ModelRoutingError(
+            "provider call timed out; no retry or fallback was attempted."
+        ) from None
     except Exception:
         raise ModelRoutingError(
             "provider call failed; no retry or fallback was attempted."

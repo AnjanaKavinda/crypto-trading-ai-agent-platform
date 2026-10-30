@@ -147,6 +147,24 @@ def test_missing_unavailable_over_budget_or_expired_route_fails_closed(
         )
 
 
+@pytest.mark.parametrize(
+    "status", [ModelAvailability.UNAVAILABLE, ModelAvailability.DEGRADED]
+)
+def test_provider_unavailable_or_degraded_never_resolves_a_route(
+    status: ModelAvailability,
+) -> None:
+    req = request()
+
+    with pytest.raises(ModelRoutingError, match="not affirmatively available"):
+        resolve_model_route(
+            policy=policy(),
+            request=req,
+            availability=availability(status),
+            now=NOW,
+            remaining_budget_usd=Decimal("0.10"),
+        )
+
+
 class FakeProvider:
     provider_id = "approved-provider"
 
@@ -247,3 +265,153 @@ def test_provider_exception_is_sanitized_and_not_retried() -> None:
             )
         )
     assert "api_key" not in str(error.value)
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, RuntimeError])
+def test_provider_timeout_or_rate_limit_failure_is_one_shot_and_sanitized(
+    failure: type[Exception],
+) -> None:
+    class FailingProvider:
+        provider_id = "approved-provider"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, request_value: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            raise failure("provider rate limit or timeout detail must not escape")
+
+    req = request()
+    provider = FailingProvider()
+    with pytest.raises(ModelRoutingError, match="no retry or fallback") as error:
+        asyncio.run(
+            invoke_provider(
+                provider=provider,
+                decision=decision(req),
+                request=req,
+                now=NOW,
+            )
+        )
+
+    assert provider.calls == 1
+    assert "provider rate limit" not in str(error.value)
+
+
+def test_provider_call_is_bounded_by_the_exact_c067_route_expiry() -> None:
+    class HangingProvider:
+        provider_id = "approved-provider"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def generate(self, request_value: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    async def exercise() -> None:
+        req = request()
+        selected = replace(decision(req), expires_at=NOW + timedelta(milliseconds=20))
+        provider = HangingProvider()
+        with pytest.raises(ModelRoutingError, match="timed out; no retry or fallback"):
+            # Outer deadline is a test watchdog. The C-067 route lease must
+            # terminate the provider call first and produce a sanitized error.
+            async with asyncio.timeout(0.2):
+                await invoke_provider(
+                    provider=provider,
+                    decision=selected,
+                    request=req,
+                    now=NOW,
+                )
+
+        assert provider.calls == 1
+        assert provider.started.is_set()
+        assert provider.cancelled.is_set()
+
+    asyncio.run(exercise())
+
+
+def test_malformed_provider_output_fails_closed_without_retry() -> None:
+    class MalformedProvider:
+        provider_id = "approved-provider"
+        calls = 0
+
+        async def generate(self, request_value: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            return object()  # type: ignore[return-value]
+
+    req = request()
+    provider = MalformedProvider()
+    with pytest.raises(ModelRoutingError, match="invalid response type"):
+        asyncio.run(
+            invoke_provider(
+                provider=provider,
+                decision=decision(req),
+                request=req,
+                now=NOW,
+            )
+        )
+    assert provider.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_id", uuid4()),
+        ("provider_id", "other-provider"),
+        ("model_id", "other-model"),
+    ],
+)
+def test_provider_response_identity_mismatch_fails_closed(
+    field: str, value: object
+) -> None:
+    req = request()
+    provider = FakeProvider(replace(provider_response(req), **{field: value}))
+
+    with pytest.raises(ModelRoutingError, match="identity does not match"):
+        asyncio.run(
+            invoke_provider(
+                provider=provider,
+                decision=decision(req),
+                request=req,
+                now=NOW,
+            )
+        )
+    assert provider.calls == 1
+
+
+def test_provider_adapter_and_prompt_route_mismatches_never_invoke_provider() -> None:
+    req = request()
+    selected = decision(req)
+
+    class OtherProvider(FakeProvider):
+        provider_id = "other-provider"
+
+    provider = OtherProvider(provider_response(req))
+    with pytest.raises(ModelRoutingError, match="does not match"):
+        asyncio.run(
+            invoke_provider(
+                provider=provider,
+                decision=selected,
+                request=req,
+                now=NOW,
+            )
+        )
+    assert provider.calls == 0
+
+    changed_prompt = replace(req, prompt_version="2")
+    with pytest.raises(ModelRoutingError, match="not bound"):
+        asyncio.run(
+            invoke_provider(
+                provider=FakeProvider(provider_response(req)),
+                decision=selected,
+                request=changed_prompt,
+                now=NOW,
+            )
+        )

@@ -138,6 +138,57 @@ def test_fanout_preserves_unavailable_reason_and_successful_findings() -> None:
     assert unavailable_outcome.reason_code is SpotAnalysisTaskReason.POLICY_REQUIRED
 
 
+def test_partial_fanout_keeps_success_unavailable_failed_and_timeout_distinct() -> None:
+    async def succeed() -> SpotMetaFinding:
+        return _finding("spot-trend")
+
+    async def unavailable() -> SpotAnalysisUnavailable:
+        return SpotAnalysisUnavailable(SpotAnalysisTaskReason.INPUT_UNAVAILABLE)
+
+    async def fail() -> SpotMetaFinding:
+        raise RuntimeError("sensitive analysis detail")
+
+    async def time_out() -> SpotMetaFinding:
+        await asyncio.sleep(0.05)
+        return _finding("spot-volatility")
+
+    correlation_id = uuid4()
+    tasks = (
+        _task("spot-trend", succeed),
+        _task("spot-momentum", unavailable),
+        _task("spot-volume", fail),
+        _task("spot-volatility", time_out),
+    )
+
+    result = asyncio.run(
+        run_spot_analysis_fanout(
+            tasks,
+            correlation_id=correlation_id,
+            max_concurrency=4,
+            timeout_seconds=0.01,
+        )
+    )
+
+    assert result.is_partial
+    assert tuple(item.status for item in result.outcomes) == (
+        SpotAnalysisTaskStatus.COMPLETE,
+        SpotAnalysisTaskStatus.UNAVAILABLE,
+        SpotAnalysisTaskStatus.FAILED,
+        SpotAnalysisTaskStatus.TIMED_OUT,
+    )
+    assert tuple(item.domain for item in result.outcomes) == tuple(
+        task.domain for task in tasks
+    )
+    assert all(item.correlation_id == correlation_id for item in result.outcomes)
+    assert result.findings == (result.outcomes[0].finding,)
+    assert result.outcomes[1].finding is None
+    assert result.outcomes[2].finding is None
+    assert result.outcomes[3].finding is None
+    assert result.outcomes[1].reason_code is SpotAnalysisTaskReason.INPUT_UNAVAILABLE
+    assert result.outcomes[2].reason_code is SpotAnalysisTaskReason.ANALYSIS_FAILED
+    assert result.outcomes[3].reason_code is SpotAnalysisTaskReason.ANALYSIS_TIMEOUT
+
+
 def test_composed_fanout_assesses_only_successful_findings_with_c093(
     monkeypatch,
 ) -> None:

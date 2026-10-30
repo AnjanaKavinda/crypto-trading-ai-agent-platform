@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -5,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from trading_platform_api.agents.contracts import (
+    AgentEvaluation,
     AgentEvaluationOutcome,
     AgentResult,
     AgentResultStatus,
@@ -12,7 +14,6 @@ from trading_platform_api.agents.contracts import (
     ModelCapabilityTier,
     ModelRoutingDecision,
 )
-from trading_platform_api.agents.evaluation import build_agent_evaluation
 from trading_platform_api.agents.result_validation import AgentResultExpectation
 from trading_platform_api.analysis.contracts import (
     AnalyticalDirection,
@@ -80,6 +81,10 @@ from trading_platform_api.orchestration.spot_debate import (
 from trading_platform_api.orchestration.spot_request_handoff import (
     build_spot_analysis_manifest,
 )
+from trading_platform_api.orchestration.spot_results import (
+    build_spot_result_graph,
+    run_spot_result_graph,
+)
 from trading_platform_api.spot_research import approved_quality_policy_template
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
@@ -89,7 +94,7 @@ NOW = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
 class DebateEnvelope:
     result: AgentResult
     expectation: AgentResultExpectation
-    evaluation: object
+    evaluation: AgentEvaluation
     context: MarketContextV5
     manifest: object
     resolved: tuple[object, ...]
@@ -104,7 +109,11 @@ def _id(number: int) -> UUID:
     return UUID(f"00000000-0000-0000-0000-{number:012d}")
 
 
-def _envelope(status: AgentResultStatus = AgentResultStatus.COMPLETE) -> DebateEnvelope:
+def _envelope(
+    status: AgentResultStatus = AgentResultStatus.COMPLETE,
+    *,
+    missing_bearish: bool = False,
+) -> DebateEnvelope:
     step = timedelta(minutes=1)
     start = NOW - timedelta(minutes=50)
     observations: list[MarketData] = []
@@ -192,7 +201,7 @@ def _envelope(status: AgentResultStatus = AgentResultStatus.COMPLETE) -> DebateE
     evidence_pair = tuple(
         sorted(evidence.values(), key=lambda item: str(item.evidence_id))[:2]
     )
-    findings = (
+    directional_findings = (
         SpotMetaFinding(
             _id(3100),
             "spot-trend",
@@ -224,6 +233,7 @@ def _envelope(status: AgentResultStatus = AgentResultStatus.COMPLETE) -> DebateE
             provenance=evidence_pair[1].provenance,
         ),
     )
+    findings = directional_findings[:1] if missing_bearish else directional_findings
     confluence, independence = calculate_spot_confluence_v3(
         manifest=manifest,
         resolved_bindings=resolved,
@@ -437,21 +447,25 @@ def _envelope(status: AgentResultStatus = AgentResultStatus.COMPLETE) -> DebateE
         allowed_output_schemas={"C-006": ("5", MarketContextV5)},
     )
     correlation_id, trace_id = _id(3303), _id(3304)
-    evaluation = build_agent_evaluation(
-        result,
+    graph = build_spot_result_graph(
         expectation=expectation,
-        correlation_id=correlation_id,
-        trace_id=trace_id,
-        environment=DeploymentEnvironment.TEST,
-        mode=OperatingMode.RESEARCH,
-        started_at=NOW - timedelta(seconds=1),
-        ended_at=NOW,
-        evaluated_at=NOW,
-        duration_ms=1000,
-        outcome=AgentEvaluationOutcome.COMPLETED,
-        failure_classification=None,
-        validation_completed=True,
+        checkpointer=None,
+        clock=lambda: NOW,
     )
+    state = asyncio.run(
+        run_spot_result_graph(
+            graph,
+            expectation=expectation,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
+            environment=DeploymentEnvironment.TEST,
+            mode=OperatingMode.RESEARCH,
+            agent_result=result,
+            thread_id=str(result.task_id),
+            clock=lambda: NOW,
+        )
+    )
+    evaluation = state["agent_evaluation"]
     return DebateEnvelope(
         result,
         expectation,
@@ -683,6 +697,23 @@ def test_public_composition_preserves_full_validated_bounded_envelope() -> None:
         envelope.independence.report_id
     )
     assert result.market_context.adversarial.contradictory_evidence_ids
+    assert result.market_context.uncertainties
+    assert all(
+        item.resolution_status is ResolutionStatus.UNRESOLVED
+        for item in result.market_context.uncertainties
+    )
+
+
+def test_public_composition_keeps_missing_thesis_branch_unavailable() -> None:
+    envelope = _envelope(missing_bearish=True)
+
+    result = _compose(envelope)
+
+    assert result.bullish.available
+    assert not result.bearish.available
+    assert result.bearish.evidence_ids == ()
+    assert result.market_context.adversarial.contradictory_evidence_ids
+    assert result.disagreement_preserved
 
 
 @pytest.mark.parametrize(
@@ -754,6 +785,56 @@ def test_public_composition_fails_closed_for_c093_digest_mismatch() -> None:
             envelope,
             independence_reports={changed_report.report_id: changed_report},
         )
+
+
+def test_public_composition_fails_closed_for_unresolved_c019_versions() -> None:
+    envelope = _envelope()
+
+    with pytest.raises(SpotDebateError, match="C-006 lineage, C-019, or C-093"):
+        _compose(envelope, supported_adversarial_versions=())
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_outcome"),
+    (
+        ("timeout", AgentEvaluationOutcome.TIMED_OUT),
+        ("failed", AgentEvaluationOutcome.FAILED),
+    ),
+)
+def test_public_debate_rejects_noncompleted_c066_for_typed_c062(
+    failure: str, expected_outcome: AgentEvaluationOutcome
+) -> None:
+    envelope = _envelope()
+
+    class FailedGraph:
+        async def ainvoke(self, _state: object, *, config: object) -> object:
+            raise RuntimeError("sensitive evaluator detail")
+
+    class SlowGraph:
+        async def ainvoke(self, _state: object, *, config: object) -> object:
+            await asyncio.sleep(0.05)
+            return {}
+
+    state = asyncio.run(
+        run_spot_result_graph(
+            FailedGraph() if failure == "failed" else SlowGraph(),
+            expectation=envelope.expectation,
+            correlation_id=envelope.correlation_id,
+            trace_id=envelope.trace_id,
+            environment=DeploymentEnvironment.TEST,
+            mode=OperatingMode.RESEARCH,
+            agent_result=envelope.result,
+            thread_id=str(envelope.result.task_id),
+            timeout_seconds=0.001,
+            clock=lambda: NOW,
+        )
+    )
+    evaluation = state["agent_evaluation"]
+
+    assert evaluation.result_id == envelope.result.result_id
+    assert evaluation.outcome is expected_outcome
+    with pytest.raises(SpotDebateError, match="C-066 is not the completed evaluation"):
+        _compose(envelope, agent_evaluation=evaluation)
 
 
 @pytest.mark.parametrize(

@@ -213,6 +213,7 @@ def test_empty_eligible_set_is_explicit_and_valid() -> None:
         _candidate(environment="docker"),
         _candidate(mode="BACKTEST"),
         _candidate(assessment_verdict=PromptInjectionVerdict.SUSPICIOUS),
+        _candidate(assessment_verdict=PromptInjectionVerdict.MALICIOUS),
         _candidate(assessment_overrides={"valid_until": NOW - timedelta(seconds=1)}),
         _candidate(
             assessment_overrides={"tool_context_ref": "context:another-analysis"}
