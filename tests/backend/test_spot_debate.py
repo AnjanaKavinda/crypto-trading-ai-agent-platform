@@ -895,10 +895,13 @@ def test_market_thesis_preserves_all_cases_and_exact_wave_one_evidence() -> None
         for item in thesis.invalidation_candidates
     )
     assert thesis.invalidation_candidates
-    assert thesis.bullish.assumptions == thesis.bearish.assumptions == ()
-    assert (
-        thesis.bullish.assumptions_state
+    assert thesis.bullish.assumptions == ()
+    assert thesis.bearish.assumptions == ()
+    assert thesis.base.assumptions == ()
+    assert all(
+        case.assumptions_state
         is ThesisAssumptionState.NOT_PROVIDED_BY_APPROVED_INPUTS
+        for case in (thesis.bullish, thesis.bearish, thesis.base)
     )
 
 
