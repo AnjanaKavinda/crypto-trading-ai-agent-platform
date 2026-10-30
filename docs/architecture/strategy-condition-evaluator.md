@@ -41,7 +41,9 @@ Declared C-021 required evidence categories are checked against a closed
 profile map: `technical` requires a present Spot analytical finding, `regime`
 requires all allowlisted C-005 dimensions, and `confluence` requires the exact
 C-009 state. Missing supported categories or an unknown category makes the
-overall result `UNKNOWN`; downstream eligibility remains out of scope.
+overall result `UNKNOWN`. Issue #81 consumes this result without duplicating
+feature resolution or condition semantics; see
+[`strategy-eligibility.md`](strategy-eligibility.md).
 
 ## Operator and group semantics
 
@@ -66,7 +68,7 @@ unknown evaluation.
 
 Evaluation reports only whether declared deterministic conditions passed,
 failed, or remained unknown for this exact strategy version and Spot context.
-It does not compute eligibility or qualification, emit C-023 or a signal,
+It does not compute qualification, emit C-023 or a signal,
 approve risk or human action, or authorize paper, order, or live execution.
 It produces no trading-performance statistics. Chat 7 remains the authority
 for statistical validation.

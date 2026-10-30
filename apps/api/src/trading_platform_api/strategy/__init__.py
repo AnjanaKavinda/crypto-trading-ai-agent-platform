@@ -13,6 +13,10 @@ from trading_platform_api.strategy.condition_evaluator import (
 )
 from trading_platform_api.strategy.contracts import *  # noqa: F403
 from trading_platform_api.strategy.contracts import __all__ as _contracts_all
+from trading_platform_api.strategy.eligibility import (
+    StrategyEligibilityEvaluation,
+    evaluate_strategy_eligibility,
+)
 from trading_platform_api.strategy.registry import (
     ArtifactVersionLifecycle,
     LifecycleAxis,
@@ -43,6 +47,8 @@ __all__ = [
     "StrategyConditionEvaluation",
     "build_spot_condition_context",
     "evaluate_strategy_conditions",
+    "StrategyEligibilityEvaluation",
+    "evaluate_strategy_eligibility",
     "ArtifactVersionLifecycle",
     "LifecycleAxis",
     "LifecycleReferenceResolver",
