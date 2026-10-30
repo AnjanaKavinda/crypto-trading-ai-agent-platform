@@ -1,3 +1,16 @@
+from trading_platform_api.strategy.condition_evaluator import (
+    DSL_DEFINITION_VERSION,
+    ConditionEvaluation,
+    ConditionResultCode,
+    ConditionTruth,
+    FeatureAvailability,
+    GroupEvaluation,
+    ResolvedFeature,
+    SpotConditionContext,
+    StrategyConditionEvaluation,
+    build_spot_condition_context,
+    evaluate_strategy_conditions,
+)
 from trading_platform_api.strategy.contracts import *  # noqa: F403
 from trading_platform_api.strategy.contracts import __all__ as _contracts_all
 from trading_platform_api.strategy.registry import (
@@ -19,6 +32,17 @@ from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegis
 
 __all__ = [
     *_contracts_all,
+    "ConditionEvaluation",
+    "ConditionResultCode",
+    "ConditionTruth",
+    "DSL_DEFINITION_VERSION",
+    "FeatureAvailability",
+    "GroupEvaluation",
+    "ResolvedFeature",
+    "SpotConditionContext",
+    "StrategyConditionEvaluation",
+    "build_spot_condition_context",
+    "evaluate_strategy_conditions",
     "ArtifactVersionLifecycle",
     "LifecycleAxis",
     "LifecycleReferenceResolver",
