@@ -34,8 +34,16 @@ from trading_platform_api.learning import (
     ExperienceRecord,
 )
 from trading_platform_api.market_data import DataQualityReportV2
-from trading_platform_api.strategy import ValidationReference
-from trading_platform_api.validation import CalibrationResult
+from trading_platform_api.strategy import (
+    SignalEvidencePackageV2,
+    SignalQualificationV2,
+    ValidationReference,
+)
+from trading_platform_api.validation import (
+    CalibrationResult,
+    CostAssumptionSetV2,
+    QualificationValidationResultV2,
+)
 
 REGISTRY_PATH = Path("docs/cross-cutting/01-domain-contract-registry.md")
 CONTRACT_PACKAGES = (
@@ -69,6 +77,10 @@ VERSIONED_CONTRACT_TYPES = {
     ConfluenceAssessmentV3: ("C-009", "3"),
     ConflictAssessmentV2: ("C-010", "2"),
     ConflictAssessmentV3: ("C-010", "3"),
+    SignalEvidencePackageV2: ("C-024", "2"),
+    SignalQualificationV2: ("C-025", "2"),
+    CostAssumptionSetV2: ("C-027", "2"),
+    QualificationValidationResultV2: ("C-028", "2"),
 }
 ALIAS_NAMES = {"CalibrationRecord", "ExperienceRecord"}
 AUTHORITY_METHOD_NAMES = {

@@ -13,6 +13,8 @@ from trading_platform_api.strategy.condition_evaluator import (
 )
 from trading_platform_api.strategy.contracts import *  # noqa: F403
 from trading_platform_api.strategy.contracts import __all__ as _contracts_all
+from trading_platform_api.strategy.contracts_v2 import *  # noqa: F403
+from trading_platform_api.strategy.contracts_v2 import __all__ as _contracts_v2_all
 from trading_platform_api.strategy.eligibility import (
     StrategyEligibilityEvaluation,
     evaluate_strategy_eligibility,
@@ -41,6 +43,7 @@ from trading_platform_api.strategy.setup_detection import (
 
 __all__ = [
     *_contracts_all,
+    *_contracts_v2_all,
     "ConditionEvaluation",
     "ConditionResultCode",
     "ConditionTruth",

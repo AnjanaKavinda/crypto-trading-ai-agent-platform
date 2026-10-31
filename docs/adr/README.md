@@ -24,6 +24,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0012 | [Retention for personal Spot analysis lineage](ADR-0012-proposed-personal-spot-analysis-lineage-retention.md) | Accepted | 2026-10-24 | Platform Architect / AnjanaKavinda (PR #412 merge) | OD-0008, OD-0017 (bounded personal Spot analysis artifacts only; broader decisions remain Open) | C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-093 v1 (no semantic changes) | — | — |
 | ADR-0013 | [Windows backups through the private Docker network](ADR-0013-proposed-windows-private-network-backup-runner.md) | Accepted | 2026-10-29 | Platform Architect / AnjanaKavinda (PR #418 merge) | OD-0026 (resolved) | No contract changes | — | — |
 | ADR-0014 | [Proposed Market Intelligence Fabric](ADR-0014-proposed-market-intelligence-fabric.md) | Proposed | 2026-10-30 | Platform Architect / human approval pending | OD-0002, OD-0004 remain open | None; any future typed snapshot requires separate governance | — | — |
+| ADR-0015 | [Wave 3 pre-qualification evidence and statistical qualification contract boundary](ADR-0015-wave-3-prequalification-evidence-and-statistical-qualification-contract-boundary.md) | Accepted | 2026-10-31 | Platform Architect / AnjanaKavinda (explicit owner approval) | — | C-024v2, C-025v2, C-027v2 cost applicability, C-028v2 | — | — |
 
 ## Creating an ADR
 
