@@ -24,6 +24,12 @@ from trading_platform_api.strategy.evidence_package import (
     EvidencePackageStatus,
     build_signal_evidence_package_v2,
 )
+from trading_platform_api.strategy.qualification_rules import (
+    QualificationEvaluationReason,
+    QualificationRuleEvaluation,
+    QualificationRuleEvaluationInput,
+    evaluate_qualification_rules,
+)
 from trading_platform_api.strategy.registry import (
     ArtifactVersionLifecycle,
     LifecycleAxis,
@@ -79,6 +85,10 @@ __all__ = [
     "SetupDetectionEvaluation",
     "SetupDetectionOutcome",
     "evaluate_strategy_setup",
+    "QualificationEvaluationReason",
+    "QualificationRuleEvaluation",
+    "QualificationRuleEvaluationInput",
+    "evaluate_qualification_rules",
     "semantic_version_is_greater",
     "strategy_version_content_sha256",
     "validate_semantic_version",
