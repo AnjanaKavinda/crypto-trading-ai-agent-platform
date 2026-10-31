@@ -411,9 +411,21 @@ def test_c026_v1_reason_vocabulary_and_golden_wire_bytes_remain_frozen() -> None
     )
     assert json.loads(encoded)["schema_version"] == "1"
     assert json.loads(encoded)["payload"]["reasons"] == ["NO_SETUP"]
+    expected_sha256 = "".join(
+        (
+            "c0af9519",
+            "1cd54a9b",
+            "662f7d8a",
+            "cccde8dd",
+            "71844504",
+            "c263b607",
+            "c53bf5d7",
+            "00ff2574",
+        )
+    )
     assert (
         contract_sha256(no_trade_decision(), payload_version="no-trade-wire-1")
-        == "c0af95191cd54a9b662f7d8acccde8dd71844504c263b607c53bf5d700ff2574"
+        == expected_sha256
     )
 
 
