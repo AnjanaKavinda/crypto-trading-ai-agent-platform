@@ -469,3 +469,20 @@ this contract foundation therefore adds no database migration. If persistence
 is added or changed later, resolution must include schema version in its key,
 and prior v1 lookup remains available. Existing `wire-1` canonical JSON and
 SHA-256 machinery remains in use; no global canonicalization change occurs.
+
+## ADR-0016 — C-026 invalid-provenance reason
+
+[`ADR-0016`](../adr/ADR-0016-c026-v2-invalid-provenance-reason.md) versions
+the C-026 reason vocabulary without changing the v1 enum or historical
+artifacts.
+
+| Contract | Schema 1 | Schema 2 | Compatibility and identity |
+|---|---|---|---|
+| C-026 NoTradeDecision | `NoTradeDecision` and its closed `NoTradeReason` vocabulary remain unchanged. | `NoTradeDecisionV2` reuses the v1 field shape; `NoTradeReasonV2` adds exactly `INVALID_PROVENANCE`. | Existing canonical JSON envelope carries schema `2`; older schema-1-only readers reject it as unsupported. No v1 rewrite/backfill. |
+
+Both schemas use the current `canonical-json-v1` / `wire-1` mechanism. Schema
+and reason are part of serialized content and its digest. C-045 learning stores
+versioned C-026 references without decoding the payload, so it needs no schema
+change. The current repository has no C-026-specific persistence or runtime
+producer; no DDL, migration, or backfill is needed. Future C-026 persistence
+must key/read by schema version.

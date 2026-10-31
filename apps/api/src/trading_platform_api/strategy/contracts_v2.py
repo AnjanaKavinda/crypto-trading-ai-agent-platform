@@ -9,6 +9,7 @@ from uuid import UUID, uuid5
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.strategy.contracts import (
     QualificationStatus,
+    SignalLifecycleState,
     StrategyContractError,
     VersionReference,
 )
@@ -72,6 +73,31 @@ class EvidenceDependenceV2(StrEnum):
     PARTIALLY_DEPENDENT = "PARTIALLY_DEPENDENT"
     HIGHLY_CORRELATED = "HIGHLY_CORRELATED"
     UNKNOWN = "UNKNOWN"
+
+
+class NoTradeReasonV2(StrEnum):
+    """C-026 schema-2 reason vocabulary; schema 1 remains frozen."""
+
+    MISSING_DATA = "MISSING_DATA"
+    STALE_DATA = "STALE_DATA"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    UNRESOLVED_CONFLICT = "UNRESOLVED_CONFLICT"
+    STRATEGY_INELIGIBLE = "STRATEGY_INELIGIBLE"
+    NO_SETUP = "NO_SETUP"
+    SETUP_INVALIDATED = "SETUP_INVALIDATED"
+    SETUP_EXPIRED = "SETUP_EXPIRED"
+    SETUP_SUPERSEDED = "SETUP_SUPERSEDED"
+    REGIME_MISMATCH = "REGIME_MISMATCH"
+    EVENT_RISK = "EVENT_RISK"
+    VALIDATION_MISSING = "VALIDATION_MISSING"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    VALIDATION_INCONCLUSIVE = "VALIDATION_INCONCLUSIVE"
+    VALIDATION_STALE = "VALIDATION_STALE"
+    DUPLICATE_THESIS = "DUPLICATE_THESIS"
+    SAFETY_UNAVAILABLE = "SAFETY_UNAVAILABLE"
+    RISK_UNAVAILABLE = "RISK_UNAVAILABLE"
+    INVALID_PROVENANCE = "INVALID_PROVENANCE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,6 +518,71 @@ class SignalQualificationV2:
         object.__setattr__(self, "evidence_package_valid_until", package_expiry)
 
 
+@dataclass(frozen=True, slots=True)
+class NoTradeDecisionV2:
+    """C-026 schema 2; identical decision shape with an additive reason code."""
+
+    decision_id: UUID
+    market_context_id: UUID
+    candidate_id: UUID | None
+    strategy_version_id: UUID | None
+    reasons: tuple[NoTradeReasonV2, ...]
+    explanation: str
+    blocking_evidence_ids: tuple[UUID, ...]
+    conflict_ids: tuple[UUID, ...]
+    uncertainty_ids: tuple[UUID, ...]
+    data_quality_report_id: UUID | None
+    provenance: tuple[VersionReference, ...]
+    correlation_id: str
+    lifecycle: SignalLifecycleState
+    decided_at: datetime
+    expires_at: datetime
+    contract_id: str = field(default="C-026", init=False)
+    schema_version: str = field(default=STRATEGY_CONTRACT_SCHEMA_VERSION_V2, init=False)
+
+    def __post_init__(self) -> None:
+        for name in ("decision_id", "market_context_id"):
+            _uuid(name, getattr(self, name))
+        for name in ("candidate_id", "strategy_version_id", "data_quality_report_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _uuid(name, value)
+        if not isinstance(self.reasons, tuple) or not self.reasons:
+            raise StrategyContractError("reasons must be a non-empty tuple.")
+        if not all(isinstance(item, NoTradeReasonV2) for item in self.reasons):
+            raise StrategyContractError("reasons must contain NoTradeReasonV2 values.")
+        if len(set(self.reasons)) != len(self.reasons):
+            raise StrategyContractError("reasons must not contain duplicates.")
+        _text("explanation", self.explanation)
+        for name in ("blocking_evidence_ids", "conflict_ids", "uncertainty_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple):
+                raise StrategyContractError(f"{name} must be a tuple.")
+            if not all(isinstance(value, UUID) for value in values):
+                raise StrategyContractError(f"{name} must contain UUID values.")
+            if len(set(values)) != len(values):
+                raise StrategyContractError(f"{name} must not contain duplicates.")
+        if not isinstance(self.provenance, tuple) or not self.provenance:
+            raise StrategyContractError("provenance must be a non-empty tuple.")
+        if not all(isinstance(item, VersionReference) for item in self.provenance):
+            raise StrategyContractError(
+                "provenance must contain VersionReference values."
+            )
+        if len(set(self.provenance)) != len(self.provenance):
+            raise StrategyContractError(
+                "provenance must not contain duplicate identities."
+            )
+        _text("correlation_id", self.correlation_id)
+        if self.lifecycle is not SignalLifecycleState.NO_TRADE:
+            raise StrategyContractError("NoTradeDecisionV2 lifecycle must be NO_TRADE.")
+        decided = _time("decided_at", self.decided_at)
+        expires = _time("expires_at", self.expires_at)
+        if decided > expires:
+            raise StrategyContractError("decided_at must not be after expires_at.")
+        object.__setattr__(self, "decided_at", decided)
+        object.__setattr__(self, "expires_at", expires)
+
+
 __all__ = [
     "C093DependenceReferenceV2",
     "EvidenceDependenceV2",
@@ -499,6 +590,8 @@ __all__ = [
     "EvidenceGraphNodeV2",
     "EvidenceGraphV2",
     "EvidenceNodeTypeV2",
+    "NoTradeDecisionV2",
+    "NoTradeReasonV2",
     "SignalEvidencePackageV2",
     "SignalQualificationV2",
     "STRATEGY_CONTRACT_SCHEMA_VERSION_V2",

@@ -35,6 +35,7 @@ from trading_platform_api.learning import (
 )
 from trading_platform_api.market_data import DataQualityReportV2
 from trading_platform_api.strategy import (
+    NoTradeDecisionV2,
     SignalEvidencePackageV2,
     SignalQualificationV2,
     ValidationReference,
@@ -79,6 +80,7 @@ VERSIONED_CONTRACT_TYPES = {
     ConflictAssessmentV3: ("C-010", "3"),
     SignalEvidencePackageV2: ("C-024", "2"),
     SignalQualificationV2: ("C-025", "2"),
+    NoTradeDecisionV2: ("C-026", "2"),
     CostAssumptionSetV2: ("C-027", "2"),
     QualificationValidationResultV2: ("C-028", "2"),
 }

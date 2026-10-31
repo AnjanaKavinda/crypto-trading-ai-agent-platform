@@ -25,6 +25,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0013 | [Windows backups through the private Docker network](ADR-0013-proposed-windows-private-network-backup-runner.md) | Accepted | 2026-10-29 | Platform Architect / AnjanaKavinda (PR #418 merge) | OD-0026 (resolved) | No contract changes | — | — |
 | ADR-0014 | [Proposed Market Intelligence Fabric](ADR-0014-proposed-market-intelligence-fabric.md) | Proposed | 2026-10-30 | Platform Architect / human approval pending | OD-0002, OD-0004 remain open | None; any future typed snapshot requires separate governance | — | — |
 | ADR-0015 | [Wave 3 pre-qualification evidence and statistical qualification contract boundary](ADR-0015-wave-3-prequalification-evidence-and-statistical-qualification-contract-boundary.md) | Accepted | 2026-10-31 | Platform Architect / AnjanaKavinda (explicit owner approval) | — | C-024v2, C-025v2, C-027v2 cost applicability, C-028v2 | — | — |
+| ADR-0016 | [Version C-026 invalid-provenance reason](ADR-0016-c026-v2-invalid-provenance-reason.md) | Accepted | 2026-10-31 | Platform Architect / AnjanaKavinda (owner instruction for bounded contract foundation) | — | C-026 schema 2 | — | — |
 
 ## Creating an ADR
 

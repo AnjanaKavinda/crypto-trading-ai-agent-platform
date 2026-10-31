@@ -40,7 +40,9 @@ from trading_platform_api.contracts import (
 from trading_platform_api.risk import ContractReference
 from trading_platform_api.strategy import (
     NoTradeDecision,
+    NoTradeDecisionV2,
     NoTradeReason,
+    NoTradeReasonV2,
     SignalLifecycleState,
     VersionReference,
 )
@@ -195,7 +197,7 @@ def governed_evidence(
 def no_trade_decision() -> NoTradeDecision:
     return NoTradeDecision(
         decision_id=IDENTITY,
-        market_context_id=uuid4(),
+        market_context_id=UUID("00000000-0000-0000-0000-000000000002"),
         candidate_id=None,
         strategy_version_id=None,
         reasons=(NoTradeReason.NO_SETUP,),
@@ -204,7 +206,11 @@ def no_trade_decision() -> NoTradeDecision:
         conflict_ids=(),
         uncertainty_ids=(),
         data_quality_report_id=None,
-        provenance=(VersionReference("strategy", uuid4(), "1.0.0", SHA_A),),
+        provenance=(
+            VersionReference(
+                "strategy", UUID("00000000-0000-0000-0000-000000000003"), "1.0.0", SHA_A
+            ),
+        ),
         correlation_id="correlation-1",
         lifecycle=SignalLifecycleState.NO_TRADE,
         decided_at=NOW,
@@ -339,6 +345,124 @@ def test_existing_canonical_dataclass_serializes_without_modification() -> None:
         NoTradeDecision, payload_version="no-trade-wire-1"
     )
     assert descriptor.contract_id == "C-026"
+
+
+def no_trade_decision_v2() -> NoTradeDecisionV2:
+    return NoTradeDecisionV2(
+        decision_id=IDENTITY,
+        market_context_id=UUID("00000000-0000-0000-0000-000000000002"),
+        candidate_id=None,
+        strategy_version_id=None,
+        reasons=(NoTradeReasonV2.INVALID_PROVENANCE,),
+        explanation="Provenance identity or digest is invalid.",
+        blocking_evidence_ids=(),
+        conflict_ids=(),
+        uncertainty_ids=(),
+        data_quality_report_id=None,
+        provenance=(
+            VersionReference(
+                "strategy", UUID("00000000-0000-0000-0000-000000000003"), "1.0.0", SHA_A
+            ),
+        ),
+        correlation_id="correlation-1",
+        lifecycle=SignalLifecycleState.NO_TRADE,
+        decided_at=NOW,
+        expires_at=NOW + timedelta(minutes=5),
+    )
+
+
+def test_c026_v1_reason_vocabulary_and_golden_wire_bytes_remain_frozen() -> None:
+    assert tuple(reason.value for reason in NoTradeReason) == (
+        "MISSING_DATA",
+        "STALE_DATA",
+        "INSUFFICIENT_DATA",
+        "INSUFFICIENT_EVIDENCE",
+        "UNRESOLVED_CONFLICT",
+        "STRATEGY_INELIGIBLE",
+        "NO_SETUP",
+        "SETUP_INVALIDATED",
+        "SETUP_EXPIRED",
+        "SETUP_SUPERSEDED",
+        "REGIME_MISMATCH",
+        "EVENT_RISK",
+        "VALIDATION_MISSING",
+        "VALIDATION_FAILED",
+        "VALIDATION_INCONCLUSIVE",
+        "VALIDATION_STALE",
+        "DUPLICATE_THESIS",
+        "SAFETY_UNAVAILABLE",
+        "RISK_UNAVAILABLE",
+    )
+    encoded = serialize_contract(no_trade_decision(), payload_version="no-trade-wire-1")
+    assert encoded == (
+        '{"canonicalization_version":"canonical-json-v1","contract_id":"C-026",'
+        '"payload":{"blocking_evidence_ids":[],"candidate_id":null,"conflict_ids":[],'
+        '"correlation_id":"correlation-1","data_quality_report_id":null,'
+        '"decided_at":"2026-09-26T15:00:00.000000Z",'
+        '"decision_id":"12345678-1234-5678-90ab-1234567890ab",'
+        '"expires_at":"2026-09-26T15:05:00.000000Z",'
+        '"explanation":"Synthetic no-trade decision","lifecycle":"NO_TRADE",'
+        '"market_context_id":"00000000-0000-0000-0000-000000000002",'
+        '"provenance":[{"artifact_id":"00000000-0000-0000-0000-000000000003",'
+        '"artifact_type":"strategy","content_sha256":"'
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"version":"1.0.0"}],"reasons":["NO_SETUP"],"strategy_version_id":null,'
+        '"uncertainty_ids":[]},"payload_version":"no-trade-wire-1","schema_version":"1"}'
+    )
+    assert json.loads(encoded)["schema_version"] == "1"
+    assert json.loads(encoded)["payload"]["reasons"] == ["NO_SETUP"]
+    expected_sha256 = "".join(
+        (
+            "c0af9519",
+            "1cd54a9b",
+            "662f7d8a",
+            "cccde8dd",
+            "71844504",
+            "c263b607",
+            "c53bf5d7",
+            "00ff2574",
+        )
+    )
+    assert (
+        contract_sha256(no_trade_decision(), payload_version="no-trade-wire-1")
+        == expected_sha256
+    )
+
+
+def test_c026_v2_invalid_provenance_serializes_and_parses_as_schema_2() -> None:
+    decision = no_trade_decision_v2()
+    encoded = serialize_contract(decision, payload_version="no-trade-wire-1")
+    payload_fields = tuple(
+        item.name
+        for item in fields(NoTradeDecisionV2)
+        if item.name not in {"contract_id", "schema_version"}
+    )
+    parsed = parse_contract_document(
+        encoded,
+        expected_contract_id="C-026",
+        supported_canonicalization_versions=(CANONICAL_JSON_VERSION,),
+        supported_schema_versions=("2",),
+        supported_payload_versions=("no-trade-wire-1",),
+        required_payload_fields=payload_fields,
+    )
+    assert parsed.schema_version == "2"
+    assert parsed.payload["reasons"] == ("INVALID_PROVENANCE",)
+    assert decision.lifecycle is SignalLifecycleState.NO_TRADE
+    assert {item.value for item in NoTradeReasonV2} == {
+        *(item.value for item in NoTradeReason),
+        "INVALID_PROVENANCE",
+    }
+    with pytest.raises(
+        ContractSerializationError, match="schema_version is unsupported"
+    ):
+        parse_contract_document(
+            encoded,
+            expected_contract_id="C-026",
+            supported_canonicalization_versions=(CANONICAL_JSON_VERSION,),
+            supported_schema_versions=("1",),
+            supported_payload_versions=("no-trade-wire-1",),
+            required_payload_fields=payload_fields,
+        )
 
 
 def test_reference_value_object_cannot_masquerade_as_its_target_contract() -> None:

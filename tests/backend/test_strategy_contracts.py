@@ -16,7 +16,9 @@ from trading_platform_api.strategy import (
     EvidenceGraphNode,
     EvidenceNodeType,
     NoTradeDecision,
+    NoTradeDecisionV2,
     NoTradeReason,
+    NoTradeReasonV2,
     QualificationRuleResult,
     QualificationStatus,
     RuleOutcome,
@@ -316,6 +318,83 @@ def test_eight_canonical_contracts_are_distinct_and_frozen() -> None:
     for item in values:
         with pytest.raises(FrozenInstanceError):
             item.schema_version = "2"  # type: ignore[misc]
+
+
+def test_c026_v2_is_additive_and_preserves_no_trade_lifecycle() -> None:
+    v1_reasons = {item.value for item in NoTradeReason}
+    v2_reasons = {item.value for item in NoTradeReasonV2}
+    assert v2_reasons == v1_reasons | {"INVALID_PROVENANCE"}
+    assert tuple(
+        item.name
+        for item in fields(NoTradeDecision)
+        if item.name not in {"contract_id", "schema_version"}
+    ) == tuple(
+        item.name
+        for item in fields(NoTradeDecisionV2)
+        if item.name not in {"contract_id", "schema_version"}
+    )
+    value = NoTradeDecisionV2(
+        decision_id=uuid4(),
+        market_context_id=uuid4(),
+        candidate_id=None,
+        strategy_version_id=None,
+        reasons=(NoTradeReasonV2.INVALID_PROVENANCE,),
+        explanation="The provenance binding is invalid.",
+        blocking_evidence_ids=(),
+        conflict_ids=(),
+        uncertainty_ids=(),
+        data_quality_report_id=None,
+        provenance=(reference(),),
+        correlation_id="trace-1",
+        lifecycle=SignalLifecycleState.NO_TRADE,
+        decided_at=T0,
+        expires_at=T2,
+    )
+    assert value.contract_id == "C-026"
+    assert value.schema_version == "2"
+    assert value.lifecycle is SignalLifecycleState.NO_TRADE
+    assert not {
+        "risk_approval",
+        "human_approval",
+        "order_intent",
+        "execution_authorized",
+    } & {item.name for item in fields(value)}
+    with pytest.raises(StrategyContractError, match="non-empty"):
+        NoTradeDecisionV2(
+            decision_id=uuid4(),
+            market_context_id=uuid4(),
+            candidate_id=None,
+            strategy_version_id=None,
+            reasons=(),
+            explanation="No reason supplied.",
+            blocking_evidence_ids=(),
+            conflict_ids=(),
+            uncertainty_ids=(),
+            data_quality_report_id=None,
+            provenance=(reference(),),
+            correlation_id="trace-1",
+            lifecycle=SignalLifecycleState.NO_TRADE,
+            decided_at=T0,
+            expires_at=T2,
+        )
+    with pytest.raises(StrategyContractError, match="duplicates"):
+        NoTradeDecisionV2(
+            decision_id=uuid4(),
+            market_context_id=uuid4(),
+            candidate_id=None,
+            strategy_version_id=None,
+            reasons=(NoTradeReasonV2.INVALID_PROVENANCE,) * 2,
+            explanation="Duplicate reason.",
+            blocking_evidence_ids=(),
+            conflict_ids=(),
+            uncertainty_ids=(),
+            data_quality_report_id=None,
+            provenance=(reference(),),
+            correlation_id="trace-1",
+            lifecycle=SignalLifecycleState.NO_TRADE,
+            decided_at=T0,
+            expires_at=T2,
+        )
 
 
 def test_strategy_version_is_hash_bound_and_reconstructable() -> None:
