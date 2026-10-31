@@ -449,3 +449,23 @@ from missing agent fields. Both origins require current-head review, successful
 configured deterministic checks, substantive governance validation, and human
 merge authority. Synchronizing a PR head invalidates prior provenance. No
 historical `1.2` artifact is migrated or rewritten.
+
+## ADR-0015 — Wave 3 qualification contract versions
+
+The owner-approved additive boundary is recorded in
+[`ADR-0015`](../adr/ADR-0015-wave-3-prequalification-evidence-and-statistical-qualification-contract-boundary.md).
+The approved scope is `PERSONAL_SPOT_RESEARCH`; it grants no risk, human
+approval, order, paper/testnet, or live-execution authority.
+
+| Contract | Schema 1 | Schema 2 | Compatibility and identity |
+|---|---|---|---|
+| C-024 SignalEvidencePackage | Historical package/graph semantics remain frozen, including the v1 qualification-node topology. | `SignalEvidencePackageV2` uses `EvidenceGraphV2`, ending at the exact C-023 candidate; includes explicit upstream provenance and C-093 dependence including `UNKNOWN`; package ID is UUIDv5 derived from the canonical content SHA-256. | Distinct `schema_version`; no v1 reinterpretation, rewrite or backfill. Digest covers schema and all package references/content. |
+| C-025 SignalQualification | Existing nullable validation and generic rule-result semantics remain historical only. | `SignalQualificationV2` binds candidate, strategy version, C-024v2, C-028v2 result and expiration; QUALIFIED requires C-028v2 PASS and every mandatory gate PASS. | New typed consumer model and schema discriminator; old readers must reject unknown v2 rather than coerce. |
+| C-027 BacktestResult | Numeric research assumptions retain existing semantics. | `CostAssumptionSetV2` and `ResearchAssumptionV2` add APPLICABLE / NOT_APPLICABLE / UNKNOWN; Spot funding applicability is explicit and NOT_APPLICABLE without numeric value. | Additive schema-2 value-object boundary; NOT_APPLICABLE requires rationale/provenance; UNKNOWN cannot pass cost applicability. |
+| C-028 ValidationResult | Existing Chat 7 validation output remains unchanged. | `QualificationValidationResultV2` binds separately versioned rule configuration, observed conditional rate/sample/expectancy, statistical-support references, authoritative gates and freshness. Outcomes are PASS / FAIL / INSUFFICIENT_VALIDATION. | Exact strategy, candidate, package digest, methodology and rule scope are hashed; equality meets the rate gate only. |
+
+The current persistence model does not store C-024/C-025/C-027/C-028 artifacts;
+this contract foundation therefore adds no database migration. If persistence
+is added or changed later, resolution must include schema version in its key,
+and prior v1 lookup remains available. Existing `wire-1` canonical JSON and
+SHA-256 machinery remains in use; no global canonicalization change occurs.

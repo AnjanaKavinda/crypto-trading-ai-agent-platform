@@ -44,11 +44,11 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-021 | StrategyVersion | Strategy Governance | Validation, Signal, Learning | Versioned rules/parameters/eligibility with lifecycle status. |
 | C-022 | StrategyEligibility | Strategy | Signal | Eligibility by asset/timeframe/regime/data state. |
 | C-023 | SignalCandidate | Signal | Qualification | Candidate setup; never an order. |
-| C-024 | SignalEvidencePackage | Signal | Validation, Risk, Approval, UX | Evidence graph and qualification context. |
-| C-025 | SignalQualification | Signal/Validation | Risk, UX | Historical conditional qualification, not probability. |
+| C-024 | SignalEvidencePackage | Signal | Validation, Risk, Approval, UX | v1 retained; v2 is pre-qualification evidence ending at the exact C-023 candidate. |
+| C-025 | SignalQualification | Signal/Validation | Risk, UX | v1 retained; v2 requires exact C-024v2 and authoritative C-028v2; historical conditional qualification, not probability. |
 | C-026 | NoTradeDecision | Signal | UX, Risk, Safety, Learning | First-class abstention with machine-readable reasons. |
-| C-027 | BacktestResult | Quant Validation | Validation, Research | Reproducible backtest with costs/assumptions. |
-| C-028 | ValidationResult | Quant Validation | Risk, Approval | OOS/walk-forward/robustness and validation status. |
+| C-027 | BacktestResult | Quant Validation | Validation, Research | v1 retained; v2 cost-assumption value objects express APPLICABLE / NOT_APPLICABLE / UNKNOWN explicitly. |
+| C-028 | ValidationResult | Quant Validation | Risk, Approval | v1 retained; v2 binds qualification rule configuration, observed results, statistical-support gates, and validation outcome. |
 | C-029 | WalkForwardResult | Quant Validation | Validation, Learning | Walk-forward folds/results. |
 | C-030 | RobustnessResult | Quant Validation | Risk, Governance | Sensitivity/Monte Carlo/regime robustness summary. |
 | C-031 | CalibrationResult | Quant/Model Evaluation | Meta Analysis, Learning | Calibration separate from AI confidence. |
