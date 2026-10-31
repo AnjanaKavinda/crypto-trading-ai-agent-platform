@@ -59,11 +59,11 @@ def version(component: str = "learning", sha: str = SHA_A) -> VersionReference:
     return VersionReference(component=component, version="1.0.0", content_sha256=sha)
 
 
-def ref(contract_id: str) -> ContractReference:
+def ref(contract_id: str, schema_version: str = "1") -> ContractReference:
     return ContractReference(
         contract_id=contract_id,
         entity_id=uuid4(),
-        schema_version="1",
+        schema_version=schema_version,
         content_sha256=SHA_A,
         valid_until=NOW + timedelta(days=1),
     )
@@ -542,6 +542,21 @@ def test_no_trade_and_rejected_paths_cannot_claim_execution() -> None:
             execution_refs=(ref("C-043"),),
             factual_outcome_ref=ref("C-044"),
         )
+
+
+def test_learning_experience_accepts_versioned_c026_no_trade_reference() -> None:
+    item = experience(
+        status=ExperienceStatus.NO_TRADE,
+        decision_refs=(ref("C-026", "2"),),
+        approval_ref=None,
+        execution_refs=(),
+        factual_outcome_ref=None,
+    )
+    decision_refs = item.decision_refs
+    assert any(
+        item.contract_id == "C-026" and item.schema_version == "2"
+        for item in decision_refs
+    )
 
 
 def test_complete_learning_chain_uses_exact_canonical_references() -> None:
