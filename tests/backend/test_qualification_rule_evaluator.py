@@ -113,7 +113,7 @@ def _candidate(strategy_version_id=None, **overrides) -> SignalCandidate:
     snapshot_id = uuid4()
     quality_id = uuid4()
     eligibility_id = uuid4()
-    concept_method = ref("C-021")
+    concept_method = VersionReference("C-021", strategy_version_id, "1.0.0", SHA)
 
     def concept(name: str) -> SignalConcept:
         return SignalConcept(name, f"{name} concept", (), concept_method)
@@ -147,11 +147,13 @@ def _candidate(strategy_version_id=None, **overrides) -> SignalCandidate:
     return SignalCandidate(**values)
 
 
-def _package(candidate: SignalCandidate) -> SignalEvidencePackageV2:
+def _package(
+    candidate: SignalCandidate,
+    *,
+    strategy_reference: VersionReference | None = None,
+) -> SignalEvidencePackageV2:
     candidate_ref = VersionReference("C-023", candidate.candidate_id, "1", SHA)
-    strategy_ref = VersionReference(
-        "C-021", candidate.strategy_version_id, "1", "b" * 64
-    )
+    strategy_ref = strategy_reference or candidate.entry_concept.method
     evidence_ref = ref("C-008")
     graph_nodes = (
         EvidenceGraphNodeV2(
@@ -646,6 +648,37 @@ def test_wrong_candidate_scope_or_strategy_fails_closed(candidate_changes) -> No
     value = request()
     candidate = replace(value.candidate, **candidate_changes)
     result = evaluate_qualification_rules(replace(value, candidate=candidate))
+    assert result.outcome is ValidationOutcomeV2.INSUFFICIENT_VALIDATION
+    assert result.validation is None
+    assert QualificationEvaluationReason.INPUT_SCOPE_MISMATCH in result.reasons
+
+
+@pytest.mark.parametrize(
+    "strategy_reference",
+    [
+        lambda original: VersionReference(
+            "C-021", original.artifact_id, "2.0.0", original.content_sha256
+        ),
+        lambda original: VersionReference(
+            "C-021", uuid4(), original.version, original.content_sha256
+        ),
+        lambda original: VersionReference(
+            "C-021", original.artifact_id, original.version, "b" * 64
+        ),
+    ],
+    ids=("wrong-semantic-version", "wrong-strategy-id", "wrong-strategy-digest"),
+)
+def test_c021_strategy_reference_must_exactly_match_candidate_method(
+    strategy_reference,
+) -> None:
+    candidate = _candidate()
+    bad_reference = strategy_reference(candidate.entry_concept.method)
+    package = _package(candidate, strategy_reference=bad_reference)
+
+    result = evaluate_qualification_rules(
+        request(candidate=candidate, evidence_package=package)
+    )
+
     assert result.outcome is ValidationOutcomeV2.INSUFFICIENT_VALIDATION
     assert result.validation is None
     assert QualificationEvaluationReason.INPUT_SCOPE_MISMATCH in result.reasons

@@ -313,12 +313,14 @@ def _input_problem(
 
 
 def _scope_matches(value: QualificationRuleEvaluationInput) -> bool:
+    strategy_reference = value.evidence_package.strategy_version
     return (
         value.candidate.lifecycle.value == "CANDIDATE"
         and value.candidate_reference.artifact_id == value.candidate.candidate_id
-        and value.evidence_package.strategy_version.artifact_id
-        == value.rule_set.strategy_version_id
-        and value.evidence_package.strategy_version.version == "1"
+        and strategy_reference.artifact_type == "C-021"
+        and strategy_reference.artifact_id == value.candidate.strategy_version_id
+        and strategy_reference == value.candidate.entry_concept.method
+        and strategy_reference.artifact_id == value.rule_set.strategy_version_id
         and value.rule_set.asset == value.candidate.asset
         and value.rule_set.timeframe == value.candidate.timeframe
         and value.rule_set.instrument_type == "SPOT"
