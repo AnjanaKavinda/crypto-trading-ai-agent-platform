@@ -6,6 +6,7 @@ from enum import StrEnum
 from typing import Any, TypeVar, cast
 from uuid import UUID, uuid5
 
+from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.strategy.contracts import (
@@ -804,6 +805,8 @@ class SignalV2:
     lineage: SignalLineageV2
     strategy_id: UUID
     strategy_version_id: UUID
+    parameter_set: VersionReference
+    configuration: VersionReference
     qualification_status: QualificationStatus
     market_context_id: UUID
     analysis_snapshot_id: UUID
@@ -814,6 +817,8 @@ class SignalV2:
     evidence_ids: tuple[UUID, ...]
     data_quality_report_id: UUID
     regime_id: UUID
+    conflict_ids: tuple[UUID, ...]
+    uncertainty_ids: tuple[UUID, ...]
     lifecycle: SignalLifecycleState
     created_at: datetime
     expires_at: datetime
@@ -836,6 +841,13 @@ class SignalV2:
             raise StrategyContractError("lineage must be exact SignalLineageV2.")
         if self.lineage.strategy_version_id != self.strategy_version_id:
             raise StrategyContractError("signal/lineage strategy identity mismatch.")
+        for name in ("parameter_set", "configuration"):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise StrategyContractError(f"{name} must be a VersionReference.")
+        if self.parameter_set != self.lineage.strategy_version:
+            raise StrategyContractError(
+                "parameter_set must bind the exact C-021v2 strategy reference."
+            )
         if self.qualification_status not in {
             QualificationStatus.QUALIFIED,
             QualificationStatus.QUALIFIED_HIGH_EVIDENCE,
@@ -855,6 +867,14 @@ class SignalV2:
             raise StrategyContractError("evidence_ids must be a non-empty UUID tuple.")
         if len(set(self.evidence_ids)) != len(self.evidence_ids):
             raise StrategyContractError("evidence_ids must be unique.")
+        for name in ("conflict_ids", "uncertainty_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or any(
+                not isinstance(item, UUID) for item in values
+            ):
+                raise StrategyContractError(f"{name} must be a UUID tuple.")
+            if len(set(values)) != len(values):
+                raise StrategyContractError(f"{name} must be unique.")
         created, expires = (
             _time("created_at", self.created_at),
             _time("expires_at", self.expires_at),
@@ -872,6 +892,7 @@ class SignalV2:
         strategy: StrategyVersionV2,
         package: SignalEvidencePackageV2,
         qualification: SignalQualificationV2,
+        market_context: MarketContextV5,
         now: datetime,
         signal_fields: dict[str, object],
     ) -> SignalV2:
@@ -887,12 +908,43 @@ class SignalV2:
             "direction",
             "evidence_ids",
             "data_quality_report_id",
-            "regime_id",
         }
         if set(signal_fields) != required_fields:
             raise StrategyContractError(
                 "signal_fields must match the closed C-070v2 payload fields."
             )
+        market_context_digest = canonical_sha256(market_context)
+        parameter_set = VersionReference(
+            "C-021",
+            strategy.strategy_version_id,
+            strategy.semantic_version,
+            strategy_digest,
+        )
+        rule_set_ref = qualification.validation.rule_set.reference
+        configuration = VersionReference(
+            rule_set_ref.artifact_type,
+            rule_set_ref.artifact_id,
+            rule_set_ref.version,
+            rule_set_ref.content_sha256,
+        )
+        context_conflicts = tuple(
+            VersionReference(
+                "C-010",
+                item.assessment_id,
+                item.schema_version,
+                canonical_sha256(item),
+            )
+            for item in market_context.conflicts
+        )
+        context_uncertainties = tuple(
+            VersionReference(
+                "C-069",
+                item.uncertainty_id,
+                item.schema_version,
+                canonical_sha256(item),
+            )
+            for item in market_context.uncertainties
+        )
         if (
             candidate.strategy_version_id != strategy.strategy_version_id
             or candidate.strategy_id != strategy.strategy_id
@@ -934,6 +986,17 @@ class SignalV2:
             or at < qualification.validation.created_at
             or at >= qualification.validation.valid_until
             or qualification.evidence_package_valid_until != package.expires_at
+            or market_context.context_id != candidate.market_context_id
+            or market_context.asset != candidate.asset
+            or market_context.instrument_id != candidate.instrument_id
+            or market_context.analysis_snapshot.snapshot_id
+            != candidate.analysis_snapshot_id
+            or package.market_context.artifact_id != market_context.context_id
+            or package.market_context.version != market_context.schema_version
+            or package.market_context.content_sha256 != market_context_digest
+            or package.analysis_snapshot.artifact_id != candidate.analysis_snapshot_id
+            or package.conflicts != context_conflicts
+            or package.uncertainties != context_uncertainties
         ):
             raise StrategyContractError(
                 "C-070v2 source artifacts are stale, mismatched, or unqualified."
@@ -963,6 +1026,8 @@ class SignalV2:
             raise StrategyContractError(
                 "signal expiry must equal the earliest upstream validity boundary."
             )
+        conflict_ids = tuple(item.artifact_id for item in package.conflicts)
+        uncertainty_ids = tuple(item.artifact_id for item in package.uncertainties)
         lineage = SignalLineageV2(
             candidate.candidate_id,
             VersionReference("C-023", candidate.candidate_id, "1", candidate_digest),
@@ -994,7 +1059,12 @@ class SignalV2:
             "lineage": lineage,
             "strategy_id": strategy.strategy_id,
             "strategy_version_id": strategy.strategy_version_id,
+            "parameter_set": parameter_set,
+            "configuration": configuration,
             "qualification_status": qualification.status,
+            "regime_id": market_context.regime.regime_id,
+            "conflict_ids": conflict_ids,
+            "uncertainty_ids": uncertainty_ids,
             "lifecycle": SignalLifecycleState.QUALIFIED,
             "created_at": at,
             "expires_at": expires,
@@ -1015,6 +1085,8 @@ class SignalV2:
             lineage=lineage,
             strategy_id=strategy.strategy_id,
             strategy_version_id=strategy.strategy_version_id,
+            parameter_set=parameter_set,
+            configuration=configuration,
             qualification_status=qualification.status,
             market_context_id=cast(UUID, signal_fields["market_context_id"]),
             analysis_snapshot_id=cast(UUID, signal_fields["analysis_snapshot_id"]),
@@ -1024,7 +1096,9 @@ class SignalV2:
             direction=cast(SignalDirection, signal_fields["direction"]),
             evidence_ids=cast(tuple[UUID, ...], signal_fields["evidence_ids"]),
             data_quality_report_id=cast(UUID, signal_fields["data_quality_report_id"]),
-            regime_id=cast(UUID, signal_fields["regime_id"]),
+            regime_id=market_context.regime.regime_id,
+            conflict_ids=conflict_ids,
+            uncertainty_ids=uncertainty_ids,
             lifecycle=SignalLifecycleState.QUALIFIED,
             created_at=at,
             expires_at=expires,
