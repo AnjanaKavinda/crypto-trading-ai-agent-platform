@@ -323,7 +323,11 @@ routes.
 
 List operations use bounded keyset pagination ordered by `(occurred_at,
 event_id)`, with an opaque cursor bound to the exact filters and a page maximum
-of 100. Detail endpoints enforce the same exact-reference and current-profile
+of 100. The only write-shaped operation is the bounded evaluate request that
+live #90 authorizes; there are no separate create or mutation routes. It returns
+the state projection and artifacts produced by the domain owners. #90 does not
+recompute invalidation, expiry, supersession, WATCH, or qualification from raw
+fields. WATCH is returned as unavailable/not produced for this profile. Detail endpoints enforce the same exact-reference and current-profile
 checks. Responses use the existing RFC 9457 problem format, correlation IDs,
 bounded fields, and `Cache-Control: no-store`; no raw prompts, hidden
 reasoning, credentials, or unbounded nested source payloads are exposed.
@@ -349,6 +353,40 @@ The lifecycle projection is not a permission state machine. Required guards:
    C-026v2 `INVALID_PROVENANCE` when a NO_TRADE record is otherwise valid.
 6. No lifecycle state grants risk approval, human approval, order intent,
    paper/testnet use, or live execution.
+
+## Wave 5 provenance handoff
+
+Wave 4 projections expose stable, version-qualified references needed by later
+prospective research logging: C-026v2 decision ID/reference, C-070v2 qualified
+signal ID/reference, exact C-021 strategy ID/version/digest, and exact
+market/evidence references including C-006, C-007, C-003, C-008, C-009,
+C-010, and C-069 where present. Consumers resolve by contract, schema, ID,
+and digest; they do not reconstruct a decision from a mutable current
+strategy or latest market snapshot. This enables later logging of both
+NO_TRADE and qualified-signal decisions without adding outcome logging to
+Wave 4.
+
+Before Wave 5 relies on prospective measurements, manual owner-trade outcome,
+cost, and baseline logging still needs an approved contract/scope decision.
+This ADR defines no trade-outcome schema and does not treat app observations
+as proof of an owner-placed trade.
+
+## Contract-freeze matrix
+
+| Area | Current source | Gap | Decision | Version impact | Producer changes | Consumer changes | Migration impact | Issue |
+|---|---|---|---|---|---|---|---|---|
+| Invalidation | C-021v1 prose; existing C-021 condition/group DSL | No typed targets or polarity | C-021v2 rules reference same-version condition/group IDs with PASS/FAIL and ANY/ALL; UNKNOWN is never proof | C-021 schema 2 only | #89 evaluates existing condition results and retained v2 rule metadata | #80/#81/#82 dispatch typed version; #89 consumes trigger | Additive strategy row; no rewrite | #89 / contract foundation |
+| C-021 version dispatch | Registry protocol/store, codec, digest helper, resolved model currently accept v1 only | V2 cannot safely enter current runtime | Closed union and schema dispatcher; unknown schema fails closed; one existing DSL | C-021 v1 and v2 coexist | Registry and resolver become union-aware | #80/#81/#82 retain exact concrete version; #85/#87/#86/#88 preserve refs | Canonical envelope already stores discriminator; decoder change, no table DDL | Contract foundation |
+| Personal Spot strategy upgrade | Current v1 strategy and governed registry | No approved invalidation rule set or SemVer increment policy | Same C-020 identity; new C-021v2 ID, parent prior where required, higher governed SemVer; exact triggers need separate bounded approval | New immutable C-021v2 record | Owner-approved strategy registration through RESEARCH/DRAFT | Candidate/evidence/qualification resolve exact v2 digest | No backfill or mutation; insert new record | Strategy configuration decision, then #89 |
+| C-070 publication | C-070v1 UUID-only lineage and C-028 v1-style validation ref | Cannot verify exact C-024v2/C-025v2/C-028v2 lineage from signal | C-070v2 carries exact references for C-023/C-021/C-024/C-025/C-028 | C-070 schema 2 | #89 publishes only from current qualified C-025v2 and complete C-028v2 PASS | API/learning support version-qualified reference; unsupported readers reject | No current C-070 store; no backfill | Contract foundation, #89 |
+| Expiry | Candidate, package, qualification, validation, gate and context validities | No common lifecycle expiry event | Effective expiry is earliest exact required-input expiry; append event at that instant | Local lifecycle event only | #89 | #90 projects; no source artifact mutation | New append-only event table; no history backfill | #89 |
+| Invalidation | C-021v2 trigger results or valid material source change | Prose/stale/mismatched data cannot prove invalidity | Exact fresh trigger match or valid material change; otherwise block and issue truthful C-026 | C-021v2; C-026v2 already exists | #89 | #90 reads event projection | New events only | #89 |
+| Supersession | No canonical predecessor field in C-023 | Recency alone is ambiguous | Local event binds prior and successor exact refs; same strategy ID/version digest, asset, instrument, timeframe, direction | Local event only | #89 records explicit successor | #90 reads both refs | No candidate rewrite | #89 |
+| WATCH | C-025 vocabulary includes WATCH; current deterministic #86 producer does not emit it | No approved producer | Unavailable/not produced for PERSONAL_SPOT_RESEARCH | None | None until separately approved producer | #90 reports unavailable; #149 remains deferred | None | #89/#90; #149 later |
+| Lifecycle history | C-060 audit plus no typed signal history | Audit fields alone do not hold typed transition provenance | Local immutable event plus C-060 linkage and idempotent atomic write/fail-closed recovery | Local record version, not global C contract | #89 | #90 read model | Add table migration; no backfill | #89 |
+| #90 API | Live #90 permits read/create-evaluate boundaries | No strategy/signal router; evaluate semantics need limits | List/detail plus reference-only bounded evaluate; no CRUD/override/approval/risk/order/execution; projection comes from #89 | API representation only | #90 orchestration boundary | Clients consume exact refs/states | Event table from #89 only | #90 |
+| #148/#149 | Live issues require #136 and #142; both open | Required auth/safety gates unmet | Keep deferred; no local-only exception | None | None | Start after both gates pass | None | #148/#149 later |
+| Wave 5 handoff | C-026v2/C-070v2 and exact upstream refs | Manual owner-trade outcome/cost/baseline logging not yet governed | Expose stable refs now; approve logging contract/scope before Wave 5 measurements | No Wave 4 outcome contract | No outcome logger in #89/#90 | Wave 5 resolves stable refs | None now | Wave 5/#299 prerequisite |
 
 ## Compatibility, identity, and migration
 
