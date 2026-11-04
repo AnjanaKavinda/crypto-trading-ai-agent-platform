@@ -1,3 +1,12 @@
+from trading_platform_api.validation.oos_validation import (
+    OOSInspectionRecord,
+    OOSSelectionPlan,
+    OOSValidationError,
+    assert_no_oos_relabel_after_inspection,
+    dataset_artifact_reference,
+    publish_oos_result,
+    validate_oos_selection,
+)
 from trading_platform_api.validation.performance_metrics import (
     MetricAvailability,
     PerformanceMetric,
@@ -36,4 +45,11 @@ __all__ = [
     "PerformanceSampleState",
     "TradePerformanceObservation",
     "calculate_performance_metrics",
+    "OOSInspectionRecord",
+    "OOSSelectionPlan",
+    "OOSValidationError",
+    "assert_no_oos_relabel_after_inspection",
+    "dataset_artifact_reference",
+    "publish_oos_result",
+    "validate_oos_selection",
 ]
