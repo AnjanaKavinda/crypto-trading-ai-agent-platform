@@ -42,6 +42,7 @@ from trading_platform_api.strategy.lifecycle import (
     can_explicitly_supersede,
     effective_expiry,
     invalidation_rule_matches,
+    publish_qualified_signal,
 )
 from trading_platform_api.strategy.qualification import (
     QualificationEngineResult,
@@ -136,6 +137,7 @@ __all__ = [
     "can_explicitly_supersede",
     "effective_expiry",
     "invalidation_rule_matches",
+    "publish_qualified_signal",
     "semantic_version_is_greater",
     "strategy_version_content_sha256",
     "validate_semantic_version",
