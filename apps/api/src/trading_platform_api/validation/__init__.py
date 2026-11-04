@@ -1,3 +1,12 @@
+from trading_platform_api.validation.performance_metrics import (
+    MetricAvailability,
+    PerformanceMetric,
+    PerformanceMetricError,
+    PerformanceMetricsReport,
+    PerformanceSampleState,
+    TradePerformanceObservation,
+    calculate_performance_metrics,
+)
 from trading_platform_api.validation.cost_models import (
     CostModelError,
     LiquidityRole,
@@ -20,4 +29,11 @@ __all__ = [
     "SpotExecutionCostProfile",
     "build_spot_cost_assumption_set",
     "estimate_spot_execution_cost",
+    "MetricAvailability",
+    "PerformanceMetric",
+    "PerformanceMetricError",
+    "PerformanceMetricsReport",
+    "PerformanceSampleState",
+    "TradePerformanceObservation",
+    "calculate_performance_metrics",
 ]
