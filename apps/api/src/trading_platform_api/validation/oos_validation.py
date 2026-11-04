@@ -133,6 +133,24 @@ class OOSInspectionRecord:
         object.__setattr__(self, "observed_at", _utc("observed_at", self.observed_at))
 
 
+def dataset_artifact_reference(dataset: DatasetVersion) -> ArtifactReference:
+    if type(dataset) is not DatasetVersion:
+        raise OOSValidationError("exact C-092 DatasetVersion is required.")
+    digest = canonical_sha256(dataset)
+    artifact_id = uuid5(
+        _DATASET_NAMESPACE,
+        canonical_sha256(
+            {
+                "dataset_id": dataset.dataset_id,
+                "version": dataset.version,
+                "lineage_sha256": dataset.lineage_sha256,
+                "content_sha256": digest,
+            }
+        ),
+    )
+    return ArtifactReference("C-092", artifact_id, dataset.version, digest)
+
+
 def validate_oos_selection(
     *,
     plan: OOSSelectionPlan,
@@ -149,14 +167,15 @@ def validate_oos_selection(
     if type(dataset) is not DatasetVersion or type(manifest) is not ReconstructionManifest:
         raise OOSValidationError("exact C-092/C-103 inputs are required.")
     dataset_ref = plan.dataset
+    expected_dataset_ref = dataset_artifact_reference(dataset)
     if (
-        dataset_ref.artifact_type != "C-092"
-        or dataset_ref.version != dataset.version
-        or dataset_ref.content_sha256 != canonical_sha256(dataset)
+        dataset_ref != expected_dataset_ref
         or manifest.dataset_version.dataset_id != dataset.dataset_id
         or manifest.dataset_version.version != dataset.version
         or manifest.dataset_lineage_sha256 != dataset.lineage_sha256
         or canonical_sha256(manifest) != plan.reconstruction_manifest_sha256
+        or plan.training_partition.point_in_time_cutoff > manifest.cutoff
+        or plan.oos_partition.point_in_time_cutoff > manifest.cutoff
     ):
         raise OOSValidationError("OOS plan dataset/manifest provenance mismatch.")
     if type(revisions) is not tuple or any(
@@ -247,16 +266,7 @@ def publish_oos_result(
         raise OOSValidationError("typed OOS metrics and intervals are required.")
     if not isinstance(lifecycle, ValidationLifecycle):
         raise OOSValidationError("lifecycle must be ValidationLifecycle.")
-    dataset_version_id = uuid5(
-        _DATASET_NAMESPACE,
-        canonical_sha256(
-            {
-                "dataset_id": dataset.dataset_id,
-                "version": dataset.version,
-                "lineage_sha256": dataset.lineage_sha256,
-            }
-        ),
-    )
+    dataset_version_id = dataset_artifact_reference(dataset).artifact_id
     identity = canonical_sha256(
         {
             "plan_id": plan.plan_id,
@@ -301,6 +311,7 @@ __all__ = [
     "OOSSelectionPlan",
     "OOSValidationError",
     "assert_no_oos_relabel_after_inspection",
+    "dataset_artifact_reference",
     "publish_oos_result",
     "validate_oos_selection",
 ]
