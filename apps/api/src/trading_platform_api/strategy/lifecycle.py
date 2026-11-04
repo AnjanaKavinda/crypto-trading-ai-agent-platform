@@ -84,7 +84,10 @@ class SignalLifecycleEvent:
     def __post_init__(self) -> None:
         if type(self.subject) is not VersionReference:
             raise SignalLifecycleError("subject must be an exact VersionReference.")
-        if self.prior_state is not None and type(self.prior_state) is not SignalLifecycleProjection:
+        if (
+            self.prior_state is not None
+            and type(self.prior_state) is not SignalLifecycleProjection
+        ):
             raise SignalLifecycleError("prior_state is invalid.")
         if type(self.resulting_state) is not SignalLifecycleProjection:
             raise SignalLifecycleError("resulting_state is invalid.")
@@ -95,10 +98,14 @@ class SignalLifecycleEvent:
         if (
             type(self.source_references) is not tuple
             or not self.source_references
-            or any(type(item) is not VersionReference for item in self.source_references)
+            or any(
+                type(item) is not VersionReference for item in self.source_references
+            )
             or len(set(self.source_references)) != len(self.source_references)
         ):
-            raise SignalLifecycleError("source_references must be unique exact references.")
+            raise SignalLifecycleError(
+                "source_references must be unique exact references."
+            )
         ordered_sources = tuple(
             sorted(
                 self.source_references,
@@ -382,7 +389,8 @@ def can_explicitly_supersede(
         and strategy_version.artifact_type == "C-021"
         and predecessor.candidate_id != successor.candidate_id
         and predecessor.strategy_id == successor.strategy_id
-        and predecessor.strategy_version_id == successor.strategy_version_id
+        and predecessor.strategy_version_id
+        == successor.strategy_version_id
         == strategy_version.artifact_id
         and predecessor.entry_concept.method.version == strategy_version.version
         and successor.entry_concept.method.version == strategy_version.version
@@ -403,7 +411,9 @@ def _validate_transition(
     cause: SignalLifecycleCause,
 ) -> None:
     if event is SignalLifecycleEventType.WATCHED:
-        raise SignalLifecycleError("WATCH has no approved PERSONAL_SPOT_RESEARCH producer.")
+        raise SignalLifecycleError(
+            "WATCH has no approved PERSONAL_SPOT_RESEARCH producer."
+        )
     allowed = {
         SignalLifecycleEventType.CREATED: (
             None,
@@ -442,7 +452,11 @@ def _validate_transition(
         ),
     }[event]
     expected_prior, expected_result, expected_cause = allowed
-    prior_ok = prior in expected_prior if isinstance(expected_prior, set) else prior is expected_prior
+    prior_ok = (
+        prior in expected_prior
+        if isinstance(expected_prior, set)
+        else prior is expected_prior
+    )
     if not prior_ok or result is not expected_result or cause is not expected_cause:
         raise SignalLifecycleError("illegal lifecycle transition.")
 
