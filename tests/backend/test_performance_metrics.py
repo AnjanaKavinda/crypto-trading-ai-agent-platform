@@ -14,14 +14,12 @@ from trading_platform_api.validation.performance_metrics import (
 
 def trade(
     pnl: str,
-    return_fraction: str,
     *,
     mae: str = "1",
     mfe: str = "2",
 ) -> TradePerformanceObservation:
     return TradePerformanceObservation(
         Decimal(pnl),
-        Decimal(return_fraction),
         Decimal(mae),
         Decimal(mfe),
     )
@@ -30,14 +28,21 @@ def trade(
 def test_observed_metrics_use_deterministic_formulas() -> None:
     report = calculate_performance_metrics(
         trades=(
-            trade("10", "0.01"),
-            trade("-5", "-0.005"),
-            trade("20", "0.02"),
-            trade("-10", "-0.01"),
+            trade("10"),
+            trade("-5"),
+            trade("20"),
+            trade("-10"),
+        ),
+        period_returns=(
+            Decimal("0.01"),
+            Decimal("-0.005"),
+            Decimal("0.02"),
+            Decimal("-0.01"),
         ),
         initial_equity=Decimal("1000"),
         periods_per_year=Decimal("365"),
-        return_period="trade",
+        return_period="1d",
+        quote_unit="USDT",
         minimum_sample_size=4,
     )
     assert report.sample_state is PerformanceSampleState.OBSERVED
@@ -59,9 +64,11 @@ def test_observed_metrics_use_deterministic_formulas() -> None:
 def test_empty_and_one_sided_samples_are_explicitly_unavailable() -> None:
     empty = calculate_performance_metrics(
         trades=(),
+        period_returns=(),
         initial_equity=Decimal("100"),
         periods_per_year=Decimal("365"),
-        return_period="trade",
+        return_period="1d",
+        quote_unit="USDT",
     )
     assert empty.sample_state is PerformanceSampleState.INSUFFICIENT_SAMPLE
     assert empty.by_name("win_rate").reason == "ZERO_DENOMINATOR"
@@ -70,10 +77,12 @@ def test_empty_and_one_sided_samples_are_explicitly_unavailable() -> None:
     assert empty.by_name("sharpe_ratio").reason == "INSUFFICIENT_RETURNS"
 
     wins = calculate_performance_metrics(
-        trades=(trade("1", "0.01"), trade("2", "0.02")),
+        trades=(trade("1"), trade("2")),
+        period_returns=(Decimal("0.01"), Decimal("0.02")),
         initial_equity=Decimal("100"),
         periods_per_year=Decimal("365"),
-        return_period="trade",
+        return_period="1d",
+        quote_unit="USDT",
     )
     assert wins.by_name("profit_factor").reason == "ZERO_GROSS_LOSS"
     assert wins.by_name("sortino_ratio").reason == "NO_DOWNSIDE_RETURNS"
@@ -82,13 +91,15 @@ def test_empty_and_one_sided_samples_are_explicitly_unavailable() -> None:
 def test_zero_return_variance_is_not_infinite_sharpe() -> None:
     report = calculate_performance_metrics(
         trades=(
-            trade("1", "0.01"),
-            trade("1", "0.01"),
-            trade("1", "0.01"),
+            trade("1"),
+            trade("1"),
+            trade("1"),
         ),
+        period_returns=(Decimal("0.01"), Decimal("0.01"), Decimal("0.01")),
         initial_equity=Decimal("100"),
         periods_per_year=Decimal("365"),
-        return_period="trade",
+        return_period="1d",
+        quote_unit="USDT",
     )
     sharpe = report.by_name("sharpe_ratio")
     assert sharpe.availability is MetricAvailability.UNAVAILABLE
@@ -98,10 +109,10 @@ def test_zero_return_variance_is_not_infinite_sharpe() -> None:
 def test_drawdown_tracks_peak_to_trough_not_total_loss_only() -> None:
     report = calculate_performance_metrics(
         trades=(
-            trade("100", "0.10"),
-            trade("-50", "-0.045"),
-            trade("-60", "-0.057"),
-            trade("20", "0.02"),
+            trade("100"),
+            trade("-50"),
+            trade("-60"),
+            trade("20"),
         ),
         initial_equity=Decimal("1000"),
         periods_per_year=Decimal("365"),
@@ -113,10 +124,12 @@ def test_drawdown_tracks_peak_to_trough_not_total_loss_only() -> None:
 
 def test_small_sample_remains_observed_data_but_is_marked_insufficient() -> None:
     report = calculate_performance_metrics(
-        trades=(trade("1", "0.01"),) * 5,
+        trades=(trade("1"),) * 5,
+        period_returns=(Decimal("0.01"),) * 5,
         initial_equity=Decimal("100"),
         periods_per_year=Decimal("365"),
-        return_period="trade",
+        return_period="1d",
+        quote_unit="USDT",
         minimum_sample_size=30,
     )
     assert report.sample_size == 5
@@ -134,10 +147,12 @@ def test_small_sample_remains_observed_data_but_is_marked_insufficient() -> None
 )
 def test_invalid_metric_configuration_fails_closed(kwargs) -> None:
     values = {
-        "trades": (trade("1", "0.01"),),
+        "trades": (trade("1"),),
+        "period_returns": (Decimal("0.01"),),
         "initial_equity": Decimal("100"),
         "periods_per_year": Decimal("365"),
-        "return_period": "trade",
+        "return_period": "1d",
+        "quote_unit": "USDT",
         "minimum_sample_size": 30,
     }
     values.update(kwargs)
