@@ -43,6 +43,7 @@ class OOSSelectionPlan:
     oos_partition: DataPartition
     training_revision_ids: tuple[UUID, ...]
     oos_revision_ids: tuple[UUID, ...]
+    minimum_sample_size: int
     frozen_at: datetime
     selection_method_version: str = "oos-holdout-v1"
     plan_id: UUID = field(init=False)
@@ -81,8 +82,13 @@ class OOSSelectionPlan:
             raise OOSValidationError(
                 "train/OOS revision membership must be unique and disjoint."
             )
-        if any(type(item) is not UUID for item in (*self.training_revision_ids, *self.oos_revision_ids)):
+        if any(
+            type(item) is not UUID
+            for item in (*self.training_revision_ids, *self.oos_revision_ids)
+        ):
             raise OOSValidationError("revision membership must contain UUID values.")
+        if type(self.minimum_sample_size) is not int or self.minimum_sample_size < 1:
+            raise OOSValidationError("minimum_sample_size must be a positive integer.")
         if (
             type(self.reconstruction_manifest_sha256) is not str
             or len(self.reconstruction_manifest_sha256) != 64
@@ -110,6 +116,7 @@ class OOSSelectionPlan:
             "oos_partition": self.oos_partition,
             "training_revision_ids": self.training_revision_ids,
             "oos_revision_ids": self.oos_revision_ids,
+            "minimum_sample_size": self.minimum_sample_size,
             "frozen_at": frozen_at,
             "selection_method_version": self.selection_method_version,
         }
@@ -276,6 +283,23 @@ def publish_oos_result(
         raise OOSValidationError("typed OOS metrics and intervals are required.")
     if not isinstance(lifecycle, ValidationLifecycle):
         raise OOSValidationError("lifecycle must be ValidationLifecycle.")
+    sample_size = len(plan.oos_revision_ids)
+    insufficient = sample_size < plan.minimum_sample_size
+    if insufficient and lifecycle is ValidationLifecycle.PASSED:
+        raise OOSValidationError(
+            "undersized OOS evidence cannot publish a PASSED result."
+        )
+    if insufficient and (
+        lifecycle is not ValidationLifecycle.INCONCLUSIVE
+        or ValidationFailureCode.INSUFFICIENT_SAMPLE not in failures
+    ):
+        raise OOSValidationError(
+            "undersized OOS evidence must be INCONCLUSIVE with INSUFFICIENT_SAMPLE."
+        )
+    if not insufficient and ValidationFailureCode.INSUFFICIENT_SAMPLE in failures:
+        raise OOSValidationError(
+            "sufficient OOS evidence cannot claim INSUFFICIENT_SAMPLE."
+        )
     dataset_version_id = dataset_artifact_reference(dataset).artifact_id
     identity = canonical_sha256(
         {
@@ -306,7 +330,7 @@ def publish_oos_result(
         partition=plan.oos_partition,
         metrics=metrics,
         intervals=intervals,
-        sample_size=len(plan.oos_revision_ids),
+        sample_size=sample_size,
     )
 
 
