@@ -25,13 +25,13 @@ from trading_platform_api.strategy.condition_evaluator import (
 from trading_platform_api.strategy.contracts import (
     EligibilityState,
     StrategyEligibility,
-    StrategyVersion,
 )
 from trading_platform_api.strategy.registry import (
     ArtifactVersionLifecycle,
     ResolvedStrategyVersion,
     StrategyAvailability,
     StrategyLifecycle,
+    StrategyVersionRecord,
     strategy_version_content_sha256,
 )
 
@@ -391,7 +391,7 @@ def _validate_provenance(
 
 
 def _regime_outcome(
-    version: StrategyVersion, context: MarketContextV5
+    version: StrategyVersionRecord, context: MarketContextV5
 ) -> tuple[tuple[str, ...], bool]:
     strategy_version = version
     regime: MarketRegime = context.regime

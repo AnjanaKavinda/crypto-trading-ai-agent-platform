@@ -440,7 +440,7 @@ class Experience:
         decisions = _references(
             "decision_refs",
             self.decision_refs,
-            allowed={"C-023", "C-024", "C-025", "C-026"},
+            allowed={"C-023", "C-024", "C-025", "C-026", "C-070"},
             empty=False,
         )
         _references(

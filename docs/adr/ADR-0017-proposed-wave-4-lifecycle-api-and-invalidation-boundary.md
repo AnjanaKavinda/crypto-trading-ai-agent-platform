@@ -1,13 +1,13 @@
-# ADR-0017: Proposed Wave 4 lifecycle, invalidation, and signal API boundary
+# ADR-0017: Wave 4 lifecycle, invalidation, and signal API boundary
 
 ## Metadata
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-11-03 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
+| Human approver | AnjanaKavinda (PR #442 merged 2026-11-04) |
 | GitHub issue / PR | #89, #90; Wave 4 contract-freeze PR |
 | Open decision ID | — |
 | Related ADRs | ADR-0008, ADR-0015, ADR-0016 |
@@ -478,6 +478,6 @@ or live capability is added.
 
 ## Approval record
 
-Pending human repository-owner review. Until accepted, this proposal is not
-implementation authority. No runtime code, schema, migration, or issue scope
-has been changed by this proposal.
+Accepted by the human repository owner through merge of PR #442 on 2026-11-04.
+This ADR is frozen architecture authority for its bounded Wave 4 scope. Runtime
+implementation remains sequenced by the implementation order above.
