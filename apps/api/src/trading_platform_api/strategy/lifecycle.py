@@ -11,6 +11,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.audit.models import AuditEvent, AuditEventType
 from trading_platform_api.audit.table import AuditEventRow
 from trading_platform_api.contracts.serialization import canonical_sha256
@@ -18,11 +19,7 @@ from trading_platform_api.strategy.condition_evaluator import (
     ConditionTruth,
     StrategyConditionEvaluation,
 )
-from trading_platform_api.strategy.contracts import (
-    SignalCandidate,
-    VersionReference,
-)
-from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
+from trading_platform_api.strategy.contracts import SignalCandidate, VersionReference
 from trading_platform_api.strategy.contracts_v2 import (
     InvalidationCombinationV2,
     InvalidationTargetTypeV2,
