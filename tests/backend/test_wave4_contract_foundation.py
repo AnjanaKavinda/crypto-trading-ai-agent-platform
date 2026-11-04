@@ -186,6 +186,7 @@ def test_c070v1_codec_and_failed_v2_path_remain_distinct_from_signal() -> None:
             strategy=case[3].version,
             package=package.package,
             qualification=qualification.qualification,  # type: ignore[arg-type]
+            market_context=case[2].market_context,
             now=evaluated_at + timedelta(seconds=2),
             signal_fields={
                 "market_context_id": candidate.market_context_id,
@@ -196,7 +197,6 @@ def test_c070v1_codec_and_failed_v2_path_remain_distinct_from_signal() -> None:
                 "direction": candidate.direction,
                 "evidence_ids": candidate.supporting_evidence_ids,
                 "data_quality_report_id": candidate.data_quality_report_id,
-                "regime_id": case[2].market_context.regime.regime_id,
             },
         )
 
@@ -249,6 +249,7 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
         strategy=strategy.version,
         package=package,
         qualification=qualification.qualification,
+        market_context=case[2].market_context,
         now=evaluated_at + timedelta(seconds=2),
         signal_fields={
             "market_context_id": candidate.market_context_id,
@@ -259,7 +260,6 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
             "direction": candidate.direction,
             "evidence_ids": candidate.supporting_evidence_ids,
             "data_quality_report_id": candidate.data_quality_report_id,
-            "regime_id": case[2].market_context.regime.regime_id,
         },
     )
     repeat = SignalV2.build(
@@ -267,6 +267,7 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
         strategy=strategy.version,
         package=package,
         qualification=qualification.qualification,
+        market_context=case[2].market_context,
         now=evaluated_at + timedelta(seconds=2),
         signal_fields={
             "market_context_id": candidate.market_context_id,
@@ -277,7 +278,6 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
             "direction": candidate.direction,
             "evidence_ids": candidate.supporting_evidence_ids,
             "data_quality_report_id": candidate.data_quality_report_id,
-            "regime_id": case[2].market_context.regime.regime_id,
         },
     )
     assert result == repeat
@@ -288,6 +288,14 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
     )
     assert result.lineage.validation.version == "2"
     assert result.execution_authorized is False
+    assert result.parameter_set == result.lineage.strategy_version
+    assert result.configuration.artifact_type == "C-025-RULESET"
+    assert result.configuration.artifact_id == qualification.qualification.validation.rule_set.rule_set_id
+    assert result.configuration.version == qualification.qualification.validation.rule_set.version
+    assert result.configuration.content_sha256 == qualification.qualification.validation.rule_set.content_sha256
+    assert result.regime_id == case[2].market_context.regime.regime_id
+    assert result.conflict_ids == tuple(item.artifact_id for item in package.conflicts)
+    assert result.uncertainty_ids == tuple(item.artifact_id for item in package.uncertainties)
     encoded = serialize_contract(result, payload_version="wire-1")
     assert decode_signal_contract(encoded) == result
     unsupported = encoded.replace('"schema_version":"2"', '"schema_version":"3"', 1)
@@ -321,6 +329,7 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
         strategy=strategy.version,
         package=changed_package,
         qualification=changed_qualification.qualification,
+        market_context=case[2].market_context,
         now=evaluated_at + timedelta(seconds=2),
         signal_fields={
             "market_context_id": candidate.market_context_id,
@@ -331,7 +340,6 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
             "direction": candidate.direction,
             "evidence_ids": candidate.supporting_evidence_ids,
             "data_quality_report_id": candidate.data_quality_report_id,
-            "regime_id": case[2].market_context.regime.regime_id,
         },
     )
     assert changed_signal.lineage.qualification_id != result.lineage.qualification_id
