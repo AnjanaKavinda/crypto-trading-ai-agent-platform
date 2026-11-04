@@ -53,6 +53,10 @@ def test_observed_metrics_use_deterministic_formulas() -> None:
     assert report.by_name("net_profit").value == Decimal("15")
     assert report.by_name("profit_factor").value == Decimal("2")
     assert report.by_name("expectancy").value == Decimal("3.75")
+    assert report.by_name("net_profit").unit == "USDT"
+    assert report.by_name("expectancy").unit == "USDT/trade"
+    assert report.return_period == "1d"
+    assert report.quote_unit == "USDT"
     assert report.by_name("largest_win").value == Decimal("20")
     assert report.by_name("largest_loss").value == Decimal("10")
     assert report.by_name("maximum_drawdown").value == Decimal("10")
@@ -114,9 +118,16 @@ def test_drawdown_tracks_peak_to_trough_not_total_loss_only() -> None:
             trade("-60"),
             trade("20"),
         ),
+        period_returns=(
+            Decimal("0.10"),
+            Decimal("-0.045"),
+            Decimal("-0.057"),
+            Decimal("0.02"),
+        ),
         initial_equity=Decimal("1000"),
         periods_per_year=Decimal("365"),
-        return_period="trade",
+        return_period="1d",
+        quote_unit="USDT",
     )
     assert report.by_name("maximum_drawdown").value == Decimal("110")
     assert report.by_name("maximum_drawdown_fraction").value == Decimal("0.1")
@@ -142,6 +153,7 @@ def test_small_sample_remains_observed_data_but_is_marked_insufficient() -> None
         {"initial_equity": Decimal("0")},
         {"periods_per_year": Decimal("0")},
         {"return_period": ""},
+        {"quote_unit": ""},
         {"minimum_sample_size": 0},
     ],
 )
