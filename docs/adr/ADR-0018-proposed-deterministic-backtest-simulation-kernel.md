@@ -115,10 +115,39 @@ a narrow engine adapter as the authoritative #92 implementation.
 
 The first implementation is bounded to PERSONAL_SPOT_RESEARCH and exact
 historical Spot inputs. The adapter boundary must make the engine replaceable
-later without changing canonical validation contracts.
+later without changing the simulation caller boundary.
+
+The #92 implementation also requires an additive **C-027 schema 3
+`BacktestResultV3`**. C-027v1 remains the historical BacktestResult and
+C-027v2 remains the typed cost-assumption value-object boundary introduced for
+PERSONAL_SPOT_RESEARCH qualification. Neither existing schema is reinterpreted.
+
+C-027v3 returns to the canonical BacktestResult responsibility while binding
+the newer exact inputs needed for truthful Spot simulation. It must reference,
+at minimum:
+
+- exact C-021v2 strategy/version provenance;
+- exact C-092 dataset version and C-103 reconstruction manifest;
+- exact C-027v2 CostAssumptionSetV2;
+- immutable parameter/configuration references;
+- immutable simulator/execution-model version and deterministic seed/policy;
+- the exact simulated period and point-in-time cutoff;
+- deterministic simulation trace/trade identities and aggregate metrics;
+- explicit data-integrity and point-in-time outcomes;
+- creation/as-of/validity timestamps and typed failure/warning state.
+
+The C-027v3 result ID is deterministic UUIDv5 over the canonical immutable
+payload with the generated ID omitted. Missing, stale, future-leaking,
+unsupported, or unverifiable inputs prevent publication.
+
+This schema-3 boundary is necessary because C-027v1's inline numeric
+`ResearchAssumption` model cannot truthfully represent the C-027v2
+`NOT_APPLICABLE` Spot-funding state without inventing a numeric funding
+value. #92 must not coerce C-027v2 cost semantics back into v1.
 
 This ADR remains `Proposed` until the human repository owner approves it.
-No #92 implementation may rely on this selection before approval.
+No #92 implementation may rely on this selection or C-027v3 contract decision
+before approval.
 
 ## Reasoning
 
@@ -143,10 +172,13 @@ After approval:
 
 1. #91 must provide exact point-in-time C-092/reconstruction inputs.
 2. #92 may implement the deterministic simulator and adapter.
-3. #93 supplies versioned fee/slippage/spread/funding/latency assumptions.
-4. #94 and later validation issues consume simulator outputs; they do not
+3. #92 publishes C-027v3 results only from exact C-027v2 cost assumptions;
+   Spot funding remains explicitly NOT_APPLICABLE without a fabricated numeric
+   value.
+4. #93 supplies versioned fee/slippage/spread/funding/latency assumptions.
+5. #94 and later validation issues consume simulator outputs; they do not
    recalculate execution semantics.
-5. #95 OOS partitions invoke the same deterministic simulator with frozen
+6. #95 OOS partitions invoke the same deterministic simulator with frozen
    strategy/configuration inputs.
 
 The first simulator must support the bounded Spot requirements actually used by
@@ -163,9 +195,9 @@ can change historical results.
 |---|---|
 | Playbook requirements | Chat 7 Sections 1–16: point-in-time data, deterministic replay, trade simulation, intrabar ambiguity, costs, slippage, funding, spread, latency. |
 | Cross-cutting artifacts | Resolves OD-0011 after approval; Wave 5 plan may proceed through #92. |
-| Contracts / events | No contract version change in this ADR. #92 must use existing C-027/C-028 and exact C-021/C-092 references; future missing contract semantics require separate governed versioning. |
+| Contracts / events | Additive C-027 schema 3 `BacktestResultV3`; C-027v1 and C-027v2 remain unchanged. C-027v3 binds exact C-021v2, C-092, C-103 and C-027v2 cost-assumption references plus deterministic simulator provenance. C-028v2 qualification semantics remain unchanged. |
 | Requirements traceability | #92 backtest execution model; supports downstream #93–#102. |
-| Versioning / migration | No database migration or dependency change is authorized by this ADR alone. Execution-model configuration and simulator version must be immutable/version-qualified in produced results. |
+| Versioning / migration | C-027 schema 3 is additive and requires closed schema dispatch/compatibility tests; no historical rewrite. No database migration or third-party dependency is authorized by this ADR alone. Execution-model configuration and simulator version must be immutable/version-qualified in produced results. |
 
 ## Safety, security, and failure behavior
 
