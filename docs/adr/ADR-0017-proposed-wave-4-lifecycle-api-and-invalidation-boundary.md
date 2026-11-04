@@ -205,16 +205,27 @@ through the existing governed `RESEARCH` registration and artifact `DRAFT`
 lifecycle, with the required decision/evidence references. No historical
 candidate or strategy row is rewritten.
 
-Do not choose a new SemVer in this ADR: the repository defines only canonical
-SemVer validation and monotonic parent ordering, not whether this change is a
-minor or major release. Record the chosen SemVer in the version-specific
-registration decision before creating the new artifact. Current approved
-strategy semantics contain prose such as “structure invalidation” but do not
-identify condition/group IDs or trigger polarity. Therefore the actual
-C-021v2 trigger set is a separate bounded strategy-configuration decision.
-It must be approved from explicit strategy semantics before #89 can publish
-C-070v2 for the Personal Spot strategy; do not derive or invent triggers from
-the prose.
+For PERSONAL_SPOT_RESEARCH, the first schema-2 strategy version is frozen as
+semantic version `2.0.0`. The existing schema-1 `1.0.0` artifact remains
+immutable. This major semantic-version boundary is deliberate: schema 2 changes
+the strategy definition from descriptive invalidation text to required
+machine-readable invalidation semantics, and C-070v2 publication depends on
+that new meaning.
+
+The PERSONAL_SPOT_RESEARCH invalidation rule is also frozen from the existing
+deterministic setup semantics rather than from prose. #80 already evaluates
+each declared condition group and combines all declared groups conjunctively;
+#82 creates a confirmed candidate only when that overall evaluation is
+`PASS`. Therefore C-021v2 references every declared required condition-group
+ID as an invalidation trigger with `target_type = CONDITION_GROUP`,
+`trigger_truth = FAIL`, and rule-set combination `ANY`.
+
+This means that a previously confirmed setup is invalidated when any exact
+required setup group definitively evaluates `FAIL` under a fresh,
+provenance-valid evaluation of the same C-021v2 strategy. `UNKNOWN` never
+proves invalidation. Missing, stale, unsupported, unavailable, future-dated, or
+mismatched inputs remain fail-closed through their existing insufficient,
+stale, or invalid-provenance paths and do not become `INVALIDATED`.
 
 ### 2. C-070 schema 2 exact publication lineage
 
@@ -262,9 +273,11 @@ rebuildable from the immutable records.
 The bounded event vocabulary is `CREATED`, `WATCHED`, `QUALIFIED`,
 `REJECTED`, `NO_TRADE`, `INVALIDATED`, `EXPIRED`, and `SUPERSEDED`. Typed
 lifecycle causes are `SOURCE_DECISION`, `INVALIDATION_RULE_MATCHED`,
-`MATERIAL_CONTEXT_CHANGE`, `EFFECTIVE_EXPIRY_REACHED`, and
-`EXPLICIT_SUCCESSOR`; C-026 reason codes remain on the referenced C-026v2
-artifact and are not copied into free text. The event ID is UUIDv5 over the
+`EFFECTIVE_EXPIRY_REACHED`, and `EXPLICIT_SUCCESSOR`; C-026 reason codes
+remain on the referenced C-026v2 artifact and are not copied into free text.
+There is no generic `MATERIAL_CONTEXT_CHANGE` invalidation authority in the
+PERSONAL_SPOT_RESEARCH profile because "material" has no deterministic contract
+definition. The event ID is UUIDv5 over the
 canonical event identity (subject reference, event/cause, exact source and
 trigger references, resulting state, and event time), excluding the generated
 ID, recorded time, and audit ID. Expiry event time is the exact effective
@@ -280,16 +293,16 @@ Use these meanings:
 | `QUALIFIED` | Exact C-025v2 is qualified and a matching C-070v2 is successfully resolved. |
 | `REJECTED` | Exact C-025 result is `REJECTED`; its C-028 result proves a failed mandatory gate. |
 | `NO_TRADE` | Successful C-026v2 decision with one or more typed reasons. This is separate from a C-025 `REJECTED` result and can reference the same evaluation. |
-| `INVALIDATED` | A current, exact C-021v2 invalidation trigger matches, or valid current source evidence proves a material context change against the exact qualified artifact. |
+| `INVALIDATED` | A current, exact C-021v2 invalidation trigger matches. Context change alone never proves invalidation. |
 | `EXPIRED` | Current time is at or beyond the subject's effective expiry. Effective expiry is the earliest expiry of all required exact inputs. |
 | `SUPERSEDED` | A new exact candidate/signal explicitly names the prior subject as its replacement. The pair must share strategy ID/version, asset, instrument, timeframe, and direction. Never infer replacement from recency alone. |
 
 Missing, stale, invalid, future-dated, or mismatched provenance is an
 insufficient/invalid-input outcome, not a positive invalidation proof. It
 blocks new qualification and C-070 publication; C-026v2 carries the truthful
-reason. A valid new C-006/C-007 context supersedes an old context only when
-the transition is explicitly recorded; a different context ID alone does not
-prove a setup invalidation.
+reason. A new C-006/C-007 context may cause fresh evaluation, expiry handling,
+NO_TRADE, or an explicit supersession decision, but a context-ID change alone
+does not invalidate or supersede an existing setup.
 
 The local history is append-only, not a new global C-contract. There is no
 current persisted C-023/C-025/C-070 store or lifecycle history to migrate. The
@@ -346,7 +359,12 @@ The lifecycle projection is not a permission state machine. Required guards:
    Wave 3 chain; never skip C-024v2/C-028v2/C-025v2.
 2. Only C-025v2 qualified plus exact provenance → C-070v2 `QUALIFIED`.
 3. C-025 `WATCH` and `REJECTED`, C-026 `NO_TRADE`, and C-070 `QUALIFIED` are
-   distinct source outcomes. Do not coerce one into another.
+   distinct source outcomes. Do not coerce one into another. For one exact
+   candidate/package/validation/qualification evaluation, a qualified C-025v2
+   produces C-070v2 and no C-026 for that evaluation; a rejected,
+   insufficient, stale, or invalid evaluation may produce C-026 and must not
+   produce C-070. Historical C-026 and later C-070 artifacts from different
+   evaluations remain valid append-only research history.
 4. `EXPIRED`, `INVALIDATED`, and `SUPERSEDED` append a lifecycle event; they do
    not mutate or delete the source artifact.
 5. An input mismatch or unsupported schema blocks progression and produces
@@ -377,11 +395,11 @@ as proof of an owner-placed trade.
 |---|---|---|---|---|---|---|---|---|
 | Invalidation | C-021v1 prose; existing C-021 condition/group DSL | No typed targets or polarity | C-021v2 rules reference same-version condition/group IDs with PASS/FAIL and ANY/ALL; UNKNOWN is never proof | C-021 schema 2 only | #89 evaluates existing condition results and retained v2 rule metadata | #80/#81/#82 dispatch typed version; #89 consumes trigger | Additive strategy row; no rewrite | #89 / contract foundation |
 | C-021 version dispatch | Registry protocol/store, codec, digest helper, resolved model currently accept v1 only | V2 cannot safely enter current runtime | Closed union and schema dispatcher; unknown schema fails closed; one existing DSL | C-021 v1 and v2 coexist | Registry and resolver become union-aware | #80/#81/#82 retain exact concrete version; #85/#87/#86/#88 preserve refs | Canonical envelope already stores discriminator; decoder change, no table DDL | Contract foundation |
-| Personal Spot strategy upgrade | Current v1 strategy and governed registry | No approved invalidation rule set or SemVer increment policy | Same C-020 identity; new C-021v2 ID, parent prior where required, higher governed SemVer; exact triggers need separate bounded approval | New immutable C-021v2 record | Owner-approved strategy registration through RESEARCH/DRAFT | Candidate/evidence/qualification resolve exact v2 digest | No backfill or mutation; insert new record | Strategy configuration decision, then #89 |
+| Personal Spot strategy upgrade | Current C-021v1 `1.0.0` strategy semantics and governed registry | V1 has no executable invalidation rule | Same C-020 identity; new C-021v2 ID; semantic version frozen to `2.0.0`; parent prior version where required; invalidation is ANY declared required condition-group FAIL | New immutable C-021v2 `2.0.0` record | Governed registration through RESEARCH/DRAFT | Candidate/evidence/qualification resolve exact v2 digest; UNKNOWN never invalidates | No backfill or mutation; insert new record | Contract foundation then #89 |
 | C-070 publication | C-070v1 UUID-only lineage and C-028 v1-style validation ref | Cannot verify exact C-024v2/C-025v2/C-028v2 lineage from signal | C-070v2 carries exact references for C-023/C-021/C-024/C-025/C-028 | C-070 schema 2 | #89 publishes only from current qualified C-025v2 and complete C-028v2 PASS | API/learning support version-qualified reference; unsupported readers reject | No current C-070 store; no backfill | Contract foundation, #89 |
 | Expiry | Candidate, package, qualification, validation, gate and context validities | No common lifecycle expiry event | Effective expiry is earliest exact required-input expiry; append event at that instant | Local lifecycle event only | #89 | #90 projects; no source artifact mutation | New append-only event table; no history backfill | #89 |
-| Invalidation | C-021v2 trigger results or valid material source change | Prose/stale/mismatched data cannot prove invalidity | Exact fresh trigger match or valid material change; otherwise block and issue truthful C-026 | C-021v2; C-026v2 already exists | #89 | #90 reads event projection | New events only | #89 |
-| Supersession | No canonical predecessor field in C-023 | Recency alone is ambiguous | Local event binds prior and successor exact refs; same strategy ID/version digest, asset, instrument, timeframe, direction | Local event only | #89 records explicit successor | #90 reads both refs | No candidate rewrite | #89 |
+| Invalidation | C-021v2 required condition-group results | Prose, context change, stale, UNKNOWN, or mismatched data cannot prove invalidity | ANY declared required group with fresh exact `FAIL` invalidates; UNKNOWN/stale/missing/invalid remain fail-closed without invalidation | C-021v2; C-026v2 already exists | #89 consumes existing #80 group results | #90 reads event projection | New events only | #89 |
+| Supersession | No canonical predecessor field in C-023 | Recency alone is ambiguous | Local event binds prior and successor exact refs; same C-020 strategy identity, same exact C-021 strategy version/digest, asset, instrument, timeframe, and direction; a strategy-version change is a different opportunity rather than implicit supersession | Local event only | #89 records explicit successor | #90 reads both refs | No candidate rewrite | #89 |
 | WATCH | C-025 vocabulary includes WATCH; current deterministic #86 producer does not emit it | No approved producer | Unavailable/not produced for PERSONAL_SPOT_RESEARCH | None | None until separately approved producer | #90 reports unavailable; #149 remains deferred | None | #89/#90; #149 later |
 | Lifecycle history | C-060 audit plus no typed signal history | Audit fields alone do not hold typed transition provenance | Local immutable event plus C-060 linkage and idempotent atomic write/fail-closed recovery | Local record version, not global C contract | #89 | #90 read model | Add table migration; no backfill | #89 |
 | #90 API | Live #90 permits read/create-evaluate boundaries | No strategy/signal router; evaluate semantics need limits | List/detail plus reference-only bounded evaluate; no CRUD/override/approval/risk/order/execution; projection comes from #89 | API representation only | #90 orchestration boundary | Clients consume exact refs/states | Event table from #89 only | #90 |
@@ -414,7 +432,9 @@ execution support.
 - Freeze byte/hash fixtures and closed vocabularies for C-021v1 and C-070v1.
 - Test C-021v2 valid condition/group refs, duplicates, absent refs, trigger
   polarity, and canonical digest stability.
-- Test that `UNKNOWN`, stale, future-dated, unsupported, and mismatched
+- Test the frozen Personal Spot invalidation rule: all declared required
+  groups are referenced, any fresh exact group `FAIL` invalidates, and
+  `UNKNOWN`, stale, future-dated, unsupported, unavailable, or mismatched
   evaluation inputs cannot produce `INVALIDATED` or `QUALIFIED`.
 - Test C-070v2 exact C-025/C-028/C-024/C-023/C-021 reference binding,
   qualification gate requirement, and expiry bounds; test unsupported-version
