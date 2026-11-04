@@ -27,7 +27,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0015 | [Wave 3 pre-qualification evidence and statistical qualification contract boundary](ADR-0015-wave-3-prequalification-evidence-and-statistical-qualification-contract-boundary.md) | Accepted | 2026-10-31 | Platform Architect / AnjanaKavinda (explicit owner approval) | — | C-024v2, C-025v2, C-027v2 cost applicability, C-028v2 | — | — |
 | ADR-0016 | [Version C-026 invalid-provenance reason](ADR-0016-c026-v2-invalid-provenance-reason.md) | Accepted | 2026-10-31 | Platform Architect / AnjanaKavinda (owner instruction for bounded contract foundation) | — | C-026 schema 2 | — | — |
 | ADR-0017 | [Wave 4 lifecycle, invalidation, and signal API boundary](ADR-0017-proposed-wave-4-lifecycle-api-and-invalidation-boundary.md) | Accepted | 2026-11-03 | Platform Architect / AnjanaKavinda (PR #442 merged 2026-11-04) | — | C-021v2, C-070v2; local lifecycle record and API boundary | — | — |
-| ADR-0018 | [Deterministic platform-owned backtest simulation kernel](ADR-0018-proposed-deterministic-backtest-simulation-kernel.md) | Proposed | 2026-11-05 | Platform Architect / human approval pending | OD-0011 | No contract change; #92 engine selection only | — | — |
+| ADR-0018 | [Deterministic platform-owned backtest simulation kernel](ADR-0018-proposed-deterministic-backtest-simulation-kernel.md) | Proposed | 2026-11-05 | Platform Architect / human approval pending | OD-0011 | Additive C-027v3 BacktestResult boundary plus #92 engine selection; C-027v1/v2 unchanged | — | — |
 
 ## Creating an ADR
 
