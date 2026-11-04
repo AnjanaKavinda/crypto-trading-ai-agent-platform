@@ -6,6 +6,8 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from test_qualification_rule_evaluator import request
+from test_strategy_evidence_package import _package
 from test_wave4_contract_foundation import _v2_case
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.strategy import (
@@ -19,7 +21,10 @@ from trading_platform_api.strategy import (
     VersionReference,
     can_explicitly_supersede,
     effective_expiry,
+    evaluate_qualification_rules,
+    evaluate_signal_qualification_v2,
     invalidation_rule_matches,
+    publish_qualified_signal,
 )
 
 NOW_OFFSET = timedelta(seconds=2)
@@ -157,6 +162,66 @@ def test_runtime_replay_idempotency_and_illegal_transition_audit() -> None:
     assert not rejected.accepted
     assert rejected.projection is SignalLifecycleProjection.QUALIFIED
     assert store.rejected[-1].result == "REJECTED"
+
+
+def test_qualified_wave3_chain_publishes_c070v2_and_lifecycle_event() -> None:
+    case, strategy, _, candidate = _v2_case()
+    package_result = _package(case, candidate=candidate)
+    assert package_result.package is not None
+    package = package_result.package
+    evaluated_at = candidate.created_at + timedelta(seconds=10)
+    validation = evaluate_qualification_rules(
+        request(
+            candidate=candidate,
+            evidence_package=package,
+            evaluated_at=evaluated_at,
+        )
+    )
+    assert validation.validation is not None
+    qualification = evaluate_signal_qualification_v2(
+        candidate=candidate,
+        evidence_package=package,
+        validation=validation.validation,
+        evaluated_at=evaluated_at + timedelta(seconds=1),
+    )
+    assert qualification.qualification is not None
+    signal_fields = {
+        "market_context_id": candidate.market_context_id,
+        "analysis_snapshot_id": candidate.analysis_snapshot_id,
+        "asset": candidate.asset,
+        "instrument_id": candidate.instrument_id,
+        "timeframe": candidate.timeframe,
+        "direction": candidate.direction,
+        "evidence_ids": candidate.supporting_evidence_ids,
+        "data_quality_report_id": candidate.data_quality_report_id,
+    }
+    signal, event = publish_qualified_signal(
+        candidate=candidate,
+        strategy=strategy.version,
+        package=package,
+        qualification=qualification.qualification,
+        market_context=case[2].market_context,
+        now=evaluated_at + timedelta(seconds=2),
+        recorded_at=evaluated_at + timedelta(seconds=3),
+        correlation_id="issue-89-qualified",
+        signal_fields=signal_fields,
+    )
+    repeat_signal, repeat_event = publish_qualified_signal(
+        candidate=candidate,
+        strategy=strategy.version,
+        package=package,
+        qualification=qualification.qualification,
+        market_context=case[2].market_context,
+        now=evaluated_at + timedelta(seconds=2),
+        recorded_at=evaluated_at + timedelta(seconds=3),
+        correlation_id="issue-89-qualified",
+        signal_fields=signal_fields,
+    )
+    assert signal == repeat_signal
+    assert event.event_id == repeat_event.event_id
+    assert event.resulting_state is SignalLifecycleProjection.QUALIFIED
+    assert event.source_references[0].artifact_type == "C-070"
+    assert event.source_references[0].artifact_id == signal.signal_id
 
 
 def test_personal_spot_invalidation_requires_exact_fresh_fail() -> None:
