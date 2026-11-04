@@ -13,6 +13,7 @@ from trading_platform_api.validation import (
     DataPartition,
     MetricValue,
     PartitionPurpose,
+    ValidationFailureCode,
     ValidationLifecycle,
 )
 from trading_platform_api.validation.oos_validation import (
@@ -65,6 +66,7 @@ def _case():
         oos_partition=oos,
         training_revision_ids=(),
         oos_revision_ids=(revision.revision_id,),
+        minimum_sample_size=1,
         frozen_at=frozen_at,
     )
     return args, reconstruction, plan
@@ -203,6 +205,39 @@ def test_c071_publication_is_deterministic_and_uses_frozen_oos_partition() -> No
     assert first.partition == plan.oos_partition
     assert first.sample_size == 1
     assert first.dataset_version_id == plan.dataset.artifact_id
+
+
+def test_undersized_oos_cannot_pass_and_must_be_inconclusive() -> None:
+    args, reconstruction, plan = _case()
+    plan = replace(plan, minimum_sample_size=2)
+    metrics = (
+        MetricValue("win_rate", Decimal("0.5"), "fraction", "metrics-v1"),
+    )
+    base = dict(
+        plan=plan,
+        dataset=args["dataset"],
+        manifest=reconstruction.manifest,
+        revisions=args["revisions"],
+        backtest_result_id=uuid4(),
+        metrics=metrics,
+        intervals=(),
+        as_of=T + 2 * STEP,
+        created_at=plan.frozen_at + 2 * STEP,
+        valid_until=plan.frozen_at + 20 * STEP,
+        evaluation_started_at=plan.frozen_at + STEP,
+    )
+    with pytest.raises(OOSValidationError, match="cannot publish a PASSED"):
+        publish_oos_result(
+            **base,
+            lifecycle=ValidationLifecycle.PASSED,
+        )
+    result = publish_oos_result(
+        **base,
+        lifecycle=ValidationLifecycle.INCONCLUSIVE,
+        failures=(ValidationFailureCode.INSUFFICIENT_SAMPLE,),
+    )
+    assert result.lifecycle is ValidationLifecycle.INCONCLUSIVE
+    assert result.failures == (ValidationFailureCode.INSUFFICIENT_SAMPLE,)
 
 
 def test_changed_oos_membership_changes_plan_identity() -> None:
