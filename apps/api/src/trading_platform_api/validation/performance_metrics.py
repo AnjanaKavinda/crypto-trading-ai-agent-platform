@@ -24,12 +24,11 @@ class PerformanceSampleState(StrEnum):
 @dataclass(frozen=True, slots=True)
 class TradePerformanceObservation:
     pnl: Decimal
-    return_fraction: Decimal
     mae: Decimal
     mfe: Decimal
 
     def __post_init__(self) -> None:
-        for name in ("pnl", "return_fraction", "mae", "mfe"):
+        for name in ("pnl", "mae", "mfe"):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not value.is_finite():
                 raise PerformanceMetricError(f"{name} must be a finite Decimal.")
@@ -75,6 +74,7 @@ class PerformanceMetricsReport:
     minimum_sample_size: int
     periods_per_year: Decimal
     return_period: str
+    quote_unit: str
 
     def __post_init__(self) -> None:
         if (
@@ -100,6 +100,8 @@ class PerformanceMetricsReport:
             raise PerformanceMetricError("periods_per_year must be positive.")
         if not isinstance(self.return_period, str) or not self.return_period.strip():
             raise PerformanceMetricError("return_period must be explicit.")
+        if not isinstance(self.quote_unit, str) or not self.quote_unit.strip():
+            raise PerformanceMetricError("quote_unit must be explicit.")
 
     def by_name(self, name: str) -> PerformanceMetric:
         for metric in self.metrics:
@@ -111,9 +113,11 @@ class PerformanceMetricsReport:
 def calculate_performance_metrics(
     *,
     trades: tuple[TradePerformanceObservation, ...],
+    period_returns: tuple[Decimal, ...],
     initial_equity: Decimal,
     periods_per_year: Decimal,
     return_period: str,
+    quote_unit: str,
     minimum_sample_size: int = 30,
 ) -> PerformanceMetricsReport:
     if (
@@ -121,6 +125,13 @@ def calculate_performance_metrics(
         or any(type(item) is not TradePerformanceObservation for item in trades)
     ):
         raise PerformanceMetricError("trades must be an exact immutable tuple.")
+    if type(period_returns) is not tuple or any(
+        not isinstance(item, Decimal) or not item.is_finite()
+        for item in period_returns
+    ):
+        raise PerformanceMetricError(
+            "period_returns must be an immutable tuple of finite Decimals."
+        )
     if (
         not isinstance(initial_equity, Decimal)
         or not initial_equity.is_finite()
@@ -137,6 +148,8 @@ def calculate_performance_metrics(
         raise PerformanceMetricError("minimum_sample_size must be positive.")
     if not isinstance(return_period, str) or not return_period.strip():
         raise PerformanceMetricError("return_period must be explicit.")
+    if not isinstance(quote_unit, str) or not quote_unit.strip():
+        raise PerformanceMetricError("quote_unit must be explicit.")
 
     count = len(trades)
     wins = tuple(item for item in trades if item.pnl > 0)
@@ -145,7 +158,7 @@ def calculate_performance_metrics(
     gross_profit = sum((item.pnl for item in wins), Decimal("0"))
     gross_loss = sum((-item.pnl for item in losses), Decimal("0"))
     net_profit = sum((item.pnl for item in trades), Decimal("0"))
-    returns = tuple(item.return_fraction for item in trades)
+    returns = period_returns
     max_drawdown, max_drawdown_fraction = _drawdown(
         trades=trades, initial_equity=initial_equity
     )
@@ -157,30 +170,33 @@ def calculate_performance_metrics(
         _available("flat_trades", Decimal(flats), "count"),
         _ratio_metric("win_rate", Decimal(len(wins)), Decimal(count)),
         _ratio_metric("loss_rate", Decimal(len(losses)), Decimal(count)),
-        _mean_metric("average_win", tuple(item.pnl for item in wins), "quote"),
+        _mean_metric("average_win", tuple(item.pnl for item in wins), quote_unit),
         _mean_metric(
-            "average_loss", tuple(-item.pnl for item in losses), "quote"
+            "average_loss", tuple(-item.pnl for item in losses), quote_unit
         ),
-        _extreme_metric("largest_win", tuple(item.pnl for item in wins), max),
+        _extreme_metric("largest_win", tuple(item.pnl for item in wins), max, quote_unit),
         _extreme_metric(
-            "largest_loss", tuple(-item.pnl for item in losses), max
+            "largest_loss",
+            tuple(-item.pnl for item in losses),
+            max,
+            quote_unit,
         ),
-        _available("gross_profit", gross_profit, "quote"),
-        _available("gross_loss", gross_loss, "quote"),
-        _available("net_profit", net_profit, "quote"),
+        _available("gross_profit", gross_profit, quote_unit),
+        _available("gross_loss", gross_loss, quote_unit),
+        _available("net_profit", net_profit, quote_unit),
         (
             _available("profit_factor", gross_profit / gross_loss, "ratio")
             if gross_loss > 0
             else _unavailable("profit_factor", "ratio", "ZERO_GROSS_LOSS")
         ),
         (
-            _available("expectancy", net_profit / Decimal(count), "quote/trade")
+            _available("expectancy", net_profit / Decimal(count), f"{quote_unit}/trade")
             if count
-            else _unavailable("expectancy", "quote/trade", "NO_TRADES")
+            else _unavailable("expectancy", f"{quote_unit}/trade", "NO_TRADES")
         ),
-        _mean_metric("average_mae", tuple(item.mae for item in trades), "quote"),
-        _mean_metric("average_mfe", tuple(item.mfe for item in trades), "quote"),
-        _available("maximum_drawdown", max_drawdown, "quote"),
+        _mean_metric("average_mae", tuple(item.mae for item in trades), quote_unit),
+        _mean_metric("average_mfe", tuple(item.mfe for item in trades), quote_unit),
+        _available("maximum_drawdown", max_drawdown, quote_unit),
         _available("maximum_drawdown_fraction", max_drawdown_fraction, "fraction"),
         (
             _available("recovery_factor", net_profit / max_drawdown, "ratio")
@@ -212,6 +228,7 @@ def calculate_performance_metrics(
         minimum_sample_size=minimum_sample_size,
         periods_per_year=periods_per_year,
         return_period=return_period,
+        quote_unit=quote_unit,
     )
 
 
@@ -247,10 +264,11 @@ def _extreme_metric(
     name: str,
     values: tuple[Decimal, ...],
     operation,
+    unit: str,
 ) -> PerformanceMetric:
     if not values:
-        return _unavailable(name, "quote", "EMPTY_SAMPLE")
-    return _available(name, operation(values), "quote")
+        return _unavailable(name, unit, "EMPTY_SAMPLE")
+    return _available(name, operation(values), unit)
 
 
 def _drawdown(
