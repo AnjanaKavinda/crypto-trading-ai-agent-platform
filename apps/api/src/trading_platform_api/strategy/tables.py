@@ -81,6 +81,215 @@ strategy_registry_versions = Table(
     ),
 )
 
+signal_lifecycle_events = Table(
+    "signal_lifecycle_events",
+    metadata,
+    Column("event_id", UUID(as_uuid=True), primary_key=True),
+    Column("audit_id", UUID(as_uuid=True), nullable=False, unique=True),
+    Column("subject_contract_id", String(16), nullable=False),
+    Column("subject_id", UUID(as_uuid=True), nullable=False),
+    Column("subject_version", String(128), nullable=False),
+    Column("subject_sha256", String(64), nullable=False),
+    Column("prior_state", String(32), nullable=True),
+    Column("resulting_state", String(32), nullable=False),
+    Column("event_type", String(32), nullable=False),
+    Column("cause", String(64), nullable=False),
+    Column("source_references", JSONB, nullable=False),
+    Column("event_time", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", String(128), nullable=False),
+    ForeignKeyConstraint(
+        ["audit_id"],
+        ["audit_events.audit_id"],
+        name="fk_signal_lifecycle_event_audit",
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint(
+        "subject_sha256 ~ '^[0-9a-f]{64}    "strategy_registry_lifecycle_events",
+    metadata,
+    Column("event_id", UUID(as_uuid=True), primary_key=True),
+    Column("audit_id", UUID(as_uuid=True), nullable=False, unique=True),
+    Column("axis", String(32), nullable=False),
+    Column("strategy_id", UUID(as_uuid=True), nullable=False),
+    Column("strategy_version_id", UUID(as_uuid=True), nullable=True),
+    Column("rollback_target_version_id", UUID(as_uuid=True), nullable=True),
+    Column("resolves_suspension_event_id", UUID(as_uuid=True), nullable=True),
+    Column("environment", String(16), nullable=True),
+    Column("operating_mode", String(32), nullable=True),
+    Column("from_status", String(64), nullable=True),
+    Column("to_status", String(64), nullable=False),
+    Column("actor", String(255), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("decision_reference", JSONB, nullable=False),
+    Column("evidence_references", JSONB, nullable=False),
+    Column("effective_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "event_id",
+        "strategy_id",
+        "axis",
+        name="uq_strategy_registry_event_subject_axis",
+    ),
+    ForeignKeyConstraint(
+        ["resolves_suspension_event_id", "strategy_id", "axis"],
+        [
+            "strategy_registry_lifecycle_events.event_id",
+            "strategy_registry_lifecycle_events.strategy_id",
+            "strategy_registry_lifecycle_events.axis",
+        ],
+        name="fk_strategy_registry_event_resolved_suspension",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["strategy_id"],
+        ["strategy_registry_identities.strategy_id"],
+        name="fk_strategy_registry_event_identity",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["audit_id"],
+        ["audit_events.audit_id"],
+        name="fk_strategy_registry_event_audit",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["strategy_id", "strategy_version_id"],
+        [
+            "strategy_registry_versions.strategy_id",
+            "strategy_registry_versions.strategy_version_id",
+        ],
+        name="fk_strategy_registry_event_version",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["strategy_id", "rollback_target_version_id"],
+        [
+            "strategy_registry_versions.strategy_id",
+            "strategy_registry_versions.strategy_version_id",
+        ],
+        name="fk_strategy_registry_event_rollback_target",
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint(
+        "axis IN ('STRATEGY_AVAILABILITY','C021_VERSION','ARTIFACT_VERSION')",
+        name="ck_strategy_registry_event_axis",
+    ),
+    CheckConstraint(
+        "(axis = 'STRATEGY_AVAILABILITY' AND strategy_version_id IS NULL) OR "
+        "(axis IN ('C021_VERSION','ARTIFACT_VERSION') AND strategy_version_id IS NOT NULL)",
+        name="ck_strategy_registry_event_subject_axis",
+    ),
+    CheckConstraint(
+        "(axis <> 'STRATEGY_AVAILABILITY' OR to_status IN "
+        "('EXPERIMENTAL','ACTIVE','SUSPENDED','DEPRECATED')) AND "
+        "(axis <> 'C021_VERSION' OR to_status IN "
+        "('RESEARCH','VALIDATED','APPROVED_FOR_SHADOW','APPROVED_FOR_PAPER',"
+        "'APPROVED_FOR_PRODUCTION','ACTIVE','RETIRED','REJECTED','ROLLED_BACK')) AND "
+        "(axis <> 'ARTIFACT_VERSION' OR to_status IN "
+        "('DRAFT','CANDIDATE','VALIDATED','APPROVED_FOR_SHADOW','APPROVED_FOR_PAPER',"
+        "'APPROVED_FOR_PRODUCTION','ACTIVE','REJECTED','RETIRED','ROLLED_BACK'))",
+        name="ck_strategy_registry_event_target_status",
+    ),
+    CheckConstraint(
+        "((COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
+        "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NOT NULL) OR "
+        "(NOT COALESCE(axis = 'STRATEGY_AVAILABILITY' AND from_status = 'SUSPENDED' "
+        "AND to_status = 'ACTIVE', FALSE) AND resolves_suspension_event_id IS NULL))",
+        name="ck_strategy_registry_event_suspension_resolution",
+    ),
+    CheckConstraint(
+        "(to_status = 'ROLLED_BACK' AND axis IN ('C021_VERSION','ARTIFACT_VERSION') "
+        "AND rollback_target_version_id IS NOT NULL "
+        "AND rollback_target_version_id <> strategy_version_id) OR "
+        "(to_status <> 'ROLLED_BACK' AND rollback_target_version_id IS NULL)",
+        name="ck_strategy_registry_event_rollback_target",
+    ),
+    CheckConstraint(
+        "(axis = 'STRATEGY_AVAILABILITY' AND environment IS NULL AND operating_mode IS NULL) OR "
+        "(axis IN ('C021_VERSION','ARTIFACT_VERSION') AND "
+        "((from_status IS NULL AND environment IS NULL AND operating_mode IS NULL) OR "
+        "(from_status IS NOT NULL AND environment IS NOT NULL AND operating_mode IS NOT NULL)))",
+        name="ck_strategy_registry_event_environment_mode_scope",
+    ),
+    CheckConstraint(
+        "environment IS NULL OR environment IN ('dev','test','staging','prod')",
+        name="ck_strategy_registry_event_environment",
+    ),
+    CheckConstraint(
+        "operating_mode IS NULL OR operating_mode IN "
+        "('research','backtest','paper','shadow','testnet','live-supervised')",
+        name="ck_strategy_registry_event_operating_mode",
+    ),
+    CheckConstraint(
+        "length(btrim(actor)) > 0 AND length(btrim(reason)) > 0",
+        name="ck_strategy_registry_event_actor_reason",
+    ),
+    CheckConstraint(
+        "effective_at <= recorded_at",
+        name="ck_strategy_registry_event_effective_time",
+    ),
+    Index(
+        "ix_strategy_registry_events_subject_axis_time",
+        "strategy_id",
+        "strategy_version_id",
+        "axis",
+        "effective_at",
+        "recorded_at",
+    ),
+)
+
+__all__ = [
+    "metadata",
+    "signal_lifecycle_events",
+    "strategy_registry_identities",
+    "strategy_registry_lifecycle_events",
+    "strategy_registry_versions",
+]
+",
+        name="ck_signal_lifecycle_subject_digest",
+    ),
+    CheckConstraint(
+        "resulting_state IN "
+        "('CANDIDATE','WATCH','QUALIFIED','REJECTED','NO_TRADE','INVALIDATED','EXPIRED','SUPERSEDED')",
+        name="ck_signal_lifecycle_resulting_state",
+    ),
+    CheckConstraint(
+        "prior_state IS NULL OR prior_state IN "
+        "('CANDIDATE','WATCH','QUALIFIED','REJECTED','NO_TRADE','INVALIDATED','EXPIRED','SUPERSEDED')",
+        name="ck_signal_lifecycle_prior_state",
+    ),
+    CheckConstraint(
+        "event_type IN "
+        "('CREATED','WATCHED','QUALIFIED','REJECTED','NO_TRADE','INVALIDATED','EXPIRED','SUPERSEDED')",
+        name="ck_signal_lifecycle_event_type",
+    ),
+    CheckConstraint(
+        "cause IN "
+        "('SOURCE_DECISION','INVALIDATION_RULE_MATCHED','EFFECTIVE_EXPIRY_REACHED','EXPLICIT_SUCCESSOR')",
+        name="ck_signal_lifecycle_cause",
+    ),
+    CheckConstraint(
+        "event_time <= recorded_at",
+        name="ck_signal_lifecycle_event_time",
+    ),
+    CheckConstraint(
+        "length(btrim(correlation_id)) > 0",
+        name="ck_signal_lifecycle_correlation_nonblank",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(source_references) = 'array' AND jsonb_array_length(source_references) > 0",
+        name="ck_signal_lifecycle_sources",
+    ),
+    Index(
+        "ix_signal_lifecycle_subject_time",
+        "subject_contract_id",
+        "subject_id",
+        "subject_version",
+        "event_time",
+        "recorded_at",
+    ),
+)
+
 strategy_registry_lifecycle_events = Table(
     "strategy_registry_lifecycle_events",
     metadata,
