@@ -58,6 +58,11 @@ from trading_platform_api.market_data.history_contracts import (
     ObservationRevision,
     ReconstructionManifest,
 )
+from trading_platform_api.market_data.history_loader import (
+    HistoricalDatasetLoaderError,
+    HistoricalLineageResolver,
+    load_historical_reconstruction,
+)
 from trading_platform_api.market_data.history_selection import (
     HistoricalReconstruction,
     reconstruct_history,
@@ -172,6 +177,9 @@ __all__ = [
     "DataQualityDimensionState",
     "DataQualityEvidenceReference",
     "DataQualityReportV2",
+    "HistoricalDatasetLoaderError",
+    "HistoricalLineageResolver",
+    "load_historical_reconstruction",
     "HistoricalEvidencePin",
     "HistoricalUniverse",
     "ObservationRevision",
