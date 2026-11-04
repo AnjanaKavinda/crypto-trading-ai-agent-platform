@@ -150,6 +150,72 @@ invalidation rule set. No strategy record is upgraded in place. A strategy
 that needs the Wave 4 lifecycle must receive a new C-021v2 version and exact
 new C-023 candidate.
 
+### C-021 schema-1/schema-2 runtime dispatch
+
+Both C-021 schemas are first-class stored records. Define a closed
+`StrategyVersionRecord = StrategyVersion | StrategyVersionV2` union and
+make registry protocol/store `register_version`, `get_version`, and semantic-version
+lookup return that union. `ResolvedStrategyVersion.version` retains the exact
+concrete v1 or v2 object. It must never decode v2 into a v1-shaped copy.
+
+The registry dispatches by the canonical document envelope's
+`(contract_id, schema_version)` pair. The existing table already stores the
+envelope in `canonical_document` and uses UUID primary identity plus a unique
+`(strategy_id, semantic_version)`; no schema column is needed. Its codec currently
+hard-codes schema 1, so implementation must add an explicit C-021 schema-2
+decoder/encoder while retaining the schema-1 codec. `get_version()` validates
+the row identity, envelope, selected model, and schema-specific digest; unknown
+schema values raise the existing unsupported/invalid-record error and never
+fall back to v1. Semantic-version lookup stays keyed by the C-020 strategy
+identity and SemVer, independent of C-021 schema. The existing SemVer
+comparator remains the parent/child ordering rule.
+
+`strategy_version_content_sha256` becomes a schema dispatcher over exact model
+types: schema 1 uses the existing frozen preimage unchanged; schema 2 hashes the
+complete C-021v2 payload, including invalidation rules, with only the
+self-referential digest omitted. `ResolvedStrategyVersion` carries the union
+through #80/#81/#82. #80 runs the same existing condition DSL/evaluator once
+over shared condition/group fields and binds its result to the exact version
+ID, SemVer, digest, and schema-derived digest. It does not strip the v2 rule
+set: #89 reads invalidation metadata from the retained v2 object and evaluates
+the already-produced condition/group results. #81 and #82 use the shared typed
+fields while preserving the exact resolved object; candidate construction
+copies the strategy identity/version and exact `SignalConcept.method` reference.
+C-023 schema 1 retains the C-021 SemVer in `VersionReference.version` and the
+C-021 content digest; that digest commits to the C-021 schema discriminator.
+Consumers resolve the candidate's strategy-version ID and verify the reference
+digest against the resolved schema-specific record; they do not infer schema
+from SemVer.
+
+C-024v2 continues to bind the exact C-021 ID, SemVer, and schema-sensitive
+content digest. #85/#87/#86/#88 keep their existing exact reference checks and
+pass the immutable C-021 identity through; they do not need a v1 projection or
+a broad C-023/C-024/C-025/C-026/C-028 version bump. Unsupported C-021 schema
+or digest mismatch blocks candidate/evidence/qualification/signal progression
+as invalid provenance.
+
+### Personal Spot strategy upgrade
+
+The existing C-021v1 Personal Spot strategy record remains immutable under
+the same C-020 strategy identity. A usable C-021v2 strategy is a new record
+with a new `strategy_version_id`, a schema-2 digest, `parent_version_id` set
+to the prior version where the existing registry parent rule applies, and a
+SemVer greater than its parent under the existing comparator. It enters
+through the existing governed `RESEARCH` registration and artifact `DRAFT`
+lifecycle, with the required decision/evidence references. No historical
+candidate or strategy row is rewritten.
+
+Do not choose a new SemVer in this ADR: the repository defines only canonical
+SemVer validation and monotonic parent ordering, not whether this change is a
+minor or major release. Record the chosen SemVer in the version-specific
+registration decision before creating the new artifact. Current approved
+strategy semantics contain prose such as “structure invalidation” but do not
+identify condition/group IDs or trigger polarity. Therefore the actual
+C-021v2 trigger set is a separate bounded strategy-configuration decision.
+It must be approved from explicit strategy semantics before #89 can publish
+C-070v2 for the Personal Spot strategy; do not derive or invent triggers from
+the prose.
+
 ### 2. C-070 schema 2 exact publication lineage
 
 Add `SignalV2` / `SignalLineageV2` under `C-070`, schema `2`. Preserve the
