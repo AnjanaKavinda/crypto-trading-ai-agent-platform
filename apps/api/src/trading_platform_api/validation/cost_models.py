@@ -41,7 +41,7 @@ class SpotExecutionCostProfile:
     taker_fee_bps: Decimal
     spread_bps: Decimal
     slippage_bps: Decimal
-    latency_bars: Decimal
+    latency_bars: int
     stress_multiplier: Decimal
     effective_from: datetime
     valid_until: datetime
@@ -67,18 +67,18 @@ class SpotExecutionCostProfile:
             "taker_fee_bps",
             "spread_bps",
             "slippage_bps",
-            "latency_bars",
             "stress_multiplier",
         ):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not value.is_finite():
                 raise CostModelError(f"{name} must be a finite Decimal.")
+        if type(self.latency_bars) is not int or self.latency_bars < 0:
+            raise CostModelError("latency_bars must be a non-negative integer.")
         if (
             self.maker_fee_bps <= 0
             or self.taker_fee_bps <= 0
             or self.spread_bps <= 0
             or self.slippage_bps <= 0
-            or self.latency_bars < 0
             or self.stress_multiplier < Decimal("1")
         ):
             raise CostModelError(
@@ -116,7 +116,7 @@ class SpotExecutionCost:
     slippage: Decimal
     total: Decimal
     total_bps: Decimal
-    latency_bars: Decimal
+    latency_bars: int
     profile_reference: ValidationArtifactReferenceV2
 
 
@@ -178,7 +178,7 @@ def build_spot_cost_assumption_set(
             AssumptionCategory.LATENCY,
             CostApplicabilityV2.APPLICABLE,
             model,
-            profile.latency_bars,
+            Decimal(profile.latency_bars),
             "bars",
             "Explicit candle-delay approximation for Spot research.",
         ),
