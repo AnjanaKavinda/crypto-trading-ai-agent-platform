@@ -102,6 +102,18 @@ class SignalLifecycleEvent:
             or len(set(self.source_references)) != len(self.source_references)
         ):
             raise SignalLifecycleError("source_references must be unique exact references.")
+        ordered_sources = tuple(
+            sorted(
+                self.source_references,
+                key=lambda item: (
+                    item.artifact_type,
+                    str(item.artifact_id),
+                    item.version,
+                    item.content_sha256,
+                ),
+            )
+        )
+        object.__setattr__(self, "source_references", ordered_sources)
         event_time = _utc("event_time", self.event_time)
         recorded_at = _utc("recorded_at", self.recorded_at)
         if event_time > recorded_at:
@@ -441,12 +453,13 @@ def _validate_transition(
 def _audit_for(
     event: SignalLifecycleEvent, *, actor: str, accepted: bool
 ) -> AuditEvent:
+    event_type = AuditEventType.SIGNAL_UPDATED
+    if accepted and event.event_type is SignalLifecycleEventType.CREATED:
+        event_type = AuditEventType.SIGNAL_CREATED
+    elif not accepted or event.event_type is SignalLifecycleEventType.REJECTED:
+        event_type = AuditEventType.SIGNAL_REJECTED
     return AuditEvent(
-        event_type=(
-            AuditEventType.SIGNAL_UPDATED
-            if accepted
-            else AuditEventType.SIGNAL_REJECTED
-        ),
+        event_type=event_type,
         actor=actor,
         action=f"signal_lifecycle.{event.event_type.value.lower()}",
         source="trading-platform.signal-lifecycle",
