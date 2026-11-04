@@ -71,6 +71,25 @@ def test_spot_analysis_lineage_migration_is_head_and_not_destructively_reversibl
         module.downgrade()
 
 
+def test_signal_lifecycle_migration_is_head_and_append_only() -> None:
+    import pytest
+
+    script_directory = ScriptDirectory.from_config(_create_alembic_config())
+    revision = script_directory.get_revision("0009_signal_lifecycle")
+    assert revision is not None
+    assert revision.down_revision == "0008_spot_analysis_lineage"
+    assert script_directory.get_heads() == ["0009_signal_lifecycle"]
+    migration_path = VERSIONS_DIR / "0009_signal_lifecycle.py"
+    spec = importlib.util.spec_from_file_location(
+        "signal_lifecycle_migration", migration_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(RuntimeError, match="Destructive downgrade is prohibited"):
+        module.downgrade()
+
+
 def test_baseline_upgrade_and_downgrade_are_reversible_no_ops() -> None:
     baseline_module = _load_baseline_module()
 
@@ -107,6 +126,9 @@ def test_offline_migration_sql_generation_succeeds_without_engine_creation(
     sql_output = output_buffer.getvalue().upper()
     assert "0001_PERSISTENCE_BASELINE" in sql_output
     assert "0008_SPOT_ANALYSIS_LINEAGE" in sql_output
+    assert "0009_SIGNAL_LIFECYCLE" in sql_output
+    assert "CREATE TABLE SIGNAL_LIFECYCLE_EVENTS" in sql_output
+    assert "SIGNAL_LIFECYCLE_EVENTS_IMMUTABLE" in sql_output
     assert "CREATE TABLE SPOT_RESEARCH_ANALYSIS" in sql_output
     assert "SPOT_RESEARCH_ANALYSIS_IMMUTABLE" in sql_output
     assert "CK_LINEAGE_CONTRACT" in sql_output
