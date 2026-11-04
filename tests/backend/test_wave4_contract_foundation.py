@@ -303,9 +303,7 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
         == qualification.qualification.validation.rule_set.content_sha256
     )
     assert result.regime_id == case[2].market_context.regime.regime_id
-    assert result.conflict_ids == tuple(
-        item.artifact_id for item in package.conflicts
-    )
+    assert result.conflict_ids == tuple(item.artifact_id for item in package.conflicts)
     assert result.uncertainty_ids == tuple(
         item.artifact_id for item in package.uncertainties
     )
