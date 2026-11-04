@@ -38,6 +38,8 @@ from trading_platform_api.strategy import (
     NoTradeDecisionV2,
     SignalEvidencePackageV2,
     SignalQualificationV2,
+    SignalV2,
+    StrategyVersionV2,
     ValidationReference,
 )
 from trading_platform_api.validation import (
@@ -83,6 +85,8 @@ VERSIONED_CONTRACT_TYPES = {
     NoTradeDecisionV2: ("C-026", "2"),
     CostAssumptionSetV2: ("C-027", "2"),
     QualificationValidationResultV2: ("C-028", "2"),
+    StrategyVersionV2: ("C-021", "2"),
+    SignalV2: ("C-070", "2"),
 }
 ALIAS_NAMES = {"CalibrationRecord", "ExperienceRecord"}
 AUTHORITY_METHOD_NAMES = {

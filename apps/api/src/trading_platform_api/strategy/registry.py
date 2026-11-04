@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
@@ -22,6 +22,16 @@ from trading_platform_api.strategy.contracts import (
     StrategyVersion,
     VersionReference,
 )
+from trading_platform_api.strategy.contracts_v2 import (
+    InvalidationCombinationV2,
+    InvalidationRuleSetV2,
+    InvalidationTargetTypeV2,
+    InvalidationTriggerV2,
+    InvalidationTruthV2,
+    StrategyVersionV2,
+)
+
+StrategyVersionRecord = StrategyVersion | StrategyVersionV2
 
 
 class StrategyRegistryError(ValueError):
@@ -105,7 +115,7 @@ class StrategyRegistryStore(Protocol):
 
     async def register_version(
         self,
-        version: StrategyVersion,
+        version: StrategyVersionRecord,
         initial_events: tuple[RegistryLifecycleEvent, RegistryLifecycleEvent],
         audit_events: tuple[AuditEvent, AuditEvent],
     ) -> None: ...
@@ -114,11 +124,11 @@ class StrategyRegistryStore(Protocol):
 
     async def get_version(
         self, strategy_version_id: UUID
-    ) -> StrategyVersion | None: ...
+    ) -> StrategyVersionRecord | None: ...
 
     async def get_version_by_semantic_version(
         self, strategy_id: UUID, semantic_version: str
-    ) -> StrategyVersion | None: ...
+    ) -> StrategyVersionRecord | None: ...
 
     async def current_status(
         self,
@@ -280,7 +290,7 @@ class TransitionResult:
 @dataclass(frozen=True, slots=True)
 class ResolvedStrategyVersion:
     strategy: Strategy
-    version: StrategyVersion
+    version: StrategyVersionRecord
     availability: StrategyAvailability
     c021_lifecycle: StrategyLifecycle
     artifact_lifecycle: ArtifactVersionLifecycle
@@ -389,11 +399,13 @@ _ARTIFACT_TRANSITIONS = {
 }
 
 
-def strategy_version_content_sha256(version: StrategyVersion) -> str:
+def strategy_version_content_sha256(version: StrategyVersionRecord) -> str:
     """Hash the complete C-021 record except its self-referential digest."""
 
-    if type(version) is not StrategyVersion:
-        raise StrategyRegistryError("version must be an exact StrategyVersion.")
+    if type(version) not in (StrategyVersion, StrategyVersionV2):
+        raise StrategyRegistryError(
+            "version must be an exact supported C-021 contract."
+        )
     payload = {
         item.name: getattr(version, item.name)
         for item in fields(version)
@@ -408,6 +420,39 @@ def strategy_version_content_sha256(version: StrategyVersion) -> str:
             "payload": payload,
         }
     )
+
+
+def build_personal_spot_strategy_v2(
+    previous: StrategyVersion,
+    *,
+    strategy_version_id: UUID,
+    created_at: datetime,
+) -> StrategyVersionV2:
+    """Create the frozen Personal Spot 2.0.0 record from its immutable v1 parent."""
+    if type(previous) is not StrategyVersion or previous.semantic_version != "1.0.0":
+        raise StrategyRegistryError(
+            "Personal Spot v2 requires the exact v1.0.0 C-021 parent."
+        )
+    rules = InvalidationRuleSetV2(
+        tuple(
+            InvalidationTriggerV2(
+                InvalidationTargetTypeV2.CONDITION_GROUP,
+                group.group_id,
+                InvalidationTruthV2.FAIL,
+            )
+            for group in previous.condition_groups
+        ),
+        InvalidationCombinationV2.ANY,
+    )
+    candidate = StrategyVersionV2.from_v1(
+        previous,
+        strategy_version_id=strategy_version_id,
+        semantic_version="2.0.0",
+        parent_version_id=previous.strategy_version_id,
+        invalidation_rules=rules,
+        created_at=created_at,
+    )
+    return replace(candidate, content_sha256=strategy_version_content_sha256(candidate))
 
 
 def validate_semantic_version(value: str) -> None:
@@ -524,7 +569,7 @@ class StrategyRegistry:
 
     async def register_version(
         self,
-        version: StrategyVersion,
+        version: StrategyVersionRecord,
         *,
         actor: str,
         reason: str,
@@ -546,7 +591,7 @@ class StrategyRegistry:
             raise StrategyRegistryError(
                 "strategy identity is unknown.", code="UNKNOWN_STRATEGY_IDENTITY"
             )
-        parent: StrategyVersion | None = None
+        parent: StrategyVersionRecord | None = None
         if version.parent_version_id is not None:
             parent = await self._store.get_version(version.parent_version_id)
             if parent is None or parent.strategy_id != version.strategy_id:

@@ -559,6 +559,13 @@ def test_learning_experience_accepts_versioned_c026_no_trade_reference() -> None
     )
 
 
+def test_learning_experience_preserves_c070_v2_reference_without_decoding() -> None:
+    signal_reference = ref("C-070", "2")
+    item = experience(decision_refs=(ref("C-023"), signal_reference))
+    assert signal_reference in item.decision_refs
+    assert signal_reference.schema_version == "2"
+
+
 def test_complete_learning_chain_uses_exact_canonical_references() -> None:
     chain = canonical_instances()[:7]
     expected_inputs = (

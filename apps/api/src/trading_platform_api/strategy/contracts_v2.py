@@ -6,12 +6,36 @@ from enum import StrEnum
 from typing import Any, TypeVar, cast
 from uuid import UUID, uuid5
 
+from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
+from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.strategy.contracts import (
+    ConditionGroup,
     QualificationStatus,
+    SignalCandidate,
+    SignalDirection,
     SignalLifecycleState,
+    StrategyCondition,
     StrategyContractError,
+    StrategyLifecycle,
+    StrategyParameter,
+    StrategyVersion,
     VersionReference,
+    _digest,
+    _typed_tuple,
+    _unique,
+)
+from trading_platform_api.strategy.contracts import (
+    _text as _c021_text,
+)
+from trading_platform_api.strategy.contracts import (
+    _text_tuple as _c021_text_tuple,
+)
+from trading_platform_api.strategy.contracts import (
+    _time as _c021_time,
+)
+from trading_platform_api.strategy.contracts import (
+    _uuid as _c021_uuid,
 )
 from trading_platform_api.validation.contracts_v2 import (
     QualificationValidationResultV2,
@@ -22,6 +46,218 @@ from trading_platform_api.validation.contracts_v2 import (
 STRATEGY_CONTRACT_SCHEMA_VERSION_V2 = "2"
 _PACKAGE_NAMESPACE = UUID("b13d3889-2a7b-5e99-9c7f-0b179f63b8a1")
 _T = TypeVar("_T")
+
+
+class InvalidationTargetTypeV2(StrEnum):
+    CONDITION = "CONDITION"
+    CONDITION_GROUP = "CONDITION_GROUP"
+
+
+class InvalidationTruthV2(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+
+
+class InvalidationCombinationV2(StrEnum):
+    ANY = "ANY"
+    ALL = "ALL"
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidationTriggerV2:
+    target_type: InvalidationTargetTypeV2
+    target_id: UUID
+    trigger_truth: InvalidationTruthV2
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target_type, InvalidationTargetTypeV2):
+            raise StrategyContractError(
+                "target_type must be a supported invalidation target."
+            )
+        _uuid("target_id", self.target_id)
+        if not isinstance(self.trigger_truth, InvalidationTruthV2):
+            raise StrategyContractError("trigger_truth must be PASS or FAIL.")
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidationRuleSetV2:
+    triggers: tuple[InvalidationTriggerV2, ...]
+    combine: InvalidationCombinationV2
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.triggers, tuple) or not self.triggers:
+            raise StrategyContractError("invalidation triggers must be non-empty.")
+        if any(type(item) is not InvalidationTriggerV2 for item in self.triggers):
+            raise StrategyContractError(
+                "invalidation triggers must be exact typed values."
+            )
+        refs = tuple((item.target_type, item.target_id) for item in self.triggers)
+        if len(refs) != len(set(refs)):
+            raise StrategyContractError(
+                "invalidation trigger references must be unique."
+            )
+        if not isinstance(self.combine, InvalidationCombinationV2):
+            raise StrategyContractError("combine must be ANY or ALL.")
+        object.__setattr__(
+            self,
+            "triggers",
+            tuple(
+                sorted(
+                    self.triggers,
+                    key=lambda item: (item.target_type.value, str(item.target_id)),
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyVersionV2:
+    strategy_version_id: UUID
+    strategy_id: UUID
+    semantic_version: str
+    lifecycle: StrategyLifecycle
+    content_sha256: str
+    parent_version_id: UUID | None
+    parameters: tuple[StrategyParameter, ...]
+    conditions: tuple[StrategyCondition, ...]
+    condition_groups: tuple[ConditionGroup, ...]
+    supported_assets: tuple[str, ...]
+    supported_instruments: tuple[str, ...]
+    supported_timeframes: tuple[str, ...]
+    preferred_regimes: tuple[str, ...]
+    acceptable_regimes: tuple[str, ...]
+    incompatible_regimes: tuple[str, ...]
+    required_evidence_categories: tuple[str, ...]
+    entry_concept: str
+    invalidation_concept: str
+    target_concepts: tuple[str, ...]
+    environments: tuple[DeploymentEnvironment, ...]
+    operating_modes: tuple[OperatingMode, ...]
+    provenance: tuple[VersionReference, ...]
+    created_at: datetime
+    invalidation_rules: InvalidationRuleSetV2
+    contract_id: str = field(default="C-021", init=False)
+    schema_version: str = field(default="2", init=False)
+
+    def __post_init__(self) -> None:
+        _validate_strategy_version_v2_common(self)
+        if type(self.invalidation_rules) is not InvalidationRuleSetV2:
+            raise StrategyContractError(
+                "invalidation_rules must be exact InvalidationRuleSetV2."
+            )
+        condition_ids = {item.condition_id for item in self.conditions}
+        group_ids = {item.group_id for item in self.condition_groups}
+        for trigger in self.invalidation_rules.triggers:
+            known = (
+                condition_ids
+                if trigger.target_type is InvalidationTargetTypeV2.CONDITION
+                else group_ids
+            )
+            if trigger.target_id not in known:
+                raise StrategyContractError(
+                    "invalidation trigger references an unknown target."
+                )
+
+    @classmethod
+    def from_v1(
+        cls,
+        version: StrategyVersion,
+        *,
+        strategy_version_id: UUID,
+        semantic_version: str,
+        parent_version_id: UUID | None,
+        invalidation_rules: InvalidationRuleSetV2,
+        created_at: datetime | None = None,
+    ) -> StrategyVersionV2:
+        from dataclasses import fields as dataclass_fields
+
+        values = {
+            item.name: getattr(version, item.name)
+            for item in dataclass_fields(StrategyVersion)
+            if item.name
+            not in {
+                "contract_id",
+                "schema_version",
+                "strategy_version_id",
+                "strategy_id",
+                "semantic_version",
+                "lifecycle",
+                "content_sha256",
+                "parent_version_id",
+            }
+        }
+        if created_at is not None:
+            values["created_at"] = created_at
+        return cls(
+            strategy_version_id,
+            version.strategy_id,
+            semantic_version,
+            version.lifecycle,
+            "0" * 64,
+            parent_version_id,
+            **values,
+            invalidation_rules=invalidation_rules,
+        )
+
+
+def _validate_strategy_version_v2_common(value: StrategyVersionV2) -> None:
+    """Apply frozen C-021 shared-field rules directly to the v2 model."""
+    _c021_uuid("strategy_version_id", value.strategy_version_id)
+    _c021_uuid("strategy_id", value.strategy_id)
+    _c021_text("semantic_version", value.semantic_version)
+    if not isinstance(value.lifecycle, StrategyLifecycle):
+        raise StrategyContractError("lifecycle must be a StrategyLifecycle.")
+    _digest("content_sha256", value.content_sha256)
+    if value.parent_version_id is not None:
+        _c021_uuid("parent_version_id", value.parent_version_id)
+        if value.parent_version_id == value.strategy_version_id:
+            raise StrategyContractError("version cannot be its own parent.")
+    parameters = _typed_tuple("parameters", value.parameters, StrategyParameter)
+    _unique("parameter names", tuple(item.name for item in parameters))
+    conditions = _typed_tuple(
+        "conditions", value.conditions, StrategyCondition, empty=False
+    )
+    condition_ids = tuple(item.condition_id for item in conditions)
+    _unique("condition identities", condition_ids)
+    groups = _typed_tuple(
+        "condition_groups", value.condition_groups, ConditionGroup, empty=False
+    )
+    _unique("condition group identities", tuple(item.group_id for item in groups))
+    known = set(condition_ids)
+    if any(
+        condition_id not in known
+        for group in groups
+        for condition_id in group.condition_ids
+    ):
+        raise StrategyContractError("condition group references an unknown condition.")
+    for name in (
+        "supported_assets",
+        "supported_instruments",
+        "supported_timeframes",
+        "required_evidence_categories",
+    ):
+        _c021_text_tuple(name, getattr(value, name), empty=False)
+    preferred = _c021_text_tuple("preferred_regimes", value.preferred_regimes)
+    acceptable = _c021_text_tuple("acceptable_regimes", value.acceptable_regimes)
+    incompatible = _c021_text_tuple("incompatible_regimes", value.incompatible_regimes)
+    if (set(preferred) | set(acceptable)) & set(incompatible):
+        raise StrategyContractError("compatible and incompatible regimes overlap.")
+    _c021_text("entry_concept", value.entry_concept)
+    _c021_text("invalidation_concept", value.invalidation_concept)
+    _c021_text_tuple("target_concepts", value.target_concepts)
+    environments = _typed_tuple(
+        "environments", value.environments, DeploymentEnvironment, empty=False
+    )
+    modes = _typed_tuple(
+        "operating_modes", value.operating_modes, OperatingMode, empty=False
+    )
+    _unique("environments", environments)
+    _unique("operating_modes", modes)
+    provenance = _typed_tuple(
+        "provenance", value.provenance, VersionReference, empty=False
+    )
+    _unique("provenance", provenance)
+    object.__setattr__(value, "created_at", _c021_time("created_at", value.created_at))
 
 
 def _text(name: str, value: object) -> str:
@@ -519,6 +755,383 @@ class SignalQualificationV2:
 
 
 @dataclass(frozen=True, slots=True)
+class SignalLineageV2:
+    candidate_id: UUID
+    candidate: VersionReference
+    strategy_version_id: UUID
+    strategy_version: VersionReference
+    evidence_package_id: UUID
+    evidence_package: VersionReference
+    qualification_id: UUID
+    qualification: VersionReference
+    validation_id: UUID
+    validation: VersionReference
+
+    def __post_init__(self) -> None:
+        for name in (
+            "candidate_id",
+            "strategy_version_id",
+            "evidence_package_id",
+            "qualification_id",
+            "validation_id",
+        ):
+            _uuid(name, getattr(self, name))
+        for name, contract_id, schema in (
+            ("candidate", "C-023", "1"),
+            ("strategy_version", "C-021", "2"),
+            ("evidence_package", "C-024", "2"),
+            ("qualification", "C-025", "2"),
+            ("validation", "C-028", "2"),
+        ):
+            ref = getattr(self, name)
+            _ref(name, ref, contract_id)
+            if name != "strategy_version" and ref.version != schema:
+                raise StrategyContractError(f"{name} must use schema {schema}.")
+        if (
+            self.candidate.artifact_id != self.candidate_id
+            or self.strategy_version.artifact_id != self.strategy_version_id
+            or self.evidence_package.artifact_id != self.evidence_package_id
+            or self.qualification.artifact_id != self.qualification_id
+            or self.validation.artifact_id != self.validation_id
+        ):
+            raise StrategyContractError(
+                "lineage reference identities do not match their IDs."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SignalV2:
+    signal_id: UUID
+    lineage: SignalLineageV2
+    strategy_id: UUID
+    strategy_version_id: UUID
+    parameter_set: VersionReference
+    configuration: VersionReference
+    qualification_status: QualificationStatus
+    market_context_id: UUID
+    analysis_snapshot_id: UUID
+    asset: str
+    instrument_id: str
+    timeframe: str
+    direction: SignalDirection
+    evidence_ids: tuple[UUID, ...]
+    data_quality_report_id: UUID
+    regime_id: UUID
+    conflict_ids: tuple[UUID, ...]
+    uncertainty_ids: tuple[UUID, ...]
+    lifecycle: SignalLifecycleState
+    created_at: datetime
+    expires_at: datetime
+    execution_authorized: bool = field(default=False, init=False)
+    contract_id: str = field(default="C-070", init=False)
+    schema_version: str = field(default="2", init=False)
+
+    def __post_init__(self) -> None:
+        _uuid("signal_id", self.signal_id)
+        for name in (
+            "strategy_id",
+            "strategy_version_id",
+            "market_context_id",
+            "analysis_snapshot_id",
+            "data_quality_report_id",
+            "regime_id",
+        ):
+            _uuid(name, getattr(self, name))
+        if type(self.lineage) is not SignalLineageV2:
+            raise StrategyContractError("lineage must be exact SignalLineageV2.")
+        if self.lineage.strategy_version_id != self.strategy_version_id:
+            raise StrategyContractError("signal/lineage strategy identity mismatch.")
+        for name in ("parameter_set", "configuration"):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise StrategyContractError(f"{name} must be a VersionReference.")
+        if self.parameter_set != self.lineage.strategy_version:
+            raise StrategyContractError(
+                "parameter_set must bind the exact C-021v2 strategy reference."
+            )
+        if self.qualification_status not in {
+            QualificationStatus.QUALIFIED,
+            QualificationStatus.QUALIFIED_HIGH_EVIDENCE,
+        }:
+            raise StrategyContractError("C-070v2 requires qualified status.")
+        if self.lifecycle is not SignalLifecycleState.QUALIFIED:
+            raise StrategyContractError("C-070v2 lifecycle must be QUALIFIED.")
+        for name in ("asset", "instrument_id", "timeframe"):
+            _text(name, getattr(self, name))
+        if not isinstance(self.direction, SignalDirection):
+            raise StrategyContractError("direction must be SignalDirection.")
+        if (
+            not isinstance(self.evidence_ids, tuple)
+            or not self.evidence_ids
+            or any(not isinstance(item, UUID) for item in self.evidence_ids)
+        ):
+            raise StrategyContractError("evidence_ids must be a non-empty UUID tuple.")
+        if len(set(self.evidence_ids)) != len(self.evidence_ids):
+            raise StrategyContractError("evidence_ids must be unique.")
+        for name in ("conflict_ids", "uncertainty_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or any(
+                not isinstance(item, UUID) for item in values
+            ):
+                raise StrategyContractError(f"{name} must be a UUID tuple.")
+            if len(set(values)) != len(values):
+                raise StrategyContractError(f"{name} must be unique.")
+        created, expires = (
+            _time("created_at", self.created_at),
+            _time("expires_at", self.expires_at),
+        )
+        if created >= expires:
+            raise StrategyContractError("signal expiry must follow creation.")
+        object.__setattr__(self, "created_at", created)
+        object.__setattr__(self, "expires_at", expires)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        candidate: SignalCandidate,
+        strategy: StrategyVersionV2,
+        package: SignalEvidencePackageV2,
+        qualification: SignalQualificationV2,
+        market_context: MarketContextV5,
+        now: datetime,
+        signal_fields: dict[str, object],
+    ) -> SignalV2:
+        at = _time("now", now)
+        candidate_digest = canonical_sha256(candidate)
+        strategy_digest = _strategy_v2_digest(strategy)
+        required_fields = {
+            "market_context_id",
+            "analysis_snapshot_id",
+            "asset",
+            "instrument_id",
+            "timeframe",
+            "direction",
+            "evidence_ids",
+            "data_quality_report_id",
+        }
+        if set(signal_fields) != required_fields:
+            raise StrategyContractError(
+                "signal_fields must match the closed C-070v2 payload fields."
+            )
+        market_context_digest = canonical_sha256(market_context)
+        parameter_set = VersionReference(
+            "C-021",
+            strategy.strategy_version_id,
+            strategy.semantic_version,
+            strategy_digest,
+        )
+        rule_set_ref = qualification.validation.rule_set.reference
+        configuration = VersionReference(
+            rule_set_ref.artifact_type,
+            rule_set_ref.artifact_id,
+            rule_set_ref.version,
+            rule_set_ref.content_sha256,
+        )
+        context_conflicts = tuple(
+            VersionReference(
+                "C-010",
+                item.assessment_id,
+                item.schema_version,
+                canonical_sha256(item),
+            )
+            for item in market_context.conflicts
+        )
+        context_uncertainties = tuple(
+            VersionReference(
+                "C-069",
+                item.uncertainty_id,
+                item.schema_version,
+                canonical_sha256(item),
+            )
+            for item in market_context.uncertainties
+        )
+        if (
+            candidate.strategy_version_id != strategy.strategy_version_id
+            or candidate.strategy_id != strategy.strategy_id
+            or qualification.candidate.artifact_id != candidate.candidate_id
+            or qualification.candidate.version != "1"
+            or qualification.candidate.content_sha256 != candidate_digest
+            or qualification.strategy_version.artifact_id
+            != strategy.strategy_version_id
+            or qualification.strategy_version.version != strategy.semantic_version
+            or qualification.strategy_version.content_sha256 != strategy_digest
+            or qualification.evidence_package.artifact_id != package.package_id
+            or qualification.evidence_package.version != "2"
+            or qualification.evidence_package.content_sha256 != package.content_sha256
+            or qualification.validation.candidate_id != candidate.candidate_id
+            or qualification.validation.candidate_sha256 != candidate_digest
+            or qualification.validation.strategy_version_id
+            != strategy.strategy_version_id
+            or qualification.strategy_version.version != strategy.semantic_version
+            or qualification.strategy_version.content_sha256 != strategy_digest
+            or qualification.validation.evidence_package_id != package.package_id
+            or qualification.evidence_package.content_sha256 != package.content_sha256
+            or qualification.validation.outcome is not ValidationOutcomeV2.PASS
+            or qualification.status
+            not in {
+                QualificationStatus.QUALIFIED,
+                QualificationStatus.QUALIFIED_HIGH_EVIDENCE,
+            }
+            or any(
+                g.outcome is not ValidationGateOutcomeV2.PASS
+                for g in qualification.validation.gates
+            )
+            or at < candidate.created_at
+            or at >= candidate.expires_at
+            or at < package.created_at
+            or at >= package.expires_at
+            or at < qualification.evaluated_at
+            or at >= qualification.expires_at
+            or at < qualification.validation.as_of
+            or at < qualification.validation.created_at
+            or at >= qualification.validation.valid_until
+            or qualification.evidence_package_valid_until != package.expires_at
+            or market_context.context_id != candidate.market_context_id
+            or market_context.asset != candidate.asset
+            or market_context.instrument_id != candidate.instrument_id
+            or market_context.analysis_snapshot.snapshot_id
+            != candidate.analysis_snapshot_id
+            or package.market_context.artifact_id != market_context.context_id
+            or package.market_context.version != market_context.schema_version
+            or package.market_context.content_sha256 != market_context_digest
+            or package.analysis_snapshot.artifact_id != candidate.analysis_snapshot_id
+            or package.conflicts != context_conflicts
+            or package.uncertainties != context_uncertainties
+        ):
+            raise StrategyContractError(
+                "C-070v2 source artifacts are stale, mismatched, or unqualified."
+            )
+        if (
+            signal_fields["market_context_id"] != candidate.market_context_id
+            or signal_fields["analysis_snapshot_id"] != candidate.analysis_snapshot_id
+            or signal_fields["asset"] != candidate.asset
+            or signal_fields["instrument_id"] != candidate.instrument_id
+            or signal_fields["timeframe"] != candidate.timeframe
+            or signal_fields["direction"] != candidate.direction
+            or signal_fields["evidence_ids"] != candidate.supporting_evidence_ids
+            or signal_fields["data_quality_report_id"]
+            != candidate.data_quality_report_id
+        ):
+            raise StrategyContractError(
+                "C-070v2 signal scope does not match the candidate."
+            )
+        expires = min(
+            candidate.expires_at,
+            package.expires_at,
+            qualification.expires_at,
+            qualification.evidence_package_valid_until,
+            qualification.validation.valid_until,
+        )
+        if "expires_at" in signal_fields and signal_fields["expires_at"] != expires:
+            raise StrategyContractError(
+                "signal expiry must equal the earliest upstream validity boundary."
+            )
+        conflict_ids = tuple(item.artifact_id for item in package.conflicts)
+        uncertainty_ids = tuple(item.artifact_id for item in package.uncertainties)
+        lineage = SignalLineageV2(
+            candidate.candidate_id,
+            VersionReference("C-023", candidate.candidate_id, "1", candidate_digest),
+            strategy.strategy_version_id,
+            VersionReference(
+                "C-021",
+                strategy.strategy_version_id,
+                strategy.semantic_version,
+                strategy_digest,
+            ),
+            package.package_id,
+            VersionReference("C-024", package.package_id, "2", package.content_sha256),
+            qualification.qualification_id,
+            VersionReference(
+                "C-025",
+                qualification.qualification_id,
+                "2",
+                _qualification_digest(qualification),
+            ),
+            qualification.validation.result_id,
+            VersionReference(
+                "C-028",
+                qualification.validation.result_id,
+                "2",
+                qualification.validation.content_sha256,
+            ),
+        )
+        payload = {
+            "lineage": lineage,
+            "strategy_id": strategy.strategy_id,
+            "strategy_version_id": strategy.strategy_version_id,
+            "parameter_set": parameter_set,
+            "configuration": configuration,
+            "qualification_status": qualification.status,
+            "regime_id": market_context.regime.regime_id,
+            "conflict_ids": conflict_ids,
+            "uncertainty_ids": uncertainty_ids,
+            "lifecycle": SignalLifecycleState.QUALIFIED,
+            "created_at": at,
+            "expires_at": expires,
+            **signal_fields,
+        }
+        digest = canonical_sha256(
+            {
+                "canonicalization_version": "canonical-json-v1",
+                "contract_id": "C-070",
+                "schema_version": "2",
+                "payload_version": "wire-1",
+                "payload": payload,
+                "execution_authorized": False,
+            }
+        )
+        return cls(
+            signal_id=uuid5(_SIGNAL_NAMESPACE, digest),
+            lineage=lineage,
+            strategy_id=strategy.strategy_id,
+            strategy_version_id=strategy.strategy_version_id,
+            parameter_set=parameter_set,
+            configuration=configuration,
+            qualification_status=qualification.status,
+            market_context_id=cast(UUID, signal_fields["market_context_id"]),
+            analysis_snapshot_id=cast(UUID, signal_fields["analysis_snapshot_id"]),
+            asset=cast(str, signal_fields["asset"]),
+            instrument_id=cast(str, signal_fields["instrument_id"]),
+            timeframe=cast(str, signal_fields["timeframe"]),
+            direction=cast(SignalDirection, signal_fields["direction"]),
+            evidence_ids=cast(tuple[UUID, ...], signal_fields["evidence_ids"]),
+            data_quality_report_id=cast(UUID, signal_fields["data_quality_report_id"]),
+            regime_id=market_context.regime.regime_id,
+            conflict_ids=conflict_ids,
+            uncertainty_ids=uncertainty_ids,
+            lifecycle=SignalLifecycleState.QUALIFIED,
+            created_at=at,
+            expires_at=expires,
+        )
+
+
+_SIGNAL_NAMESPACE = UUID("9d5cddda-f3ea-5e9c-a220-68c97c4b4cd5")
+
+
+def _strategy_v2_digest(version: StrategyVersionV2) -> str:
+    payload = {
+        item.name: getattr(version, item.name)
+        for item in fields(version)
+        if item.name != "content_sha256"
+    }
+    return canonical_sha256(
+        {
+            "canonicalization_version": "canonical-json-v1",
+            "contract_id": "C-021",
+            "schema_version": "2",
+            "payload_version": "wire-1",
+            "payload": payload,
+        }
+    )
+
+
+def _qualification_digest(value: SignalQualificationV2) -> str:
+    from trading_platform_api.contracts.serialization import contract_sha256
+
+    return contract_sha256(value, payload_version="wire-1")
+
+
+@dataclass(frozen=True, slots=True)
 class NoTradeDecisionV2:
     """C-026 schema 2; identical decision shape with an additive reason code."""
 
@@ -584,6 +1197,14 @@ class NoTradeDecisionV2:
 
 
 __all__ = [
+    "InvalidationCombinationV2",
+    "InvalidationRuleSetV2",
+    "InvalidationTargetTypeV2",
+    "InvalidationTriggerV2",
+    "InvalidationTruthV2",
+    "SignalLineageV2",
+    "SignalV2",
+    "StrategyVersionV2",
     "C093DependenceReferenceV2",
     "EvidenceDependenceV2",
     "EvidenceGraphEdgeV2",

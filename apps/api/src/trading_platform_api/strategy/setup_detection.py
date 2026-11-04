@@ -39,12 +39,12 @@ from trading_platform_api.strategy.contracts import (
     SignalDirection,
     SignalLifecycleState,
     StrategyEligibility,
-    StrategyVersion,
     VersionReference,
 )
 from trading_platform_api.strategy.eligibility import StrategyEligibilityEvaluation
 from trading_platform_api.strategy.registry import (
     ResolvedStrategyVersion,
+    StrategyVersionRecord,
     strategy_version_content_sha256,
 )
 
@@ -393,7 +393,7 @@ def _validate_inputs(
 
 
 def _condition_structure_matches(
-    version: StrategyVersion, evaluation: StrategyConditionEvaluation
+    version: StrategyVersionRecord, evaluation: StrategyConditionEvaluation
 ) -> bool:
     expected_conditions = {item.condition_id: item for item in version.conditions}
     actual_conditions = {item.condition_id: item for item in evaluation.conditions}
@@ -423,7 +423,7 @@ def _condition_structure_matches(
 
 
 def _derive_direction(
-    version: StrategyVersion,
+    version: StrategyVersionRecord,
     context: SpotConditionContext,
     evaluation: StrategyConditionEvaluation,
 ) -> tuple[SignalDirection | None, str]:

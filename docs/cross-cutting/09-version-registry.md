@@ -486,3 +486,24 @@ versioned C-026 references without decoding the payload, so it needs no schema
 change. The current repository has no C-026-specific persistence or runtime
 producer; no DDL, migration, or backfill is needed. Future C-026 persistence
 must key/read by schema version.
+
+## ADR-0017 — Wave 4 C-021/C-070 schema compatibility foundation
+
+[`ADR-0017`](../adr/ADR-0017-proposed-wave-4-lifecycle-api-and-invalidation-boundary.md)
+was accepted by the repository owner through PR #442. This contract-foundation
+slice adds typed schema-2 meanings while preserving all schema-1 records and
+hashes. It does not implement #89 lifecycle runtime or #90 APIs.
+
+| Contract | Schema 1 | Schema 2 | Compatibility and identity |
+|---|---|---|---|
+| C-021 StrategyVersion | Frozen `StrategyVersion` and existing content-hash preimage. | `StrategyVersionV2` adds non-empty `InvalidationRuleSetV2` referencing exact same-record conditions/groups with PASS/FAIL and ANY/ALL. | Closed `(C-021, schema_version)` registry dispatch preserves concrete type; no down-conversion. V2 hashes the complete schema-2 record except its digest. Personal Spot v2 is semantic `2.0.0`, parented to immutable v1.0.0, and configures every required group as CONDITION_GROUP/FAIL with ANY. |
+| C-070 Signal | Frozen qualified-only `Signal` with legacy `SignalLineage`. | `SignalV2`/`SignalLineageV2` bind C-023v1, C-021v2, C-024v2, C-025v2, and C-028v2 references and construct deterministic UUIDv5 identity from canonical signal content. | V1-only consumers remain unsupported for v2 and must reject it. C-070v2 requires qualified status and PASS validation gates; its expiry is bounded by upstream validity. No risk, approval, order, or execution fields are introduced. |
+
+C-021 row persistence already stores the canonical envelope and digest, so
+schema dispatch requires no DDL or historical rewrite. The strategy store
+accepts only exact v1/v2 model types and rejects unknown schema discriminators.
+C-045 accepts C-070 references in its existing version-qualified reference
+record and preserves them without decoding the signal payload. Existing
+C-023/C-024v2/C-025v2/C-026v2/C-028v2 meanings are unchanged. Lifecycle events,
+expiry processing, invalidation evaluation, supersession, WATCH, persistence,
+and API routes remain assigned to later issues.

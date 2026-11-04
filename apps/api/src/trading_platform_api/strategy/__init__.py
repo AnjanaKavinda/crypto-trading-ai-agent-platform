@@ -1,3 +1,4 @@
+from trading_platform_api.strategy.codec import SignalCodecError, decode_signal_contract
 from trading_platform_api.strategy.condition_evaluator import (
     DSL_DEFINITION_VERSION,
     ConditionEvaluation,
@@ -50,7 +51,9 @@ from trading_platform_api.strategy.registry import (
     StrategyAvailability,
     StrategyRegistry,
     StrategyRegistryError,
+    StrategyVersionRecord,
     TransitionResult,
+    build_personal_spot_strategy_v2,
     semantic_version_is_greater,
     strategy_version_content_sha256,
     validate_semantic_version,
@@ -66,6 +69,8 @@ __all__ = [
     *_contracts_all,
     *_contracts_v2_all,
     "ConditionEvaluation",
+    "SignalCodecError",
+    "decode_signal_contract",
     "ConditionResultCode",
     "ConditionTruth",
     "DSL_DEFINITION_VERSION",
@@ -91,6 +96,8 @@ __all__ = [
     "StrategyAvailability",
     "StrategyRegistry",
     "StrategyRegistryError",
+    "StrategyVersionRecord",
+    "build_personal_spot_strategy_v2",
     "TransitionResult",
     "SetupDetectionEvaluation",
     "SetupDetectionOutcome",

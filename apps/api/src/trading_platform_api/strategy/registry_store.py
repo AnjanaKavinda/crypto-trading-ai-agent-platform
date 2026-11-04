@@ -8,7 +8,7 @@ from dataclasses import fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, cast, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 from sqlalchemy import and_, insert, select
@@ -27,6 +27,7 @@ from trading_platform_api.strategy.contracts import (
     StrategyVersion,
     VersionReference,
 )
+from trading_platform_api.strategy.contracts_v2 import StrategyVersionV2
 from trading_platform_api.strategy.registry import (
     LifecycleAxis,
     RegistryLifecycleEvent,
@@ -39,9 +40,12 @@ from trading_platform_api.strategy.tables import (
     strategy_registry_versions,
 )
 
-_MODELS: dict[str, type[Strategy] | type[StrategyVersion]] = {
-    "C-020": Strategy,
-    "C-021": StrategyVersion,
+_MODELS: dict[
+    tuple[str, str], type[Strategy] | type[StrategyVersion] | type[StrategyVersionV2]
+] = {
+    ("C-020", "1"): Strategy,
+    ("C-021", "1"): StrategyVersion,
+    ("C-021", "2"): StrategyVersionV2,
 }
 
 
@@ -86,12 +90,14 @@ class SqlAlchemyStrategyRegistryStore:
 
     async def register_version(
         self,
-        version: StrategyVersion,
+        version: StrategyVersion | StrategyVersionV2,
         initial_events: tuple[RegistryLifecycleEvent, RegistryLifecycleEvent],
         audit_events: tuple[AuditEvent, AuditEvent],
     ) -> None:
-        if type(version) is not StrategyVersion:
-            raise StrategyRegistryError("version must be the exact C-021 contract.")
+        if type(version) not in (StrategyVersion, StrategyVersionV2):
+            raise StrategyRegistryError(
+                "version must be an exact supported C-021 contract."
+            )
         if version.content_sha256 != strategy_version_content_sha256(version):
             raise StrategyRegistryError("C-021 content_sha256 does not match content.")
         if len(initial_events) != 2 or len(audit_events) != 2:
@@ -157,7 +163,9 @@ class SqlAlchemyStrategyRegistryStore:
             )
         return record
 
-    async def get_version(self, strategy_version_id: UUID) -> StrategyVersion | None:
+    async def get_version(
+        self, strategy_version_id: UUID
+    ) -> StrategyVersion | StrategyVersionV2 | None:
         result = await self._session.execute(
             select(strategy_registry_versions).where(
                 strategy_registry_versions.c.strategy_version_id == strategy_version_id
@@ -168,7 +176,7 @@ class SqlAlchemyStrategyRegistryStore:
 
     async def get_version_by_semantic_version(
         self, strategy_id: UUID, semantic_version: str
-    ) -> StrategyVersion | None:
+    ) -> StrategyVersion | StrategyVersionV2 | None:
         result = await self._session.execute(
             select(strategy_registry_versions).where(
                 and_(
@@ -363,24 +371,28 @@ class SqlAlchemyStrategyRegistryStore:
         if flush:
             await self._session.flush()
 
-    def _decode_version_row(self, row: Any) -> StrategyVersion:
+    def _decode_version_row(self, row: Any) -> StrategyVersion | StrategyVersionV2:
         record = _decode_contract(row["canonical_document"], "C-021")
+        if type(record) not in (StrategyVersion, StrategyVersionV2):
+            raise StrategyRegistryError(
+                "stored C-021 record failed content verification."
+            )
+        version = cast(StrategyVersion | StrategyVersionV2, record)
         if (
-            type(record) is not StrategyVersion
-            or record.strategy_version_id != row["strategy_version_id"]
-            or record.strategy_id != row["strategy_id"]
-            or record.semantic_version != row["semantic_version"]
-            or record.parent_version_id != row["parent_version_id"]
-            or record.created_at != row["created_at"]
-            or record.content_sha256 != row["content_sha256"]
-            or contract_sha256(record, payload_version="wire-1")
+            version.strategy_version_id != row["strategy_version_id"]
+            or version.strategy_id != row["strategy_id"]
+            or version.semantic_version != row["semantic_version"]
+            or version.parent_version_id != row["parent_version_id"]
+            or version.created_at != row["created_at"]
+            or version.content_sha256 != row["content_sha256"]
+            or contract_sha256(version, payload_version="wire-1")
             != row["document_sha256"]
-            or strategy_version_content_sha256(record) != row["content_sha256"]
+            or strategy_version_content_sha256(version) != row["content_sha256"]
         ):
             raise StrategyRegistryError(
                 "stored C-021 record failed content verification."
             )
-        return record
+        return version
 
 
 def _validate_initial_event(
@@ -451,14 +463,16 @@ def _decode_contract(document: str, expected_contract: str) -> object:
             }
             or envelope["canonicalization_version"] != "canonical-json-v1"
             or envelope["contract_id"] != expected_contract
-            or envelope["schema_version"] != "1"
+            or type(envelope["schema_version"]) is not str
             or envelope["payload_version"] != "wire-1"
             or type(envelope["payload"]) is not dict
         ):
             raise ValueError
-        model = _MODELS[expected_contract]
+        model = _MODELS[(expected_contract, envelope["schema_version"])]
         payload = dict(envelope["payload"])
-        payload.update(contract_id=expected_contract, schema_version="1")
+        payload.update(
+            contract_id=expected_contract, schema_version=envelope["schema_version"]
+        )
         record = _decode_value(model, payload)
         if serialize_contract(record, payload_version="wire-1") != document:
             raise ValueError
