@@ -186,9 +186,19 @@ def validate_oos_selection(
     if len(by_id) != len(revisions):
         raise OOSValidationError("duplicate revision identities are invalid.")
     manifest_ids = set(manifest.selected_revision_ids)
+    manifest_pins = {
+        item.evidence_id: item.content_sha256 for item in manifest.revision_pins
+    }
     selected_ids = set(plan.training_revision_ids) | set(plan.oos_revision_ids)
     if not selected_ids.issubset(manifest_ids):
         raise OOSValidationError("partition membership is not pinned by C-103.")
+    if any(
+        revision_id not in manifest_pins
+        or revision_id not in by_id
+        or canonical_sha256(by_id[revision_id]) != manifest_pins[revision_id]
+        for revision_id in selected_ids
+    ):
+        raise OOSValidationError("C-102 revision content does not match C-103 pins.")
     for revision_id in plan.training_revision_ids:
         revision = by_id.get(revision_id)
         if revision is None or not (
