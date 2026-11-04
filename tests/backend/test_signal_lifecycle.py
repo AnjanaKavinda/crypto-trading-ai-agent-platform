@@ -148,7 +148,9 @@ def test_runtime_replay_idempotency_and_illegal_transition_audit() -> None:
     assert first.accepted and not first.duplicate
     assert duplicate.accepted and duplicate.duplicate
     assert second.accepted
-    assert asyncio.run(runtime.projection(subject)) is SignalLifecycleProjection.QUALIFIED
+    assert (
+        asyncio.run(runtime.projection(subject)) is SignalLifecycleProjection.QUALIFIED
+    )
 
     illegal = _event(
         subject=subject,
