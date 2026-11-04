@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid5
 
 from sqlalchemy import insert, select
@@ -20,13 +20,16 @@ from trading_platform_api.strategy.condition_evaluator import (
 )
 from trading_platform_api.strategy.contracts import (
     SignalCandidate,
-    SignalLifecycleState,
     VersionReference,
 )
+from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.strategy.contracts_v2 import (
     InvalidationCombinationV2,
     InvalidationTargetTypeV2,
     InvalidationTruthV2,
+    SignalEvidencePackageV2,
+    SignalQualificationV2,
+    SignalV2,
     StrategyVersionV2,
 )
 from trading_platform_api.strategy.tables import signal_lifecycle_events
@@ -219,6 +222,13 @@ class SqlAlchemySignalLifecycleStore:
     async def append_rejected(self, audit_event: AuditEvent) -> None:
         if type(audit_event) is not AuditEvent:
             raise TypeError("audit_event must be C-060.")
+        existing = await self._session.execute(
+            select(AuditEventRow.audit_id).where(
+                AuditEventRow.audit_id == audit_event.audit_id
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            return
         self._session.add(AuditEventRow.from_event(audit_event))
         await self._session.flush()
 
@@ -257,6 +267,52 @@ class SignalLifecycleRuntime:
     ) -> SignalLifecycleProjection | None:
         history = await self._store.history(subject)
         return history[-1].resulting_state if history else None
+
+
+def publish_qualified_signal(
+    *,
+    candidate: SignalCandidate,
+    strategy: StrategyVersionV2,
+    package: SignalEvidencePackageV2,
+    qualification: SignalQualificationV2,
+    market_context: MarketContextV5,
+    now: datetime,
+    recorded_at: datetime,
+    correlation_id: str,
+    signal_fields: dict[str, object],
+) -> tuple[SignalV2, SignalLifecycleEvent]:
+    """Resolve the exact qualified C-070v2 and its matching lifecycle event."""
+    signal = SignalV2.build(
+        candidate=candidate,
+        strategy=strategy,
+        package=package,
+        qualification=qualification,
+        market_context=market_context,
+        now=now,
+        signal_fields=signal_fields,
+    )
+    candidate_ref = VersionReference(
+        "C-023", candidate.candidate_id, "1", canonical_sha256(candidate)
+    )
+    signal_ref = VersionReference(
+        "C-070", signal.signal_id, "2", canonical_sha256(signal)
+    )
+    event = SignalLifecycleEvent(
+        subject=candidate_ref,
+        prior_state=SignalLifecycleProjection.CANDIDATE,
+        resulting_state=SignalLifecycleProjection.QUALIFIED,
+        event_type=SignalLifecycleEventType.QUALIFIED,
+        cause=SignalLifecycleCause.SOURCE_DECISION,
+        source_references=(
+            signal_ref,
+            signal.lineage.qualification,
+            signal.lineage.validation,
+        ),
+        event_time=signal.created_at,
+        recorded_at=recorded_at,
+        correlation_id=correlation_id,
+    )
+    return signal, event
 
 
 def invalidation_rule_matches(
@@ -439,7 +495,7 @@ def _reference_from_document(value: object) -> VersionReference:
     )
 
 
-def _event_from_row(row: object) -> SignalLifecycleEvent:
+def _event_from_row(row: Any) -> SignalLifecycleEvent:
     event = SignalLifecycleEvent(
         subject=VersionReference(
             row["subject_contract_id"],
@@ -485,4 +541,5 @@ __all__ = [
     "can_explicitly_supersede",
     "effective_expiry",
     "invalidation_rule_matches",
+    "publish_qualified_signal",
 ]
