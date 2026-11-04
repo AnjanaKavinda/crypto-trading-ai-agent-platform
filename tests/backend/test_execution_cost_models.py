@@ -38,7 +38,7 @@ def profile(**overrides):
         "taker_fee_bps": Decimal("12"),
         "spread_bps": Decimal("4"),
         "slippage_bps": Decimal("6"),
-        "latency_bars": Decimal("1"),
+        "latency_bars": 1,
         "stress_multiplier": Decimal("1"),
         "effective_from": NOW - timedelta(days=1),
         "valid_until": NOW + timedelta(days=1),
@@ -99,7 +99,7 @@ def test_maker_taker_and_stress_costs_are_explicit() -> None:
     assert taker.total > maker.total
     assert maker.spread == Decimal("4")
     assert maker.slippage == Decimal("12")
-    assert maker.latency_bars == Decimal("1")
+    assert maker.latency_bars == 1
 
 
 @pytest.mark.parametrize(
@@ -109,6 +109,13 @@ def test_maker_taker_and_stress_costs_are_explicit() -> None:
 def test_zero_cost_defaults_are_rejected(field: str) -> None:
     with pytest.raises(CostModelError, match="positive"):
         profile(**{field: Decimal("0")})
+
+
+def test_fractional_or_negative_bar_latency_is_rejected() -> None:
+    with pytest.raises(CostModelError, match="non-negative integer"):
+        profile(latency_bars=Decimal("0.5"))
+    with pytest.raises(CostModelError, match="non-negative integer"):
+        profile(latency_bars=-1)
 
 
 def test_stale_or_future_cost_profile_is_rejected() -> None:
