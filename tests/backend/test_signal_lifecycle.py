@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from test_qualification_rule_evaluator import request
@@ -62,7 +62,12 @@ def _candidate_ref(candidate):
 
 
 def _source_ref(kind: str = "C-025"):
-    return VersionReference(kind, uuid4(), "2", "a" * 64)
+    return VersionReference(
+        kind,
+        UUID("11111111-1111-4111-8111-111111111111"),
+        "2",
+        "a" * 64,
+    )
 
 
 def _event(
@@ -222,8 +227,10 @@ def test_qualified_wave3_chain_publishes_c070v2_and_lifecycle_event() -> None:
     assert signal == repeat_signal
     assert event.event_id == repeat_event.event_id
     assert event.resulting_state is SignalLifecycleProjection.QUALIFIED
-    assert event.source_references[0].artifact_type == "C-070"
-    assert event.source_references[0].artifact_id == signal.signal_id
+    signal_reference = next(
+        item for item in event.source_references if item.artifact_type == "C-070"
+    )
+    assert signal_reference.artifact_id == signal.signal_id
 
 
 def test_personal_spot_invalidation_requires_exact_fresh_fail() -> None:
