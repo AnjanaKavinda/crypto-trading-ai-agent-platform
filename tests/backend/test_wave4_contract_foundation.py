@@ -290,12 +290,25 @@ def test_wave3_chain_and_c070v2_exact_lineage_from_personal_spot_v2() -> None:
     assert result.execution_authorized is False
     assert result.parameter_set == result.lineage.strategy_version
     assert result.configuration.artifact_type == "C-025-RULESET"
-    assert result.configuration.artifact_id == qualification.qualification.validation.rule_set.rule_set_id
-    assert result.configuration.version == qualification.qualification.validation.rule_set.version
-    assert result.configuration.content_sha256 == qualification.qualification.validation.rule_set.content_sha256
+    assert (
+        result.configuration.artifact_id
+        == qualification.qualification.validation.rule_set.rule_set_id
+    )
+    assert (
+        result.configuration.version
+        == qualification.qualification.validation.rule_set.version
+    )
+    assert (
+        result.configuration.content_sha256
+        == qualification.qualification.validation.rule_set.content_sha256
+    )
     assert result.regime_id == case[2].market_context.regime.regime_id
-    assert result.conflict_ids == tuple(item.artifact_id for item in package.conflicts)
-    assert result.uncertainty_ids == tuple(item.artifact_id for item in package.uncertainties)
+    assert result.conflict_ids == tuple(
+        item.artifact_id for item in package.conflicts
+    )
+    assert result.uncertainty_ids == tuple(
+        item.artifact_id for item in package.uncertainties
+    )
     encoded = serialize_contract(result, payload_version="wire-1")
     assert decode_signal_contract(encoded) == result
     unsupported = encoded.replace('"schema_version":"2"', '"schema_version":"3"', 1)
