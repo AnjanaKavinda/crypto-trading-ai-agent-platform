@@ -36,6 +36,7 @@ class SpotExecutionCostProfile:
     instrument_id: str
     asset: str
     fee_tier: str
+    source_reference: ValidationArtifactReferenceV2
     maker_fee_bps: Decimal
     taker_fee_bps: Decimal
     spread_bps: Decimal
@@ -57,6 +58,10 @@ class SpotExecutionCostProfile:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip() or value != value.strip():
                 raise CostModelError(f"{name} must be a non-blank trimmed string.")
+        if type(self.source_reference) is not ValidationArtifactReferenceV2:
+            raise CostModelError(
+                "source_reference must be an exact versioned source reference."
+            )
         for name in (
             "maker_fee_bps",
             "taker_fee_bps",
