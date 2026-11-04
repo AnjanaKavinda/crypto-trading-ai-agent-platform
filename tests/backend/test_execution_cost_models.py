@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from trading_platform_api.validation import (
     AssumptionCategory,
     CostApplicabilityV2,
+    ValidationArtifactReferenceV2,
 )
 from trading_platform_api.validation.cost_models import (
     CostModelError,
@@ -27,6 +28,12 @@ def profile(**overrides):
         "instrument_id": "BTC-USDT-SPOT",
         "asset": "BTC",
         "fee_tier": "personal-research-explicit-v1",
+        "source_reference": ValidationArtifactReferenceV2(
+            "C-091",
+            UUID("22222222-2222-4222-8222-222222222222"),
+            "1",
+            "c" * 64,
+        ),
         "maker_fee_bps": Decimal("10"),
         "taker_fee_bps": Decimal("12"),
         "spread_bps": Decimal("4"),
@@ -55,6 +62,10 @@ def test_spot_cost_assumptions_are_deterministic_and_complete() -> None:
     assert value == repeat
     assert value.assumption_set_id == repeat.assumption_set_id
     assert value.instrument_type == "SPOT"
+    assert all(
+        item.model.content_sha256 == profile().content_sha256
+        for item in value.assumptions
+    )
     assert set(value.required_categories) == {
         AssumptionCategory.FEE,
         AssumptionCategory.SPREAD,
