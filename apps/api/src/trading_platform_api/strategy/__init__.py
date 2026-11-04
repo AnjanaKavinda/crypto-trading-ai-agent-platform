@@ -25,11 +25,6 @@ from trading_platform_api.strategy.evidence_package import (
     EvidencePackageStatus,
     build_signal_evidence_package_v2,
 )
-from trading_platform_api.strategy.no_trade import (
-    NoTradeEngineResult,
-    NoTradeEngineStatus,
-    evaluate_no_trade_v2,
-)
 from trading_platform_api.strategy.lifecycle import (
     SignalLifecycleAppendResult,
     SignalLifecycleCause,
@@ -43,6 +38,11 @@ from trading_platform_api.strategy.lifecycle import (
     effective_expiry,
     invalidation_rule_matches,
     publish_qualified_signal,
+)
+from trading_platform_api.strategy.no_trade import (
+    NoTradeEngineResult,
+    NoTradeEngineStatus,
+    evaluate_no_trade_v2,
 )
 from trading_platform_api.strategy.qualification import (
     QualificationEngineResult,
