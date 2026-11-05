@@ -37,12 +37,12 @@ class StrategySignalApiError(RuntimeError):
 
 
 class ApiVersionReference(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    contract_id: str = Field(min_length=1, max_length=32)
+    contract_id: str = Field(min_length=1, max_length=32, strict=True)
     artifact_id: UUID
-    schema_version: str = Field(min_length=1, max_length=128)
-    content_sha256: str = Field(min_length=64, max_length=64)
+    schema_version: str = Field(min_length=1, max_length=128, strict=True)
+    content_sha256: str = Field(min_length=64, max_length=64, strict=True)
 
     @field_validator("content_sha256")
     @classmethod
@@ -81,9 +81,9 @@ class StrategyArtifactPage(BaseModel):
 
 
 class StrategyEvaluationRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    profile: str = PROFILE
+    profile: str = Field(default=PROFILE, strict=True)
     strategy_version: ApiVersionReference
     market_context: ApiVersionReference
 
