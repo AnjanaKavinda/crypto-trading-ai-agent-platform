@@ -1,3 +1,27 @@
+## Governed implementation V2
+
+For governed Copilot implementation work, read the latest owner/controller
+`EXECUTION_PACKET` on the linked issue before editing.
+
+The packet binds the exact `dev` base SHA, scope/profile, frozen architecture,
+custom agent, explicit profile-scoped dependency satisfaction, boundaries, and
+stop conditions.
+
+Before implementation classify the current state as exactly one of:
+`ALREADY_COMPLETE`, `PARTIALLY_COMPLETE`, `MISSING`, or `BLOCKED`.
+
+Do not reopen frozen architecture for ordinary implementation choices. Stop only
+for a concrete contradiction with a higher-authority source, destructive
+migration, authority/safety expansion, or information that cannot be truthfully
+derived.
+
+A changed PR head invalidates prior readiness. Correction review is bounded to
+the correction plus exact-head regression unless a new concrete defect is
+demonstrated.
+
+ADR-0018 governs this development-automation behavior. Human owner merge
+authority remains mandatory.
+
 # Copilot Repository Instructions
 
 This repository implements an enterprise-grade supervised autonomous crypto trading intelligence and execution platform.
