@@ -45,6 +45,12 @@ from trading_platform_api.spot_research import (
     validate_local_origin,
 )
 from trading_platform_api.spot_research_store import SqlAlchemySpotResearchStore
+from trading_platform_api.strategy_api import (
+    StrategySignalApiError,
+    StrategySignalApiService,
+    UnavailableStrategySignalApiService,
+    create_strategy_signal_router,
+)
 
 APP_TITLE = "Trading Platform API"
 APP_VERSION = "0.1.0"
@@ -183,6 +189,7 @@ def create_app(
     settings: AppSettings | None = None,
     *,
     research_service: SpotResearchService | None = None,
+    strategy_signal_service: StrategySignalApiService | None = None,
     allowed_origin: str | None = None,
     _docker_local: bool = False,
 ) -> FastAPI:
@@ -210,6 +217,11 @@ def create_app(
         if research_service is not None
         else _make_default_research_service(engine_holder=engine_holder)
     )
+    app.state.strategy_signal_service = (
+        strategy_signal_service
+        if strategy_signal_service is not None
+        else UnavailableStrategySignalApiService()
+    )
     if docker_settings is not None:
         allowed_origin = docker_settings.origin
     elif allowed_origin is None:
@@ -233,6 +245,7 @@ def create_app(
     )
     app.include_router(create_health_router())
     app.include_router(create_research_router())
+    app.include_router(create_strategy_signal_router())
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(
@@ -244,6 +257,18 @@ def create_app(
                 correlation_id=request.state.correlation_id,
                 occurred_at=datetime.now(UTC),
             )
+        )
+
+    @app.exception_handler(StrategySignalApiError)
+    async def handle_strategy_signal_error(
+        request: Request, exception: StrategySignalApiError
+    ) -> JSONResponse:
+        return _problem(
+            request,
+            status=exception.status,
+            code=exception.code,
+            title=exception.title,
+            detail=exception.detail,
         )
 
     @app.exception_handler(SpotResearchError)
