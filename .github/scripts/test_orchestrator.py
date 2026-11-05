@@ -63,6 +63,24 @@ class GovernanceTests(unittest.TestCase):
             [])
         self.assertEqual(resolve_canonical_number(
             "# Issue 004 — Requirements traceability baseline")[0], 4)
+    def test_v2_dispatch_uses_catalog_when_issue_documents_multiple_paths(self):
+        catalog = {88: [32, *range(67, 77)]}
+        body = (
+            "## Dependencies\n"
+            "**Full-platform path:** 032,067-076.\n"
+            "**PERSONAL_SPOT_RESEARCH path:** GitHub #34/#256 and all of #69-#78."
+        )
+        parsed = parse_dependencies(body)
+        self.assertNotEqual(parsed, catalog[88])
+        self.assertEqual(
+            orchestrate_issue.resolve_dispatch_dependencies(88, catalog, parsed),
+            catalog[88],
+        )
+        with self.assertRaisesRegex(
+            GovernanceError, "missing from approved catalog"
+        ):
+            orchestrate_issue.resolve_dispatch_dependencies(89, catalog, parsed)
+
     def test_smc_catalog_dependencies_match_spot_prerequisites(self):
         catalog = Path(__file__).parents[2] / "docs/copilot-team/04-issues/ISSUE-CATALOG.md"
         dependencies = parse_catalog_dependencies(catalog.read_text(encoding="utf-8"))[55]
