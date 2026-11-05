@@ -83,6 +83,12 @@ fields.
 
 Absent explicit packet evidence, the normal closed-dependency rule remains.
 
+The canonical issue catalog remains authoritative for dependency identity.
+Issue prose may describe more than one approved delivery/profile path and must
+not be reduced to a competing dependency set by the free-form dependency
+parser. The Execution Packet is the only V2 mechanism that may explicitly mark
+catalog dependencies satisfied for a narrower approved profile.
+
 ### 3. Pilot graduation
 
 The per-issue `GOVERNED_PILOT_ISSUES` allowlist is retired as a dispatch and
