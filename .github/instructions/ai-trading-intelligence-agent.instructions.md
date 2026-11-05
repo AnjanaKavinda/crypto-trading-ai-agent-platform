@@ -1,5 +1,5 @@
 ---
-applyTo: "services/market-data/**,services/analysis/**,services/strategy/**,services/validation/**,agents/**,tests/trading-intelligence/**"
+applyTo: "apps/api/src/trading_platform_api/analysis/**,apps/api/src/trading_platform_api/strategy/**,apps/api/src/trading_platform_api/validation/**,apps/api/src/trading_platform_api/agents/**,apps/api/src/trading_platform_api/orchestration/**,apps/api/migrations/**,tests/backend/**"
 ---
 
 # AI-Trading Intelligence Path Instructions
@@ -16,9 +16,26 @@ Read:
 - approved analytical contracts
 - approved ADRs
 
-If sources conflict:
+If sources conflict with the frozen Execution Packet, approved ADR, or shared
+contract, stop and report the concrete contradiction. Do not stop for an
+ordinary implementation choice that can be resolved without changing frozen
+architecture or authority.
 
-STOP and report the conflict.
+## Execution Packet rule
+
+Before editing, read the current owner/controller Execution Packet for the issue.
+
+Classify the existing implementation exactly once as:
+
+- ALREADY_COMPLETE
+- PARTIALLY_COMPLETE
+- MISSING
+- BLOCKED
+
+Implement only genuinely missing scope.
+
+The Execution Packet's architecture decisions are frozen for the task. Do not
+reopen them merely because another reasonable implementation exists.
 
 ## Analytical stage separation
 

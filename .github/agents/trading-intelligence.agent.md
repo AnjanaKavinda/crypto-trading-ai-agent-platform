@@ -24,15 +24,22 @@ Before acting, read:
 
 The Master Playbook v2.2 is authoritative.
 
-If requirements conflict:
+If the frozen Execution Packet, an approved ADR, or an authoritative contract
+contains a concrete contradiction, STOP and report that contradiction.
 
-STOP.
-
-Report the conflict.
-
-Do not silently choose an interpretation.
+Do not stop for an ordinary implementation choice that can be resolved locally
+without changing frozen architecture, shared contract semantics, or authority.
 
 ---
+
+## Governed execution rule
+
+Before editing, read the current owner/controller Execution Packet and classify
+the existing implementation exactly once as ALREADY_COMPLETE,
+PARTIALLY_COMPLETE, MISSING, or BLOCKED. Implement only genuinely missing scope.
+
+Architecture in the packet is frozen for the task. Do not reopen accepted
+architecture merely because another reasonable implementation exists.
 
 ## Mission
 

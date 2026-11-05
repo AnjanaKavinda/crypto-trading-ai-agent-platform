@@ -1,3 +1,10 @@
+> **V2 supersession note (2026-11-05):** ADR-0018 supersedes the pilot-only
+> dispatch restrictions in this document for normal governed implementation.
+> The per-issue `GOVERNED_PILOT_ISSUES` allowlist is retired. A global
+> fail-closed automation switch, deterministic routing, exact owner Execution
+> Packet, profile-scoped dependency evidence, exact-head review, and human merge
+> authority remain mandatory. Historical V1/V1.1 records remain valid.
+
 # Governed Copilot orchestrator V1
 
 The repository-side V1 controller rules live in

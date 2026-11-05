@@ -341,13 +341,60 @@ class GovernanceTests(unittest.TestCase):
             orchestrate_issue.validate_assignment_handoff(
                 issue, comments, "AnjanaKavinda",
                 [{"login": "AnjanaKavinda", "type": "User", "id": 1}])
-        orchestrate_issue.validate_assignment_controls(
-            "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
-            pilot_enabled="true", pilot_issues={"6"}, implementer_session="session")
-        with self.assertRaises(GovernanceError):
+        with patch.dict(
+            os.environ, {"GOVERNED_AUTOMATION_ENABLED": "true"}, clear=False
+        ):
             orchestrate_issue.validate_assignment_controls(
-                "6", "AnjanaKavinda", allowed_actors={"AnjanaKavinda"},
-                pilot_enabled="false", pilot_issues={"6"}, implementer_session="session")
+                "6",
+                "AnjanaKavinda",
+                allowed_actors={"AnjanaKavinda"},
+                implementer_session="session",
+            )
+        with patch.dict(
+            os.environ,
+            {"GOVERNED_AUTOMATION_ENABLED": "false", "GOVERNED_PILOT_ENABLED": ""},
+            clear=False,
+        ):
+            with self.assertRaises(GovernanceError):
+                orchestrate_issue.validate_assignment_controls(
+                    "6",
+                    "AnjanaKavinda",
+                    allowed_actors={"AnjanaKavinda"},
+                    implementer_session="session",
+                )
+
+    def test_v2_execution_packet_is_owner_bound_and_exact(self):
+        packet = {
+            "issue_id": 90,
+            "base_branch": "dev",
+            "base_sha": "a" * 40,
+            "scope_profile": "PERSONAL_SPOT_RESEARCH",
+            "architecture_state": "FROZEN",
+            "agent_role": "Trading Intelligence Engineer",
+            "satisfied_dependencies": [67, 68],
+            "boundaries": ["no execution"],
+            "stop_conditions": ["frozen contract contradiction"],
+        }
+        comments = [
+            {
+                "id": 1,
+                "user": {"login": "other"},
+                "body": f"EXECUTION_PACKET {json.dumps(packet)}",
+            },
+            {
+                "id": 2,
+                "user": {"login": "AnjanaKavinda"},
+                "body": f"EXECUTION_PACKET {json.dumps(packet)}",
+            },
+        ]
+        self.assertEqual(
+            orchestrate_issue.current_execution_packet(90, comments), packet
+        )
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.current_execution_packet(
+                91,
+                comments,
+            )
 
     def test_human_assignment_handoff_rejects_stale_or_duplicate_ready_records(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
@@ -1271,8 +1318,8 @@ class GovernanceTests(unittest.TestCase):
                             "verify-branch-rulesets.ps1").read_text(encoding="utf-8")
 
         self.assertIn("governed automation is disabled by the global kill switch", issue_source)
-        self.assertIn("GOVERNED_PILOT_ISSUES", issue_source)
-        self.assertIn("GOVERNED_PILOT_ISSUES:", issue_workflow)
+        self.assertIn("current_execution_packet", issue_source)
+        self.assertIn("GOVERNED_AUTOMATION_ENABLED:", issue_workflow)
         self.assertIn('workflows: ["Governance CI", "Product CI"]', review_workflow)
         self.assertIn("governance-gate", review_workflow)
         self.assertIn("GOVERNED_REVIEW_ARTIFACT_FILE", review_workflow)
@@ -1289,8 +1336,8 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("state=closed", transition_source)
         self.assertIn('"github-actions[bot]"', transition_source)
         self.assertIn("trusted_correction_actors", transition_source)
-        self.assertIn('GOVERNED_PILOT_ENABLED', transition_source)
-        self.assertIn('GOVERNED_PILOT_ISSUES', transition_source)
+        self.assertIn('automation_enabled', transition_source)
+        self.assertIn('current_execution_packet', transition_source)
         self.assertIn("owner_checks_ready", review_workflow)
         self.assertIn("'product-ci', 'governance-ci'", review_workflow)
         self.assertIn("unset GOVERNED_REVIEW_RESULT_FILE", review_workflow)

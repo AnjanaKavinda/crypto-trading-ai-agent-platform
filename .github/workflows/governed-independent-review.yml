@@ -25,10 +25,10 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'pull_request' &&
-       vars.GOVERNED_PILOT_ENABLED == 'true') ||
+       (vars.GOVERNED_AUTOMATION_ENABLED == 'true' || vars.GOVERNED_PILOT_ENABLED == 'true')) ||
       (github.event_name == 'pull_request_review' &&
        github.event.pull_request.base.ref == 'dev' &&
-       vars.GOVERNED_PILOT_ENABLED == 'true')
+       (vars.GOVERNED_AUTOMATION_ENABLED == 'true' || vars.GOVERNED_PILOT_ENABLED == 'true'))
     runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
@@ -86,10 +86,10 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'pull_request' &&
-       vars.GOVERNED_PILOT_ENABLED == 'true') ||
+       (vars.GOVERNED_AUTOMATION_ENABLED == 'true' || vars.GOVERNED_PILOT_ENABLED == 'true')) ||
       (github.event_name == 'pull_request_review' &&
        github.event.pull_request.base.ref == 'dev' &&
-       vars.GOVERNED_PILOT_ENABLED == 'true')
+       (vars.GOVERNED_AUTOMATION_ENABLED == 'true' || vars.GOVERNED_PILOT_ENABLED == 'true'))
     runs-on: ubuntu-latest
     outputs:
       tier: ${{ steps.classify.outputs.tier }}
@@ -208,7 +208,7 @@ jobs:
            needs.classify-r1.outputs.owner_review_available == 'true')))) ||
        (github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'pull_request' &&
-        vars.GOVERNED_PILOT_ENABLED == 'true' &&
+        (vars.GOVERNED_AUTOMATION_ENABLED == 'true' || vars.GOVERNED_PILOT_ENABLED == 'true') &&
         ((needs.resolve-pr.outputs.owner_direct == 'true' &&
           needs.classify-r1.outputs.owner_checks_ready == 'true' &&
           (needs.classify-r1.outputs.tier != 'R1' ||
@@ -218,7 +218,7 @@ jobs:
           github.event.workflow_run.name == 'Governance CI'))) ||
        (github.event_name == 'pull_request_review' &&
         github.event.pull_request.base.ref == 'dev' &&
-        vars.GOVERNED_PILOT_ENABLED == 'true' &&
+        (vars.GOVERNED_AUTOMATION_ENABLED == 'true' || vars.GOVERNED_PILOT_ENABLED == 'true') &&
         needs.resolve-pr.outputs.owner_direct == 'true' &&
         needs.classify-r1.outputs.tier == 'R1' &&
         needs.classify-r1.outputs.owner_checks_ready == 'true' &&
@@ -247,7 +247,6 @@ jobs:
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_AI_REVIEWER_ROLE: ${{ vars.GOVERNED_AI_REVIEWER_ROLE }}
-          GOVERNED_PILOT_ISSUES: ${{ vars.GOVERNED_PILOT_ISSUES }}
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           REQUIRED_CHECKS: ${{ vars.GOVERNED_REQUIRED_CHECKS }}
           REVIEW_CONTEXT_MAX_BYTES: ${{ vars.REVIEW_CONTEXT_MAX_BYTES }}
@@ -265,11 +264,6 @@ jobs:
           except Exception as error:
               raise SystemExit(str(error)) from error
           open('/tmp/issue_number.txt', 'w').write(str(issue_id))
-          if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
-              allowed = {item.strip() for item in os.environ.get(
-                  'GOVERNED_PILOT_ISSUES', '').split(',') if item.strip()}
-              if '*' not in allowed and str(issue_id) not in allowed:
-                  raise SystemExit('linked issue is not on the governed pilot allowlist')
           PY
           gh api "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)" > /tmp/issue.json
           gh api --paginate --slurp "repos/${{ github.repository }}/issues/$(cat /tmp/issue_number.txt)/comments" > /tmp/issue-comments.json
@@ -535,7 +529,6 @@ jobs:
           GOVERNED_CONTROLLER: ${{ vars.GOVERNED_CONTROLLER }}
           GOVERNED_PR_AUTHORS: ${{ vars.GOVERNED_PR_AUTHORS }}
           GOVERNED_PILOT_ENABLED: ${{ vars.GOVERNED_PILOT_ENABLED }}
-          GOVERNED_PILOT_ISSUES: ${{ vars.GOVERNED_PILOT_ISSUES }}
           GOVERNED_REVIEWER_ROLES: ${{ vars.GOVERNED_REVIEWER_ROLES }}
           GOVERNED_REVIEWER_TIERS: ${{ vars.GOVERNED_REVIEWER_TIERS }}
           GOVERNED_IMPLEMENTER_SESSION: ${{ vars.GOVERNED_IMPLEMENTER_SESSION }}

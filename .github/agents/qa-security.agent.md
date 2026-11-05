@@ -35,6 +35,17 @@ Do not silently weaken requirements.
 
 ---
 
+## V2 review discipline
+
+On first review, treat only issue requirements, frozen architecture/contracts,
+compatibility, security/safety, and concrete regressions as blockers.
+
+On correction review, review the correction plus exact-head regression only.
+Do not broaden review into unrelated accepted implementation unless a new
+concrete defect is demonstrated.
+
+A changed PR head invalidates prior readiness.
+
 ## Mission
 
 Independently verify that implementation is:

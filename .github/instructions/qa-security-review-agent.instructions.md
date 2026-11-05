@@ -23,6 +23,17 @@ STOP and report the conflict.
 
 Do not weaken requirements silently.
 
+## Review scope discipline
+
+For a first review, block only on issue requirements, frozen architecture or
+contracts, compatibility, security/safety, or a concrete regression.
+
+For a correction review, review the correction and exact-head regression only.
+Do not reopen unrelated accepted implementation unless a new concrete defect is
+demonstrated.
+
+Any new PR head SHA invalidates prior readiness and must be reviewed again.
+
 ## Review responsibility
 
 Check:
