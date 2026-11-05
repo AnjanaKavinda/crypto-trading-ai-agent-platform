@@ -50,9 +50,7 @@ class FakeStrategySignalService:
         self.queries: list[ArtifactListQuery] = []
         self.evaluations: list[StrategyEvaluationRequest] = []
 
-    async def list_artifacts(
-        self, query: ArtifactListQuery
-    ) -> StrategyArtifactPage:
+    async def list_artifacts(self, query: ArtifactListQuery) -> StrategyArtifactPage:
         self.queries.append(query)
         return StrategyArtifactPage(items=(self.view,), next_cursor=None)
 

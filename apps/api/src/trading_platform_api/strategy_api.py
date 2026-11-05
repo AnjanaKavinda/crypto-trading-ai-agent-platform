@@ -168,9 +168,7 @@ class UnavailableStrategySignalApiService:
             detail="The exact strategy research resolver is not configured.",
         )
 
-    async def list_artifacts(
-        self, query: ArtifactListQuery
-    ) -> StrategyArtifactPage:
+    async def list_artifacts(self, query: ArtifactListQuery) -> StrategyArtifactPage:
         del query
         raise self._unavailable()
 
@@ -243,9 +241,7 @@ def decode_cursor(
     try:
         padding = "=" * (-len(cursor) % 4)
         document = json.loads(
-            base64.urlsafe_b64decode((cursor + padding).encode("ascii")).decode(
-                "utf-8"
-            )
+            base64.urlsafe_b64decode((cursor + padding).encode("ascii")).decode("utf-8")
         )
         if type(document) is not dict or set(document) != {"payload", "checksum"}:
             raise ValueError
