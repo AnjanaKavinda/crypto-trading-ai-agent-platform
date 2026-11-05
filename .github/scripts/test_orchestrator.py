@@ -484,14 +484,14 @@ class GovernanceTests(unittest.TestCase):
             {
                 "user": {"login": "github-actions[bot]"},
                 "body": (
-                    f"{orchestrate_issue.MARKER}\\nDISPATCH_READY "
+                    f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
                     f"{json.dumps(old_record, sort_keys=True)}"
                 ),
             },
             {
                 "user": {"login": "github-actions[bot]"},
                 "body": (
-                    f"{orchestrate_issue.MARKER}\\nDISPATCH_READY "
+                    f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
                     f"{json.dumps(current_record, sort_keys=True)}"
                 ),
             },
