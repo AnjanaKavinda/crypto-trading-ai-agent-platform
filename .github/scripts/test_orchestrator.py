@@ -2004,3 +2004,62 @@ def load_tests(loader, tests, pattern):
 
 if __name__ == "__main__":
     unittest.main()
+
+class LatestDispatchHandoffRegressionTests(unittest.TestCase):
+    def test_assignment_uses_latest_distinct_dispatch_and_keeps_history(self):
+        def record(key: str, prompt: str) -> dict:
+            return {
+                "issue_id": 90,
+                "base_branch": "dev",
+                "agent": "Trading Intelligence Engineer",
+                "agent_role": "Trading Intelligence Engineer",
+                "capability_tier": "strong-coding-reasoning",
+                "review_tier": "R2",
+                "risk_classification": "medium",
+                "context_pack_id": "pack",
+                "context_pack_version": "v1.1",
+                "controller_policy_version": "v2",
+                "implementer_session_id": "session",
+                "routing_reason": "test",
+                "retry_count": 0,
+                "prompt_hash": sha256(prompt.encode()).hexdigest(),
+                "dispatch_key": key,
+                "prompt": prompt,
+            }
+
+        old = record("old-key", "old refined prompt")
+        latest = record("new-key", "new refined prompt")
+        comments = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": (
+                    f"{orchestrate_issue.MARKER}\n"
+                    f"DISPATCH_READY {json.dumps(old)}"
+                ),
+            },
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": (
+                    f"{orchestrate_issue.MARKER}\n"
+                    f"DISPATCH_READY {json.dumps(latest)}"
+                ),
+            },
+        ]
+
+        selected = orchestrate_issue.validate_assignment_handoff(
+            {"number": 90},
+            comments,
+            "AnjanaKavinda",
+            [{"login": "Copilot", "type": "Bot", "id": 198982749}],
+        )
+        self.assertEqual(selected["dispatch_key"], "new-key")
+
+        duplicate_latest = comments + [comments[-1]]
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                {"number": 90},
+                duplicate_latest,
+                "AnjanaKavinda",
+                [{"login": "Copilot", "type": "Bot", "id": 198982749}],
+            )
+
