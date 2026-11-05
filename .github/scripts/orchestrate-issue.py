@@ -120,6 +120,27 @@ def build_protection_snapshot(rulesets: list[dict], *, repository_settings: dict
     return protection
 
 
+def resolve_dispatch_dependencies(
+    canonical_issue: int,
+    catalog_dependencies: dict[int, list[int]],
+    body_dependencies: list[int],
+) -> list[int]:
+    """Use the canonical catalog for V2 dispatch dependency identity.
+
+    Issue prose may document multiple approved delivery/profile paths. It remains
+    useful context, but the free-form parser must not collapse those paths into
+    an alternate authoritative dependency set. Profile-scoped satisfaction is
+    supplied explicitly by the owner Execution Packet.
+    """
+    expected = catalog_dependencies.get(canonical_issue)
+    if expected is None:
+        raise GovernanceError("issue dependencies are missing from approved catalog")
+    # Parse the body for context/diagnostics, but never use it to replace or
+    # reinterpret the canonical dependency identity under V2.
+    _ = body_dependencies
+    return list(expected)
+
+
 def automation_enabled() -> bool:
     """V2 global kill switch with temporary V1 compatibility alias."""
     value = os.environ.get("GOVERNED_AUTOMATION_ENABLED", "")
@@ -366,11 +387,9 @@ def main() -> int:
     body = issue.get("body") or ""
     current_canonical, _ = resolve_canonical_number(issue.get("body") or "")
     body_dependencies = parse_dependencies(issue.get("body") or "")
-    expected_dependencies = catalog_dependencies.get(current_canonical)
-    if expected_dependencies is None or (
-            body_dependencies and body_dependencies != expected_dependencies):
-        raise GovernanceError("issue dependencies do not match approved catalog")
-    dependencies = expected_dependencies
+    dependencies = resolve_dispatch_dependencies(
+        current_canonical, catalog_dependencies, body_dependencies
+    )
     ownership = [label.split(":", 1)[1] for label in labels if label.startswith("ownership:")]
     open_issues = gh_paginated(f"{root}/issues?state=all&per_page=100")
     canonical_to_github = build_canonical_mapping(open_issues, catalog_titles)
