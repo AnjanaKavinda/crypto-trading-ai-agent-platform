@@ -45,7 +45,6 @@ from trading_platform_api.spot_research import (
     validate_local_origin,
 )
 from trading_platform_api.spot_research_store import SqlAlchemySpotResearchStore
-
 from trading_platform_api.strategy_api import (
     StrategySignalApiError,
     StrategySignalApiService,
