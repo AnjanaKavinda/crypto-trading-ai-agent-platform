@@ -303,7 +303,7 @@ def ready_handoff_for_key(comments: list[dict], dispatch_key: str,
                           expected: dict) -> dict | None:
     records = parse_handoff_comments(comments, "DISPATCH_READY")
     matching = [item for item in records if item.get("dispatch_key") == dispatch_key]
-    if len(records) > 1 or len(matching) > 1:
+    if len(matching) > 1:
         raise GovernanceError("dispatch-ready evidence is ambiguous")
     if matching and matching[0] != expected:
         raise GovernanceError("dispatch-ready evidence conflicts with current dispatch")

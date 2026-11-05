@@ -477,6 +477,33 @@ class GovernanceTests(unittest.TestCase):
                                    f"{json.dumps(conflicting, sort_keys=True)}"}],
                 "key", record)
 
+    def test_ready_handoff_allows_distinct_historical_dispatches(self):
+        old_record = {"dispatch_key": "old-dispatch"}
+        current_record = {"dispatch_key": "current-dispatch"}
+        comments = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": (
+                    f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                    f"{json.dumps(old_record, sort_keys=True)}"
+                ),
+            },
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": (
+                    f"{orchestrate_issue.MARKER}\nDISPATCH_READY "
+                    f"{json.dumps(current_record, sort_keys=True)}"
+                ),
+            },
+        ]
+
+        self.assertEqual(
+            orchestrate_issue.ready_handoff_for_key(
+                comments, "current-dispatch", current_record
+            ),
+            current_record,
+        )
+
     def test_r3_handoff_preserves_provenance(self):
         record = {"issue_id": 6, "base_branch": "dev", "agent": "Platform Architect",
                   "agent_role": "Platform Architect", "capability_tier": "premium-strongest-available",
