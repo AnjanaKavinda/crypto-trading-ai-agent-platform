@@ -36,12 +36,6 @@ from trading_platform_api.problems import (
     problem_response,
     request_validation_problem,
 )
-from trading_platform_api.strategy_api import (
-    StrategySignalApiError,
-    StrategySignalApiService,
-    UnavailableStrategySignalApiService,
-    create_strategy_signal_router,
-)
 from trading_platform_api.spot_research import (
     SpotResearchError,
     SpotResearchService,
@@ -51,6 +45,13 @@ from trading_platform_api.spot_research import (
     validate_local_origin,
 )
 from trading_platform_api.spot_research_store import SqlAlchemySpotResearchStore
+
+from trading_platform_api.strategy_api import (
+    StrategySignalApiError,
+    StrategySignalApiService,
+    UnavailableStrategySignalApiService,
+    create_strategy_signal_router,
+)
 
 APP_TITLE = "Trading Platform API"
 APP_VERSION = "0.1.0"

@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-
 from trading_platform_api.config import (
     AppSettings,
     DeploymentEnvironment,
