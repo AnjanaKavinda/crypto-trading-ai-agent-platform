@@ -4,14 +4,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-11-05 |
 | Decision owner | Platform Architect |
-| Human approver | Pending owner review |
-| GitHub issue / PR | #90 / architecture proposal PR pending |
+| Human approver | AnjanaKavinda (owner-approved #90 refinement, 2026-11-05) |
+| GitHub issue / PR | #90 / PR #458 (proposal merged; owner acceptance recorded in #90 refinement) |
 | Open decision ID | — |
 | Related ADRs | ADR-0003, ADR-0012, ADR-0017 |
-| Supersedes / superseded by | On acceptance, supersedes only ADR-0017's prohibition on persistence/migrations for the #90 API path; ADR-0017 otherwise remains in force |
+| Supersedes / superseded by | Supersedes only ADR-0017's prohibition on persistence/migrations for the #90 API path; ADR-0017 otherwise remains in force |
 
 ## Context
 
@@ -80,9 +80,10 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed:** Select Option B for the single-user local
-`PERSONAL_SPOT_RESEARCH` profile only. This ADR is not implementation authority
-unless and until the repository owner accepts it.
+**Accepted:** Select Option B for the single-user local
+`PERSONAL_SPOT_RESEARCH` profile only. The owner accepted this decision in the
+owner-approved #90 implementation refinement dated 2026-11-05. PR #458 merged
+the proposal document; the issue refinement records the owner decision.
 
 1. Extend the existing lineage graph with closed, explicit codecs and exact
    `(contract_id, record_id, schema_version)` identities for the supported
@@ -182,6 +183,7 @@ durable exact-read or retry-idempotency requirements.
 
 ## Approval record
 
-Pending human repository owner review. On acceptance, record the approval and
-merge reference here, update the ADR register, and refine #90 before runtime
-implementation.
+Accepted by AnjanaKavinda in the owner-approved #90 refinement dated
+2026-11-05. PR #458 merged the proposal document; the later issue refinement
+records the approval. Runtime implementation remains limited to this ADR's
+scope.
