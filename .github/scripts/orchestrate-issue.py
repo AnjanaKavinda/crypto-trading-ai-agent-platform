@@ -22,6 +22,7 @@ from orchestrator import (
 )
 
 MARKER = "<!-- governed-copilot-orchestrator:v1 -->"
+EXECUTION_PACKET_PREFIX = "EXECUTION_PACKET "
 TRUSTED_COMPLETION_ACTORS = {"github-actions[bot]"}
 COPILOT_ASSIGNEE = "Copilot"
 COPILOT_ASSIGNEE_ID = 198982749
@@ -119,6 +120,78 @@ def build_protection_snapshot(rulesets: list[dict], *, repository_settings: dict
     return protection
 
 
+def automation_enabled() -> bool:
+    """V2 global kill switch with temporary V1 compatibility alias."""
+    value = os.environ.get("GOVERNED_AUTOMATION_ENABLED", "")
+    if not value.strip():
+        value = os.environ.get("GOVERNED_PILOT_ENABLED", "")
+    return value.strip().lower() == "true"
+
+
+def current_execution_packet(issue_id: int, comments: list[dict]) -> dict:
+    """Return the latest exact owner-authored V2 execution packet."""
+    packets: list[tuple[int, dict]] = []
+    for comment in comments:
+        if (comment.get("user") or {}).get("login") != HUMAN_CONTROLLER:
+            continue
+        line = next(
+            (
+                item
+                for item in (comment.get("body") or "").splitlines()
+                if item.startswith(EXECUTION_PACKET_PREFIX)
+            ),
+            None,
+        )
+        if line is None:
+            continue
+        try:
+            record = json.loads(line[len(EXECUTION_PACKET_PREFIX):])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if record.get("issue_id") != issue_id:
+            continue
+        packets.append((int(comment.get("id") or 0), record))
+    if not packets:
+        raise GovernanceError("current owner execution packet is required")
+    record = max(packets, key=lambda item: item[0])[1]
+    required = {
+        "issue_id",
+        "base_branch",
+        "base_sha",
+        "scope_profile",
+        "architecture_state",
+        "agent_role",
+        "satisfied_dependencies",
+        "boundaries",
+        "stop_conditions",
+    }
+    if set(record) != required:
+        raise GovernanceError("execution packet fields are invalid")
+    if record["base_branch"] != "dev" or record["architecture_state"] != "FROZEN":
+        raise GovernanceError("execution packet base or architecture state is invalid")
+    if not isinstance(record["base_sha"], str) or not record["base_sha"].strip():
+        raise GovernanceError("execution packet base SHA is invalid")
+    if not isinstance(record["scope_profile"], str) or not record["scope_profile"].strip():
+        raise GovernanceError("execution packet scope profile is invalid")
+    if not isinstance(record["agent_role"], str) or not record["agent_role"].strip():
+        raise GovernanceError("execution packet agent role is invalid")
+    for name in ("boundaries", "stop_conditions"):
+        if (
+            not isinstance(record[name], list)
+            or not record[name]
+            or any(not isinstance(item, str) or not item.strip() for item in record[name])
+        ):
+            raise GovernanceError(f"execution packet {name} are invalid")
+    dependencies = record["satisfied_dependencies"]
+    if (
+        not isinstance(dependencies, list)
+        or any(type(item) is not int or item <= 0 for item in dependencies)
+        or len(set(dependencies)) != len(dependencies)
+    ):
+        raise GovernanceError("execution packet dependency evidence is invalid")
+    return record
+
+
 def completed_assignment_keys(comments: list[dict]) -> set[str]:
     """Return only dispatches with persisted assignment completion evidence."""
     completed: set[str] = set()
@@ -210,15 +283,17 @@ def ready_handoff_for_key(comments: list[dict], dispatch_key: str,
     return matching[0] if matching else None
 
 
-def validate_assignment_controls(issue_id: str, actor: str, *,
-                                 allowed_actors: set[str],
-                                 pilot_enabled: str, pilot_issues: set[str],
-                                 implementer_session: str) -> None:
-    if (actor != HUMAN_CONTROLLER or actor not in allowed_actors
-            or pilot_enabled.strip().lower() != "true"):
-        raise GovernanceError("human assignment is outside the governed pilot")
-    if not pilot_issues or ("*" not in pilot_issues and issue_id not in pilot_issues):
-        raise GovernanceError("issue is not on the governed pilot allowlist")
+def validate_assignment_controls(
+    issue_id: str,
+    actor: str,
+    *,
+    allowed_actors: set[str],
+    implementer_session: str,
+) -> None:
+    if actor != HUMAN_CONTROLLER or actor not in allowed_actors or not automation_enabled():
+        raise GovernanceError("human assignment is outside governed automation")
+    if not issue_id.strip():
+        raise GovernanceError("issue ID is required")
     if not implementer_session.strip():
         raise GovernanceError("implementer session is not configured")
 
@@ -233,14 +308,13 @@ def main() -> int:
     if event.get("action") == "assigned":
         allowed_actors = {item for item in os.environ.get(
             "GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
-        pilot_issues = {item.strip() for item in os.environ.get(
-            "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
         validate_assignment_controls(
-            str(issue_id), os.environ.get("GITHUB_ACTOR", ""),
+            str(issue_id),
+            os.environ.get("GITHUB_ACTOR", ""),
             allowed_actors=allowed_actors,
-            pilot_enabled=os.environ.get("GOVERNED_PILOT_ENABLED", ""),
-            pilot_issues=pilot_issues,
-            implementer_session=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""))
+            implementer_session=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""),
+        )
+        current_execution_packet(int(issue_id), comments)
         record = validate_assignment_handoff(
             issue, comments, os.environ.get("GITHUB_ACTOR", ""),
             [event.get("assignee") or {}],
@@ -282,14 +356,12 @@ def main() -> int:
     allowed_actors = {item for item in os.environ.get("GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
     if not allowed_actors or os.environ.get("GITHUB_ACTOR") not in allowed_actors:
         raise GovernanceError("dispatch actor is not on the governed allowlist")
-    if os.environ.get("GOVERNED_PILOT_ENABLED", "").strip().lower() != "true":
+    if not automation_enabled():
         raise GovernanceError("governed automation is disabled by the global kill switch")
-    pilot_issues = {item.strip() for item in os.environ.get(
-        "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
-    if not pilot_issues:
-        raise GovernanceError("governed pilot issue allowlist is empty")
-    if "*" not in pilot_issues and str(issue_id) not in pilot_issues:
-        raise GovernanceError("issue is not on the governed pilot allowlist")
+    execution_packet = current_execution_packet(int(issue_id), comments)
+    dev_head = gh(f"{root}/commits/dev")
+    if not isinstance(dev_head, dict) or dev_head.get("sha") != execution_packet["base_sha"]:
+        raise GovernanceError("execution packet base SHA is stale")
     labels = [item["name"] for item in issue.get("labels", [])]
     body = issue.get("body") or ""
     current_canonical, _ = resolve_canonical_number(issue.get("body") or "")
@@ -329,11 +401,12 @@ def main() -> int:
         routing_inputs,
         issue_metadata={"issue_id": int(issue_id), "github_title": issue.get("title", ""),
                         "dependencies": dependencies, "base_branch": "dev",
-                        "controller_version": "v1.1"},
+                        "controller_version": "v2"},
         references=["AGENTS.md", ".github/copilot-instructions.md",
                     "docs/adr/ADR-0001-governed-copilot-development-orchestration.md",
+                    "docs/adr/ADR-0018-governed-copilot-development-orchestration-v2.md",
                     "docs/copilot-team/03-github-workflow/MODEL-ROUTING-GOVERNANCE-V1.1.md"],
-        excerpts=[body],
+        excerpts=[body, json.dumps(execution_packet, sort_keys=True)],
     )
     # Repository rulesets are the durable protection source; absence is unsafe.
     # The ruleset collection endpoint returns summary objects without the detailed
@@ -347,20 +420,31 @@ def main() -> int:
     )
     verify_protections(protection)
     dependency_status = {}
+    packet_satisfied = set(execution_packet["satisfied_dependencies"])
     for canonical, number in zip(dependencies, dependency_github_numbers):
         dependency_issue = gh(f"{root}/issues/{number}")
-        dependency_status[canonical] = "closed" if dependency_issue.get("state") == "closed" else "open"
+        dependency_status[canonical] = (
+            "closed"
+            if dependency_issue.get("state") == "closed" or canonical in packet_satisfied
+            else "open"
+        )
     eligibility = validate_issue(issue_input, dependency_status=dependency_status)
+    if eligibility["agent"] != execution_packet["agent_role"]:
+        raise GovernanceError("execution packet agent role does not match deterministic routing")
     eligibility.update({"routing_inputs": routing_inputs, "capability_tier": escalation_tier,
                         "review_tier": review_tier, "context_pack": context_pack})
     prompt, prompt_hash = build_launch_prompt(
         {**issue_input, "canonical_backlog": eligibility["canonical_backlog"]},
         eligibility["agent"], ["AGENTS.md", ".github/copilot-instructions.md",
-                               "docs/adr/ADR-0001-governed-copilot-development-orchestration.md"],
+                               "docs/adr/ADR-0001-governed-copilot-development-orchestration.md",
+                               "docs/adr/ADR-0018-governed-copilot-development-orchestration-v2.md"],
+        safety_version="v2",
         context_pack=context_pack,
     )
     active = completed_assignment_keys(comments)
-    request = create_dispatch_request(issue_input, eligibility, prompt_hash)
+    request = create_dispatch_request(
+        issue_input, eligibility, prompt_hash, controller_version="v2"
+    )
     if not can_dispatch(request["dispatch_key"], active):
         if "workflow:agent-running" not in labels:
             if "workflow:ready" in labels:
@@ -376,12 +460,12 @@ def main() -> int:
                "risk_classification": routing_inputs.risk_label,
                "context_pack_id": context_pack.context_pack_id,
                "context_pack_version": context_pack.version,
-               "controller_policy_version": "v1.1", "retry_count": 0,
+               "controller_policy_version": "v2", "retry_count": 0,
                "escalation_count": 0, "review_tier": review_tier,
                "reviewer_role": "independent-ai-reviewer", "outcome": "dispatch-intended",
                "timestamp": datetime.now(timezone.utc).isoformat(),
                "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
-               "prompt_hash": prompt_hash, "controller_version": "v1.1",
+               "prompt_hash": prompt_hash, "controller_version": "v2",
                "prior_state": "workflow:ready", "new_state": "workflow:human-decision-required",
                "implementer_session_id": os.environ.get("GOVERNED_IMPLEMENTER_SESSION", "")}
     if not payload["implementer_session_id"]:
