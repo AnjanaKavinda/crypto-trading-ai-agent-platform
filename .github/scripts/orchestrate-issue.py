@@ -272,9 +272,15 @@ def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
         attempts = [item.get("correction_attempt") for item in ready]
         latest = max(attempts)
         ready = [item for item in ready if item.get("correction_attempt") == latest]
-    if len(ready) != 1:
+    if not ready:
         raise GovernanceError("assignment handoff is missing or ambiguous")
-    record = ready[0]
+    record = ready[-1]
+    same_dispatch = [
+        item for item in ready
+        if item.get("dispatch_key") == record.get("dispatch_key")
+    ]
+    if len(same_dispatch) != 1:
+        raise GovernanceError("assignment handoff is missing or ambiguous")
     required = ("issue_id", "base_branch", "agent", "agent_role", "capability_tier",
                 "review_tier", "risk_classification", "context_pack_id",
                 "context_pack_version", "controller_policy_version",
