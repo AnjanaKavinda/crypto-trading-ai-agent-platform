@@ -1318,7 +1318,7 @@ def test_alembic_head_includes_registry_ddl_and_immutable_guards(monkeypatch):
     )
     config = Config(str(REPO_ROOT / "apps/api/alembic.ini"), output_buffer=output)
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["0008_spot_analysis_lineage"]
+    assert scripts.get_heads() == ["0009_signal_lifecycle"]
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue().upper()
     for table in (

@@ -81,6 +81,76 @@ strategy_registry_versions = Table(
     ),
 )
 
+signal_lifecycle_events = Table(
+    "signal_lifecycle_events",
+    metadata,
+    Column("event_id", UUID(as_uuid=True), primary_key=True),
+    Column("audit_id", UUID(as_uuid=True), nullable=False, unique=True),
+    Column("subject_contract_id", String(16), nullable=False),
+    Column("subject_id", UUID(as_uuid=True), nullable=False),
+    Column("subject_version", String(128), nullable=False),
+    Column("subject_sha256", String(64), nullable=False),
+    Column("prior_state", String(32), nullable=True),
+    Column("resulting_state", String(32), nullable=False),
+    Column("event_type", String(32), nullable=False),
+    Column("cause", String(64), nullable=False),
+    Column("source_references", JSONB, nullable=False),
+    Column("event_time", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", String(128), nullable=False),
+    ForeignKeyConstraint(
+        ["audit_id"],
+        ["audit_events.audit_id"],
+        name="fk_signal_lifecycle_event_audit",
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint(
+        "subject_sha256 ~ '^[0-9a-f]{64}$'",
+        name="ck_signal_lifecycle_subject_digest",
+    ),
+    CheckConstraint(
+        "resulting_state IN "
+        "('CANDIDATE','WATCH','QUALIFIED','REJECTED','NO_TRADE','INVALIDATED','EXPIRED','SUPERSEDED')",
+        name="ck_signal_lifecycle_resulting_state",
+    ),
+    CheckConstraint(
+        "prior_state IS NULL OR prior_state IN "
+        "('CANDIDATE','WATCH','QUALIFIED','REJECTED','NO_TRADE','INVALIDATED','EXPIRED','SUPERSEDED')",
+        name="ck_signal_lifecycle_prior_state",
+    ),
+    CheckConstraint(
+        "event_type IN "
+        "('CREATED','WATCHED','QUALIFIED','REJECTED','NO_TRADE','INVALIDATED','EXPIRED','SUPERSEDED')",
+        name="ck_signal_lifecycle_event_type",
+    ),
+    CheckConstraint(
+        "cause IN "
+        "('SOURCE_DECISION','INVALIDATION_RULE_MATCHED','EFFECTIVE_EXPIRY_REACHED','EXPLICIT_SUCCESSOR')",
+        name="ck_signal_lifecycle_cause",
+    ),
+    CheckConstraint(
+        "event_time <= recorded_at",
+        name="ck_signal_lifecycle_event_time",
+    ),
+    CheckConstraint(
+        "length(btrim(correlation_id)) > 0",
+        name="ck_signal_lifecycle_correlation_nonblank",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(source_references) = 'array' AND "
+        "jsonb_array_length(source_references) > 0",
+        name="ck_signal_lifecycle_sources",
+    ),
+    Index(
+        "ix_signal_lifecycle_subject_time",
+        "subject_contract_id",
+        "subject_id",
+        "subject_version",
+        "event_time",
+        "recorded_at",
+    ),
+)
+
 strategy_registry_lifecycle_events = Table(
     "strategy_registry_lifecycle_events",
     metadata,
@@ -217,6 +287,7 @@ strategy_registry_lifecycle_events = Table(
 
 __all__ = [
     "metadata",
+    "signal_lifecycle_events",
     "strategy_registry_identities",
     "strategy_registry_lifecycle_events",
     "strategy_registry_versions",
