@@ -464,11 +464,11 @@ def main() -> int:
     except (GovernanceError, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return blocked("required governance evidence or state validation failed")
     if target == "workflow:changes-requested":
-        if os.environ.get("GOVERNED_PILOT_ENABLED", "").strip().lower() != "true":
+        if not _dispatch.automation_enabled():
             return blocked("required governance evidence or state validation failed")
-        pilot_issues = {item.strip() for item in os.environ.get(
-            "GOVERNED_PILOT_ISSUES", "").split(",") if item.strip()}
-        if "*" not in pilot_issues and issue not in pilot_issues:
+        try:
+            _dispatch.current_execution_packet(int(issue), comments)
+        except GovernanceError:
             return blocked("required governance evidence or state validation failed")
         if signed_result is not None:
             if signed_result.get("disposition") != "changes-requested":
