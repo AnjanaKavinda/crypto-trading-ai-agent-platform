@@ -2,18 +2,25 @@
 
 import json
 from dataclasses import replace
+from uuid import uuid4
 
 import pytest
 from test_history_selection import history
 from test_point_in_time import evidence
+from test_spot_analysis_fanout import _finding
 from trading_platform_api.lineage.codec import (
     LineageError,
     LineageKey,
     decode,
+    decode_value,
     encode,
     key_for,
 )
 from trading_platform_api.market_data.history_selection import reconstruct_history
+from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SpotAnalysisTaskOutcome,
+    SpotAnalysisTaskStatus,
+)
 
 
 def samples():
@@ -66,3 +73,27 @@ def test_identity_conflict_changes_content_not_identity():
         LineageKey("C-999", "x")
     with pytest.raises(LineageError):
         LineageKey("C-091", " " * 3)
+
+
+def test_closed_nested_decoder_restores_typed_spot_fanout_outcome():
+    from trading_platform_api.contracts.serialization import canonical_json_dumps
+
+    outcome = SpotAnalysisTaskOutcome(
+        correlation_id=uuid4(),
+        task_id=uuid4(),
+        domain="spot-trend",
+        status=SpotAnalysisTaskStatus.COMPLETE,
+        finding=_finding("spot-trend"),
+        reason_code=None,
+    )
+    decoded = decode_value(
+        SpotAnalysisTaskOutcome,
+        json.loads(canonical_json_dumps(outcome)),
+    )
+    assert type(decoded) is SpotAnalysisTaskOutcome
+    assert decoded == outcome
+
+    invalid = json.loads(canonical_json_dumps(outcome))
+    invalid["finding"]["unexpected"] = "rejected"
+    with pytest.raises(LineageError):
+        decode_value(SpotAnalysisTaskOutcome, invalid)

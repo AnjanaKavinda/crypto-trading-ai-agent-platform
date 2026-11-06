@@ -8,7 +8,7 @@
 | Date | 2026-11-05 |
 | Decision owner | Platform Architect |
 | Human approver | AnjanaKavinda (owner-approved #90 refinement, 2026-11-05) |
-| GitHub issue / PR | #90 / PR #458 (proposal merged; owner acceptance recorded in #90 refinement) |
+| GitHub issue / PR | #90 / PR #458 proposal; PR #460 acceptance record |
 | Open decision ID | — |
 | Related ADRs | ADR-0003, ADR-0012, ADR-0017 |
 | Supersedes / superseded by | Supersedes only ADR-0017's prohibition on persistence/migrations for the #90 API path; ADR-0017 otherwise remains in force |
@@ -81,9 +81,11 @@ Costs, risks, and constraints:
 ## Decision
 
 **Accepted:** Select Option B for the single-user local
-`PERSONAL_SPOT_RESEARCH` profile only. The owner accepted this decision in the
-owner-approved #90 implementation refinement dated 2026-11-05. PR #458 merged
-the proposal document; the issue refinement records the owner decision.
+`PERSONAL_SPOT_RESEARCH` profile only. The owner accepted the core persistence
+decision in the #90 implementation refinement dated 2026-11-05; PR #458 merged
+the proposal document and PR #460 synchronized the acceptance record. The owner
+approved the bounded input-closure extension on 2026-11-06. Implementation
+remains limited to the decisions below.
 
 1. Extend the existing lineage graph with closed, explicit codecs and exact
    `(contract_id, record_id, schema_version)` identities for the supported
@@ -130,6 +132,48 @@ the proposal document; the issue refinement records the owner decision.
    problem-response, and future authorization-seam requirements remain in
    force.
 
+### Owner-approved input-closure extension (2026-11-06)
+
+The existing #80 condition builder requires the exact typed #68 debate and
+fan-out handoffs. C-006 alone does not carry the C-062/C-066 identity needed to
+validate the debate handoff, and the fan-out outcomes are stored in the Spot
+analysis read model rather than as typed lineage records. #90 must resolve
+these exact upstream outputs before it can run the existing deterministic
+pipeline.
+
+1. Extend the closed lineage codec and contract allowlist to persist only the
+   required `C-062v1 AgentResult`, `C-066v1 AgentEvaluation`, and nested
+   `C-067v1 ModelRoutingDecision` records. This is persistence of existing
+   contracts; it changes no contract meaning, schema version, prompt content,
+   provider behavior, or agent authority.
+2. Add an append-only, immutable producer handoff binding that pins one exact
+   C-006v5 context digest to the exact C-062v1 result digest and its one exact
+   C-066v1 evaluation digest, including their correlation/trace identity. The
+   writer must validate the C-062 output equals that C-006 record and that
+   C-066 references that exact C-062 result and context. Ambiguous or
+   conflicting bindings fail closed; no latest-by-time selection is allowed.
+3. Reuse the existing immutable Spot analysis row for fan-out outcomes. Decode
+   it through a closed typed decoder, verify its stored digest and exact C-007
+   manifest binding, and require its correlation ID to match the exact C-066
+   evaluation. Do not rerun fan-out during evaluate. Recompose the internal
+   `SpotDebateResult` only through the existing deterministic validator from
+   the exact persisted C-062/C-066/C-006 closure; it remains an orchestration
+   value, not a new persisted domain contract.
+4. Keep the extension producer-owned. It adds no HTTP ingestion endpoint,
+   caller-authored context, model/provider call, external service, shared
+   contract, or strategy behavior. The existing upstream producer may append
+   the exact handoff closure through an internal persistence method. Missing
+   producer outputs remain unavailable and fail closed.
+5. Add only the additive DDL needed for the closed contract allowlist and the
+   immutable C-006/C-062/C-066 handoff binding. Preserve exact existing
+   immutability, backup, retention, transaction, digest, and fail-closed rules
+   above. No historical backfill is authorized.
+
+This extension does not change #90's reference-only request shape: evaluate
+still accepts only exact C-021v2 and C-006v5 references. It resolves the exact
+producer handoff by the requested C-006 identity and will never synthesize or
+substitute missing inputs.
+
 ## Reasoning
 
 Option B reuses the repository's established immutable evidence and exact
@@ -165,7 +209,7 @@ implementation must stop and bring back that specific conflict for review.
 |---|---|
 | Playbook requirements | Chat 6 strategy/signal evidence and qualification boundary; no approval or execution authority |
 | Cross-cutting artifacts | Version Registry; lineage graph; lifecycle state registry; provenance and fail-closed rules |
-| Contracts / events | C-023v1, C-024v2, C-025v2, C-026v2, C-028v2, C-070v2 and existing C-060 linkage; no contract semantics or versions changed |
+| Contracts / events | C-023v1, C-024v2, C-025v2, C-026v2, C-028v2, C-070v2 plus exact C-062v1/C-066v1/C-067v1 producer input closure and existing C-060 linkage; persistence only, no contract semantics or versions changed |
 | Requirements traceability | GitHub #90 PERSONAL_SPOT_RESEARCH refinement; #89 lifecycle dependency |
 | Versioning / migration | Closed codec dispatch by exact contract/schema; forward-only additive migration; no historical backfill or destructive downgrade |
 
@@ -183,7 +227,9 @@ durable exact-read or retry-idempotency requirements.
 
 ## Approval record
 
-Accepted by AnjanaKavinda in the owner-approved #90 refinement dated
-2026-11-05. PR #458 merged the proposal document; the later issue refinement
-records the approval. Runtime implementation remains limited to this ADR's
-scope.
+Core persistence decision accepted by AnjanaKavinda in the owner-approved #90
+refinement dated 2026-11-05; proposal document merged in PR #458 and acceptance
+record synchronized by merged PR #460. The bounded C-062/C-066/C-067 input-
+closure extension was explicitly approved by AnjanaKavinda on 2026-11-06 in
+the current implementation discussion. Runtime implementation remains limited
+to this ADR's scope.

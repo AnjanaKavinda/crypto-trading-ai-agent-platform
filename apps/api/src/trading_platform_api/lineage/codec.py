@@ -9,12 +9,26 @@ from enum import Enum
 from typing import Any, get_args, get_origin, get_type_hints
 from uuid import UUID
 
-from trading_platform_api.analysis.contracts import MarketRegime
+from trading_platform_api.agents.contracts import (
+    AgentEvaluation,
+    AgentResult,
+    ModelRoutingDecision,
+)
+from trading_platform_api.analysis.contracts import AnalyticalUncertainty, MarketRegime
 from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
 from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
-from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
+from trading_platform_api.analysis.versioned_contracts_v4 import (
+    AnalysisSnapshotV4,
+    ConflictAssessmentV3,
+    ConfluenceAssessmentV3,
+)
+from trading_platform_api.analysis.versioned_contracts_v5 import (
+    AdversarialAssessmentV2,
+    MarketContextV5,
+)
 from trading_platform_api.contracts.serialization import (
     MAX_DOCUMENT_BYTES,
+    canonical_json_dumps,
     canonical_sha256,
     serialize_contract,
 )
@@ -31,6 +45,23 @@ from trading_platform_api.market_data.history_contracts import (
     ObservationRevision,
     ReconstructionManifest,
 )
+from trading_platform_api.strategy.contracts import (
+    SignalCandidate,
+    Strategy,
+    StrategyEligibility,
+    StrategyVersion,
+)
+from trading_platform_api.strategy.contracts_v2 import (
+    NoTradeDecisionV2,
+    SignalEvidencePackageV2,
+    SignalQualificationV2,
+    SignalV2,
+    StrategyVersionV2,
+)
+from trading_platform_api.validation.contracts_v2 import (
+    CostAssumptionSetV2,
+    QualificationValidationResultV2,
+)
 
 MODELS = {
     "C-001": MarketData,
@@ -45,6 +76,24 @@ MODELS = {
     "C-007": AnalysisSnapshotV4,
     "C-008": EvidenceItemV2,
     "C-093": AgentIndependenceReport,
+    "C-006": MarketContextV5,
+    "C-009": ConfluenceAssessmentV3,
+    "C-010": ConflictAssessmentV3,
+    "C-019": AdversarialAssessmentV2,
+    "C-020": Strategy,
+    "C-021": StrategyVersionV2,
+    "C-022": StrategyEligibility,
+    "C-023": SignalCandidate,
+    "C-024": SignalEvidencePackageV2,
+    "C-025": SignalQualificationV2,
+    "C-026": NoTradeDecisionV2,
+    "C-027": CostAssumptionSetV2,
+    "C-028": QualificationValidationResultV2,
+    "C-069": AnalyticalUncertainty,
+    "C-070": SignalV2,
+    "C-062": AgentResult,
+    "C-066": AgentEvaluation,
+    "C-067": ModelRoutingDecision,
 }
 
 
@@ -98,6 +147,44 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-102", str(record.revision_id))
     if type(record) is ReconstructionManifest:
         return LineageKey("C-103", canonical_sha256(record))
+    if type(record) is Strategy:
+        return LineageKey("C-020", str(record.strategy_id), "1")
+    if type(record) is StrategyVersion:
+        return LineageKey("C-021", str(record.strategy_version_id), "1")
+    if type(record) is StrategyVersionV2:
+        return LineageKey("C-021", str(record.strategy_version_id), "2")
+    if type(record) is SignalCandidate:
+        return LineageKey("C-023", str(record.candidate_id), record.schema_version)
+    if type(record) is SignalEvidencePackageV2:
+        return LineageKey("C-024", str(record.package_id), record.schema_version)
+    if type(record) is SignalQualificationV2:
+        return LineageKey("C-025", str(record.qualification_id), record.schema_version)
+    if type(record) is NoTradeDecisionV2:
+        return LineageKey("C-026", str(record.decision_id), record.schema_version)
+    if type(record) is QualificationValidationResultV2:
+        return LineageKey("C-028", str(record.result_id), record.schema_version)
+    if type(record) is SignalV2:
+        return LineageKey("C-070", str(record.signal_id), record.schema_version)
+    if type(record) is MarketContextV5:
+        return LineageKey("C-006", str(record.context_id), record.schema_version)
+    if type(record) is ConfluenceAssessmentV3:
+        return LineageKey("C-009", str(record.assessment_id), record.schema_version)
+    if type(record) is ConflictAssessmentV3:
+        return LineageKey("C-010", str(record.assessment_id), record.schema_version)
+    if type(record) is AdversarialAssessmentV2:
+        return LineageKey("C-019", str(record.assessment_id), record.schema_version)
+    if type(record) is StrategyEligibility:
+        return LineageKey("C-022", str(record.eligibility_id), record.schema_version)
+    if type(record) is CostAssumptionSetV2:
+        return LineageKey("C-027", str(record.assumption_set_id), record.schema_version)
+    if type(record) is AnalyticalUncertainty:
+        return LineageKey("C-069", str(record.uncertainty_id), record.schema_version)
+    if type(record) is AgentResult:
+        return LineageKey("C-062", str(record.result_id), record.schema_version)
+    if type(record) is AgentEvaluation:
+        return LineageKey("C-066", str(record.evaluation_id), record.schema_version)
+    if type(record) is ModelRoutingDecision:
+        return LineageKey("C-067", str(record.request_id), record.schema_version)
     raise LineageError("Unsupported lineage contract type.")
 
 
@@ -116,9 +203,17 @@ def _decode(kind: Any, value: Any) -> Any:
         if value is None and type(None) in args:
             return None
         candidates = [item for item in args if item is not type(None)]
-        if len(candidates) != 1:
-            raise LineageError("Ambiguous contract union.")
-        return _decode(candidates[0], value)
+        if len(candidates) == 1:
+            return _decode(candidates[0], value)
+        decoded: list[Any] = []
+        for candidate in candidates:
+            try:
+                decoded.append(_decode(candidate, value))
+            except (ValueError, TypeError, KeyError, ArithmeticError):
+                continue
+        if len(decoded) != 1:
+            raise LineageError("Contract union did not resolve uniquely.")
+        return decoded[0]
     if origin is tuple and len(args) == 2 and args[1] is Ellipsis:
         if type(value) is not list:
             raise LineageError("Expected immutable sequence payload.")
@@ -131,6 +226,16 @@ def _decode(kind: Any, value: Any) -> Any:
         if type(value) is not str:
             raise LineageError("Expected canonical scalar string.")
         return datetime.fromisoformat(value) if kind is datetime else kind(value)
+    if kind is object:
+        # PERSONAL_SPOT_RESEARCH persists C-062 only for its exact C-006v5
+        # output. Do not deserialize arbitrary provider output dynamically.
+        if (
+            type(value) is dict
+            and value.get("contract_id") == "C-006"
+            and value.get("schema_version") == "5"
+        ):
+            return _decode(MarketContextV5, value)
+        raise LineageError("Unsupported C-062 output contract.")
     if isinstance(kind, type) and issubclass(kind, Enum):
         if type(value) is not str:
             raise LineageError("Expected canonical enum string.")
@@ -150,6 +255,21 @@ def _decode(kind: Any, value: Any) -> Any:
             }
         )
     raise LineageError("Unsupported contract value type.")
+
+
+def decode_value(kind: type[Any], value: Any) -> Any:
+    """Decode one nested value through the same closed contract type rules."""
+    if not isinstance(kind, type):
+        raise LineageError("A concrete registered value type is required.")
+    try:
+        decoded = _decode(kind, value)
+        if canonical_json_dumps(decoded) != json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ):
+            raise LineageError("Nested contract value is not canonical.")
+        return decoded
+    except (ValueError, TypeError, KeyError, RecursionError, ArithmeticError):
+        raise LineageError("Invalid or corrupt nested contract value.") from None
 
 
 def decode(document: str) -> object:
@@ -179,11 +299,35 @@ def decode(document: str) -> object:
                 raise LineageError("Unsupported C-003 schema version.")
         else:
             model = MODELS[contract_id]
+            if contract_id == "C-021":
+                model = {"1": StrategyVersion, "2": StrategyVersionV2}.get(
+                    schema_version
+                )
+                if model is None:
+                    raise LineageError("Unsupported C-021 schema version.")
             expected_version = {
                 "C-005": "1",
                 "C-007": "4",
                 "C-008": "2",
                 "C-093": "1",
+                "C-006": "5",
+                "C-009": "3",
+                "C-010": "3",
+                "C-019": "2",
+                "C-020": "1",
+                "C-021": schema_version,
+                "C-022": "1",
+                "C-023": "1",
+                "C-024": "2",
+                "C-025": "2",
+                "C-026": "2",
+                "C-027": "2",
+                "C-028": "2",
+                "C-069": "1",
+                "C-070": "2",
+                "C-062": "1",
+                "C-066": "1",
+                "C-067": "1",
             }.get(contract_id)
             if expected_version is not None and schema_version != expected_version:
                 raise LineageError("Unsupported analysis contract version.")

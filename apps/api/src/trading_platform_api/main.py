@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from starlette.types import ASGIApp
@@ -46,6 +46,7 @@ from trading_platform_api.spot_research import (
 )
 from trading_platform_api.spot_research_store import SqlAlchemySpotResearchStore
 from trading_platform_api.strategy_api import (
+    SqlAlchemyStrategySignalApiService,
     StrategySignalApiError,
     StrategySignalApiService,
     UnavailableStrategySignalApiService,
@@ -162,6 +163,7 @@ def _is_loopback_host(hostname: str) -> bool:
 def _make_default_research_service(
     *,
     engine_holder: dict[str, AsyncEngine | None],
+    session_factory_holder: dict[str, async_sessionmaker[AsyncSession] | None],
 ) -> SpotResearchService:
     provider_settings = load_binance_spot_settings()
     raw_database_url = os.environ.get("DATABASE_URL")
@@ -171,6 +173,7 @@ def _make_default_research_service(
         engine = create_async_engine_instance(database_settings)
         engine_holder["engine"] = engine
         session_factory = create_async_session_factory(engine)
+        session_factory_holder["factory"] = session_factory
         archive_root = os.environ.get("TRADING_PLATFORM_LOCAL_MARKET_ARCHIVE_ROOT")
         archive_store = (
             LocalFilesystemObjectStore(Path(archive_root)) if archive_root else None
@@ -198,6 +201,9 @@ def create_app(
         load_docker_local_settings(app_settings) if _docker_local else None
     )
     engine_holder: dict[str, AsyncEngine | None] = {"engine": None}
+    session_factory_holder: dict[str, async_sessionmaker[AsyncSession] | None] = {
+        "factory": None
+    }
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -215,12 +221,25 @@ def create_app(
     app.state.spot_research_service = (
         research_service
         if research_service is not None
-        else _make_default_research_service(engine_holder=engine_holder)
+        else _make_default_research_service(
+            engine_holder=engine_holder,
+            session_factory_holder=session_factory_holder,
+        )
     )
+    default_strategy_service: StrategySignalApiService = (
+        UnavailableStrategySignalApiService()
+    )
+    session_factory = session_factory_holder["factory"]
+    if session_factory is not None:
+        default_strategy_service = SqlAlchemyStrategySignalApiService(
+            session_factory,
+            environment=app_settings.environment,
+            mode=app_settings.mode,
+        )
     app.state.strategy_signal_service = (
         strategy_signal_service
         if strategy_signal_service is not None
-        else UnavailableStrategySignalApiService()
+        else default_strategy_service
     )
     if docker_settings is not None:
         allowed_origin = docker_settings.origin
