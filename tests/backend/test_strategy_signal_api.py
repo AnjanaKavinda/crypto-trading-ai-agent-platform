@@ -153,17 +153,21 @@ def test_cursor_is_opaque_filter_bound_and_tamper_detected() -> None:
     cursor = encode_cursor(
         occurred_at=NOW,
         event_id=event_id,
+        event_contract_id="C-070",
+        event_schema_version="2",
         contract_id="C-070",
         schema_version="2",
         projection_state="QUALIFIED",
     )
-    occurred_at, decoded_id = decode_cursor(
+    occurred_at, contract_id, schema_version, decoded_id = decode_cursor(
         cursor,
         contract_id="C-070",
         schema_version="2",
         projection_state="QUALIFIED",
     )
     assert occurred_at == NOW
+    assert contract_id == "C-070"
+    assert schema_version == "2"
     assert decoded_id == event_id
 
     service = FakeStrategySignalService()

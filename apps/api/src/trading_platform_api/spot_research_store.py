@@ -30,7 +30,7 @@ from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
 from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
 from trading_platform_api.contracts.serialization import canonical_json_dumps
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
-from trading_platform_api.lineage.codec import LineageError, LineageKey
+from trading_platform_api.lineage.codec import LineageError, LineageKey, decode_value
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
@@ -296,6 +296,7 @@ class StoredSpotAnalysis:
     independence_report: AgentIndependenceReport
     outcomes: tuple[dict[str, Any], ...]
     correlation_id: str
+    fanout: SpotAnalysisFanoutResult | None = None
 
 
 def policy_document(policy: DataQualityPolicy) -> dict[str, Any]:
@@ -843,8 +844,14 @@ class SqlAlchemySpotResearchStore:
             ):
                 raise LineageError("Stored fan-out outcomes are malformed.")
             UUID(row["correlation_id"])
-            for item in outcomes:
-                UUID(item["task_id"])
+            typed_outcomes = tuple(
+                decode_value(SpotAnalysisTaskOutcome, item) for item in outcomes
+            )
+            fanout_correlation_id = UUID(row["correlation_id"])
+            fanout = SpotAnalysisFanoutResult(
+                correlation_id=fanout_correlation_id,
+                outcomes=typed_outcomes,
+            )
             return StoredSpotAnalysis(
                 quality_report=quality,
                 regime=regime,
@@ -853,6 +860,7 @@ class SqlAlchemySpotResearchStore:
                 independence_report=independence,
                 outcomes=tuple(outcomes),
                 correlation_id=row["correlation_id"],
+                fanout=fanout,
             )
         except (KeyError, IndexError, ValueError, TypeError, LineageError) as exc:
             raise SpotResearchStoreError(

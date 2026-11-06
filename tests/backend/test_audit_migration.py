@@ -88,7 +88,7 @@ def test_migration_lineage_and_single_head() -> None:
     scripts = ScriptDirectory.from_config(_config())
     assert migration.revision == "0002_audit_event_foundation"
     assert migration.down_revision == "0001_persistence_baseline"
-    assert scripts.get_heads() == ["0009_signal_lifecycle"]
+    assert scripts.get_heads() == ["0010_strategy_signal_artifacts"]
     assert scripts.get_revision("0007_strategy_registry").down_revision == (
         "0006_spot_research_read_model"
     )
