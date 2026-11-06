@@ -28,7 +28,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0016 | [Version C-026 invalid-provenance reason](ADR-0016-c026-v2-invalid-provenance-reason.md) | Accepted | 2026-10-31 | Platform Architect / AnjanaKavinda (owner instruction for bounded contract foundation) | — | C-026 schema 2 | — | — |
 | ADR-0017 | [Wave 4 lifecycle, invalidation, and signal API boundary](ADR-0017-proposed-wave-4-lifecycle-api-and-invalidation-boundary.md) | Accepted | 2026-11-03 | Platform Architect / AnjanaKavinda (PR #442 merged 2026-11-04) | — | C-021v2, C-070v2; local lifecycle record and API boundary | — | — |
 | ADR-0019 | [Deterministic internal backtest execution engine](ADR-0019-deterministic-internal-backtest-engine.md) | Proposed | 2026-11-05 | Platform Architect / human approval pending | OD-0011 | Validation execution simulation boundary | — | — |
-| ADR-0020 | [Proposed Personal Spot strategy artifact persistence for the Strategy/Signal API](ADR-0020-proposed-personal-spot-strategy-artifact-persistence.md) | Proposed | 2026-11-05 | Platform Architect / human approval pending | — | C-023v1, C-024v2, C-025v2, C-026v2, C-028v2, C-070v2 (persistence only; no semantic change) | On acceptance, ADR-0017 storage/migration prohibition for #90 only | — |
+| ADR-0020 | [Personal Spot strategy artifact persistence for the Strategy/Signal API](ADR-0020-proposed-personal-spot-strategy-artifact-persistence.md) | Accepted | 2026-11-05 | Platform Architect / AnjanaKavinda (owner-approved #90 refinement, 2026-11-05) | — | C-023v1, C-024v2, C-025v2, C-026v2, C-028v2, C-070v2 (persistence only; no semantic change) | ADR-0017 storage/migration prohibition for #90 only | — |
 
 ## Creating an ADR
 
