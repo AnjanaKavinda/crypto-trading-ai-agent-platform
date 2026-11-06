@@ -29,6 +29,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0017 | [Wave 4 lifecycle, invalidation, and signal API boundary](ADR-0017-proposed-wave-4-lifecycle-api-and-invalidation-boundary.md) | Accepted | 2026-11-03 | Platform Architect / AnjanaKavinda (PR #442 merged 2026-11-04) | — | C-021v2, C-070v2; local lifecycle record and API boundary | — | — |
 | ADR-0019 | [Deterministic internal backtest execution engine](ADR-0019-deterministic-internal-backtest-engine.md) | Proposed | 2026-11-05 | Platform Architect / human approval pending | OD-0011 | Validation execution simulation boundary | — | — |
 | ADR-0020 | [Personal Spot strategy artifact persistence for the Strategy/Signal API](ADR-0020-proposed-personal-spot-strategy-artifact-persistence.md) | Accepted | 2026-11-05 | Platform Architect / AnjanaKavinda (core decision: #90 refinement; input closure: owner approval 2026-11-06) | — | C-023v1, C-024v2, C-025v2, C-026v2, C-028v2, C-070v2; C-062v1, C-066v1, C-067v1 persistence-only input closure | ADR-0017 storage/migration prohibition for #90 only | — |
+| ADR-0021 | [Proposed PERSONAL_SPOT_RESEARCH analysis producer path](ADR-0021-proposed-personal-spot-analysis-producer-path.md) | Proposed | 2026-11-06 | Platform Architect / human approval pending | OD-0027 | No schema changes proposed; existing C-003/C-005/C-006/C-007/C-008/C-009/C-010/C-019/C-062/C-066/C-067/C-093 versions | — | — |
 
 ## Creating an ADR
 

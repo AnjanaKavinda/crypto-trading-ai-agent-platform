@@ -36,6 +36,7 @@ decision scope as open.
 | OD-0024 | Authoritative-source precedence and stale historical path correction | Open | Repository governance; Issues 001–002 | Human repository owner | — | — |
 | OD-0025 | Additive C-019/C-006 Spot adversarial schema and lineage path | Resolved | Contract compatibility; issue #379, downstream issue #68 | Human repository owner | [ADR-0010](../adr/ADR-0010-proposed-c019-v2-c006-v5-spot-adversarial-path.md) (accepted Option A; implementation authority after merge) | 2026-10-19 |
 | OD-0026 | Windows/Docker Desktop backup access to the private Compose PostgreSQL service | Resolved | Local backup/restore transport and protected configuration; Issue #414 | Human repository owner | [ADR-0013](../adr/ADR-0013-proposed-windows-private-network-backup-runner.md) (accepted one-shot private-network runner) | 2026-10-29 |
+| OD-0027 | PERSONAL_SPOT_RESEARCH producer composition and direct C-006 v5 construction | Proposed | Spot analysis production and C-062/C-066/C-067 handoff; Issue #462 | Human repository owner | [Proposed ADR-0021](../adr/ADR-0021-proposed-personal-spot-analysis-producer-path.md) (direct validated C-006 v5 producer path; approval pending) | Resolves on owner approval |
 
 ## Open-state decision analysis
 
