@@ -315,19 +315,38 @@ is still a separate required Phase 1 lane.
 
 ### Producer request identity, reservation, and replay
 
-The producer request key is the canonical digest of the profile and exact
-validated input identity: snapshot ID/digest, C-003 report ID/digest, C-005
-regime ID/digest, the ordered C-008 evidence IDs/digests, selected timeframe and
-coverage, and the registry-resolved route, method, model, and prompt IDs and
-versions. The key is computed only after validating current inputs and resolving the
-allowlisted route, but before any provider invocation. In addition to the exact
-snapshot/provenance identity, it explicitly includes the versioned producer
-identity tuple for C-003 quality policy, C-005 regime method/profile, C-012
-unavailable-state adapter, C-009 confluence method, C-010 conflict method,
-C-093 independence method, C-069 uncertainty projection method, and the C-007
-v4/C-006 v5/C-019 v2 schemas. It also includes the C-067 route, method, model,
-and prompt IDs/versions. It never contains prompt text, credentials, or model
-output.
+The producer request key is the canonical SHA-256 digest of a
+versioned `ProducerRequestIdentity` value using the repository's canonical
+serialization version. Its identity has four explicit components:
+
+1. **Profile and agent:** the exact `PERSONAL_SPOT_RESEARCH` profile ID/version
+   and the registry-resolved C-061 agent ID, definition version, and capability
+   profile version.
+2. **Input closure:** the exact C-002 snapshot ID/schema/lineage/content digest;
+   C-003 quality report ID/schema/lineage/digest and quality-policy ID/version;
+   C-005 regime ID/schema/lineage/digest plus regime method/profile versions;
+   the sorted exact C-008 evidence IDs/schema/lineage/digests and each evidence
+   method version; the C-007 v4 manifest ID/schema/lineage/digest; its exact
+   C-001 observation IDs/digests and C-091 source IDs/digests; and the selected
+   timeframe and coverage bounds.
+3. **Producer vector:** the schema/lineage versions and exact method/profile
+   versions used for C-012 unavailable-state projection, C-009 confluence,
+   C-010 conflict, C-093 independence, and C-069 uncertainty projection. Include
+   C-003, C-005, C-008, and C-007 versions here as resolved identity fields too;
+   duplicate mention in the input closure is intentional and the canonical
+   object has one value per named component.
+4. **Handoff and routing:** the exact C-019 method/model/prompt IDs and versions,
+   C-067 route identity/version, and schema/lineage versions for the resulting
+   C-019 v2, C-006 v5, C-062, C-066, C-067, and C-069 records.
+
+Encode the version vector as sorted `(component_role, contract_id, schema_version,
+lineage_version, component_id, component_version)` tuples, with explicit nulls
+only where the contract has no such field. A changed profile, agent, source or
+observation closure, schema/lineage version, deterministic method, route, model,
+or prompt version MUST produce a different key. Compute the key only after
+validating exact current inputs and resolving the allowlisted route, but before
+any provider invocation. The identity never contains prompt text, credentials,
+or model output.
 
 An additive internal persistence record with a unique request key is inserted
 as `IN_PROGRESS` before the provider call. A concurrent duplicate observes the
