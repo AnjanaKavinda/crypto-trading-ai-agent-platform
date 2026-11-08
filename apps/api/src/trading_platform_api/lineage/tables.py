@@ -27,7 +27,7 @@ records = Table(
     Column("evidence_sha256", String(64), nullable=False),
     CheckConstraint(
         "contract_id IN ('C-001','C-002','C-003','C-005','C-006','C-007','C-008',"
-        "'C-009','C-010','C-019','C-020','C-021','C-022','C-023','C-024',"
+        "'C-009','C-010','C-012','C-019','C-020','C-021','C-022','C-023','C-024',"
         "'C-025','C-026','C-027','C-028','C-062','C-066','C-067','C-069','C-070','C-091','C-092',"
         "'C-093','C-101','C-102','C-103')",
         name="ck_lineage_contract",
@@ -323,5 +323,52 @@ spot_agent_handoff_bindings = Table(
         "evaluation_record_id",
         "evaluation_version",
         name="uq_spot_agent_handoff_evaluation",
+    ),
+)
+
+spot_producer_request_reservations = Table(
+    "spot_producer_request_reservations",
+    metadata,
+    Column("profile", String(64), primary_key=True),
+    Column("request_sha256", String(64), primary_key=True),
+    Column("request_document", Text, nullable=False),
+    Column("snapshot_id", String(36), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("context_contract_id", String(5), nullable=True),
+    Column("context_record_id", String(512), nullable=True),
+    Column("context_version", String(512), nullable=True),
+    Column("context_sha256", String(64), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(
+        ["context_contract_id", "context_record_id", "context_version"],
+        [
+            "lineage_records.contract_id",
+            "lineage_records.record_id",
+            "lineage_records.version",
+        ],
+        ondelete="RESTRICT",
+    ),
+    CheckConstraint(
+        "profile = 'PERSONAL_SPOT_RESEARCH'",
+        name="ck_spot_producer_reservation_profile",
+    ),
+    CheckConstraint(
+        "request_sha256 ~ '^[0-9a-f]{64}$' AND "
+        "octet_length(request_document) <= 1000000",
+        name="ck_spot_producer_reservation_request",
+    ),
+    CheckConstraint(
+        "status IN ('IN_PROGRESS','COMPLETED','FAILED')",
+        name="ck_spot_producer_reservation_status",
+    ),
+    CheckConstraint(
+        "(status = 'COMPLETED' AND context_contract_id = 'C-006' AND "
+        "context_version = '5' AND context_record_id IS NOT NULL AND "
+        "context_sha256 ~ '^[0-9a-f]{64}$' AND completed_at IS NOT NULL) OR "
+        "(status != 'COMPLETED' AND context_contract_id IS NULL AND "
+        "context_record_id IS NULL AND context_version IS NULL AND "
+        "context_sha256 IS NULL AND completed_at IS NULL)",
+        name="ck_spot_producer_reservation_completion",
     ),
 )

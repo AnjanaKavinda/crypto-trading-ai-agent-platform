@@ -17,7 +17,11 @@ from trading_platform_api.agents.contracts import (
     AgentResult,
     ModelRoutingDecision,
 )
-from trading_platform_api.analysis.contracts import MarketRegime
+from trading_platform_api.analysis.contracts import (
+    AnalyticalUncertainty,
+    MarketRegime,
+    TechnicalAssessment,
+)
 from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
 from trading_platform_api.analysis.versioned_contracts import (
     AnalysisRecordReference,
@@ -27,6 +31,8 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     AnalysisOutputReferenceV4,
     AnalysisSnapshotReferenceV4,
     AnalysisSnapshotV4,
+    ConflictAssessmentV3,
+    ConfluenceAssessmentV3,
 )
 from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.contracts.serialization import (
@@ -570,6 +576,10 @@ class SqlAlchemyLineageStore:
         AnalysisSnapshotV4,
         EvidenceItemV2,
         AgentIndependenceReport,
+        ConfluenceAssessmentV3,
+        ConflictAssessmentV3,
+        TechnicalAssessment,
+        AnalyticalUncertainty,
     )
 
     def __init__(

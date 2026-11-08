@@ -18,6 +18,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from test_lineage_postgresql import database_url as database_url
+from trading_platform_api.agents import PERSONAL_SPOT_RESEARCH_AGENT
+from trading_platform_api.agents.contracts import (
+    AgentPermissionProfile,
+    ModelAvailability,
+    ModelCapabilityTier,
+    ModelRequest,
+    ModelResponse,
+    ModelRoute,
+    ModelRoutingPolicy,
+)
+from trading_platform_api.agents.routing import ProviderAvailabilityEvidence
+from trading_platform_api.analysis.contracts import VersionReference
 from trading_platform_api.analysis.indicator_registry import SPOT_RESEARCH_INDICATORS
 from trading_platform_api.analysis.momentum import (
     MomentumReason,
@@ -38,18 +50,16 @@ from trading_platform_api.analysis.vwap_volume_profile import (
     calculate_volume_profile,
     calculate_vwap,
 )
-from trading_platform_api.config import (
-    AppSettings,
-    DeploymentEnvironment,
-    OperatingMode,
-)
+from trading_platform_api.config import AppSettings, DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.codec import encode, key_for
 from trading_platform_api.lineage.store import (
+    LineageKey,
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
     references,
 )
+from trading_platform_api.lineage.tables import spot_producer_request_reservations
 from trading_platform_api.main import create_app
 from trading_platform_api.market_data.binance_spot import BinanceSpotSettings
 from trading_platform_api.market_data.contracts import (
@@ -72,6 +82,15 @@ from trading_platform_api.market_data.quality import (
     assess_complete_binance_spot_batch,
     validate_spot_ohlcv_quality_v2,
 )
+from trading_platform_api.orchestration.spot_agent_producer import (
+    CompletedSpotAgentHandoff,
+    ProducerReservation,
+    SPOT_ADVERSARIAL_WORKLOAD,
+    SpotProducerRuntime,
+)
+from trading_platform_api.risk import VersionReference as SafetyVersionReference
+from trading_platform_api.safety import AgentPermissionPolicy
+import trading_platform_api.spot_research as spot_research_module
 from trading_platform_api.spot_research import (
     _DETACHED_TIMEOUT_TASKS,
     QualityPolicyTemplate,
@@ -219,6 +238,7 @@ class FakeRepository:
         self.persist_calls = 0
         self.read_calls = 0
         self.analysis_persist_calls = 0
+        self.producer_reservations: dict[str, str | CompletedSpotAgentHandoff] = {}
 
     async def persist(
         self,
@@ -240,8 +260,33 @@ class FakeRepository:
             adapter_version="binance-spot-adapter-v1",
         )
 
-    async def persist_analysis(self, *, snapshot_id: str, handoff) -> None:
+    async def reserve_producer_request(
+        self, *, request_sha256: str, request_document: str, snapshot_id: str
+    ) -> ProducerReservation:
+        existing = self.producer_reservations.get(request_sha256)
+        if isinstance(existing, CompletedSpotAgentHandoff):
+            return ProducerReservation("COMPLETED", existing)
+        if existing is not None:
+            return ProducerReservation("IN_PROGRESS")
+        self.producer_reservations[request_sha256] = "IN_PROGRESS"
+        return ProducerReservation("RESERVED")
+
+    async def fail_producer_request(self, *, request_sha256: str) -> None:
+        self.producer_reservations[request_sha256] = "FAILED"
+
+    async def persist_analysis(
+        self,
+        *,
+        snapshot_id: str,
+        handoff,
+        producer_handoff: CompletedSpotAgentHandoff,
+        request_sha256: str,
+        request_document: str,
+    ) -> None:
         self.analysis_persist_calls += 1
+        assert producer_handoff.request_sha256 == request_sha256
+        assert producer_handoff.request_document == request_document
+        self.producer_reservations[request_sha256] = producer_handoff
         assert self.stored is not None
         assert str(self.stored.snapshot.snapshot_id) == snapshot_id
         self.stored = replace(
@@ -281,6 +326,159 @@ class FakeRepository:
         return self.stored
 
 
+class FakeSpotModelProvider:
+    provider_id = "offline-spot-test-provider"
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+        self.calls = 0
+
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        self.calls += 1
+        document = json.loads(request.content)
+        evidence_ids = [item["evidence_id"] for item in document["usable_evidence"]]
+        if len(evidence_ids) < 2:
+            raise AssertionError("positive producer test requires two usable evidence items")
+        content = json.dumps(
+            {
+                "counter_thesis": "The primary regime may not persist.",
+                "alternative_hypotheses": ["The move may be a short-lived price response."],
+                "supporting_evidence_ids": [evidence_ids[0]],
+                "falsification_evidence_ids": [evidence_ids[1]],
+                "failure_conditions": ["The cited evidence may become stale."],
+                "data_limitations": ["This is a bounded Spot sample."],
+                "measurement_error_risks": ["Candle aggregation can obscure intrabar moves."],
+                "confirmation_bias_concerns": ["The selected regime may anchor interpretation."],
+                "coverage_gaps": ["No order-book evidence is included."],
+            },
+            separators=(",", ":"),
+        )
+        return ModelResponse(
+            request_id=request.request_id,
+            provider_id=self.provider_id,
+            model_id="offline-spot-test-model",
+            returned_model_version="test-1",
+            content=content,
+            started_at=self.now,
+            completed_at=self.now + timedelta(seconds=1),
+            input_tokens=max(1, request.requested_input_tokens),
+            output_tokens=100,
+            actual_cost_usd=Decimal("0.01"),
+            availability=ModelAvailability.AVAILABLE,
+        )
+
+
+class InvalidSpotModelProvider(FakeSpotModelProvider):
+    def __init__(self, now: datetime, failure: str) -> None:
+        super().__init__(now)
+        self.failure = failure
+
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        if self.failure == "timeout":
+            await asyncio.sleep(0.05)
+        response = await super().generate(request)
+        if self.failure == "malformed":
+            return replace(response, content="not-json")
+        if self.failure == "stale-input":
+            return replace(
+                response,
+                completed_at=self.now + timedelta(minutes=30),
+            )
+        document = json.loads(response.content)
+        document["supporting_evidence_ids"] = [str(uuid4())]
+        return replace(response, content=json.dumps(document))
+
+
+def test_spot_producer_runtime(now: datetime) -> SpotProducerRuntime:
+    provider = FakeSpotModelProvider(now)
+    policy_id = "offline-spot-test-policy"
+    model_id = "offline-spot-test-model"
+    provider_id = provider.provider_id
+    prompt_id = "spot-adversarial-draft"
+    prompt_version = "1"
+    method = VersionReference("spot-adversarial-counter-thesis", "1")
+    model = VersionReference(model_id, "test-1")
+    prompt = VersionReference(prompt_id, prompt_version)
+    route = ModelRoute(
+        capability_tier=ModelCapabilityTier.ECONOMICAL_FAST,
+        provider_id=provider_id,
+        model_id=model_id,
+        model_version="test-1",
+        prompt_id=prompt_id,
+        prompt_version=prompt_version,
+        policy_id=policy_id,
+        policy_version="1",
+        approved_workloads=(SPOT_ADVERSARIAL_WORKLOAD,),
+        max_input_tokens=900_000,
+        max_output_tokens=2_000,
+        max_request_cost_usd=Decimal("0.10"),
+    )
+    routing_policy = ModelRoutingPolicy(
+        policy_id=policy_id,
+        policy_version="1",
+        routes=(route,),
+        valid_until=now + timedelta(hours=2),
+    )
+    permission_policy = AgentPermissionPolicy(
+        policy_id=uuid4(),
+        name="Offline test research-only permission ceiling",
+        revision=1,
+        version=SafetyVersionReference("agent-permission-policy", "1", "a" * 64),
+        agent_roles=(PERSONAL_SPOT_RESEARCH_AGENT.role,),
+        agent_identities=("personal-spot-research@1",),
+        grants=(),
+        denied_capabilities=(
+            "HUMAN_TRADE_APPROVAL",
+            "POLICY_OVERRIDE",
+            "WITHDRAW_FUNDS",
+            "TRANSFER_FUNDS",
+            "UNRESTRICTED_CREDENTIAL_ACCESS",
+            "ARBITRARY_TOOL_EXECUTION",
+            "DIRECT_AI_ORDER_SUBMISSION",
+        ),
+        default_deny=True,
+        environments=(DeploymentEnvironment.TEST.value,),
+        modes=("PERSONAL_SPOT_RESEARCH",),
+        effective_at=now - timedelta(minutes=1),
+        expires_at=now + timedelta(hours=2),
+        created_at=now - timedelta(minutes=2),
+        issuer_ref="offline-test",
+        configuration_version=SafetyVersionReference("test-configuration", "1", "b" * 64),
+        content_sha256="c" * 64,
+    )
+    profile = AgentPermissionProfile(
+        profile_id=uuid4(),
+        agent_id=PERSONAL_SPOT_RESEARCH_AGENT.agent_id,
+        agent_version=PERSONAL_SPOT_RESEARCH_AGENT.agent_version,
+        role=PERSONAL_SPOT_RESEARCH_AGENT.role,
+        environment=DeploymentEnvironment.TEST.value,
+        mode="PERSONAL_SPOT_RESEARCH",
+        policy=permission_policy,
+        tool_access_ids=(),
+        valid_from=now - timedelta(minutes=1),
+        valid_until=now + timedelta(hours=1),
+    )
+    return SpotProducerRuntime(
+        routing_policy=routing_policy,
+        availability=ProviderAvailabilityEvidence(
+            provider_id=provider_id,
+            model_id=model_id,
+            status=ModelAvailability.AVAILABLE,
+            evidence_reference="offline-test-provider",
+            checked_at=now - timedelta(seconds=1),
+            valid_until=now + timedelta(hours=1),
+        ),
+        provider=provider,
+        permission_profile=profile,
+        environment=DeploymentEnvironment.TEST,
+        operating_mode=OperatingMode.RESEARCH,
+        capability_tier=ModelCapabilityTier.ECONOMICAL_FAST,
+        remaining_budget_usd=Decimal("1.00"),
+        adversarial_method=method,
+        supported_adversarial_versions=(method, model, prompt),
+    )
+
+
 def service(
     *,
     counter: list[int] | None = None,
@@ -295,6 +493,7 @@ def service(
             provider_settings=provider_settings,
             quality_policy=quality_policy,
             repository=store,
+            spot_agent_runtime=test_spot_producer_runtime(NOW),
             provider_factory=lambda settings: FakeProvider(settings, calls),
             clock=lambda: NOW,
             monotonic=lambda: 100.0,
@@ -447,6 +646,65 @@ def test_refresh_requires_opt_in_and_recorded_terms_and_region_reviews() -> None
     assert response.status_code == 403
     assert response.json()["code"] == "COLLECTION_NOT_ENABLED"
     assert calls == []
+
+
+def test_refresh_keeps_producer_unavailable_without_explicit_model_route() -> None:
+    provider_calls: list[int] = []
+    repository = FakeRepository()
+    research = SpotResearchService(
+        provider_settings=SOURCE_SETTINGS,
+        quality_policy=policy_template(),
+        repository=repository,
+        provider_factory=lambda settings: FakeProvider(settings, provider_calls),
+        clock=lambda: NOW,
+        monotonic=lambda: 100.0,
+    )
+
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["analysis_fanout"]["status"] == "UNAVAILABLE"
+    assert response.json()["analysis_fanout"]["reason_code"] == (
+        "MODEL_ROUTE_NOT_CONFIGURED"
+    )
+    assert repository.persist_calls == 1
+    assert repository.analysis_persist_calls == 0
+    assert provider_calls == [1]
+
+
+@pytest.mark.parametrize(
+    "failure", ["timeout", "malformed", "evidence-mismatch", "stale-input"]
+)
+def test_invalid_model_draft_fails_closed_without_retry_or_persistence(
+    failure: str,
+) -> None:
+    research, market_calls, repository = service(quality_policy=policy_template())
+    provider = InvalidSpotModelProvider(NOW, failure)
+    assert research.spot_agent_runtime is not None
+    research.spot_agent_runtime = replace(
+        research.spot_agent_runtime,
+        provider=provider,
+        provider_deadline_seconds=0.01,
+    )
+
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["analysis_fanout"]["status"] == "UNAVAILABLE"
+    assert response.json()["analysis_fanout"]["reason_code"] == (
+        "MODEL_HANDOFF_INVALID_OR_UNAVAILABLE"
+    )
+    assert provider.calls == 1
+    assert market_calls == [1]
+    assert repository.analysis_persist_calls == 0
+    assert set(repository.producer_reservations.values()) == {"FAILED"}
 
 
 def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -> None:
@@ -1558,6 +1816,7 @@ def persisted_service(database_url):
         provider_settings=SOURCE_SETTINGS,
         quality_policy=policy_template(),
         repository=repository,
+        spot_agent_runtime=test_spot_producer_runtime(now),
         provider_factory=lambda settings: FakeProvider(settings, calls),
         clock=lambda: now,
         monotonic=lambda: 100.0,
@@ -1575,7 +1834,7 @@ def persisted_service(database_url):
     ],
 )
 def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit):
-    research, calls, _, now = persisted_service
+    research, calls, repository, now = persisted_service
     with client_for(research) as client:
         refreshed = client.post(
             f"/api/research/spot/{INSTRUMENT}/refresh",
@@ -1607,6 +1866,45 @@ def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit
     assert len(payload["candles"]) == limit
     assert payload["persisted"] is True
     assert calls == [1]
+    if expected["analysis_fanout"]["status"] in {"AVAILABLE", "PARTIAL"}:
+        assert research.spot_agent_runtime is not None
+        model_provider = research.spot_agent_runtime.provider
+        assert isinstance(model_provider, FakeSpotModelProvider)
+        assert model_provider.calls == 1
+
+        async def resolve_persisted_producer_handoff() -> None:
+            async with repository._session_factory() as session:
+                row = (
+                    (
+                        await session.execute(
+                            select(spot_producer_request_reservations).where(
+                                spot_producer_request_reservations.c.snapshot_id
+                                == expected["snapshot_id"],
+                                spot_producer_request_reservations.c.status
+                                == "COMPLETED",
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                handoff = await SqlAlchemyLineageStore(session).get_spot_agent_handoff(
+                    LineageKey(
+                        row["context_contract_id"],
+                        row["context_record_id"],
+                        row["context_version"],
+                    )
+                )
+                assert handoff is not None
+                context, result, evaluation, correlation_id, trace_id = handoff
+                assert result.output == context
+                assert evaluation.result_id == result.result_id
+                assert evaluation.context_id == context.context_id
+                assert evaluation.correlation_id == correlation_id
+                assert evaluation.trace_id == trace_id
+                assert result.routing_decision.contract_id == "C-067"
+
+        asyncio.run(resolve_persisted_producer_handoff())
 
 
 def test_store_read_keeps_candles_when_analysis_closure_cannot_be_verified(
@@ -1644,6 +1942,43 @@ def test_store_read_keeps_candles_when_analysis_closure_cannot_be_verified(
     assert calls == [1]
 
 
+def test_completed_producer_reservation_replays_without_second_model_call(
+    persisted_service, monkeypatch
+):
+    research, _, repository, now = persisted_service
+    original = spot_research_module.produce_spot_agent_handoff
+    captured: list[dict[str, object]] = []
+
+    async def capture_producer_call(**kwargs):
+        captured.append(kwargs)
+        return await original(**kwargs)
+
+    monkeypatch.setattr(
+        spot_research_module,
+        "produce_spot_agent_handoff",
+        capture_producer_call,
+    )
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(timeframe="1m", limit=50, now=now),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["analysis_fanout"]["status"] == "AVAILABLE"
+    assert len(captured) == 1
+    assert research.spot_agent_runtime is not None
+    provider = research.spot_agent_runtime.provider
+    assert isinstance(provider, FakeSpotModelProvider)
+    assert provider.calls == 1
+
+    replay = asyncio.run(original(**captured[0]))
+
+    assert isinstance(replay, CompletedSpotAgentHandoff)
+    assert replay.is_replay is True
+    assert provider.calls == 1
+
+
 def test_store_analysis_append_is_idempotent_and_rejects_conflicting_retry(
     persisted_service, monkeypatch
 ):
@@ -1651,9 +1986,19 @@ def test_store_analysis_append_is_idempotent_and_rejects_conflicting_retry(
     captured = []
     append_analysis = repository.persist_analysis
 
-    async def capture_analysis(*, snapshot_id: str, handoff) -> None:
-        captured.append((snapshot_id, handoff))
-        await append_analysis(snapshot_id=snapshot_id, handoff=handoff)
+    async def capture_analysis(
+        *, snapshot_id: str, handoff, producer_handoff, request_sha256, request_document
+    ) -> None:
+        captured.append(
+            (snapshot_id, handoff, producer_handoff, request_sha256, request_document)
+        )
+        await append_analysis(
+            snapshot_id=snapshot_id,
+            handoff=handoff,
+            producer_handoff=producer_handoff,
+            request_sha256=request_sha256,
+            request_document=request_document,
+        )
 
     monkeypatch.setattr(repository, "persist_analysis", capture_analysis)
     with client_for(research) as client:
@@ -1664,8 +2009,16 @@ def test_store_analysis_append_is_idempotent_and_rejects_conflicting_retry(
 
     assert refreshed.status_code == 200, refreshed.text
     assert len(captured) == 1
-    snapshot_id, handoff = captured[0]
-    asyncio.run(append_analysis(snapshot_id=snapshot_id, handoff=handoff))
+    snapshot_id, handoff, producer_handoff, request_sha256, request_document = captured[0]
+    asyncio.run(
+        append_analysis(
+            snapshot_id=snapshot_id,
+            handoff=handoff,
+            producer_handoff=producer_handoff,
+            request_sha256=request_sha256,
+            request_document=request_document,
+        )
+    )
 
     outcome = handoff.assessment.fanout.outcomes[0]
     assert outcome.finding is not None
@@ -1680,7 +2033,15 @@ def test_store_analysis_append_is_idempotent_and_rejects_conflicting_retry(
     changed_assessment = replace(handoff.assessment, fanout=changed_fanout)
     changed_handoff = replace(handoff, assessment=changed_assessment)
     with pytest.raises(SpotResearchStoreError, match="different immutable analysis"):
-        asyncio.run(append_analysis(snapshot_id=snapshot_id, handoff=changed_handoff))
+        asyncio.run(
+            append_analysis(
+                snapshot_id=snapshot_id,
+                handoff=changed_handoff,
+                producer_handoff=producer_handoff,
+                request_sha256=request_sha256,
+                request_document=request_document,
+            )
+        )
 
     assert calls == [1]
 

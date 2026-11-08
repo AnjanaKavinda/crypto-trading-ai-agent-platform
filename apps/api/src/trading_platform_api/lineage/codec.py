@@ -14,7 +14,11 @@ from trading_platform_api.agents.contracts import (
     AgentResult,
     ModelRoutingDecision,
 )
-from trading_platform_api.analysis.contracts import AnalyticalUncertainty, MarketRegime
+from trading_platform_api.analysis.contracts import (
+    AnalyticalUncertainty,
+    MarketRegime,
+    TechnicalAssessment,
+)
 from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
 from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
 from trading_platform_api.analysis.versioned_contracts_v4 import (
@@ -79,6 +83,7 @@ MODELS = {
     "C-006": MarketContextV5,
     "C-009": ConfluenceAssessmentV3,
     "C-010": ConflictAssessmentV3,
+    "C-012": TechnicalAssessment,
     "C-019": AdversarialAssessmentV2,
     "C-020": Strategy,
     "C-021": StrategyVersionV2,
@@ -171,6 +176,8 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-009", str(record.assessment_id), record.schema_version)
     if type(record) is ConflictAssessmentV3:
         return LineageKey("C-010", str(record.assessment_id), record.schema_version)
+    if type(record) is TechnicalAssessment:
+        return LineageKey("C-012", str(record.assessment_id), "1")
     if type(record) is AdversarialAssessmentV2:
         return LineageKey("C-019", str(record.assessment_id), record.schema_version)
     if type(record) is StrategyEligibility:
@@ -313,6 +320,7 @@ def decode(document: str) -> object:
                 "C-006": "5",
                 "C-009": "3",
                 "C-010": "3",
+                "C-012": "1",
                 "C-019": "2",
                 "C-020": "1",
                 "C-021": schema_version,

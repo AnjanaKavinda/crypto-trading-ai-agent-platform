@@ -35,6 +35,17 @@ and C-064, subject to C-098 policy ceilings. Definitions are currently
 code-registered in memory; durable persistence and lifecycle promotion are not
 introduced by this issue.
 
+## Issue #462 — bounded Spot producer method versions
+
+The producer's unavailable-input methods are code-registered as
+`spot-profile-technical-unavailable-adapter@1` for the typed C-012 UNAVAILABLE
+assessment and `spot-profile-unavailability-severity@1` for its scoped C-069
+projection. Their identities and the exact input closure are part of the
+producer request key. These methods do not claim a technical-structure
+calculation, confidence estimate, probability, or market-risk score. The
+C-019 method/model/prompt route remains separately configured and allowlisted;
+absence of that configuration blocks the model handoff.
+
 ## Issue #72 — C-063/C-064 permission enforcement
 
 C-063 schema `1` binds one exact C-061 agent version, role, environment, and

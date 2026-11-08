@@ -1,10 +1,10 @@
-# ADR-0021: Proposed PERSONAL_SPOT_RESEARCH analysis producer path
+# ADR-0021: PERSONAL_SPOT_RESEARCH analysis producer path
 
 ## Metadata
 
 | Field | Value |
 |---|---|
-| Status | Accepted on merge of PR #464 |
+| Status | Accepted |
 | Date | 2026-11-06 |
 | Decision owner | Platform Architect |
 | Human approver | AnjanaKavinda, by merging PR #464 |
@@ -117,11 +117,10 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Option B is accepted when PR #464 is merged by the human repository owner.**
-That merge records the decision to keep C-007 v4/C-006 v5, expose C-012 as
-unavailable, and proceed under the exact persistence, idempotency, provenance,
-and fail-closed requirements below. Before that merge, no runtime
-implementation is authorized.
+**Option B was accepted when PR #464 merged.** That merge recorded the decision
+to keep C-007 v4/C-006 v5, expose C-012 as unavailable, and proceed under the
+exact persistence, idempotency, provenance, and fail-closed requirements
+below. Runtime implementation is authorized within this bounded decision.
 
 The proposed producer boundary is:
 
@@ -347,7 +346,9 @@ canonical SHA-256 digest has these explicitly versioned components:
    independence method; C-069 `1/1` and uncertainty-projection method.
 5. **Handoff and routing:** exact C-019 method/model/prompt IDs and versions,
    C-067 route identity/version, and schema/lineage versions for C-019 `2/2`,
-   C-006 `5/5`, C-062 `1/1`, C-066 `1/1`, and C-067 `1/1`.
+C-006 `5/5`, C-062 `1/1`, C-066 `1/1`, and C-067 `1/1`. Include a digest
+of the bounded prompt content so prompt-body changes cannot reuse a key even
+if an operator fails to advance its registered version.
 
 Represent contract entries as sorted
 `(component_role, contract_id, schema_version, lineage_version, component_id,

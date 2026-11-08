@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -22,12 +23,16 @@ from trading_platform_api.analysis.contracts import (
     EvidenceRelation,
     FundamentalAssessment,
     ResolutionStatus,
+    TechnicalAssessment,
     UncertaintyCategory,
     VersionReference,
 )
 from trading_platform_api.analysis.spot_adversarial import (
     SpotAdversarialDraft,
     build_spot_market_context_v5,
+)
+from trading_platform_api.analysis.spot_unavailable_context import (
+    build_spot_unavailable_technical_context,
 )
 from trading_platform_api.analysis.spot_meta_analysis import (
     C093Registry,
@@ -55,12 +60,14 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     ConfluenceAssessmentV3,
     ConfluenceComponentV2,
     MarketContextV4,
+    ResolvedSpotOHLCVBindingV4,
     create_analysis_snapshot_v4,
     resolve_analysis_snapshot_v4,
 )
 from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.lineage.codec import decode, encode, key_for
 from trading_platform_api.market_data import (
     DataSourceRecord,
     MarketData,
@@ -973,3 +980,27 @@ def test_market_thesis_rejects_expired_debate() -> None:
 
     with pytest.raises(SpotMarketThesisError, match="current and unexpired"):
         compose_spot_market_thesis(debate, now=debate.expires_at)
+
+
+def test_c012_technical_assessment_has_closed_lineage_codec() -> None:
+    envelope = _envelope()
+    binding = cast(ResolvedSpotOHLCVBindingV4, envelope.resolved[0])
+    unavailable = build_spot_unavailable_technical_context(
+        snapshot=binding.snapshot,
+        quality_report=binding.report,
+        manifest=envelope.manifest,
+    )
+    assessment = unavailable.assessment
+
+    assert type(assessment) is TechnicalAssessment
+    assert assessment.status is AssessmentStatus.UNAVAILABLE
+    assert assessment.findings == assessment.observations == assessment.evidence_ids == ()
+    assert assessment.uncertainty_ids == (unavailable.uncertainty.uncertainty_id,)
+    assert key_for(assessment).contract_id == "C-012"
+    assert key_for(assessment).version == "1"
+    assert decode(encode(assessment)) == assessment
+    assert build_spot_unavailable_technical_context(
+        snapshot=binding.snapshot,
+        quality_report=binding.report,
+        manifest=envelope.manifest,
+    ) == unavailable
