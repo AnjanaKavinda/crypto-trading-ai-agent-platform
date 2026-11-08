@@ -116,13 +116,14 @@ proposal.
 
 The proposed producer boundary is:
 
-1. An explicit user request selects one exact, validated, current Spot snapshot.
-2. Resolve C-003/C-005/C-008 from that snapshot, then run the registered
-   deterministic C-012 producer (#56) and local finding tasks. The C-012
-   `TechnicalAssessment` is admitted only when its exact evidence IDs resolve
-   to the same C-008 v2 records and its instrument, timeframe, quality report,
-   provenance, and validity window match this request. C-005 remains the
-   separate `regime` field; it is not placed in C-006's `assessments` array.
+1. The only producer invocation is an explicit successful Spot refresh. The
+   refresh creates or selects one exact validated snapshot; no separate
+   analyze-only request may attach a new analysis closure to an existing
+   snapshot.
+2. Resolve C-003/C-005/C-008 from that snapshot, run the registered
+   deterministic C-012 producer (#56), then apply the explicit compatibility
+   projection below and run local finding tasks. C-005 remains the separate
+   `regime` field; it is not placed in C-006's `assessments` array.
 3. Allocate the final C-007 snapshot identity once. Build an in-memory seed
    manifest containing the immutable input scope and supported C-005/C-008
    references, then run C-093 against that exact scope. C-093's approved input
@@ -134,32 +135,77 @@ The proposed producer boundary is:
    contains the exact C-012 assessment ID; `analysis_outputs` contains only
    contracts allowed by C-007 v4. Validate the final manifest, all referenced
    records, and their digests before any analysis-closure persistence.
-5. Construct the required C-006 v5 fields truthfully: `regime` is the exact
-   C-005 result; `assessments` contains the compatible C-012 assessment whose
-   ID is in the finalized manifest; `multi_timeframe_state` records only the
-   timeframe(s) actually selected and validated for this request; and the
-   nonempty C-069 uncertainty set is derived deterministically from the exact
-   coverage and unavailable profile inputs. Do not invent C-012 values,
-   timeframes, or uncertainty records to satisfy nonempty contract fields. If
-   any field cannot be produced and validated, fail closed. Validate C-006 v5
-   against the exact finalized C-007 digest.
+5. Prepare the required deterministic C-006 inputs truthfully: `regime` is the
+   exact C-005 result; `assessments` contains the projected C-012 assessment
+   whose ID is in the finalized manifest; `multi_timeframe_state` records only
+   the timeframe(s) actually selected and validated for this request; and the
+   nonempty C-069 uncertainty set is derived deterministically from exact
+   coverage and unavailable profile inputs. Validate these values and all
+   deterministic C-007 dependencies, but do not construct or claim full
+   C-006 v5 validation yet: its required C-019 v2 assessment does not exist
+   until after the provider call. Do not invent assessments, timeframes, or
+   uncertainty records to satisfy nonempty fields; fail closed if any input is
+   unavailable.
 6. Reserve the producer request durably before invoking the provider, using
    the idempotency rules below. Only after the reservation succeeds may the
    provider-neutral router invoke an explicitly configured and allowlisted
    C-067 route to draft the bounded C-019 v2 adversarial content.
-7. Validate the model draft, build and validate C-006 v5, then atomically
+7. Validate the model draft, construct C-019 v2 and the complete C-006 v5,
+   then run the full C-006 v5 validator against the exact finalized C-007
+   digest. Only after that validation, atomically
    persist the final C-007 analysis closure, its referenced records, the exact
    C-062 result, exactly one linked C-066 evaluation, C-067 routing provenance,
    and the completed request reservation. Bind fan-out, C-062, and C-066 to
    the same exact context, correlation, and trace identities required by #90.
    Expose only a fully persisted exact handoff to the strategy-signal API.
 
-The market snapshot/raw market-data write may precede this flow. The immutable
-analysis closure may be written only once, after final C-007/C-006 construction
-and validation. If the snapshot already has an analysis closure, reuse it only
-when its complete exact references match the request and remain current;
-otherwise leave it unchanged and require an explicit refresh producing a new
-snapshot. Never rewrite or append a different manifest to a legacy snapshot.
+The market snapshot/raw market-data write may precede this flow. Under accepted
+ADR-0012, analysis records are appended only within the same explicit successful
+refresh operation; no analyze-only endpoint, GET, UI reload, or readback may
+write an analysis bundle. The immutable analysis closure is written only once,
+after final C-007/C-019/C-006 construction and full validation. A snapshot with
+an existing exact, current bundle may be read/replayed without a write. A
+snapshot without a bundle remains analysis-unavailable until a later successful
+explicit refresh creates its matching bundle. Never rewrite, append, or
+backfill a different manifest for a legacy snapshot. If analysis persistence
+fails, preserve the valid OHLCV refresh result and return analysis unavailable,
+as required by ADR-0012. No amendment to ADR-0012 is proposed.
+
+### C-012 compatibility projection
+
+The current #56 `MarketStructureAnalysis` is not directly admissible in C-006
+v5: it consumes C-003 v1, emits C-008 v1 evidence, and sets the C-012 asset to
+the full instrument ID. #462 must add the bounded, deterministic, registered
+projection method `spot-c012-context-binding` v1; it must not describe the
+current #56 output as already compatible.
+
+The projection is permitted only when the source C-012 assessment and C-008 v1
+evidence bind to the exact refresh snapshot, source/observation IDs, timeframe,
+cutoff, and a valid C-003 v1 report, and the approved C-003 v2 assessment of
+that same snapshot/scope is also valid under the same approved policy. It then:
+
+1. Converts each exact #56 C-008 v1 evidence payload to C-008 v2 without
+   changing the evidence ID or analytical claim, while adding only the exact
+   C-007 binding, C-002 observation IDs, and C-091 source IDs. It validates the
+   converted records and their canonical digests.
+2. Creates a new immutable C-012 `TechnicalAssessment` with the canonical base
+   asset from C-007, the exact C-007 instrument/timeframe/cutoff, the C-003 v2
+   report ID, and only the converted C-008 v2 evidence IDs. It preserves the
+   source findings/observations only when every referenced evidence ID resolves
+   exactly; it adds the registered projection method/version to provenance and
+   derives a new stable assessment ID from the source assessment digest, target
+   C-003/C-008 digests, and projection version. The original #56 result is
+   immutable and is never rewritten.
+3. Adds only the projected C-012 ID to C-007 `assessment_ids`; C-012 is not
+   added to the closed `analysis_outputs` whitelist. C-006 assessment IDs must
+   equal this manifest field exactly.
+
+If either quality report is invalid, scope/policy differs, a C-008 claim or
+identity cannot be preserved, or asset/timeframe/evidence checks fail, the
+projection and the C-006 v5 context are unavailable. No report-ID substitution,
+evidence placeholder, or unversioned asset rewrite is allowed. This is the
+explicit bridge between the existing #56 output and the C-003 v2/C-008 v2
+contracts; no new shared contract version is introduced.
 
 ### Producer request identity, reservation, and replay
 
@@ -190,9 +236,9 @@ an additive migration. The migration adds no public contract, C-007 output kind,
 or shared schema version and does not rewrite historical rows.
 
 The deterministic primary Spot interpretation is the exact registered C-005
-regime, the validated #56 C-012 technical assessment, its C-007-bound C-008
-evidence, and deterministic C-009/C-010 findings bound to the validated
-snapshot. C-006 `assessments` identities must equal the C-007
+regime, the explicitly projected #56 C-012 technical assessment, its
+C-007-bound C-008 evidence, and deterministic C-009/C-010 findings bound to the
+validated snapshot. C-006 `assessments` identities must equal the C-007
 `assessment_ids` exactly. C-005 remains represented by C-006 `regime` and the
 C-007 binding; it must not be misrepresented as a `VersionedAssessment`.
 The model may produce only the adversarial/counter-thesis draft accepted by
@@ -212,14 +258,15 @@ There is no automatic retry, provider/model fallback, or background invocation.
 Option B is the smallest truthful path that composes the current approved
 contracts. C-006 v5 separates the C-005 regime from its nonempty typed
 assessment list; the current request handoff's `assessment_ids=(C-005 regime
-ID,)` is not a valid C-006 assessment mapping. The producer must use an exact
-compatible C-012 assessment from the registered deterministic #56 path and
-include that ID in C-007 `assessment_ids`. The timeframe state and uncertainty
-records must be derived from the exact selected Spot scope and profile
-limitations, not fabricated defaults. If #56 cannot produce a compatible
-assessment bound to exact C-008 v2 evidence, this architecture is blocked until
-that concrete compatibility gap receives an approved decision; the producer
-must not substitute C-005 or a placeholder.
+ID,)` is not a valid C-006 assessment mapping. The existing #56 C-012 output
+cannot be used directly. A registered deterministic projection must validate
+the source C-003 v1/C-008 v1 records against the exact snapshot, bridge them to
+the approved C-003 v2/C-008 v2 closure, normalize the assessment's asset to the
+canonical C-007 base asset, and place the new projected C-012 ID in C-007
+`assessment_ids`. The explicit projection preconditions and fail-closed cases
+are part of this ADR. The timeframe state and uncertainty records must also be
+derived from the exact selected Spot scope and profile limitations, not
+fabricated defaults.
 
 The finalization order preserves the immutable analysis closure: all supported
 outputs and C-006 required fields are assembled and validated before the
@@ -290,7 +337,7 @@ Implementation sequencing after approval:
 | Area | References and impact |
 |---|---|
 | Playbook requirements | Master Playbook v2.2, Chat 5 analysis/evidence requirements and Chat 6 candidate-signal separation. No Playbook text change. |
-| Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
+| Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Register the C-012 projection method/version before runtime use. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
 | Contracts / events | No contract schema or event changes proposed. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-012 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1, and C-069 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
 | Requirements traceability | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462); preserve #68, #90, #91 gates; Futures #39 then personal slice #61 remains required for Phase 1. |
 | Versioning / migration | No public contract schema or output-kind changes. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
