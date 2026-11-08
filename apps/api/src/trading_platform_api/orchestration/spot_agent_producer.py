@@ -48,7 +48,6 @@ from trading_platform_api.contracts.serialization import (
     canonical_json_dumps,
     canonical_sha256,
 )
-from trading_platform_api.risk import ContractReference
 from trading_platform_api.market_data.contracts import (
     DataQualityReportV2,
     DataSourceRecord,
@@ -58,6 +57,7 @@ from trading_platform_api.market_data.contracts import (
 from trading_platform_api.orchestration.spot_request_handoff import (
     SpotRequestAnalysisHandoff,
 )
+from trading_platform_api.risk import ContractReference
 
 SPOT_ADVERSARIAL_WORKLOAD = "personal-spot-adversarial-draft"
 _IDENTITY_VERSION = "producer-request-identity-v1"
