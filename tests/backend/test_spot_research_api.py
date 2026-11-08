@@ -387,6 +387,7 @@ class InvalidSpotModelProvider(FakeSpotModelProvider):
 
     async def generate(self, request: ModelRequest) -> ModelResponse:
         if self.failure == "timeout":
+            self.calls += 1
             await asyncio.sleep(0.05)
         response = await super().generate(request)
         if self.failure == "malformed":
@@ -401,7 +402,7 @@ class InvalidSpotModelProvider(FakeSpotModelProvider):
         return replace(response, content=json.dumps(document))
 
 
-def test_spot_producer_runtime(now: datetime) -> SpotProducerRuntime:
+def spot_producer_runtime(now: datetime) -> SpotProducerRuntime:
     provider = FakeSpotModelProvider(now)
     policy_id = "offline-spot-test-policy"
     model_id = "offline-spot-test-model"
@@ -507,7 +508,7 @@ def service(
             provider_settings=provider_settings,
             quality_policy=quality_policy,
             repository=store,
-            spot_agent_runtime=test_spot_producer_runtime(NOW),
+            spot_agent_runtime=spot_producer_runtime(NOW),
             provider_factory=lambda settings: FakeProvider(settings, calls),
             clock=lambda: NOW,
             monotonic=lambda: 100.0,
@@ -676,7 +677,8 @@ def test_refresh_keeps_producer_unavailable_without_explicit_model_route() -> No
 
     with client_for(research) as client:
         response = client.post(
-            f"/api/research/spot/{INSTRUMENT}/refresh", json=refresh_body()
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=50),
         )
 
     assert response.status_code == 200, response.text
@@ -1830,7 +1832,7 @@ def persisted_service(database_url):
         provider_settings=SOURCE_SETTINGS,
         quality_policy=policy_template(),
         repository=repository,
-        spot_agent_runtime=test_spot_producer_runtime(now),
+        spot_agent_runtime=spot_producer_runtime(now),
         provider_factory=lambda settings: FakeProvider(settings, calls),
         clock=lambda: now,
         monotonic=lambda: 100.0,

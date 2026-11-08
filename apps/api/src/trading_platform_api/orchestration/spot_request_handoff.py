@@ -21,7 +21,6 @@ from trading_platform_api.analysis.spot_meta_analysis import (
     AgentIndependenceReport,
     C093Registry,
     ConflictCalculationState,
-    ConfluenceCalculationState,
     calculate_spot_conflicts_v3,
     calculate_spot_confluence_v3,
 )
@@ -470,9 +469,12 @@ async def run_spot_analysis_request_handoff(
             findings=assessment.fanout.findings,
             now=now,
         )
+        # An INDETERMINATE C-009 is still a valid, provenance-bound result: it
+        # records that this single-source Spot profile cannot establish enough
+        # evidence or independence for confluence. Preserve it in the final
+        # manifest so downstream consumers can fail closed on its status.
         if (
-            confluence_result.state is ConfluenceCalculationState.INDETERMINATE
-            or conflict_result.state
+            conflict_result.state
             not in {
                 ConflictCalculationState.NOT_ASSESSED,
                 ConflictCalculationState.NO_CONFLICT,

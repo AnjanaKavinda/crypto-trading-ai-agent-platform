@@ -31,6 +31,7 @@ from trading_platform_api.analysis.versioned_contracts_v5 import (
     MarketContextV5,
 )
 from trading_platform_api.contracts.serialization import (
+    CANONICAL_JSON_VERSION,
     MAX_DOCUMENT_BYTES,
     canonical_json_dumps,
     canonical_sha256,
@@ -197,7 +198,21 @@ def key_for(record: object) -> LineageKey:
 
 def encode(record: object) -> str:
     key_for(record)
-    result = serialize_contract(record, payload_version="wire-1")
+    if type(record) is TechnicalAssessment:
+        # C-012 v1 predates the fixed dataclass-field metadata convention. Keep
+        # its established payload shape and carry the ClassVar contract identity
+        # in the canonical envelope, without changing the shared C-012 schema.
+        result = canonical_json_dumps(
+            {
+                "canonicalization_version": CANONICAL_JSON_VERSION,
+                "contract_id": "C-012",
+                "schema_version": "1",
+                "payload_version": "wire-1",
+                "payload": record,
+            }
+        )
+    else:
+        result = serialize_contract(record, payload_version="wire-1")
     if len(result.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise LineageError("Lineage document exceeds the size limit.")
     return result
@@ -340,10 +355,16 @@ def decode(document: str) -> object:
             if expected_version is not None and schema_version != expected_version:
                 raise LineageError("Unsupported analysis contract version.")
         payload = dict(envelope["payload"])
-        payload.update(
-            contract_id=contract_id,
-            schema_version=schema_version,
-        )
+        if contract_id == "C-012":
+            # C-012 v1 stores contract_id as a ClassVar, so it is envelope
+            # metadata and must not be injected into its dataclass payload.
+            if payload.get("schema_version") != schema_version:
+                raise LineageError("C-012 payload schema version is mismatched.")
+        else:
+            payload.update(
+                contract_id=contract_id,
+                schema_version=schema_version,
+            )
         record = _decode(model, payload)
         if encode(record) != document:
             raise LineageError("Unsupported version or noncanonical lineage document.")
