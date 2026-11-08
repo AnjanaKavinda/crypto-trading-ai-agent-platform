@@ -221,6 +221,64 @@ technical context. Enabling #56 technical findings in the same C-007 closure
 requires a separate owner-approved, versioned contract design and is outside
 this no-schema-change proposal.
 
+### Exact C-006 v5 field mapping (no placeholder analysis)
+
+C-006 v5 has required fields that are not all populated by C-005/C-009/C-010.
+Use this exact mapping:
+
+- `regime` is the exact validated C-005 regime; it remains separate from
+  `assessments`.
+- `assessments` contains one C-012 `TechnicalAssessment` with status
+  `UNAVAILABLE`, created by a deterministic unavailable-state adapter because
+  the current request has no approved #55/#56 pivot/break policy and the
+  available #56 method evidence is not admissible in C-007 v4. It has no
+  findings, observations, or evidence IDs. Its stable identity binds the exact
+  snapshot ID/digest, C-003 ID/digest, unavailable reason, and registered
+  adapter version. It must not be represented as a #56 calculation result or
+  given a numeric confidence interpretation.
+- `assessment_ids` is exactly the ordered identity list for
+  `context.assessments`; C-005 remains represented by `context.regime` and
+  the C-007 binding. C-009/C-010 remain exact manifest outputs, not entries in
+  the C-006 v5 `VersionedAssessment` tuple.
+- `multi_timeframe_state` is the explicit singleton
+  `("UNAVAILABLE:CROSS_TIMEFRAME_NOT_REQUESTED",)` for this one-timeframe
+  producer request. It records that no cross-timeframe comparison was made;
+  it must never be parsed as a directional finding.
+- `uncertainties` contains deterministic C-069 v1 records derived from the
+  exact snapshot scope and unavailable-input reason. IDs bind the same exact
+  snapshot and reason. No unprovided timeframe, finding, evidence, or confidence
+  is synthesized.
+
+If C-012 v1 or C-069 v1 cannot represent this mapping truthfully, stop for an
+architecture correction; do not weaken validation or create a new contract
+version inside this producer implementation.
+
+### Why this proposal does not add a multi-method contract lane
+
+The C-007 v4 resolver binds C-008 evidence to the exact regime evidence and
+method. Admitting available #56 `spot-market-structure` evidence would require
+a new additive evidence-manifest version and a compatibility path through the
+following existing pins:
+
+| Area | Current pin | Compatibility work required for available #56 evidence |
+|---|---|---|
+| C-007 analysis manifest | v4 | New schema/lineage version with distinct, typed evidence groups and method-specific closure validation |
+| C-006 context / C-019 adversarial | C-006 v5 / C-019 v2 pin C-007 v4 | New versions that bind the new manifest and preserve exact evidence semantics |
+| C-009 / C-010 / C-093 | C-009/C-010 v3 and C-093 v1 pin C-007 v4 | New versions or an explicitly compatible binding design |
+| Closed lineage and persistence | C-007 v4, C-006 v5 and their current typed codecs/allowlists | Additive codecs, durable identities, allowlist/migration, exact read/resolve behavior |
+| Strategy chain and API | #80–#90 resolve exact C-007 v4/C-006 v5 and evidence closure | Additive consumer compatibility and end-to-end revalidation without changing #90's frozen API |
+
+This is a material shared-contract and consumer expansion, not a local #462
+producer correction. It also would not create usable #56 evidence by itself:
+the current approved profile does not supply the pivot/break policies #55/#56
+require. Keep this proposal on C-007 v4/C-006 v5, expose C-012 as unavailable,
+and require NO_TRADE for strategies that declare C-012 required. Revisit the
+multi-method lane only after the required deterministic policies are approved
+through their existing issue/decision path and a separately scoped compatibility
+decision is accepted. Do not treat this Spot producer or the Phase 1 objective
+as complete while any required strategy evidence remains unavailable; Futures
+is still a separate required Phase 1 lane.
+
 ### Producer request identity, reservation, and replay
 
 The producer request key is the canonical digest of the profile and exact
