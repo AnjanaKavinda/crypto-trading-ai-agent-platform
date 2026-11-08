@@ -102,6 +102,8 @@ class Reference:
 
 
 def _reference_content_sha256(record: object) -> str:
+    if type(record) is AnalysisSnapshotV4:
+        return record.content_sha256
     if type(record) is StrategyVersion or type(record) is StrategyVersionV2:
         from trading_platform_api.strategy.registry import (
             strategy_version_content_sha256,
