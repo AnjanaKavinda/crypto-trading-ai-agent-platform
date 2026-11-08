@@ -63,30 +63,37 @@ Costs, risks, and constraints:
 
 Add an additive producer/builder path that consumes the exact finalized C-007
 v4 manifest, exact resolved C-003/C-008 Spot bindings, deterministic C-005
-regime, C-009/C-010
-findings, and registry-resolved C-093 independence output. It validates these
-components and the provider-produced typed C-019 v2 draft, then constructs and
-validates C-006 v5 directly. The existing C-006 v1–v4 contracts and the
-existing #68 C-006 v4 consumer/binder remain unchanged.
+regime, C-009/C-010 findings, and registry-resolved C-093 independence output.
+Because #56's distinct C-008 evidence cannot satisfy the unchanged C-007 v4
+regime-evidence resolver, include a typed C-012 `UNAVAILABLE` assessment with
+an exact C-069 explanation rather than projecting or relabeling #56 evidence.
+Validate these components and the provider-produced typed C-019 v2 draft,
+then construct and validate C-006 v5 directly. Existing C-006 v1–v4 contracts
+and the existing #68 C-006 v4 consumer/binder remain unchanged.
 
 Benefits:
 
-- Does not invent or fabricate a C-019 v1 assessment.
-- Keeps the C-005 Spot regime deterministic and provenance-bound, and makes unavailable technical context explicit.
-- Uses the already approved C-019 v2 / C-006 v5 contract path without changing
-  schema versions, C-007 v4 closure, or historical payload semantics.
-- Provides one explicit validated boundary for the exact inputs required by the
-  strategy-signal handoff.
+- Does not fabricate a C-019 v1 assessment.
+- Keeps the C-005 regime deterministic and provenance-bound.
+- Makes missing technical context explicit and prevents strategies that
+  require available C-012 findings from advancing.
+- Uses the approved C-019 v2 / C-006 v5 contract path without changing schema
+  versions, C-007 v4 closure, or historical payload semantics.
 
 Costs, risks, and constraints:
 
+- This is a regime-centered research handoff; it does not include #56 technical
+  findings in the C-006 closure.
+- Any strategy requiring available C-012 must return NO_TRADE.
 - Requires an additive producer path and full integration tests.
-- The deterministic inputs and exact output references must be assembled from
-  the live Spot analysis path; missing or mismatched inputs block the result.
+- Deterministic inputs and exact output references must be assembled from the
+  live Spot analysis path; missing or mismatched inputs block the result.
+- A future multi-method evidence closure requires a separate owner-approved
+  versioned contract design.
 - A production model/provider configuration remains a separate allowlisted
   configuration and empirical-quality prerequisite under ADR-0002.
 
-**Recommended.**
+**Recommended, with the stated limitation.**
 
 ### Option C — Expand C-007 v4 or reinterpret existing C-006/C-019 schemas
 
@@ -243,11 +250,13 @@ an additive migration. The migration adds no public contract, C-007 output kind,
 or shared schema version and does not rewrite historical rows.
 
 The deterministic primary Spot interpretation is the exact registered C-005
-regime, the explicitly projected #56 C-012 technical assessment, its
-C-007-bound C-008 evidence, and deterministic C-009/C-010 findings bound to the
-validated snapshot. C-006 `assessments` identities must equal the C-007
-`assessment_ids` exactly. C-005 remains represented by C-006 `regime` and the
-C-007 binding; it must not be misrepresented as a `VersionedAssessment`.
+regime and its C-007-bound C-008 evidence, together with deterministic
+C-009/C-010 findings bound to the validated snapshot. The C-012 assessment is
+explicitly `UNAVAILABLE` whenever #56 evidence cannot be admitted by the
+unchanged C-007 v4 resolver; it must not contain projected #56 findings.
+C-006 `assessments` identities must equal the C-007 `assessment_ids` exactly.
+C-005 remains represented by C-006 `regime` and the C-007 binding; it is not
+misrepresented as a `VersionedAssessment`.
 The model may produce only the adversarial/counter-thesis draft accepted by
 #68. It may not replace the deterministic primary interpretation, invent
 market data or calculations, or produce qualification, risk, approval, or
