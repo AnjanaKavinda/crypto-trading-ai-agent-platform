@@ -94,6 +94,16 @@ SUPPORTED_INSTRUMENTS = frozenset(
 )
 SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 
+
+def _freeze_json_sequences(value: object) -> object:
+    """Restore canonical tuple sequences after parsing persisted JSON arrays."""
+    if type(value) is list:
+        return tuple(_freeze_json_sequences(item) for item in value)
+    if type(value) is dict:
+        return {key: _freeze_json_sequences(item) for key, item in value.items()}
+    return value
+
+
 spot_research_snapshots = Table(
     "spot_research_snapshots",
     metadata,
@@ -734,9 +744,10 @@ class SqlAlchemySpotResearchStore:
     ) -> ProducerReservation:
         """Reserve one exact model invocation or return its immutable prior state."""
         try:
-            identity = json.loads(request_document)
+            identity = _freeze_json_sequences(json.loads(request_document))
             if (
-                canonical_json_dumps(identity) != request_document
+                type(identity) is not dict
+                or canonical_json_dumps(identity) != request_document
                 or canonical_sha256(identity) != request_sha256
                 or len(request_document.encode("utf-8")) > 1_000_000
                 or str(UUID(snapshot_id)) != snapshot_id
