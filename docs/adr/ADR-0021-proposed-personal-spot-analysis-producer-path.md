@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted on merge of PR #464 |
 | Date | 2026-11-06 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
+| Human approver | AnjanaKavinda, by merging PR #464 |
 | GitHub issue / PR | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462) |
 | Open decision ID | OD-0027 |
 | Related ADRs | ADR-0002, ADR-0010, ADR-0012, ADR-0020 |
@@ -117,9 +117,11 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed: Option B.** The human repository owner has not yet approved this
-architecture decision. No runtime implementation is authorized by this
-proposal.
+**Option B is accepted when PR #464 is merged by the human repository owner.**
+That merge records the decision to keep C-007 v4/C-006 v5, expose C-012 as
+unavailable, and proceed under the exact persistence, idempotency, provenance,
+and fail-closed requirements below. Before that merge, no runtime
+implementation is authorized.
 
 The proposed producer boundary is:
 
@@ -162,12 +164,18 @@ The proposed producer boundary is:
    C-067 route to draft the bounded C-019 v2 adversarial content.
 7. Validate the model draft, construct C-019 v2 and the complete C-006 v5,
    then run the full C-006 v5 validator against the exact finalized C-007
-   digest. Only after that validation, atomically
-   persist the final C-007 analysis closure, its referenced records, the exact
-   C-062 result, exactly one linked C-066 evaluation, C-067 routing provenance,
-   and the completed request reservation. Bind fan-out, C-062, and C-066 to
-   the same exact context, correlation, and trace identities required by #90.
-   Expose only a fully persisted exact handoff to the strategy-signal API.
+   digest. Only after that validation, atomically persist:
+   - the final C-007 v4 closure and every referenced record;
+   - the standalone C-006 v5 lineage record, keyed by its exact context ID and
+     schema version, with its canonical content digest and exact C-007 reference;
+   - the exact C-062 result whose output is that same C-006 v5 record;
+   - exactly one linked C-066 evaluation, with the exact C-006 context ID;
+   - the exact C-067 routing provenance; and
+   - the completed producer-request reservation.
+   Bind fan-out, C-006, C-062, and C-066 to the same exact context,
+   correlation, and trace identities required by #90. Persist C-006 through
+   the bounded internal Spot write path; do not add or change an HTTP/API
+   operation in #90. Expose only the fully persisted exact handoff to #90.
 
 The market snapshot/raw market-data write may precede this flow. Under accepted
 ADR-0012, analysis records are appended only within the same explicit successful
@@ -249,6 +257,34 @@ Use this exact mapping:
   snapshot and reason. No unprovided timeframe, finding, evidence, or confidence
   is synthesized.
 
+### C-069 v1 unavailable-context projection
+
+For the exact C-012 unavailable condition, build one C-069 v1 record using a
+registered deterministic projection method 
+`spot-profile-unavailability-severity-v1`:
+
+- `category`: `METHOD`, because the required structure method/policy is not
+  available in the approved C-007 v4 evidence closure.
+- `affected_finding_ids`: empty; no structure finding was produced.
+- `affected_domains`: exactly `("spot-market-structure",)`.
+- `severity`: decimal `1.0`, meaning complete unavailability of this affected
+  domain for this request only. It is not probability, analytical confidence,
+  market-risk score, or a global context score; it cannot block unrelated
+  domains by itself.
+- `reducible`: true; `required_evidence` names both the approved #55/#56
+  pivot/break policies and an accepted multi-method C-007 compatibility
+  decision. Until both exist, resolution remains blocked.
+- `as_of`: exact C-007 analysis cutoff. `expires_at`: the earliest expiry among
+  the exact C-003 quality report, C-007 manifest, and C-012 unavailable
+  assessment; it must not exceed C-006 expiry.
+- `resolution_status`: `UNRESOLVED`.
+- `uncertainty_id`: deterministic from exact C-007 snapshot identity/digest,
+  C-012 unavailable reason, and this projection method/version.
+
+This method/version is provenance and part of the producer idempotency key.
+If any required bound or scope cannot be derived from these exact inputs, the
+producer fails closed instead of inventing a value.
+
 If C-012 v1 or C-069 v1 cannot represent this mapping truthfully, stop for an
 architecture correction; do not weaken validation or create a new contract
 version inside this producer implementation.
@@ -281,12 +317,48 @@ is still a separate required Phase 1 lane.
 
 ### Producer request identity, reservation, and replay
 
-The producer request key is the canonical digest of the profile and exact
-validated input identity: snapshot ID/digest, C-003 report ID/digest, C-005
-regime ID/digest, the ordered C-008 evidence IDs/digests, selected timeframe and
-coverage, and the registry-resolved route, method, model, and prompt IDs and
-versions. The key is computed only after validating current inputs and
-resolving the allowlisted route, but before any provider invocation. It never
+The request identity uses protocol version
+`producer-request-identity-v1` and canonicalization version
+`canonical-json-v1` (the repository's `CANONICAL_JSON_VERSION`). Its
+canonical SHA-256 digest has these explicitly versioned components:
+
+1. **Research profile and agent:** exact `PERSONAL_SPOT_RESEARCH` profile ID
+   and version; C-061 agent ID, agent-definition version, and schema `1`.
+   C-061 has no independent lineage artifact in this flow, so its lineage slot
+   is explicitly `N/A: registry definition`.
+2. **Runtime permission closure:** C-063 profile ID/revision/schema `1`,
+   validity window, and canonical content digest; its exact C-098 policy
+   ID/revision/version/schema `1` and policy content digest; and the exact
+   C-064 access-grant set. This research agent has no tool grants, so the C-064
+   set is explicitly empty (schema `1`). C-063/C-064/C-098 are not persisted
+   as lineage records in this flow; their lineage slots are explicitly
+   `N/A: runtime permission registry`. If runtime access controls change, the
+   policy/profile/grant identity in the key changes. Do not encode invented
+   “capability profile” versions on C-061.
+3. **Input closure:** C-002 snapshot `1/1` ID/digest; C-003 quality report
+   `2/2` ID/digest and quality-policy ID/version; C-005 regime `1/1`
+   ID/digest plus regime method/profile versions; sorted C-008 evidence `2/2`
+   IDs/digests and each evidence method version; C-007 manifest `4/4`
+   ID/digest; exact C-001 observations `1/1` IDs/digests; exact C-091
+   sources `1/1` IDs/digests; timeframe and coverage bounds.
+4. **Deterministic producer vector:** C-012 unavailable assessment schema
+   `1` (no independent lineage record) plus unavailable-state adapter
+   version; C-009/C-010 `3/3` and their method versions; C-093 `1/1` and
+   independence method; C-069 `1/1` and uncertainty-projection method.
+5. **Handoff and routing:** exact C-019 method/model/prompt IDs and versions,
+   C-067 route identity/version, and schema/lineage versions for C-019 `2/2`,
+   C-006 `5/5`, C-062 `1/1`, C-066 `1/1`, and C-067 `1/1`.
+
+Represent contract entries as sorted
+`(component_role, contract_id, schema_version, lineage_version, component_id,
+component_version, content_digest)` tuples. Use the explicit `N/A` lineage
+labels above for components without independently persisted lineage; never
+omit a version field silently. C-063/C-098 permission content digests and the
+empty C-064 grant set are part of the identity. A changed profile, permission
+policy, agent, source/observation closure, schema/lineage version,
+deterministic method, route, model, or prompt version MUST produce a different
+key. Compute the key only after validating exact current inputs and resolving
+the allowlisted route, but before any provider invocation. The identity never
 contains prompt text, credentials, or model output.
 
 An additive internal persistence record with a unique request key is inserted
@@ -359,7 +431,10 @@ independent evidence.
 
 The proposal preserves #68's deterministic binder for its existing use and
 preserves #90's exact-reference, fail-closed consumer boundary. It adds only an
-upstream producer path. It does not claim that a model's analytical output is
+upstream producer path. The standalone C-006 v5 record is explicitly persisted
+because #90 resolves that exact input from lineage; this is producer-owned
+persistence under the existing closed C-006 codec/identity, not a change to
+#90's API or behavior. It does not claim that a model's analytical output is
 profitable or statistically validated; those remain separate evidence and
 qualification questions.
 
@@ -416,7 +491,7 @@ Implementation sequencing after approval:
 | Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Register the C-012 unavailable-state provenance method/version before runtime use; do not implement a #56-to-C-007-v4 evidence projection. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
 | Contracts / events | No contract schema or event changes proposed. A later multi-method evidence closure requires separate owner-approved versioning design. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-012 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1, and C-069 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
 | Requirements traceability | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462); preserve #68, #90, #91 gates; Futures #39 then personal slice #61 remains required for Phase 1. |
-| Versioning / migration | No public contract schema or output-kind changes. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
+| Versioning / migration | No public contract schema or output-kind changes. Use the existing closed C-006 v5 identity/codec and add it to the producer-owned append allowlist so #90 can resolve its exact standalone context. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
 
 ## Safety, security, and failure behavior
 
@@ -435,6 +510,6 @@ Implementation sequencing after approval:
 
 ## Approval record
 
-Pending human repository owner review. Until approved, this ADR is not
-implementation authority and Issue #462 must not implement the proposed runtime
-architecture.
+Owner approval is recorded by merging PR #464. After that merge, this ADR is
+implementation authority for the bounded Issue #462 runtime path. Until the
+merge, Issue #462 must not implement the proposed runtime architecture.
