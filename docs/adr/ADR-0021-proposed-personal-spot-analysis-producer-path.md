@@ -317,38 +317,49 @@ is still a separate required Phase 1 lane.
 
 ### Producer request identity, reservation, and replay
 
-The producer request key is the canonical SHA-256 digest of a
-versioned `ProducerRequestIdentity` value using the repository's canonical
-serialization version. Its identity has four explicit components:
+The request identity uses protocol version
+`producer-request-identity-v1` and canonicalization version
+`canonical-json-v1` (the repository's `CANONICAL_JSON_VERSION`). Its
+canonical SHA-256 digest has these explicitly versioned components:
 
-1. **Profile and agent:** the exact `PERSONAL_SPOT_RESEARCH` profile ID/version
-   and the registry-resolved C-061 agent ID, definition version, and capability
-   profile version.
-2. **Input closure:** the exact C-002 snapshot ID/schema/lineage/content digest;
-   C-003 quality report ID/schema/lineage/digest and quality-policy ID/version;
-   C-005 regime ID/schema/lineage/digest plus regime method/profile versions;
-   the sorted exact C-008 evidence IDs/schema/lineage/digests and each evidence
-   method version; the C-007 v4 manifest ID/schema/lineage/digest; its exact
-   C-001 observation IDs/digests and C-091 source IDs/digests; and the selected
-   timeframe and coverage bounds.
-3. **Producer vector:** the schema/lineage versions and exact method/profile
-   versions used for C-012 unavailable-state projection, C-009 confluence,
-   C-010 conflict, C-093 independence, and C-069 uncertainty projection. Include
-   C-003, C-005, C-008, and C-007 versions here as resolved identity fields too;
-   duplicate mention in the input closure is intentional and the canonical
-   object has one value per named component.
-4. **Handoff and routing:** the exact C-019 method/model/prompt IDs and versions,
-   C-067 route identity/version, and schema/lineage versions for the resulting
-   C-019 v2, C-006 v5, C-062, C-066, C-067, and C-069 records.
+1. **Research profile and agent:** exact `PERSONAL_SPOT_RESEARCH` profile ID
+   and version; C-061 agent ID, agent-definition version, and schema `1`.
+   C-061 has no independent lineage artifact in this flow, so its lineage slot
+   is explicitly `N/A: registry definition`.
+2. **Runtime permission closure:** C-063 profile ID/revision/schema `1`,
+   validity window, and canonical content digest; its exact C-098 policy
+   ID/revision/version/schema `1` and policy content digest; and the exact
+   C-064 access-grant set. This research agent has no tool grants, so the C-064
+   set is explicitly empty (schema `1`). C-063/C-064/C-098 are not persisted
+   as lineage records in this flow; their lineage slots are explicitly
+   `N/A: runtime permission registry`. If runtime access controls change, the
+   policy/profile/grant identity in the key changes. Do not encode invented
+   “capability profile” versions on C-061.
+3. **Input closure:** C-002 snapshot `1/1` ID/digest; C-003 quality report
+   `2/2` ID/digest and quality-policy ID/version; C-005 regime `1/1`
+   ID/digest plus regime method/profile versions; sorted C-008 evidence `2/2`
+   IDs/digests and each evidence method version; C-007 manifest `4/4`
+   ID/digest; exact C-001 observations `1/1` IDs/digests; exact C-091
+   sources `1/1` IDs/digests; timeframe and coverage bounds.
+4. **Deterministic producer vector:** C-012 unavailable assessment schema
+   `1` (no independent lineage record) plus unavailable-state adapter
+   version; C-009/C-010 `3/3` and their method versions; C-093 `1/1` and
+   independence method; C-069 `1/1` and uncertainty-projection method.
+5. **Handoff and routing:** exact C-019 method/model/prompt IDs and versions,
+   C-067 route identity/version, and schema/lineage versions for C-019 `2/2`,
+   C-006 `5/5`, C-062 `1/1`, C-066 `1/1`, and C-067 `1/1`.
 
-Encode the version vector as sorted `(component_role, contract_id, schema_version,
-lineage_version, component_id, component_version)` tuples, with explicit nulls
-only where the contract has no such field. A changed profile, agent, source or
-observation closure, schema/lineage version, deterministic method, route, model,
-or prompt version MUST produce a different key. Compute the key only after
-validating exact current inputs and resolving the allowlisted route, but before
-any provider invocation. The identity never contains prompt text, credentials,
-or model output.
+Represent contract entries as sorted
+`(component_role, contract_id, schema_version, lineage_version, component_id,
+component_version, content_digest)` tuples. Use the explicit `N/A` lineage
+labels above for components without independently persisted lineage; never
+omit a version field silently. C-063/C-098 permission content digests and the
+empty C-064 grant set are part of the identity. A changed profile, permission
+policy, agent, source/observation closure, schema/lineage version,
+deterministic method, route, model, or prompt version MUST produce a different
+key. Compute the key only after validating exact current inputs and resolving
+the allowlisted route, but before any provider invocation. The identity never
+contains prompt text, credentials, or model output.
 
 An additive internal persistence record with a unique request key is inserted
 as `IN_PROGRESS` before the provider call. A concurrent duplicate observes the
