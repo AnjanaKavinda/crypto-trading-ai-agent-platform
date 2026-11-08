@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Awaitable, Callable, Literal, TypedDict, cast
@@ -48,6 +48,7 @@ from trading_platform_api.contracts.serialization import (
     canonical_json_dumps,
     canonical_sha256,
 )
+from trading_platform_api.risk import ContractReference
 from trading_platform_api.market_data.contracts import (
     DataQualityReportV2,
     DataSourceRecord,
@@ -605,6 +606,15 @@ async def produce_spot_agent_handoff(
             outcome=AgentEvaluationOutcome.COMPLETED,
             failure_classification=None,
             validation_completed=True,
+        )
+        evaluation = replace(
+            evaluation,
+            routing_decision_ref=ContractReference(
+                "C-067",
+                decision.request_id,
+                decision.schema_version,
+                content_sha256=canonical_sha256(decision),
+            ),
         )
         return CompletedSpotAgentHandoff(
             context,
