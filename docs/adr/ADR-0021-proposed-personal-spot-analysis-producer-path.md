@@ -259,7 +259,7 @@ Use this exact mapping:
 
 For the exact C-012 unavailable condition, build one C-069 v1 record using a
 registered deterministic projection method 
-\`spot-profile-unavailability-severity-v1\`:
+`spot-profile-unavailability-severity-v1`:
 
 - `category`: `METHOD`, because the required structure method/policy is not
   available in the approved C-007 v4 evidence closure.
@@ -459,7 +459,7 @@ Implementation sequencing after approval:
 | Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Register the C-012 unavailable-state provenance method/version before runtime use; do not implement a #56-to-C-007-v4 evidence projection. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
 | Contracts / events | No contract schema or event changes proposed. A later multi-method evidence closure requires separate owner-approved versioning design. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-012 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1, and C-069 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
 | Requirements traceability | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462); preserve #68, #90, #91 gates; Futures #39 then personal slice #61 remains required for Phase 1. |
-| Versioning / migration | No public contract schema or output-kind changes. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
+| Versioning / migration | No public contract schema or output-kind changes. Use the existing closed C-006 v5 identity/codec and add it to the producer-owned append allowlist so #90 can resolve its exact standalone context. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
 
 ## Safety, security, and failure behavior
 
