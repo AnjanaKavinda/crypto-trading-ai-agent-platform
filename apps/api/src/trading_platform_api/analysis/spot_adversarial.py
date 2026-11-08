@@ -392,7 +392,9 @@ def build_spot_market_context_v5_direct(
         evidence=evidence_refs,
         contradictory_evidence_ids=draft.falsification_evidence_ids,
         failure_conditions=draft.failure_conditions,
-        data_limitations=tuple(sorted(set((*draft.data_limitations, *draft.coverage_gaps)))),
+        data_limitations=tuple(
+            sorted(set((*draft.data_limitations, *draft.coverage_gaps)))
+        ),
         measurement_error_risks=draft.measurement_error_risks,
         confirmation_bias_concerns=draft.confirmation_bias_concerns,
         analytical_confidence=AnalyticalConfidenceV2(

@@ -104,9 +104,7 @@ class SpotProducerUnavailable:
     reason_code: str
 
 
-ReserveProducerRequest = Callable[
-    [str, str, str], Awaitable[ProducerReservation]
-]
+ReserveProducerRequest = Callable[[str, str, str], Awaitable[ProducerReservation]]
 FailProducerRequest = Callable[[str], Awaitable[None]]
 
 
@@ -154,7 +152,9 @@ def _draft_from_response(
     support = tuple(UUID(item) for item in payload["supporting_evidence_ids"])
     falsification = tuple(UUID(item) for item in payload["falsification_evidence_ids"])
     if not set((*support, *falsification)).issubset(set(allowed_evidence_ids)):
-        raise ValueError("model output cites evidence outside exact usable C-008 inputs")
+        raise ValueError(
+            "model output cites evidence outside exact usable C-008 inputs"
+        )
     return SpotAdversarialDraft(
         counter_thesis=payload["counter_thesis"],
         alternative_hypotheses=tuple(payload["alternative_hypotheses"]),
@@ -265,7 +265,9 @@ def _producer_identity(
                     item.method,
                     item.provenance,
                 )
-                for item in sorted(handoff.evidence, key=lambda item: str(item.evidence_id))
+                for item in sorted(
+                    handoff.evidence, key=lambda item: str(item.evidence_id)
+                )
             ),
             "c007": (
                 str(handoff.manifest.snapshot_id),
@@ -430,7 +432,11 @@ async def produce_spot_agent_handoff(
     ):
         return SpotProducerUnavailable("AGENT_PERMISSION_PROFILE_UNAVAILABLE")
     route = next(
-        (item for item in runtime.routing_policy.routes if item.capability_tier is runtime.capability_tier),
+        (
+            item
+            for item in runtime.routing_policy.routes
+            if item.capability_tier is runtime.capability_tier
+        ),
         None,
     )
     if route is None:
@@ -562,11 +568,15 @@ async def produce_spot_agent_handoff(
             confidence=None,
             supporting_evidence_ids=draft.supporting_evidence_ids,
             contradicting_evidence_ids=draft.falsification_evidence_ids,
-            unresolved_risks=tuple(sorted(set(draft.data_limitations + draft.coverage_gaps)))
+            unresolved_risks=tuple(
+                sorted(set(draft.data_limitations + draft.coverage_gaps))
+            )
             or ("ANALYSIS_ONLY_NO_TRADE_AUTHORITY",),
             output=context,
         )
-        validate_agent_result(result, expectation=expectation, now=response.completed_at)
+        validate_agent_result(
+            result, expectation=expectation, now=response.completed_at
+        )
         evaluation = build_agent_evaluation(
             result,
             expectation=expectation,
@@ -577,7 +587,9 @@ async def produce_spot_agent_handoff(
             started_at=decision.decided_at,
             ended_at=response.completed_at,
             evaluated_at=response.completed_at,
-            duration_ms=int((response.completed_at - decision.decided_at).total_seconds() * 1000),
+            duration_ms=int(
+                (response.completed_at - decision.decided_at).total_seconds() * 1000
+            ),
             outcome=AgentEvaluationOutcome.COMPLETED,
             failure_classification=None,
             validation_completed=True,

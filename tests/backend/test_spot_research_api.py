@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import trading_platform_api.spot_research as spot_research_module
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -50,7 +51,11 @@ from trading_platform_api.analysis.vwap_volume_profile import (
     calculate_volume_profile,
     calculate_vwap,
 )
-from trading_platform_api.config import AppSettings, DeploymentEnvironment, OperatingMode
+from trading_platform_api.config import (
+    AppSettings,
+    DeploymentEnvironment,
+    OperatingMode,
+)
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.codec import encode, key_for
 from trading_platform_api.lineage.store import (
@@ -83,14 +88,13 @@ from trading_platform_api.market_data.quality import (
     validate_spot_ohlcv_quality_v2,
 )
 from trading_platform_api.orchestration.spot_agent_producer import (
+    SPOT_ADVERSARIAL_WORKLOAD,
     CompletedSpotAgentHandoff,
     ProducerReservation,
-    SPOT_ADVERSARIAL_WORKLOAD,
     SpotProducerRuntime,
 )
 from trading_platform_api.risk import VersionReference as SafetyVersionReference
 from trading_platform_api.safety import AgentPermissionPolicy
-import trading_platform_api.spot_research as spot_research_module
 from trading_platform_api.spot_research import (
     _DETACHED_TIMEOUT_TASKS,
     QualityPolicyTemplate,
@@ -338,17 +342,25 @@ class FakeSpotModelProvider:
         document = json.loads(request.content)
         evidence_ids = [item["evidence_id"] for item in document["usable_evidence"]]
         if len(evidence_ids) < 2:
-            raise AssertionError("positive producer test requires two usable evidence items")
+            raise AssertionError(
+                "positive producer test requires two usable evidence items"
+            )
         content = json.dumps(
             {
                 "counter_thesis": "The primary regime may not persist.",
-                "alternative_hypotheses": ["The move may be a short-lived price response."],
+                "alternative_hypotheses": [
+                    "The move may be a short-lived price response."
+                ],
                 "supporting_evidence_ids": [evidence_ids[0]],
                 "falsification_evidence_ids": [evidence_ids[1]],
                 "failure_conditions": ["The cited evidence may become stale."],
                 "data_limitations": ["This is a bounded Spot sample."],
-                "measurement_error_risks": ["Candle aggregation can obscure intrabar moves."],
-                "confirmation_bias_concerns": ["The selected regime may anchor interpretation."],
+                "measurement_error_risks": [
+                    "Candle aggregation can obscure intrabar moves."
+                ],
+                "confirmation_bias_concerns": [
+                    "The selected regime may anchor interpretation."
+                ],
                 "coverage_gaps": ["No order-book evidence is included."],
             },
             separators=(",", ":"),
@@ -443,7 +455,9 @@ def test_spot_producer_runtime(now: datetime) -> SpotProducerRuntime:
         expires_at=now + timedelta(hours=2),
         created_at=now - timedelta(minutes=2),
         issuer_ref="offline-test",
-        configuration_version=SafetyVersionReference("test-configuration", "1", "b" * 64),
+        configuration_version=SafetyVersionReference(
+            "test-configuration", "1", "b" * 64
+        ),
         content_sha256="c" * 64,
     )
     profile = AgentPermissionProfile(
@@ -2009,7 +2023,9 @@ def test_store_analysis_append_is_idempotent_and_rejects_conflicting_retry(
 
     assert refreshed.status_code == 200, refreshed.text
     assert len(captured) == 1
-    snapshot_id, handoff, producer_handoff, request_sha256, request_document = captured[0]
+    snapshot_id, handoff, producer_handoff, request_sha256, request_document = captured[
+        0
+    ]
     asyncio.run(
         append_analysis(
             snapshot_id=snapshot_id,

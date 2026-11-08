@@ -79,17 +79,17 @@ from trading_platform_api.market_data.quality import (
     assess_complete_binance_spot_batch,
     assess_data_quality,
 )
-from trading_platform_api.orchestration.spot_request_handoff import (
-    SpotRequestAnalysisHandoff,
-    SpotRequestAnalysisUnavailable,
-    run_spot_analysis_request_handoff,
-)
 from trading_platform_api.orchestration.spot_agent_producer import (
     CompletedSpotAgentHandoff,
     ProducerReservation,
     SpotProducerRuntime,
     SpotProducerUnavailable,
     produce_spot_agent_handoff,
+)
+from trading_platform_api.orchestration.spot_request_handoff import (
+    SpotRequestAnalysisHandoff,
+    SpotRequestAnalysisUnavailable,
+    run_spot_analysis_request_handoff,
 )
 from trading_platform_api.spot_research_store import (
     MAX_READ_CANDLES,
@@ -1577,13 +1577,17 @@ class SpotResearchService:
                                     trace_id=trace_id,
                                     now=self.clock().astimezone(UTC),
                                     runtime=self.spot_agent_runtime,
-                                    reserve_request=lambda request_sha256, request_document, request_snapshot_id: self.repository.reserve_producer_request(
-                                        request_sha256=request_sha256,
-                                        request_document=request_document,
-                                        snapshot_id=request_snapshot_id,
+                                    reserve_request=lambda request_sha256, request_document, request_snapshot_id: (
+                                        self.repository.reserve_producer_request(
+                                            request_sha256=request_sha256,
+                                            request_document=request_document,
+                                            snapshot_id=request_snapshot_id,
+                                        )
                                     ),
-                                    fail_request=lambda request_sha256: self.repository.fail_producer_request(
-                                        request_sha256=request_sha256
+                                    fail_request=lambda request_sha256: (
+                                        self.repository.fail_producer_request(
+                                            request_sha256=request_sha256
+                                        )
                                     ),
                                 )
                             ),
@@ -1639,7 +1643,9 @@ class SpotResearchService:
                                         )
                                     except Exception:
                                         pass
-                                    analysis_unavailable_reason = "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                                    analysis_unavailable_reason = (
+                                        "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                                    )
                             except Exception:
                                 try:
                                     await self.repository.fail_producer_request(
@@ -1647,7 +1653,9 @@ class SpotResearchService:
                                     )
                                 except Exception:
                                     pass
-                                analysis_unavailable_reason = "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                                analysis_unavailable_reason = (
+                                    "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                                )
                             else:
                                 analysis_handoff = handoff
             response = await _response(

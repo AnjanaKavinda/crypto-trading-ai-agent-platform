@@ -39,7 +39,10 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     ConfluenceAssessmentV3,
 )
 from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
-from trading_platform_api.contracts.serialization import canonical_json_dumps
+from trading_platform_api.contracts.serialization import (
+    canonical_json_dumps,
+    canonical_sha256,
+)
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
 from trading_platform_api.lineage.codec import LineageError, LineageKey, decode_value
 from trading_platform_api.lineage.store import (
@@ -61,6 +64,10 @@ from trading_platform_api.market_data.contracts import (
 )
 from trading_platform_api.market_data.providers import ProviderBatch, ProviderDataKind
 from trading_platform_api.market_data.quality import DataQualityPolicy, MetricBound
+from trading_platform_api.orchestration.spot_agent_producer import (
+    CompletedSpotAgentHandoff,
+    ProducerReservation,
+)
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SUPPORTED_SPOT_FINDING_DOMAINS,
     SpotAnalysisFanoutAssessment,
@@ -71,10 +78,6 @@ from trading_platform_api.orchestration.spot_analysis_fanout import (
 )
 from trading_platform_api.orchestration.spot_request_handoff import (
     SpotRequestAnalysisHandoff,
-)
-from trading_platform_api.orchestration.spot_agent_producer import (
-    CompletedSpotAgentHandoff,
-    ProducerReservation,
 )
 from trading_platform_api.persistence.session import transactional_session
 
@@ -515,8 +518,7 @@ class SqlAlchemySpotResearchStore:
             or type(handoff.confluence) is not ConfluenceAssessmentV3
             or type(handoff.conflicts) is not tuple
             or any(type(item) is not ConflictAssessmentV3 for item in handoff.conflicts)
-            or type(handoff.unavailable_technical.assessment)
-            is not TechnicalAssessment
+            or type(handoff.unavailable_technical.assessment) is not TechnicalAssessment
             or handoff.unavailable_technical.assessment.status
             is not AssessmentStatus.UNAVAILABLE
             or type(handoff.unavailable_technical.uncertainty)
@@ -560,11 +562,9 @@ class SqlAlchemySpotResearchStore:
             != manifest.snapshot_id
             or producer_handoff.context.analysis_snapshot.content_sha256
             != manifest.content_sha256
-            or producer_handoff.context.context_id
-            != producer_handoff.result.context_id
+            or producer_handoff.context.context_id != producer_handoff.result.context_id
             or producer_handoff.result.output != producer_handoff.context
-            or producer_handoff.correlation_id
-            != assessment.fanout.correlation_id
+            or producer_handoff.correlation_id != assessment.fanout.correlation_id
         ):
             raise SpotResearchStoreError(
                 "Producer handoff does not bind the exact Spot request."
@@ -742,7 +742,9 @@ class SqlAlchemySpotResearchStore:
             ):
                 raise ValueError
         except (TypeError, ValueError, json.JSONDecodeError):
-            raise SpotResearchStoreError("Producer request identity is invalid.") from None
+            raise SpotResearchStoreError(
+                "Producer request identity is invalid."
+            ) from None
         async with transactional_session(self._session_factory) as session:
             if not isinstance(session, AsyncSession):
                 raise SpotResearchStoreError("A PostgreSQL async session is required.")

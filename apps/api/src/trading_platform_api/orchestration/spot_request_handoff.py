@@ -143,8 +143,7 @@ def _validate_final_manifest_outputs(
             item.input_snapshot_id != manifest.snapshot_id
             or item.input_snapshot_schema_version != manifest.schema_version
             or item.expires_at > manifest.expires_at
-            or item.data_quality_reports
-            != (manifest.bindings[0].data_quality_report,)
+            or item.data_quality_reports != (manifest.bindings[0].data_quality_report,)
             for item in conflicts
         )
     ):

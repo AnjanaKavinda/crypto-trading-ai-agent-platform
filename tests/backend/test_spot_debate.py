@@ -31,9 +31,6 @@ from trading_platform_api.analysis.spot_adversarial import (
     SpotAdversarialDraft,
     build_spot_market_context_v5,
 )
-from trading_platform_api.analysis.spot_unavailable_context import (
-    build_spot_unavailable_technical_context,
-)
 from trading_platform_api.analysis.spot_meta_analysis import (
     C093Registry,
     ConflictMaterialityV2,
@@ -41,6 +38,9 @@ from trading_platform_api.analysis.spot_meta_analysis import (
     SpotMetaFinding,
     calculate_spot_conflicts_v3,
     calculate_spot_confluence_v3,
+)
+from trading_platform_api.analysis.spot_unavailable_context import (
+    build_spot_unavailable_technical_context,
 )
 from trading_platform_api.analysis.versioned_contracts import (
     AdversarialAssessment,
@@ -994,13 +994,18 @@ def test_c012_technical_assessment_has_closed_lineage_codec() -> None:
 
     assert type(assessment) is TechnicalAssessment
     assert assessment.status is AssessmentStatus.UNAVAILABLE
-    assert assessment.findings == assessment.observations == assessment.evidence_ids == ()
+    assert (
+        assessment.findings == assessment.observations == assessment.evidence_ids == ()
+    )
     assert assessment.uncertainty_ids == (unavailable.uncertainty.uncertainty_id,)
     assert key_for(assessment).contract_id == "C-012"
     assert key_for(assessment).version == "1"
     assert decode(encode(assessment)) == assessment
-    assert build_spot_unavailable_technical_context(
-        snapshot=binding.snapshot,
-        quality_report=binding.report,
-        manifest=envelope.manifest,
-    ) == unavailable
+    assert (
+        build_spot_unavailable_technical_context(
+            snapshot=binding.snapshot,
+            quality_report=binding.report,
+            manifest=envelope.manifest,
+        )
+        == unavailable
+    )

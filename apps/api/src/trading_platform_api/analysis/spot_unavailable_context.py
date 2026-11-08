@@ -81,7 +81,8 @@ def build_spot_unavailable_technical_context(
         raise ValueError("Unavailable technical context has no valid lifetime.")
     uncertainty_id = uuid5(
         _IDENTITY_NAMESPACE,
-        "c069-unavailable:" + canonical_sha256(
+        "c069-unavailable:"
+        + canonical_sha256(
             (
                 str(manifest.snapshot_id),
                 manifest.content_sha256,
