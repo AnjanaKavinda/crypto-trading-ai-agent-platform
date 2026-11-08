@@ -63,7 +63,7 @@ Costs, risks, and constraints:
 
 Add an additive producer/builder path that consumes the exact finalized C-007
 v4 manifest, exact resolved C-003/C-008 Spot bindings, deterministic C-005
-regime, a compatible deterministic C-012 technical assessment, C-009/C-010
+regime, C-009/C-010
 findings, and registry-resolved C-093 independence output. It validates these
 components and the provider-produced typed C-019 v2 draft, then constructs and
 validates C-006 v5 directly. The existing C-006 v1–v4 contracts and the
@@ -72,7 +72,7 @@ existing #68 C-006 v4 consumer/binder remain unchanged.
 Benefits:
 
 - Does not invent or fabricate a C-019 v1 assessment.
-- Keeps the primary Spot interpretation deterministic and provenance-bound.
+- Keeps the C-005 Spot regime deterministic and provenance-bound, and makes unavailable technical context explicit.
 - Uses the already approved C-019 v2 / C-006 v5 contract path without changing
   schema versions, C-007 v4 closure, or historical payload semantics.
 - Provides one explicit validated boundary for the exact inputs required by the
@@ -122,7 +122,7 @@ The proposed producer boundary is:
    snapshot.
 2. Resolve C-003/C-005/C-008 from that snapshot, run the registered
    deterministic C-012 producer (#56), then apply the explicit compatibility
-   projection below and run local finding tasks. C-005 remains the separate
+   explicit C-012 UNAVAILABLE mapping below and run local finding tasks. C-005 remains the separate
    `regime` field; it is not placed in C-006's `assessments` array.
 3. Allocate the final C-007 snapshot identity once. Build an in-memory seed
    manifest containing the immutable input scope and supported C-005/C-008
@@ -136,7 +136,7 @@ The proposed producer boundary is:
    contracts allowed by C-007 v4. Validate the final manifest, all referenced
    records, and their digests before any analysis-closure persistence.
 5. Prepare the required deterministic C-006 inputs truthfully: `regime` is the
-   exact C-005 result; `assessments` contains the projected C-012 assessment
+   exact C-005 result; `assessments` contains the exact C-012 UNAVAILABLE assessment
    whose ID is in the finalized manifest; `multi_timeframe_state` records only
    the timeframe(s) actually selected and validated for this request; and the
    nonempty C-069 uncertainty set is derived deterministically from exact
@@ -171,41 +171,45 @@ backfill a different manifest for a legacy snapshot. If analysis persistence
 fails, preserve the valid OHLCV refresh result and return analysis unavailable,
 as required by ADR-0012. No amendment to ADR-0012 is proposed.
 
-### C-012 compatibility projection
+### C-012 context availability mapping
 
-The current #56 `MarketStructureAnalysis` is not directly admissible in C-006
-v5: it consumes C-003 v1, emits C-008 v1 evidence, and sets the C-012 asset to
-the full instrument ID. #462 must add the bounded, deterministic, registered
-projection method `spot-c012-context-binding` v1; it must not describe the
-current #56 output as already compatible.
+The current #56 `MarketStructureAnalysis` is not admissible as an available
+C-012 assessment in the C-007 v4/C-006 v5 closure. The C-007 v4 resolver
+requires the exact C-005 regime evidence IDs and requires every bound C-008
+record to use the `spot-market-regime` method. #56 emits distinct
+`spot-market-structure` evidence. Converting its C-008 version, adding
+lineage, or changing its asset cannot make those records satisfy the resolver
+without changing their analytical meaning. The original #56 assessment and
+evidence remain immutable and outside this C-007 v4 closure.
 
-The projection is permitted only when the source C-012 assessment and C-008 v1
-evidence bind to the exact refresh snapshot, source/observation IDs, timeframe,
-cutoff, and a valid C-003 v1 report, and the approved C-003 v2 assessment of
-that same snapshot/scope is also valid under the same approved policy. It then:
+Preserve the existing contracts and use an explicit, typed C-012
+`UNAVAILABLE` assessment when no C-012 evidence is admissible under the exact
+C-007 v4 binding. Include its identity in the manifest's `assessment_ids` and
+include the exact assessment in C-006 v5. It has no findings, observations,
+evidence IDs, or contradiction IDs; it references the exact C-003 v2 quality
+report, uses the `UNAVAILABLE` status, and links the deterministic C-069
+uncertainty explaining that #56 evidence is incompatible with the C-007 v4
+regime-evidence binding. Register the assessment's provenance method/version
+before runtime use. Its required numeric confidence field is not interpreted
+when status is `UNAVAILABLE`; every consumer must branch on status and must
+never treat that value as a confidence estimate.
 
-1. Converts each exact #56 C-008 v1 evidence payload to C-008 v2 without
-   changing the evidence ID or analytical claim, while adding only the exact
-   C-007 binding, C-002 observation IDs, and C-091 source IDs. It validates the
-   converted records and their canonical digests.
-2. Creates a new immutable C-012 `TechnicalAssessment` with the canonical base
-   asset from C-007, the exact C-007 instrument/timeframe/cutoff, the C-003 v2
-   report ID, and only the converted C-008 v2 evidence IDs. It preserves the
-   source findings/observations only when every referenced evidence ID resolves
-   exactly; it adds the registered projection method/version to provenance and
-   derives a new stable assessment ID from the source assessment digest, target
-   C-003/C-008 digests, and projection version. The original #56 result is
-   immutable and is never rewritten.
-3. Adds only the projected C-012 ID to C-007 `assessment_ids`; C-012 is not
-   added to the closed `analysis_outputs` whitelist. C-006 assessment IDs must
-   equal this manifest field exactly.
+C-005 remains the evidence-backed primary regime in C-006's separate `regime`
+field. Only its exact C-008 v2 `spot-market-regime` evidence is bound by
+C-007 v4 and available to C-019 v2. C-006 v5 validation still resolves the
+full C-007 v4 closure and requires the exact C-012 assessment ID listed in the
+manifest. This is a truthful availability record, not a projection of #56
+findings and not a claim that technical structure was analyzed in this
+context.
 
-If either quality report is invalid, scope/policy differs, a C-008 claim or
-identity cannot be preserved, or asset/timeframe/evidence checks fail, the
-projection and the C-006 v5 context are unavailable. No report-ID substitution,
-evidence placeholder, or unversioned asset rewrite is allowed. This is the
-explicit bridge between the existing #56 output and the C-003 v2/C-008 v2
-contracts; no new shared contract version is introduced.
+If the regime, evidence, C-003 quality, or unavailable assessment cannot be
+validated exactly, the producer is blocked. Any strategy or candidate path
+that requires an `AVAILABLE` C-012 assessment must return NO_TRADE; it must
+not advance a candidate using the unavailable assessment. This producer
+supplies a valid regime-centered research handoff while exposing the missing
+technical context. Enabling #56 technical findings in the same C-007 closure
+requires a separate owner-approved, versioned contract design and is outside
+this no-schema-change proposal.
 
 ### Producer request identity, reservation, and replay
 
@@ -256,17 +260,17 @@ There is no automatic retry, provider/model fallback, or background invocation.
 ## Reasoning
 
 Option B is the smallest truthful path that composes the current approved
-contracts. C-006 v5 separates the C-005 regime from its nonempty typed
-assessment list; the current request handoff's `assessment_ids=(C-005 regime
-ID,)` is not a valid C-006 assessment mapping. The existing #56 C-012 output
-cannot be used directly. A registered deterministic projection must validate
-the source C-003 v1/C-008 v1 records against the exact snapshot, bridge them to
-the approved C-003 v2/C-008 v2 closure, normalize the assessment's asset to the
-canonical C-007 base asset, and place the new projected C-012 ID in C-007
-`assessment_ids`. The explicit projection preconditions and fail-closed cases
-are part of this ADR. The timeframe state and uncertainty records must also be
-derived from the exact selected Spot scope and profile limitations, not
-fabricated defaults.
+contracts without pretending the existing #56 output satisfies C-007 v4.
+C-006 v5 separates C-005 regime from its required typed assessment list. The
+current `assessment_ids=(C-005 regime ID,)` is invalid. The exact #56 C-012
+assessment cannot be admitted as available because its C-008 evidence uses
+`spot-market-structure`, while C-007 v4 binds only C-005 evidence using
+`spot-market-regime`. A typed C-012 `UNAVAILABLE` mapping satisfies the
+schema status semantics without changing evidence identity or method.
+Consumers fail closed for strategies requiring available technical analysis.
+A future multi-method evidence closure requires its own owner-approved
+versioning decision. Timeframe state and C-069 uncertainties derive from the
+exact Spot scope and profile limitations, not fabricated defaults.
 
 The finalization order preserves the immutable analysis closure: all supported
 outputs and C-006 required fields are assembled and validated before the
@@ -293,8 +297,9 @@ qualification questions.
 
 Positive:
 
-- A complete user-triggered Spot producer can feed the merged #90 API without
-  fabricating a legacy assessment or weakening provenance.
+- A regime-centered user-triggered Spot producer can feed the merged #90 API
+  without a fabricated legacy assessment or weakened provenance; incompatible
+  technical context is explicitly unavailable.
 - All provider output remains untrusted until typed parsing, evidence
   resolution, version checks, freshness checks, and C-006 v5 validation pass.
 - Existing C-006/C-019 and C-007 schemas remain stable.
@@ -320,8 +325,9 @@ Operational obligations and limits:
 
 Implementation sequencing after approval:
 
-1. Implement the deterministic Spot finalization and additive direct C-006 v5
-   producer path with contract/provenance tests.
+1. Implement deterministic Spot finalization and direct C-006 v5 production
+   with an explicit unavailable C-012 state and contract/provenance tests;
+   require NO_TRADE for strategies needing available C-012.
 2. Implement bounded, user-triggered routing and validated persistence of the
    C-062/C-066/C-067 handoff under #462.
 3. Enable a real provider route only after an explicit provider/model
@@ -337,8 +343,8 @@ Implementation sequencing after approval:
 | Area | References and impact |
 |---|---|
 | Playbook requirements | Master Playbook v2.2, Chat 5 analysis/evidence requirements and Chat 6 candidate-signal separation. No Playbook text change. |
-| Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Register the C-012 projection method/version before runtime use. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
-| Contracts / events | No contract schema or event changes proposed. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-012 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1, and C-069 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
+| Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Register the C-012 unavailable-state provenance method/version before runtime use; do not implement a #56-to-C-007-v4 evidence projection. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
+| Contracts / events | No contract schema or event changes proposed. A later multi-method evidence closure requires separate owner-approved versioning design. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-012 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1, and C-069 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
 | Requirements traceability | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462); preserve #68, #90, #91 gates; Futures #39 then personal slice #61 remains required for Phase 1. |
 | Versioning / migration | No public contract schema or output-kind changes. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
 
