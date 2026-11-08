@@ -63,11 +63,11 @@ Costs, risks, and constraints:
 
 Add an additive producer/builder path that consumes the exact finalized C-007
 v4 manifest, exact resolved C-003/C-008 Spot bindings, deterministic C-005
-regime and assessments, C-009/C-010 findings, and registry-resolved C-093
-independence output. It validates these components and the provider-produced
-typed C-019 v2 draft, then constructs and validates C-006 v5 directly. The
-existing C-006 v1–v4 contracts and the existing #68 C-006 v4 consumer/binder
-remain unchanged.
+regime, a compatible deterministic C-012 technical assessment, C-009/C-010
+findings, and registry-resolved C-093 independence output. It validates these
+components and the provider-produced typed C-019 v2 draft, then constructs and
+validates C-006 v5 directly. The existing C-006 v1–v4 contracts and the
+existing #68 C-006 v4 consumer/binder remain unchanged.
 
 Benefits:
 
@@ -117,25 +117,84 @@ proposal.
 The proposed producer boundary is:
 
 1. An explicit user request selects one exact, validated, current Spot snapshot.
-2. Deterministic producers compute the registered Spot regime, evidence,
-   confluence/conflict, and independence outputs against the exact input scope.
-3. The producer finalizes the existing C-007 v4 manifest with exact,
-   already-supported C-005/C-008/C-009/C-010/C-093 references. It does not add
-   C-019 to the manifest closure or change supported output kinds.
-4. The provider-neutral router invokes only an explicitly configured and
-   allowlisted C-067 route to draft the bounded C-019 v2 adversarial content.
-5. A new additive builder validates the exact manifest, C-003/C-008 provenance,
-   deterministic assessments, C-093 reference, model draft, supported
-   method/model/prompt versions, and expiry; it constructs C-006 v5 directly
-   and runs the full C-006 v5 validator.
-6. The accepted #90 orchestration path persists exactly one linked C-062 result,
-   one C-066 evaluation, and the exact C-067 routing provenance, then exposes
-   only the resulting handoff to the strategy-signal API.
+2. Resolve C-003/C-005/C-008 from that snapshot, then run the registered
+   deterministic C-012 producer (#56) and local finding tasks. The C-012
+   `TechnicalAssessment` is admitted only when its exact evidence IDs resolve
+   to the same C-008 v2 records and its instrument, timeframe, quality report,
+   provenance, and validity window match this request. C-005 remains the
+   separate `regime` field; it is not placed in C-006's `assessments` array.
+3. Allocate the final C-007 snapshot identity once. Build an in-memory seed
+   manifest containing the immutable input scope and supported C-005/C-008
+   references, then run C-093 against that exact scope. C-093's approved input
+   fingerprint excludes analysis-output references, so adding final outputs
+   does not change the assessed input scope or create a digest cycle.
+4. Build C-009 and any C-010 records from the deterministic findings and exact
+   C-093 result. Finalize the C-007 v4 manifest in memory with the exact
+   supported C-005/C-008/C-009/C-010/C-093 references. Its `assessment_ids`
+   contains the exact C-012 assessment ID; `analysis_outputs` contains only
+   contracts allowed by C-007 v4. Validate the final manifest, all referenced
+   records, and their digests before any analysis-closure persistence.
+5. Construct the required C-006 v5 fields truthfully: `regime` is the exact
+   C-005 result; `assessments` contains the compatible C-012 assessment whose
+   ID is in the finalized manifest; `multi_timeframe_state` records only the
+   timeframe(s) actually selected and validated for this request; and the
+   nonempty C-069 uncertainty set is derived deterministically from the exact
+   coverage and unavailable profile inputs. Do not invent C-012 values,
+   timeframes, or uncertainty records to satisfy nonempty contract fields. If
+   any field cannot be produced and validated, fail closed. Validate C-006 v5
+   against the exact finalized C-007 digest.
+6. Reserve the producer request durably before invoking the provider, using
+   the idempotency rules below. Only after the reservation succeeds may the
+   provider-neutral router invoke an explicitly configured and allowlisted
+   C-067 route to draft the bounded C-019 v2 adversarial content.
+7. Validate the model draft, build and validate C-006 v5, then atomically
+   persist the final C-007 analysis closure, its referenced records, the exact
+   C-062 result, exactly one linked C-066 evaluation, C-067 routing provenance,
+   and the completed request reservation. Bind fan-out, C-062, and C-066 to
+   the same exact context, correlation, and trace identities required by #90.
+   Expose only a fully persisted exact handoff to the strategy-signal API.
+
+The market snapshot/raw market-data write may precede this flow. The immutable
+analysis closure may be written only once, after final C-007/C-006 construction
+and validation. If the snapshot already has an analysis closure, reuse it only
+when its complete exact references match the request and remain current;
+otherwise leave it unchanged and require an explicit refresh producing a new
+snapshot. Never rewrite or append a different manifest to a legacy snapshot.
+
+### Producer request identity, reservation, and replay
+
+The producer request key is the canonical digest of the profile and exact
+validated input identity: snapshot ID/digest, C-003 report ID/digest, C-005
+regime ID/digest, the ordered C-008 evidence IDs/digests, selected timeframe and
+coverage, and the registry-resolved route, method, model, and prompt IDs and
+versions. The key is computed only after validating current inputs and
+resolving the allowlisted route, but before any provider invocation. It never
+contains prompt text, credentials, or model output.
+
+An additive internal persistence record with a unique request key is inserted
+as `IN_PROGRESS` before the provider call. A concurrent duplicate observes the
+existing reservation and does not make another provider call. The successful
+completion transaction records the exact C-006/C-019/C-062/C-066/C-067
+references and marks the reservation `COMPLETED`. A repeated identical request
+may replay only that exact stored handoff after re-resolving every reference
+and confirming freshness; stale, changed, missing, or mismatched inputs return
+a typed unavailable/blocked result and never fall back to a newer snapshot.
+Terminal failure is stored as a bounded failure state and replayed without
+retry. An abandoned `IN_PROGRESS` reservation is treated as indeterminate and
+must not trigger an automatic provider retry. A changed snapshot, provenance,
+or approved route/version produces a different request key.
+
+The reservation contains no raw prompt, credential, or provider response text.
+It follows the accepted Spot lineage backup/retention rules and is covered by
+an additive migration. The migration adds no public contract, C-007 output kind,
+or shared schema version and does not rewrite historical rows.
 
 The deterministic primary Spot interpretation is the exact registered C-005
-regime, its C-007-bound evidence, and deterministic C-009/C-010 findings bound
-to the validated snapshot. The C-006 assessment identities must remain exactly
-those declared by the finalized manifest.
+regime, the validated #56 C-012 technical assessment, its C-007-bound C-008
+evidence, and deterministic C-009/C-010 findings bound to the validated
+snapshot. C-006 `assessments` identities must equal the C-007
+`assessment_ids` exactly. C-005 remains represented by C-006 `regime` and the
+C-007 binding; it must not be misrepresented as a `VersionedAssessment`.
 The model may produce only the adversarial/counter-thesis draft accepted by
 #68. It may not replace the deterministic primary interpretation, invent
 market data or calculations, or produce qualification, risk, approval, or
@@ -151,11 +210,24 @@ There is no automatic retry, provider/model fallback, or background invocation.
 ## Reasoning
 
 Option B is the smallest truthful path that composes the current approved
-contracts. The primary interpretation can be represented by deterministic
-regime and analytical records already associated with C-007, while C-019 v2
-records the distinct adversarial challenge. C-006 v5 already embeds those
-components and binds the exact C-007 v4 manifest. No contract change is needed
-to express this composition; the change is an additive runtime producer path.
+contracts. C-006 v5 separates the C-005 regime from its nonempty typed
+assessment list; the current request handoff's `assessment_ids=(C-005 regime
+ID,)` is not a valid C-006 assessment mapping. The producer must use an exact
+compatible C-012 assessment from the registered deterministic #56 path and
+include that ID in C-007 `assessment_ids`. The timeframe state and uncertainty
+records must be derived from the exact selected Spot scope and profile
+limitations, not fabricated defaults. If #56 cannot produce a compatible
+assessment bound to exact C-008 v2 evidence, this architecture is blocked until
+that concrete compatibility gap receives an approved decision; the producer
+must not substitute C-005 or a placeholder.
+
+The finalization order preserves the immutable analysis closure: all supported
+outputs and C-006 required fields are assembled and validated before the
+single analysis persistence write. C-093 hashes the exact input scope while
+excluding output references by design, allowing the final manifest to include
+the registry-resolved C-093 output without a digest cycle. The request
+reservation prevents identical requests from duplicating provider calls, and
+freshness-checked replay prevents stale handoffs from re-entering #90.
 
 Keeping C-007 v4's supported output kinds intact preserves ADR-0010's
 no-digest-cycle design. C-019 v2 remains outside the manifest output closure
@@ -185,6 +257,9 @@ Operational obligations and limits:
 - This proposal is not implementation authority until the owner approves it.
 - The producer remains unavailable when its provider/model route is not
   configured and validated.
+- Identical requests cannot produce duplicate provider calls. A stored exact
+  handoff is replayed only after current freshness and lineage checks; failed
+  or indeterminate requests do not retry automatically.
 - Provider timeout, malformed output, stale snapshot, missing evidence,
   persistence failure, or provenance mismatch must yield a blocked/
   `NO_TRADE` result; no candidate may advance from partial output.
@@ -216,9 +291,9 @@ Implementation sequencing after approval:
 |---|---|
 | Playbook requirements | Master Playbook v2.2, Chat 5 analysis/evidence requirements and Chat 6 candidate-signal separation. No Playbook text change. |
 | Cross-cutting artifacts | OD-0027 tracks this proposed producer composition. Preserve the Evidence Graph, C-067 routing provenance, C-062/C-066 one-to-one linkage, and C-093 owner registry. |
-| Contracts / events | No contract schema or event changes proposed. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-093 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
+| Contracts / events | No contract schema or event changes proposed. Use C-003 v2, C-005 v1, C-007 v4, C-008 v2, C-009/C-010 v3, C-012 v1, C-019 v2, C-006 v5, C-062/C-066/C-067 v1, and C-069 v1. Use only the output kinds already supported for the existing C-007 v4 analysis closure. |
 | Requirements traceability | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462); preserve #68, #90, #91 gates; Futures #39 then personal slice #61 remains required for Phase 1. |
-| Versioning / migration | None proposed. Existing identities, canonical bytes, hashes, codecs, and readers remain unchanged. New runtime records use existing versioned contracts. |
+| Versioning / migration | No public contract schema or output-kind changes. Add one internal producer-request reservation table with a unique canonical request key; use a forward-only additive migration and preserve existing identities, canonical bytes, hashes, codecs, readers, backup, and retention rules. No historical backfill. |
 
 ## Safety, security, and failure behavior
 
