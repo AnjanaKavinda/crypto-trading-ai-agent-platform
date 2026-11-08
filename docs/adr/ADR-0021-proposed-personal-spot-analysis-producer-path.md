@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted on merge of PR #464 |
 | Date | 2026-11-06 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
+| Human approver | AnjanaKavinda, by merging PR #464 |
 | GitHub issue / PR | [Issue #462](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/462) |
 | Open decision ID | OD-0027 |
 | Related ADRs | ADR-0002, ADR-0010, ADR-0012, ADR-0020 |
@@ -117,9 +117,11 @@ Costs, risks, and constraints:
 
 ## Decision
 
-**Proposed: Option B.** The human repository owner has not yet approved this
-architecture decision. No runtime implementation is authorized by this
-proposal.
+**Option B is accepted when PR #464 is merged by the human repository owner.**
+That merge records the decision to keep C-007 v4/C-006 v5, expose C-012 as
+unavailable, and proceed under the exact persistence, idempotency, provenance,
+and fail-closed requirements below. Before that merge, no runtime
+implementation is authorized.
 
 The proposed producer boundary is:
 
@@ -497,6 +499,6 @@ Implementation sequencing after approval:
 
 ## Approval record
 
-Pending human repository owner review. Until approved, this ADR is not
-implementation authority and Issue #462 must not implement the proposed runtime
-architecture.
+Owner approval is recorded by merging PR #464. After that merge, this ADR is
+implementation authority for the bounded Issue #462 runtime path. Until the
+merge, Issue #462 must not implement the proposed runtime architecture.
