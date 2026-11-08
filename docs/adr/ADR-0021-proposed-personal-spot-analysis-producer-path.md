@@ -162,12 +162,18 @@ The proposed producer boundary is:
    C-067 route to draft the bounded C-019 v2 adversarial content.
 7. Validate the model draft, construct C-019 v2 and the complete C-006 v5,
    then run the full C-006 v5 validator against the exact finalized C-007
-   digest. Only after that validation, atomically
-   persist the final C-007 analysis closure, its referenced records, the exact
-   C-062 result, exactly one linked C-066 evaluation, C-067 routing provenance,
-   and the completed request reservation. Bind fan-out, C-062, and C-066 to
-   the same exact context, correlation, and trace identities required by #90.
-   Expose only a fully persisted exact handoff to the strategy-signal API.
+   digest. Only after that validation, atomically persist:
+   - the final C-007 v4 closure and every referenced record;
+   - the standalone C-006 v5 lineage record, keyed by its exact context ID and
+     schema version, with its canonical content digest and exact C-007 reference;
+   - the exact C-062 result whose output is that same C-006 v5 record;
+   - exactly one linked C-066 evaluation, with the exact C-006 context ID;
+   - the exact C-067 routing provenance; and
+   - the completed producer-request reservation.
+   Bind fan-out, C-006, C-062, and C-066 to the same exact context,
+   correlation, and trace identities required by #90. Persist C-006 through
+   the bounded internal Spot write path; do not add or change an HTTP/API
+   operation in #90. Expose only the fully persisted exact handoff to #90.
 
 The market snapshot/raw market-data write may precede this flow. Under accepted
 ADR-0012, analysis records are appended only within the same explicit successful
@@ -249,6 +255,34 @@ Use this exact mapping:
   snapshot and reason. No unprovided timeframe, finding, evidence, or confidence
   is synthesized.
 
+### C-069 v1 unavailable-context projection
+
+For the exact C-012 unavailable condition, build one C-069 v1 record using a
+registered deterministic projection method 
+\`spot-profile-unavailability-severity-v1\`:
+
+- `category`: `METHOD`, because the required structure method/policy is not
+  available in the approved C-007 v4 evidence closure.
+- `affected_finding_ids`: empty; no structure finding was produced.
+- `affected_domains`: exactly `("spot-market-structure",)`.
+- `severity`: decimal `1.0`, meaning complete unavailability of this affected
+  domain for this request only. It is not probability, analytical confidence,
+  market-risk score, or a global context score; it cannot block unrelated
+  domains by itself.
+- `reducible`: true; `required_evidence` names both the approved #55/#56
+  pivot/break policies and an accepted multi-method C-007 compatibility
+  decision. Until both exist, resolution remains blocked.
+- `as_of`: exact C-007 analysis cutoff. `expires_at`: the earliest expiry among
+  the exact C-003 quality report, C-007 manifest, and C-012 unavailable
+  assessment; it must not exceed C-006 expiry.
+- `resolution_status`: `UNRESOLVED`.
+- `uncertainty_id`: deterministic from exact C-007 snapshot identity/digest,
+  C-012 unavailable reason, and this projection method/version.
+
+This method/version is provenance and part of the producer idempotency key.
+If any required bound or scope cannot be derived from these exact inputs, the
+producer fails closed instead of inventing a value.
+
 If C-012 v1 or C-069 v1 cannot represent this mapping truthfully, stop for an
 architecture correction; do not weaken validation or create a new contract
 version inside this producer implementation.
@@ -285,9 +319,15 @@ The producer request key is the canonical digest of the profile and exact
 validated input identity: snapshot ID/digest, C-003 report ID/digest, C-005
 regime ID/digest, the ordered C-008 evidence IDs/digests, selected timeframe and
 coverage, and the registry-resolved route, method, model, and prompt IDs and
-versions. The key is computed only after validating current inputs and
-resolving the allowlisted route, but before any provider invocation. It never
-contains prompt text, credentials, or model output.
+versions. The key is computed only after validating current inputs and resolving the
+allowlisted route, but before any provider invocation. In addition to the exact
+snapshot/provenance identity, it explicitly includes the versioned producer
+identity tuple for C-003 quality policy, C-005 regime method/profile, C-012
+unavailable-state adapter, C-009 confluence method, C-010 conflict method,
+C-093 independence method, C-069 uncertainty projection method, and the C-007
+v4/C-006 v5/C-019 v2 schemas. It also includes the C-067 route, method, model,
+and prompt IDs/versions. It never contains prompt text, credentials, or model
+output.
 
 An additive internal persistence record with a unique request key is inserted
 as `IN_PROGRESS` before the provider call. A concurrent duplicate observes the
@@ -359,7 +399,10 @@ independent evidence.
 
 The proposal preserves #68's deterministic binder for its existing use and
 preserves #90's exact-reference, fail-closed consumer boundary. It adds only an
-upstream producer path. It does not claim that a model's analytical output is
+upstream producer path. The standalone C-006 v5 record is explicitly persisted
+because #90 resolves that exact input from lineage; this is producer-owned
+persistence under the existing closed C-006 codec/identity, not a change to
+#90's API or behavior. It does not claim that a model's analytical output is
 profitable or statistically validated; those remain separate evidence and
 qualification questions.
 
