@@ -34,7 +34,10 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     ConflictAssessmentV3,
     ConfluenceAssessmentV3,
 )
-from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
+from trading_platform_api.analysis.versioned_contracts_v5 import (
+    AdversarialAssessmentV2,
+    MarketContextV5,
+)
 from trading_platform_api.contracts.serialization import (
     canonical_sha256,
 )
@@ -406,6 +409,14 @@ def references(record: object) -> tuple[Reference, ...]:
             for item in record.uncertainties
         )
         result.extend(
+            Reference(
+                LineageKey("C-012", str(item.assessment_id), "1"),
+                canonical_sha256(item),
+            )
+            for item in record.assessments
+            if type(item) is TechnicalAssessment
+        )
+        result.extend(
             Reference(LineageKey("C-008", str(item), "2"))
             for item in record.evidence_ids
         )
@@ -473,6 +484,7 @@ def references(record: object) -> tuple[Reference, ...]:
         CostAssumptionSetV2,
         SignalV2,
         MarketContextV5,
+        AdversarialAssessmentV2,
         SignalCandidate,
     ):
         result.extend(_typed_contract_references(record))
@@ -579,6 +591,7 @@ class SqlAlchemyLineageStore:
         ConfluenceAssessmentV3,
         ConflictAssessmentV3,
         TechnicalAssessment,
+        AdversarialAssessmentV2,
         AnalyticalUncertainty,
     )
 

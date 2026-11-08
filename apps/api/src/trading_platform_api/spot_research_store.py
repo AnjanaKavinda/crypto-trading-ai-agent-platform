@@ -637,6 +637,9 @@ class SqlAlchemySpotResearchStore:
                 )
                 await lineage.append_personal_spot_analysis_record(manifest)
                 await lineage.append_personal_spot_analysis_record(report)
+                await lineage.append_personal_spot_analysis_record(
+                    producer_handoff.context.adversarial
+                )
             except LineageError as exc:
                 raise SpotResearchStoreError(
                     "Spot analysis lineage failed exact reference validation."
