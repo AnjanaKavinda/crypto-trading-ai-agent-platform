@@ -692,8 +692,9 @@ class SqlAlchemySpotResearchStore:
                     context_sha256=canonical_sha256(producer_handoff.context),
                     completed_at=completed_at,
                 )
+                .returning(spot_producer_request_reservations.c.request_sha256)
             )
-            if updated.rowcount != 1:
+            if updated.scalar_one_or_none() != request_sha256:
                 existing = (
                     (
                         await session.execute(
@@ -844,8 +845,9 @@ class SqlAlchemySpotResearchStore:
                     spot_producer_request_reservations.c.status == "IN_PROGRESS",
                 )
                 .values(status="FAILED")
+                .returning(spot_producer_request_reservations.c.status)
             )
-            if result.rowcount != 1:
+            if result.scalar_one_or_none() != "FAILED":
                 raise SpotResearchStoreError(
                     "Producer request was not in a fail-able reserved state."
                 )

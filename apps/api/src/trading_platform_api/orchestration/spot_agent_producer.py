@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Awaitable, Callable, Literal, Mapping
+from typing import Awaitable, Callable, Literal, TypedDict, cast
 from uuid import UUID, uuid4, uuid5
 
 from trading_platform_api.agents.contracts import (
@@ -108,7 +108,19 @@ ReserveProducerRequest = Callable[[str, str, str], Awaitable[ProducerReservation
 FailProducerRequest = Callable[[str], Awaitable[None]]
 
 
-def _strict_draft_payload(content: str) -> Mapping[str, object]:
+class _SpotAdversarialPayload(TypedDict):
+    counter_thesis: str
+    alternative_hypotheses: list[str]
+    supporting_evidence_ids: list[str]
+    falsification_evidence_ids: list[str]
+    failure_conditions: list[str]
+    data_limitations: list[str]
+    measurement_error_risks: list[str]
+    confirmation_bias_concerns: list[str]
+    coverage_gaps: list[str]
+
+
+def _strict_draft_payload(content: str) -> _SpotAdversarialPayload:
     def unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
@@ -137,7 +149,7 @@ def _strict_draft_payload(content: str) -> Mapping[str, object]:
             raise ValueError("model output list has an invalid type")
     if type(decoded["counter_thesis"]) is not str:
         raise ValueError("model counter-thesis has an invalid type")
-    return decoded
+    return cast(_SpotAdversarialPayload, decoded)
 
 
 def _draft_from_response(

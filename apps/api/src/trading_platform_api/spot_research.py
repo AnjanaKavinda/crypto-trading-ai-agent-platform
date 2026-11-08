@@ -1274,7 +1274,8 @@ class SpotResearchService:
     ) -> dict[str, Any]:
         if not _CORRELATION_ID.fullmatch(correlation_id):
             correlation_id = str(uuid4())
-        if self.provider_settings is None or self.repository is None:
+        repository = self.repository
+        if self.provider_settings is None or repository is None:
             raise SpotResearchError(
                 status=503,
                 code="RESEARCH_SERVICE_UNAVAILABLE",
@@ -1463,7 +1464,7 @@ class SpotResearchService:
                     )
                     await _await_cancellable(
                         asyncio.create_task(
-                            self.repository.persist(
+                            repository.persist(
                                 batch=batch,
                                 quality=quality,
                                 policy=policy,
@@ -1578,14 +1579,14 @@ class SpotResearchService:
                                     now=self.clock().astimezone(UTC),
                                     runtime=self.spot_agent_runtime,
                                     reserve_request=lambda request_sha256, request_document, request_snapshot_id: (
-                                        self.repository.reserve_producer_request(
+                                        repository.reserve_producer_request(
                                             request_sha256=request_sha256,
                                             request_document=request_document,
                                             snapshot_id=request_snapshot_id,
                                         )
                                     ),
                                     fail_request=lambda request_sha256: (
-                                        self.repository.fail_producer_request(
+                                        repository.fail_producer_request(
                                             request_sha256=request_sha256
                                         )
                                     ),
@@ -1616,7 +1617,7 @@ class SpotResearchService:
                             try:
                                 await _await_cancellable(
                                     asyncio.create_task(
-                                        self.repository.persist_analysis(
+                                        repository.persist_analysis(
                                             snapshot_id=str(snapshot.snapshot_id),
                                             handoff=handoff,
                                             producer_handoff=produced,
@@ -1638,7 +1639,7 @@ class SpotResearchService:
                                     analysis_unavailable_reason = exc.code
                                 else:
                                     try:
-                                        await self.repository.fail_producer_request(
+                                        await repository.fail_producer_request(
                                             request_sha256=produced.request_sha256
                                         )
                                     except Exception:
@@ -1648,7 +1649,7 @@ class SpotResearchService:
                                     )
                             except Exception:
                                 try:
-                                    await self.repository.fail_producer_request(
+                                    await repository.fail_producer_request(
                                         request_sha256=produced.request_sha256
                                     )
                                 except Exception:
