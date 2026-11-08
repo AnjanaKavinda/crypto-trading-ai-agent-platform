@@ -120,10 +120,13 @@ The proposed producer boundary is:
    refresh creates or selects one exact validated snapshot; no separate
    analyze-only request may attach a new analysis closure to an existing
    snapshot.
-2. Resolve C-003/C-005/C-008 from that snapshot, run the registered
-   deterministic C-012 producer (#56), then apply the explicit compatibility
-   explicit C-012 UNAVAILABLE mapping below and run local finding tasks. C-005 remains the separate
-   `regime` field; it is not placed in C-006's `assessments` array.
+2. Resolve C-003/C-005/C-008 from that snapshot and run only registered
+   deterministic producers valid for the exact C-007 v4 closure. Preserve
+   C-005 as C-006's separate `regime` field. Do not relabel or project #56
+   `spot-market-structure` evidence into the C-007 v4
+   `spot-market-regime` evidence set. When #56 cannot be admitted, construct
+   the explicit C-012 `UNAVAILABLE` assessment and C-069 explanation described
+   below; then run the remaining local finding tasks.
 3. Allocate the final C-007 snapshot identity once. Build an in-memory seed
    manifest containing the immutable input scope and supported C-005/C-008
    references, then run C-093 against that exact scope. C-093's approved input
