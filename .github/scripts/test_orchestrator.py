@@ -2090,3 +2090,156 @@ class LatestDispatchHandoffRegressionTests(unittest.TestCase):
                 [{"login": "Copilot", "type": "Bot", "id": 198982749}],
             )
 
+
+class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
+    def payload(self):
+        key = sha256(b"synthetic-dispatch").hexdigest()
+        return {
+            "issue_id": 93, "agent_role": "Trading Intelligence Engineer",
+            "capability_tier": "premium-strongest-available", "review_tier": "R3",
+            "risk_classification": "high", "context_pack_id": "synthetic-pack",
+            "context_pack_version": "v1.1", "controller_policy_version": "v2",
+            "controller_version": "v2", "implementer_session_id": "synthetic-session",
+            "routing_reason": "test", "retry_count": 0,
+            "prompt_hash": sha256(b"bounded prompt").hexdigest(),
+            "dispatch_key": key, "correlation_id": key, "commit_sha": "approved-base",
+        }
+
+    def ready(self):
+        return orchestrate_issue.build_dispatch_ready(
+            self.payload(), issue_id=93, base_branch="dev",
+            agent="Trading Intelligence Engineer", prompt="bounded prompt")
+
+    def comment(self, record, footer=None, actor="github-actions[bot]"):
+        body = f"{orchestrate_issue.MARKER}\nDISPATCH_READY {json.dumps(record)}"
+        if footer is not None:
+            body += f"\ndispatch_key:{footer}"
+        return {"user": {"login": actor}, "body": body}
+
+    def validate(self, comments):
+        return orchestrate_issue.validate_assignment_handoff(
+            {"number": 93}, comments, "AnjanaKavinda",
+            [{"login": "Copilot", "type": "Bot", "id": 198982749}])
+
+    def test_generated_record_round_trips_into_assignment_validator(self):
+        ready = self.ready()
+        result = self.validate([self.comment(ready, ready["dispatch_key"])])
+        self.assertEqual(result, ready)
+        self.assertEqual(result["review_tier"], "R3")
+
+    def test_producer_refuses_missing_or_inconsistent_key_or_prompt(self):
+        for field, value in (("dispatch_key", None), ("correlation_id", "wrong"),
+                             ("prompt_hash", "wrong")):
+            with self.subTest(field=field), self.assertRaises(GovernanceError):
+                orchestrate_issue.build_dispatch_ready(
+                    {**self.payload(), field: value}, issue_id=93, base_branch="dev",
+                    agent="Trading Intelligence Engineer", prompt="bounded prompt")
+
+    def test_exact_legacy_v2_footer_normalizes_without_rewriting_comment(self):
+        legacy = self.ready()
+        key = legacy.pop("dispatch_key")
+        comment = self.comment(legacy, key)
+        before = comment["body"]
+        self.assertEqual(self.validate([comment])["dispatch_key"], key)
+        self.assertEqual(comment["body"], before)
+        with self.assertRaises(GovernanceError):
+            self.validate([comment, comment])
+
+    def test_legacy_inference_requires_trusted_bot_and_exact_bindings(self):
+        legacy = self.ready()
+        key = legacy.pop("dispatch_key")
+        variants = [
+            self.comment(legacy),
+            self.comment(legacy, "f" * 64),
+            self.comment(legacy, "short"),
+            self.comment(legacy, key, actor="AnjanaKavinda"),
+            self.comment({**legacy, "controller_version": "v1"}, key),
+            self.comment({**legacy, "correlation_id": "different"}, key),
+            self.comment({**legacy, "prompt": "tampered"}, key),
+            self.comment({**legacy, "dispatch_key": None}, key),
+        ]
+        duplicate_footer = self.comment(legacy, key)
+        duplicate_footer["body"] += f"\ndispatch_key:{key}"
+        variants.append(duplicate_footer)
+        for index, comment in enumerate(variants):
+            with self.subTest(index=index), self.assertRaises(GovernanceError):
+                self.validate([comment])
+
+    def test_modern_conflicting_footer_or_correlation_is_rejected(self):
+        ready = self.ready()
+        for comment in (
+            self.comment(ready, "f" * 64),
+            self.comment({**ready, "correlation_id": "different"}, ready["dispatch_key"]),
+        ):
+            with self.assertRaises(GovernanceError):
+                self.validate([comment])
+
+    def test_existing_assignment_confirmation_is_owner_only_and_issue_only(self):
+        event = {"action": "created", "issue": {"number": 93}, "comment": {
+            "body": "/copilot-confirm-assignment", "user": {"login": "AnjanaKavinda"}}}
+        self.assertTrue(orchestrate_issue.is_assignment_confirmation(event))
+        for variant in (
+            {**event, "action": "edited"},
+            {**event, "issue": {"number": 469, "pull_request": {}}},
+            {**event, "comment": {"body": "/copilot-confirm-assignment", "user": {"login": "other"}}},
+            {**event, "comment": {**event["comment"], "body": "please /copilot-confirm-assignment"}},
+        ):
+            self.assertFalse(orchestrate_issue.is_assignment_confirmation(variant))
+        ready = self.ready()
+        with self.assertRaises(GovernanceError):
+            orchestrate_issue.validate_assignment_handoff(
+                {"number": 93}, [self.comment(ready)], "AnjanaKavinda", [])
+
+    def test_confirmation_entrypoint_repairs_legacy_assignment_without_relaunch(self):
+        ready = self.ready()
+        key = ready.pop("dispatch_key")
+        packet = {"issue_id": 93, "base_branch": "dev", "base_sha": "approved-base",
+                  "scope_profile": "PERSONAL_SPOT_RESEARCH", "architecture_state": "FROZEN",
+                  "agent_role": "Trading Intelligence Engineer", "satisfied_dependencies": [],
+                  "boundaries": ["bounded cost work"], "stop_conditions": ["scope expansion"]}
+        comments = [{"id": 1, "user": {"login": "AnjanaKavinda"},
+                     "body": "EXECUTION_PACKET " + json.dumps(packet)}, self.comment(ready, key)]
+        writes = []
+        labels = ["workflow:human-decision-required"]
+
+        def fake_get(path):
+            if path.endswith("/comments"):
+                return comments
+            self.assertTrue(path.endswith("/issues/93"))
+            return {"number": 93, "labels": [{"name": name} for name in labels],
+                    "assignees": [{"login": "Copilot", "type": "Bot", "id": 198982749}]}
+
+        def fake_write(path, *args):
+            writes.append((path, args))
+            if path.endswith("/comments"):
+                body = next(value[5:] for value in args if value.startswith("body="))
+                comments.append({"user": {"login": "github-actions[bot]"}, "body": body})
+            else:
+                self.assertTrue(path.endswith("/labels"))
+                labels[:] = ["workflow:agent-running"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps({"action": "created", "issue": {"number": 93},
+                "comment": {"body": "/copilot-confirm-assignment", "user": {"login": "AnjanaKavinda"}}}))
+            env = {"GITHUB_REPOSITORY": "owner/repo", "GITHUB_EVENT_PATH": str(event_path),
+                   "GITHUB_ACTOR": "AnjanaKavinda", "GOVERNED_AUTOMATION_ENABLED": "true",
+                   "GOVERNED_DISPATCH_ACTORS": "AnjanaKavinda", "GOVERNED_IMPLEMENTER_SESSION": "configured",
+                   "GOVERNED_AUDIT_PATH": str(Path(directory) / "audit.jsonl")}
+            with patch.dict(os.environ, env), patch.object(orchestrate_issue, "gh", side_effect=fake_get), \
+                    patch.object(orchestrate_issue, "gh_mutate", side_effect=fake_write), \
+                    patch.object(orchestrate_issue, "gh_delete"):
+                self.assertEqual(orchestrate_issue.main(), 0)
+                self.assertIn("ASSIGNMENT_COMPLETED", comments[-1]["body"])
+                self.assertIn(key, comments[-1]["body"])
+                count = len(writes)
+                self.assertEqual(orchestrate_issue.main(), 0)
+                self.assertEqual(len(writes), count)
+                comments[0]["body"] = "EXECUTION_PACKET " + json.dumps({**packet, "base_sha": "different-base"})
+                with self.assertRaises(GovernanceError):
+                    orchestrate_issue.main()
+                self.assertEqual(len(writes), count)
+            self.assertTrue((Path(directory) / "audit.jsonl").exists())
+        self.assertEqual(labels, ["workflow:agent-running"])
+        self.assertTrue(all("/assignees" not in path and "/pulls" not in path for path, _ in writes))
+

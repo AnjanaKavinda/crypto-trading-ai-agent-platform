@@ -24,6 +24,25 @@ current controller does not inspect or prove which native custom-agent profile
 was selected. The owner must record that profile selection in the issue
 handoff.
 
+### Dispatch-key correction and existing-assignment recovery
+
+`DISPATCH_READY` JSON includes the generated `dispatch_key`, equal to its
+correlation ID and standalone footer; its prompt hash remains mandatory. Early
+V2 bot-authored records omitted the JSON field. Readers may normalize only that
+exact representation when the single SHA-256 footer equals the correlation ID,
+both controller versions are V2, and normal assignment/prompt checks pass.
+Owner-authored copies, explicit null keys, conflicting/duplicate footers and
+tampered prompts are rejected. Historical comments are never rewritten.
+
+After the correction is merged, the owner can post the exact command
+`/copilot-confirm-assignment` on the issue to retry confirmation of an already
+assigned Copilot bot. This reruns the existing actor allowlist, automation switch,
+Execution Packet, trusted handoff, prompt hash and bot-identity checks, writes
+assignment audit/completion evidence, and is idempotent for an already completed
+key. It does not select a custom profile, assign/reassign Copilot, start a new
+implementation, refresh scope, waive review, or merge. The command is ignored
+on PRs and when posted by anyone other than the configured human owner.
+
 Repository protection/ruleset verification is currently unavailable under the
 present GitHub repository/account capability. The incomplete
 `setup-branch-rulesets.ps1` is not evidence of active protection. Until a
