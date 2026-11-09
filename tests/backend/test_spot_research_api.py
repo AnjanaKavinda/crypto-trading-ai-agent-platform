@@ -45,6 +45,7 @@ from trading_platform_api.analysis.price_action import calculate_spot_price_acti
 from trading_platform_api.analysis.spot_market_regime import (
     calculate_spot_market_regime,
 )
+from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.analysis.volatility import calculate_realized_volatility
 from trading_platform_api.analysis.vwap_volume_profile import (
     calculate_volume_confirmation,
@@ -1912,8 +1913,9 @@ def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit
                     )
                 )
                 assert handoff is not None
-                context, result, evaluation, correlation_id, trace_id = handoff
-                assert result.output == context
+                result, evaluation, correlation_id, trace_id = handoff
+                context = result.output
+                assert type(context) is MarketContextV5
                 assert evaluation.result_id == result.result_id
                 assert evaluation.context_id == context.context_id
                 assert evaluation.correlation_id == correlation_id
