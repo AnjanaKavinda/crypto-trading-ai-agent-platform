@@ -371,6 +371,16 @@ def is_assignment_confirmation(event: dict) -> bool:
             and "pull_request" not in event["issue"])
 
 
+def confirmation_workflow_state(issue: dict) -> str:
+    """Confirmation records evidence only; it cannot unblock or advance work."""
+    states = {item["name"] for item in issue.get("labels", []) if item["name"] in STATES}
+    permitted = {"workflow:ready", "workflow:agent-running", "workflow:review",
+                 "workflow:changes-requested"}
+    if issue.get("state") != "open" or len(states) != 1 or not states <= permitted:
+        raise GovernanceError("assignment confirmation requires one active workflow state")
+    return next(iter(states))
+
+
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
@@ -401,6 +411,7 @@ def main() -> int:
         if confirm_existing and (dispatched_base != packet["base_sha"]
                                  or record["agent_role"] != packet["agent_role"]):
             raise GovernanceError("assignment recovery packet does not match the handoff")
+        confirmation_state = confirmation_workflow_state(issue) if confirm_existing else None
         if record.get("_completed"):
             return 0
         append_governance_event(
@@ -414,6 +425,8 @@ def main() -> int:
              "controller_policy_version": record["controller_policy_version"],
              "retry_count": record["retry_count"], "review_tier": record["review_tier"],
              "outcome": "assigned",
+             **({"confirmation_only": True, "workflow_state_before": confirmation_state,
+                 "workflow_state_after": confirmation_state} if confirm_existing else {}),
              "timestamp": datetime.now(timezone.utc).isoformat(),
              "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
              "implementer_session_id": record["implementer_session_id"]},
@@ -422,6 +435,10 @@ def main() -> int:
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
                   f"{json.dumps(record, sort_keys=True)}\n"
                   f"dispatch_key:{record['dispatch_key']}")
+        if confirm_existing:
+            # Recording a historical native assignment does not authorize a
+            # state transition or relaunch. Preserve review and correction gates.
+            return 0
         for state in STATES:
             if state in [item["name"] for item in issue.get("labels", [])]:
                 gh_delete(f"{root}/issues/{issue_id}/labels/{state}")

@@ -2203,13 +2203,13 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
         comments = [{"id": 1, "user": {"login": "AnjanaKavinda"},
                      "body": "EXECUTION_PACKET " + json.dumps(packet)}, self.comment(ready, key)]
         writes = []
-        labels = ["workflow:human-decision-required"]
+        labels = ["workflow:review"]
 
         def fake_get(path):
             if path.endswith("/comments"):
                 return comments
             self.assertTrue(path.endswith("/issues/93"))
-            return {"number": 93, "labels": [{"name": name} for name in labels],
+            return {"number": 93, "state": "open", "labels": [{"name": name} for name in labels],
                     "assignees": [{"login": "Copilot", "type": "Bot", "id": 198982749}]}
 
         def fake_write(path, *args):
@@ -2231,7 +2231,17 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
                    "GOVERNED_AUDIT_PATH": str(Path(directory) / "audit.jsonl")}
             with patch.dict(os.environ, env), patch.object(orchestrate_issue, "gh", side_effect=fake_get), \
                     patch.object(orchestrate_issue, "gh_mutate", side_effect=fake_write), \
-                    patch.object(orchestrate_issue, "gh_delete"):
+                    patch.object(orchestrate_issue, "gh_delete") as delete:
+                for blocked_labels in (["workflow:blocked"], ["workflow:complete"],
+                                       ["workflow:human-decision-required"],
+                                       ["workflow:ready-to-merge"], [],
+                                       ["workflow:review", "workflow:blocked"]):
+                    labels[:] = blocked_labels
+                    with self.subTest(labels=blocked_labels), self.assertRaises(GovernanceError):
+                        orchestrate_issue.main()
+                    self.assertEqual(writes, [])
+                    self.assertFalse((Path(directory) / "audit.jsonl").exists())
+                labels[:] = ["workflow:review"]
                 self.assertEqual(orchestrate_issue.main(), 0)
                 self.assertIn("ASSIGNMENT_COMPLETED", comments[-1]["body"])
                 self.assertIn(key, comments[-1]["body"])
@@ -2247,7 +2257,19 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
                 with self.assertRaises(GovernanceError):
                     orchestrate_issue.main()
                 self.assertEqual(len(writes), count)
+                delete.assert_not_called()
             self.assertTrue((Path(directory) / "audit.jsonl").exists())
-        self.assertEqual(labels, ["workflow:agent-running"])
-        self.assertTrue(all("/assignees" not in path and "/pulls" not in path for path, _ in writes))
+            audit = (Path(directory) / "audit.jsonl").read_text()
+            self.assertIn('"workflow_state_before": "workflow:review"', audit)
+            self.assertIn('"workflow_state_after": "workflow:review"', audit)
+        self.assertEqual(labels, ["workflow:review"])
+        self.assertTrue(all(path.endswith("/comments") for path, _ in writes))
+
+    def test_confirmation_state_requires_open_issue_with_one_active_state(self):
+        for state in ("workflow:ready", "workflow:agent-running", "workflow:review",
+                      "workflow:changes-requested"):
+            issue = {"state": "open", "labels": [{"name": state}]}
+            self.assertEqual(orchestrate_issue.confirmation_workflow_state(issue), state)
+            with self.assertRaises(GovernanceError):
+                orchestrate_issue.confirmation_workflow_state({**issue, "state": "closed"})
 

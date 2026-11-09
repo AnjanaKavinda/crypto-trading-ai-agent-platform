@@ -45,7 +45,12 @@ After the correction is merged, the owner can post the exact command
 assigned Copilot bot. This reruns the existing actor allowlist, automation switch,
 Execution Packet, trusted handoff, prompt hash and bot-identity checks, writes
 assignment audit/completion evidence, and is idempotent for an already completed
-key. It does not select a custom profile, assign/reassign Copilot, start a new
+key. Confirmation requires an open issue with exactly one active state (ready,
+agent-running, review or changes-requested). Blocked, human-decision-required,
+ready-to-merge, complete and missing/ambiguous states fail before any write.
+Confirmation preserves all labels and records the unchanged workflow state in
+its audit; it does not advance the state machine or authorize a relaunch.
+It does not select a custom profile, assign/reassign Copilot, start a new
 implementation, refresh scope, waive review, or merge. The command is ignored
 on PRs and when posted by anyone other than the configured human owner.
 
