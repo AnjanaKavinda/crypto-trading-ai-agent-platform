@@ -4,9 +4,18 @@ Reviewed baseline: `420458b6bdc5dd85e1ecc8d4b07564d96584fb63` (PR #465 merge).
 
 ## Decision
 
-The baseline is **BLOCKED** by a reproducible producer/consumer compatibility
-defect. Issue #91 remains gated until the correction is merged and its exact
-merged revision is verified. This report does not claim full-platform Strategy,
+The original baseline was **BLOCKED** by a reproducible producer/consumer
+compatibility defect, corrected in owner-merged PR #466. The post-merge revision
+`82a489ce2c56d40d264fc7776a59bd6f749ce11a` has the same tree as validated head
+`82cd63aaa8da5cfc96b033ad48a343572d3acc8c`. Both Product CI and Governance CI
+passed on that tree. On the exact merged revision, the 68 focused strategy,
+lifecycle, contract and API regressions and the disposable-PostgreSQL persisted
+producer/evaluate/replay/readback regression passed again.
+
+The bounded Wave 4 implementation checkpoint is **PASS WITH LIMITATIONS**;
+#91 may proceed using the existing immutable historical contracts. The remaining
+operational, provider-quality and statistical-validation gates below still apply.
+This report does not claim full-platform Strategy,
 operational Spot readiness, Futures readiness, or profitability.
 
 ## Finding and bounded correction
@@ -43,8 +52,9 @@ retained user database operation is performed.
 - Native frontend regression: 58 passed.
 - Ruff, formatting, mypy (121 source files), Product CI contract tests (4), and
   `git diff --check`: passed.
-- Hosted Product CI on the correction's exact PR head remains a merge gate;
-  historical #465 results do not prove this changed tree.
+- Hosted Product CI and Governance CI passed on the correction's exact PR head;
+  the merged tree is identical. Historical #465 results were not used as proof
+  of the changed tree.
 - Local Docker/browser execution is unavailable in this workspace. Hosted
   Product CI covers those stages; local retained-stack acceptance is separate.
 
