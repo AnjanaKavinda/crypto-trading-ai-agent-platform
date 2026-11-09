@@ -30,7 +30,13 @@ from trading_platform_api.validation import (
     ResearchAssumptionV2,
     ValidationArtifactReferenceV2,
 )
+from trading_platform_api.validation.cost_models import (
+    CostSourceKind,
+    SpotExecutionCostProfile,
+    build_spot_cost_assumption_set,
+)
 from trading_platform_api.validation.dataset_loader import load_validation_dataset
+from trading_platform_api.validation.spot_cost_adapter import SpotExecutionCostAdapter
 from trading_platform_api.validation.spot_execution import (
     ExecutionCostQuote,
     OrderKind,
@@ -221,6 +227,46 @@ def run(case, **changes):
     return run_spot_execution_scenario(**dict(case, **changes))
 
 
+def production_cost_case(case):
+    profile = SpotExecutionCostProfile(
+        venue_id=case["policy"].venue,
+        instrument_id=case["policy"].instrument_id,
+        asset=case["policy"].asset,
+        price_unit=case["policy"].quote_unit,
+        quantity_unit=case["policy"].quantity_unit,
+        fee_tier="synthetic-taker-tier-v1",
+        source_reference=ValidationArtifactReferenceV2(
+            "SYNTHETIC_COST_CONFIGURATION",
+            UUID("22222222-2222-4222-8222-222222222222"),
+            "1",
+            "c" * 64,
+        ),
+        source_kind=CostSourceKind.CONFIGURED_RESEARCH_ASSUMPTION,
+        methodology_version="spot-cost-model-v1",
+        maker_fee_bps=D("10"),
+        taker_fee_bps=D("10"),
+        spread_bps=D("4"),
+        slippage_bps=D("6"),
+        latency_bars=case["policy"].latency_bars,
+        stress_multiplier=D("1"),
+        available_at=T,
+        effective_from=T,
+        valid_until=T + 9 * STEP,
+    )
+    assumptions = build_spot_cost_assumption_set(
+        profile=profile,
+        strategy_version_id=case["strategy"].strategy_version_id,
+        as_of=T,
+    )
+    adapter = SpotExecutionCostAdapter(profile, assumptions)
+    return {
+        **case,
+        "cost_assumptions": assumptions,
+        "cost_adapter_reference": adapter.adapter_reference,
+        "cost_adapter": adapter,
+    }
+
+
 def test_golden_next_bar_partial_fills_cost_accounting_and_replay():
     case = fixture()
     first = run(case)
@@ -241,6 +287,34 @@ def test_golden_next_bar_partial_fills_cost_accounting_and_replay():
         context.prec = 6
         assert run(case) == first
     assert run(case).trace.content_sha256 == trace.content_sha256
+
+
+def test_loaded_synthetic_dataset_kernel_and_production_cost_adapter_integrate():
+    case = production_cost_case(fixture())
+    result = run(case)
+
+    assert result.outcome == "COMPLETED", result.reason_codes
+    assert result.trace.cost_adapter == case["cost_adapter"].adapter_reference
+    assert [fill.quantity for fill in result.trace.fills] == [D(".5"), D(".5")]
+    assert [
+        (fill.costs.fee, fill.costs.spread, fill.costs.slippage)
+        for fill in result.trace.fills
+    ] == [(D(".05"), D(".01"), D(".03"))] * 2
+    assert result.trace.final_cash == D("899.82")
+    assert result.trace.final_inventory == D("1")
+    assert run(case) == result
+
+
+def test_kernel_rejects_wrong_production_adapter_identity():
+    case = production_cost_case(fixture())
+    adapter_reference = case["cost_adapter_reference"]
+    wrong_reference = replace(adapter_reference, content_sha256="f" * 64)
+
+    result = run(case, cost_adapter_reference=wrong_reference)
+
+    assert result.outcome == "INCONCLUSIVE"
+    assert result.reason_codes == ("COST_QUOTE_BINDING_MISMATCH",)
+    assert result.trace is None
 
 
 def test_submission_at_open_is_not_same_timestamp_fill_and_latency_is_bound():
@@ -608,7 +682,7 @@ def test_known_cost_unavailability_is_not_a_zero_fee_fallback():
 
 
 def test_postgresql_dataset_loader_to_execution_replays_read_only(database_url):
-    case = fixture()
+    case = production_cost_case(fixture())
     expected = run(case)
 
     async def check():
