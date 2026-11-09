@@ -199,6 +199,14 @@ def key_for(record: object) -> LineageKey:
     raise LineageError("Unsupported lineage contract type.")
 
 
+def _restore_canonical_tuples(value: Any) -> Any:
+    if type(value) is list:
+        return tuple(_restore_canonical_tuples(item) for item in value)
+    if type(value) is dict:
+        return {key: _restore_canonical_tuples(item) for key, item in value.items()}
+    return value
+
+
 def encode(record: object) -> str:
     key_for(record)
     if type(record) is TechnicalAssessment:
@@ -217,7 +225,7 @@ def encode(record: object) -> str:
     else:
         result = serialize_contract(record, payload_version="wire-1")
         if type(record) is MarketContextV5:
-            envelope = json.loads(result)
+            envelope = _restore_canonical_tuples(json.loads(result))
             envelope["payload"]["assessments"] = [
                 {
                     "assessment_contract_id": item.contract_id,
