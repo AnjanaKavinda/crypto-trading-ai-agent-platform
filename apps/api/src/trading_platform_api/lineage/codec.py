@@ -377,10 +377,10 @@ def decode(document: str) -> object:
             }
             decoded_assessments = []
             for item in payload.get("assessments", []):
-                if (
-                    type(item) is not dict
-                    or set(item) != {"assessment_contract_id", "record"}
-                ):
+                if type(item) is not dict or set(item) != {
+                    "assessment_contract_id",
+                    "record",
+                }:
                     raise LineageError(
                         "C-006 assessment type identity is missing."
                     )
