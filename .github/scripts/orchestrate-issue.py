@@ -242,8 +242,45 @@ def parse_handoff_comments(comments: list[dict], kind: str) -> list[dict]:
             record = json.loads(line.split(" ", 1)[1])
         except (json.JSONDecodeError, IndexError):
             continue
+        if not isinstance(record, dict):
+            raise GovernanceError("trusted handoff must be a JSON object")
+        if kind == "DISPATCH_READY":
+            footers = re.findall(r"^dispatch_key:([^\r\n]+)$", body, re.MULTILINE)
+            key = record.get("dispatch_key")
+            if "dispatch_key" not in record:
+                # Early V2 producers omitted the JSON field but emitted the same
+                # key as a standalone footer and correlation ID. Normalize only
+                # that exact trusted-bot representation; never rewrite history.
+                if (record.get("controller_policy_version") != "v2"
+                        or record.get("controller_version") != "v2"
+                        or len(footers) != 1
+                        or re.fullmatch(r"[0-9a-f]{64}", footers[0]) is None
+                        or record.get("correlation_id") != footers[0]):
+                    raise GovernanceError("legacy dispatch handoff key is missing or conflicting")
+                record = {**record, "dispatch_key": footers[0]}
+            elif not isinstance(key, str) or not key.strip():
+                raise GovernanceError("dispatch JSON key is invalid")
+            elif footers and (len(footers) != 1 or footers[0] != key):
+                raise GovernanceError("dispatch JSON key does not match its footer")
+            elif record.get("correlation_id", key) != key:
+                raise GovernanceError("dispatch JSON key does not match its correlation")
         records.append(record)
     return records
+
+
+def build_dispatch_ready(payload: dict, *, issue_id: int, base_branch: str,
+                         agent: str, prompt: str) -> dict:
+    """Produce a handoff that the assignment validator can consume verbatim."""
+    key = payload.get("dispatch_key")
+    if (not isinstance(key, str) or re.fullmatch(r"[0-9a-f]{64}", key) is None
+            or payload.get("correlation_id") != key
+            or not isinstance(payload.get("base_sha"), str) or not payload["base_sha"].strip()
+            or payload.get("prompt_hash") != sha256(prompt.encode()).hexdigest()):
+        raise GovernanceError("generated dispatch key or prompt binding is invalid")
+    return {**payload, "issue_id": issue_id, "base_branch": base_branch,
+            "agent": agent, "prompt": prompt,
+            "outcome": "awaiting-human-copilot-assignment",
+            "reason": "awaiting-human-copilot-assignment"}
 
 
 def validate_assignment_handoff(issue: dict, comments: list[dict], actor: str,
@@ -325,6 +362,25 @@ def validate_assignment_controls(
         raise GovernanceError("implementer session is not configured")
 
 
+def is_assignment_confirmation(event: dict) -> bool:
+    """Owner-only retry for an existing native assignment, never a new launch."""
+    return (event.get("action") == "created"
+            and (event.get("comment") or {}).get("body") == "/copilot-confirm-assignment"
+            and ((event.get("comment") or {}).get("user") or {}).get("login") == HUMAN_CONTROLLER
+            and isinstance(event.get("issue"), dict)
+            and "pull_request" not in event["issue"])
+
+
+def confirmation_workflow_state(issue: dict) -> str:
+    """Confirmation records evidence only; it cannot unblock or advance work."""
+    states = {item["name"] for item in issue.get("labels", []) if item["name"] in STATES}
+    permitted = {"workflow:ready", "workflow:agent-running", "workflow:review",
+                 "workflow:changes-requested"}
+    if issue.get("state") != "open" or len(states) != 1 or not states <= permitted:
+        raise GovernanceError("assignment confirmation requires one active workflow state")
+    return next(iter(states))
+
+
 def main() -> int:
     repository = os.environ["GITHUB_REPOSITORY"]
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
@@ -332,7 +388,8 @@ def main() -> int:
     root = f"repos/{repository}"
     issue = gh(f"{root}/issues/{issue_id}")
     comments = gh(f"{root}/issues/{issue_id}/comments")
-    if event.get("action") == "assigned":
+    confirm_existing = is_assignment_confirmation(event)
+    if event.get("action") == "assigned" or confirm_existing:
         allowed_actors = {item for item in os.environ.get(
             "GOVERNED_DISPATCH_ACTORS", "").split(",") if item}
         validate_assignment_controls(
@@ -341,11 +398,20 @@ def main() -> int:
             allowed_actors=allowed_actors,
             implementer_session=os.environ.get("GOVERNED_IMPLEMENTER_SESSION", ""),
         )
-        current_execution_packet(int(issue_id), comments)
+        packet = current_execution_packet(int(issue_id), comments)
         record = validate_assignment_handoff(
             issue, comments, os.environ.get("GITHUB_ACTOR", ""),
-            [event.get("assignee") or {}],
+            (issue.get("assignees") or []) if confirm_existing
+            else [event.get("assignee") or {}],
             kind="DISPATCH_READY")
+        # GITHUB_SHA is workflow provenance, not necessarily the dispatched dev
+        # revision. New records pin that revision explicitly. Old records can
+        # recover only when their recorded commit exactly matches the packet.
+        dispatched_base = record.get("base_sha", record.get("commit_sha"))
+        if confirm_existing and (dispatched_base != packet["base_sha"]
+                                 or record["agent_role"] != packet["agent_role"]):
+            raise GovernanceError("assignment recovery packet does not match the handoff")
+        confirmation_state = confirmation_workflow_state(issue) if confirm_existing else None
         if record.get("_completed"):
             return 0
         append_governance_event(
@@ -359,6 +425,8 @@ def main() -> int:
              "controller_policy_version": record["controller_policy_version"],
              "retry_count": record["retry_count"], "review_tier": record["review_tier"],
              "outcome": "assigned",
+             **({"confirmation_only": True, "workflow_state_before": confirmation_state,
+                 "workflow_state_after": confirmation_state} if confirm_existing else {}),
              "timestamp": datetime.now(timezone.utc).isoformat(),
              "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
              "implementer_session_id": record["implementer_session_id"]},
@@ -367,6 +435,10 @@ def main() -> int:
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
                   f"{json.dumps(record, sort_keys=True)}\n"
                   f"dispatch_key:{record['dispatch_key']}")
+        if confirm_existing:
+            # Recording a historical native assignment does not authorize a
+            # state transition or relaunch. Preserve review and correction gates.
+            return 0
         for state in STATES:
             if state in [item["name"] for item in issue.get("labels", [])]:
                 gh_delete(f"{root}/issues/{issue_id}/labels/{state}")
@@ -478,7 +550,9 @@ def main() -> int:
                       "labels[]=workflow:agent-running")
         return 0
     audit = AppendOnlyAudit()
-    payload = {"correlation_id": request["dispatch_key"], "issue_id": int(issue_id),
+    payload = {"base_sha": execution_packet["base_sha"],
+               "correlation_id": request["dispatch_key"],
+               "dispatch_key": request["dispatch_key"], "issue_id": int(issue_id),
                "canonical_backlog": eligibility["canonical_backlog"], "agent": eligibility["agent"],
                "agent_role": eligibility["agent"], "capability_tier": capability_tier,
                "routing_reason": "deterministic V1.1 decision table",
@@ -500,10 +574,9 @@ def main() -> int:
     gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
               f"body={MARKER}\nDISPATCH_INTENT {json.dumps(payload, sort_keys=True)}\n"
               f"dispatch_key:{request['dispatch_key']}")
-    ready = {**payload, "issue_id": int(issue_id), "base_branch": eligibility["base_branch"],
-             "agent": eligibility["agent"], "prompt": prompt,
-             "outcome": "awaiting-human-copilot-assignment",
-             "reason": "awaiting-human-copilot-assignment"}
+    ready = build_dispatch_ready(payload, issue_id=int(issue_id),
+                                 base_branch=eligibility["base_branch"],
+                                 agent=eligibility["agent"], prompt=prompt)
     existing_ready = ready_handoff_for_key(comments, request["dispatch_key"], ready)
     if existing_ready is None:
         gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",

@@ -5,6 +5,8 @@ concurrency:
 on:
   issues:
     types: [assigned, labeled, reopened]
+  issue_comment:
+    types: [created]
 permissions:
   contents: read
   issues: write
@@ -15,7 +17,11 @@ jobs:
     if: >-
       (github.event.action == 'assigned' && github.event.assignee.login == 'Copilot') ||
       (github.event.action == 'labeled' && github.event.label.name == 'workflow:ready') ||
-      (github.event.action == 'reopened' && contains(github.event.issue.labels.*.name, 'workflow:ready'))
+      (github.event.action == 'reopened' && contains(github.event.issue.labels.*.name, 'workflow:ready')) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.comment.body == '/copilot-confirm-assignment' &&
+       github.event.comment.user.login == 'AnjanaKavinda' &&
+       !github.event.issue.pull_request)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
