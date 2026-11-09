@@ -449,3 +449,42 @@ def test_resolver_consumes_exact_spot_debate_and_fanout_outputs() -> None:
             fanout=mismatched,
             now=SPOT_NOW,
         )
+
+    # A completed task may produce a partial finding for which C-009 has no
+    # component. Its numeric value must remain unavailable to the strategy.
+    unavailable_context = replace(
+        debate.market_context,
+        confluence=replace(debate.market_context.confluence, components=()),
+    )
+    unavailable_debate = replace(
+        debate,
+        market_context=unavailable_context,
+        agent_result=replace(debate.agent_result, output=unavailable_context),
+    )
+    partial = replace(finding, readiness=FindingReadiness.PARTIAL)
+    partial_fanout = replace(
+        fanout, outcomes=(replace(fanout.outcomes[0], finding=partial),)
+    )
+    unavailable_features = build_spot_condition_context(
+        strategy=strategy,
+        debate=unavailable_debate,
+        fanout=partial_fanout,
+        now=SPOT_NOW,
+    )
+    assert (
+        evaluate_strategy_conditions(strategy, unavailable_features).truth
+        is ConditionTruth.UNKNOWN
+    )
+    assert all(
+        item.path != "spot.momentum.rsi14.value"
+        for item in unavailable_features.features
+    )
+
+    # A READY finding still requires its exact C-009 component.
+    with pytest.raises(ValueError, match="exact C-009 component"):
+        build_spot_condition_context(
+            strategy=strategy,
+            debate=unavailable_debate,
+            fanout=fanout,
+            now=SPOT_NOW,
+        )

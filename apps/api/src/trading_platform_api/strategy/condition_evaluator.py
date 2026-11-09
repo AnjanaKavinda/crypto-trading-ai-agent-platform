@@ -266,7 +266,13 @@ def build_spot_condition_context(
         finding = outcome.finding
         if type(finding) is not SpotMetaFinding or finding.domain != outcome.domain:
             raise ValueError("Spot fan-out finding does not match its task")
+        # Completed computation can still yield unavailable analytical evidence.
+        # C-009 deliberately omits components for non-ready findings. Leave
+        # their features unavailable rather than treating that omission as a
+        # broken provenance binding or exposing partial values to conditions.
         component = components.get(finding.finding_id)
+        if component is None and finding.readiness is not FindingReadiness.READY:
+            continue
         if component is None or (
             component.domain,
             component.direction,
