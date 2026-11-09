@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-11-05 |
 | Decision owner | Platform Architect |
-| Human approver | Pending owner merge |
+| Human approver | AnjanaKavinda; owner merge of #446 on 2026-11-09 |
 | GitHub issue / PR | #92 / #446; refreshed after #447 |
 | Open decision ID | OD-0011 |
 | Related ADRs | ADR-0017, ADR-0018 |
@@ -151,11 +151,11 @@ assumption may be silently substituted.
 
 ## Compatibility
 
-This decision does not change existing strategy/signal contracts. It also
-proposes the additive C-027 schema-3 boundary below for owner review; no code or
-schema dispatch is introduced by this documentation PR.
+This decision does not change existing strategy/signal contracts. It accepts
+the additive C-027 schema-3 boundary below. The approving PR #446 introduced no
+code or schema dispatch; implementation follows in the bounded #92 foundation.
 
-### Proposed C-027 schema 3 — BacktestResultV3
+### C-027 schema 3 — BacktestResultV3
 
 The compatibility audit found that C-027v1 `BacktestResult` embeds
 `ReproducibilityContext` with numeric `ResearchAssumption` values. The current
@@ -163,13 +163,13 @@ C-027v2 `CostAssumptionSetV2` instead requires explicit `NOT_APPLICABLE` Spot
 funding. Converting that state into a v1 numeric funding assumption would invent
 an input and discard applicability semantics. These versions must remain intact.
 
-Propose additive **C-027 schema 3 `BacktestResultV3`**, preserving:
+Use additive **C-027 schema 3 `BacktestResultV3`**, preserving:
 
 | Schema | Meaning and compatibility |
 |---|---|
 | 1 | Historical BacktestResult and its existing numeric assumptions; unchanged. |
 | 2 | CostAssumptionSetV2 and typed cost applicability; unchanged. |
-| 3 (proposed) | BacktestResult binding exact versioned data, strategy, typed costs and simulation provenance. No reinterpretation of schemas 1 or 2. |
+| 3 | BacktestResult binding exact versioned data, strategy, typed costs and simulation provenance. No reinterpretation of schemas 1 or 2. |
 
 The schema-3 result must bind at minimum:
 
@@ -257,11 +257,11 @@ by accepted development-governance architecture; this refresh consolidates the
 backtest proposal into ADR-0019 and removes the unmerged duplicate. The accepted
 ADR-0018 is not changed or superseded.
 
-The owner is asked to approve both the repository-owned engine choice and the
-additive C-027v3 contract boundary. This ADR remains Proposed until explicit owner
-approval/merge of #446; that merge constitutes acceptance of both decisions and
-resolution of OD-0011. Record Accepted/Resolved metadata and the exact approving
-merge in the subsequent implementation refinement before runtime edits.
+The owner approved both the repository-owned engine choice and the additive
+C-027v3 contract boundary by merging #446 on 2026-11-09, revision
+`9f749089fb26d10c3914f47cf8d548d7e314945a`. Product CI and Governance CI passed
+on its identical reviewed tree. This resolves OD-0011. The schema-3 sections above
+retain the proposal rationale; they now describe the accepted boundary.
 
 The initial runtime remains PERSONAL_SPOT_RESEARCH. Future Futures research must
 first satisfy #39 data and #61 analysis plus its own scoped simulation contracts;

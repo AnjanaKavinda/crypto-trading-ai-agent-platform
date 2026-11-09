@@ -70,6 +70,7 @@ from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
     QualificationValidationResultV2,
 )
+from trading_platform_api.validation.contracts_v3 import BacktestResultV3
 
 MODELS = {
     "C-001": MarketData,
@@ -188,6 +189,8 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-022", str(record.eligibility_id), record.schema_version)
     if type(record) is CostAssumptionSetV2:
         return LineageKey("C-027", str(record.assumption_set_id), record.schema_version)
+    if type(record) is BacktestResultV3:
+        return LineageKey("C-027", str(record.result_id), record.schema_version)
     if type(record) is AnalyticalUncertainty:
         return LineageKey("C-069", str(record.uncertainty_id), record.schema_version)
     if type(record) is AgentResult:
@@ -380,6 +383,12 @@ def decode(document: str) -> object:
                 raise LineageError("Unsupported C-003 schema version.")
         else:
             model = MODELS[contract_id]
+            if contract_id == "C-027":
+                model = {"2": CostAssumptionSetV2, "3": BacktestResultV3}.get(
+                    schema_version
+                )
+                if model is None:
+                    raise LineageError("Unsupported C-027 schema version.")
             if contract_id == "C-021":
                 model = {"1": StrategyVersion, "2": StrategyVersionV2}.get(
                     schema_version
@@ -403,7 +412,7 @@ def decode(document: str) -> object:
                 "C-024": "2",
                 "C-025": "2",
                 "C-026": "2",
-                "C-027": "2",
+                "C-027": schema_version,
                 "C-028": "2",
                 "C-069": "1",
                 "C-070": "2",

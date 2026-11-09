@@ -43,6 +43,7 @@ from trading_platform_api.strategy import (
     ValidationReference,
 )
 from trading_platform_api.validation import (
+    BacktestResultV3,
     CalibrationResult,
     CostAssumptionSetV2,
     QualificationValidationResultV2,
@@ -84,6 +85,7 @@ VERSIONED_CONTRACT_TYPES = {
     SignalQualificationV2: ("C-025", "2"),
     NoTradeDecisionV2: ("C-026", "2"),
     CostAssumptionSetV2: ("C-027", "2"),
+    BacktestResultV3: ("C-027", "3"),
     QualificationValidationResultV2: ("C-028", "2"),
     StrategyVersionV2: ("C-021", "2"),
     SignalV2: ("C-070", "2"),
