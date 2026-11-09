@@ -20,7 +20,10 @@ from trading_platform_api.analysis.contracts import (
     TechnicalAssessment,
 )
 from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
-from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts import (
+    EvidenceItemV2,
+    VersionedAssessment,
+)
 from trading_platform_api.analysis.versioned_contracts_v4 import (
     AnalysisSnapshotV4,
     ConflictAssessmentV3,
@@ -213,6 +216,16 @@ def encode(record: object) -> str:
         )
     else:
         result = serialize_contract(record, payload_version="wire-1")
+        if type(record) is MarketContextV5:
+            envelope = json.loads(result)
+            envelope["payload"]["assessments"] = [
+                {
+                    "assessment_contract_id": item.contract_id,
+                    "record": json.loads(canonical_json_dumps(item)),
+                }
+                for item in record.assessments
+            ]
+            result = canonical_json_dumps(envelope)
     if len(result.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise LineageError("Lineage document exceeds the size limit.")
     return result
@@ -258,6 +271,8 @@ def _decode(kind: Any, value: Any) -> Any:
         ):
             return _decode(MarketContextV5, value)
         raise LineageError("Unsupported C-062 output contract.")
+    if isinstance(kind, type) and type(value) is kind:
+        return value
     if isinstance(kind, type) and issubclass(kind, Enum):
         if type(value) is not str:
             raise LineageError("Expected canonical enum string.")
@@ -355,6 +370,23 @@ def decode(document: str) -> object:
             if expected_version is not None and schema_version != expected_version:
                 raise LineageError("Unsupported analysis contract version.")
         payload = dict(envelope["payload"])
+        if contract_id == "C-006":
+            assessment_types = {
+                getattr(item, "contract_id", None): item
+                for item in get_args(VersionedAssessment)
+            }
+            decoded_assessments = []
+            for item in payload.get("assessments", []):
+                if (
+                    type(item) is not dict
+                    or set(item) != {"assessment_contract_id", "record"}
+                ):
+                    raise LineageError("C-006 assessment type identity is missing.")
+                assessment_type = assessment_types.get(item["assessment_contract_id"])
+                if assessment_type is None:
+                    raise LineageError("Unsupported C-006 assessment type.")
+                decoded_assessments.append(_decode(assessment_type, item["record"]))
+            payload["assessments"] = decoded_assessments
         if contract_id == "C-012":
             # C-012 v1 stores contract_id as a ClassVar, so it is envelope
             # metadata and must not be injected into its dataclass payload.
