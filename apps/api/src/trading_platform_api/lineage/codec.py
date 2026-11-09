@@ -226,13 +226,13 @@ def encode(record: object) -> str:
         result = serialize_contract(record, payload_version="wire-1")
         if type(record) is MarketContextV5:
             envelope = _restore_canonical_tuples(json.loads(result))
-            envelope["payload"]["assessments"] = [
+            envelope["payload"]["assessments"] = tuple(
                 {
                     "assessment_contract_id": item.contract_id,
                     "record": item,
                 }
                 for item in record.assessments
-            ]
+            )
             result = canonical_json_dumps(envelope)
     if len(result.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise LineageError("Lineage document exceeds the size limit.")
