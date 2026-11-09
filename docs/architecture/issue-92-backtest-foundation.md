@@ -32,7 +32,9 @@ is silently introduced.
 
 ## Remaining #92 acceptance work
 
-- Repository-owned deterministic execution kernel and adapter.
+- Repository-owned deterministic execution kernel and adapter: the offline
+  scenario component is documented in [Spot execution model](issue-92-spot-execution-model.md);
+  strategy replay and production cost integration remain required.
 - Historical strategy replay against exact approved strategy/version and #91
   data, with no caller-invented market facts or future knowledge.
 - Explicit next-event timing, ambiguity, capacity, partial fills, expiry and
