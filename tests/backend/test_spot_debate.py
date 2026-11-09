@@ -1001,6 +1001,8 @@ def test_c012_technical_assessment_has_closed_lineage_codec() -> None:
     assert key_for(assessment).contract_id == "C-012"
     assert key_for(assessment).version == "1"
     assert decode(encode(assessment)) == assessment
+    context = replace(envelope.context, assessments=(assessment,))
+    assert decode(encode(context)) == context
     assert (
         build_spot_unavailable_technical_context(
             snapshot=binding.snapshot,
@@ -1009,3 +1011,9 @@ def test_c012_technical_assessment_has_closed_lineage_codec() -> None:
         )
         == unavailable
     )
+
+
+def test_c062_agent_result_round_trips_typed_c006_assessments() -> None:
+    envelope = _envelope()
+    assert type(envelope.result.output) is MarketContextV5
+    assert decode(encode(envelope.result)) == envelope.result
