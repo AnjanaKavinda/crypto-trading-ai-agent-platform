@@ -5,6 +5,18 @@ It preserves exact historical resolution for trades, decisions, validations,
 experiments, and rollback actions without redefining canonical contract
 schemas.
 
+## Pending ADR-0019 — proposed C-027 schema 3
+
+PR #446 proposes additive `BacktestResultV3`, binding exact C-021, C-092/C-103,
+C-027v2 cost assumptions and deterministic simulator/trace provenance. This is
+pending owner approval, not a registered runtime schema. C-027v1 BacktestResult
+and C-027v2 CostAssumptionSetV2 retain their layouts, meanings and identities.
+The proposed result hash excludes the generated ID and hash field; deterministic
+UUIDv5 identity uses a fixed versioned method namespace and explicit replay
+timestamps. Closed schema dispatch and canonical compatibility tests are required
+before use. No migration or historical rewrite is approved here. See ADR-0019
+for the proposed boundary and approval gate.
+
 ## Issue #70 — C-062 AgentResult schema 1
 
 C-062 schema `1` is a frozen, attributable result envelope bound to exact task

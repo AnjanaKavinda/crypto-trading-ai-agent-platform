@@ -8,7 +8,7 @@
 | Date | 2026-11-05 |
 | Decision owner | Platform Architect |
 | Human approver | Pending owner merge |
-| GitHub issue / PR | #92; architecture preflight |
+| GitHub issue / PR | #92 / #446; refreshed after #447 |
 | Open decision ID | OD-0011 |
 | Related ADRs | ADR-0017, ADR-0018 |
 | Supersedes / superseded by | — |
@@ -151,18 +151,73 @@ assumption may be silently substituted.
 
 ## Compatibility
 
-This decision does not require changing existing strategy/signal contracts.
-#92 should introduce only the validation-domain records required to represent
-simulation inputs/results. Shared-contract changes require their own versioned
-proposal.
+This decision does not change existing strategy/signal contracts. It also
+proposes the additive C-027 schema-3 boundary below for owner review; no code or
+schema dispatch is introduced by this documentation PR.
+
+### Proposed C-027 schema 3 — BacktestResultV3
+
+The compatibility audit found that C-027v1 `BacktestResult` embeds
+`ReproducibilityContext` with numeric `ResearchAssumption` values. The current
+C-027v2 `CostAssumptionSetV2` instead requires explicit `NOT_APPLICABLE` Spot
+funding. Converting that state into a v1 numeric funding assumption would invent
+an input and discard applicability semantics. These versions must remain intact.
+
+Propose additive **C-027 schema 3 `BacktestResultV3`**, preserving:
+
+| Schema | Meaning and compatibility |
+|---|---|
+| 1 | Historical BacktestResult and its existing numeric assumptions; unchanged. |
+| 2 | CostAssumptionSetV2 and typed cost applicability; unchanged. |
+| 3 (proposed) | BacktestResult binding exact versioned data, strategy, typed costs and simulation provenance. No reinterpretation of schemas 1 or 2. |
+
+The schema-3 result must bind at minimum:
+
+- exact C-021 schema/version/identity/content digest and immutable parameters;
+- exact C-092 dataset ID/version/canonical digest and C-103 canonical digest,
+  preserving #91's dataset coverage, cutoff, historical universe, ordered
+  constituents, source hashes and revision ancestry;
+- exact C-027v2 assumption-set identity/content digest, including its strategy,
+  asset and market bindings; Spot funding stays `NOT_APPLICABLE`;
+- immutable simulator/execution-model/configuration identities and versions,
+  explicit event-priority, latency, capacity and intrabar policies, and an
+  explicit deterministic seed policy;
+- simulated period, decision-time availability rules and exact trace/fill/trade
+  references with canonical content digests;
+- reproducible observed metrics and their method versions when present, explicit
+  sample counts, data-integrity/point-in-time outcomes and failure/warning state;
+- creation/as-of/validity timestamps and environment/research-mode identity.
+
+Result identity is deterministic UUIDv5 from the canonical immutable result
+content digest under a fixed, versioned method namespace. The content-hash
+preimage omits both the generated result ID and its own digest to avoid circular
+hashing. Timestamps are explicit pinned inputs, never a fresh wall-clock value
+inserted during replay. Method/namespace/preimage rules must be frozen with the
+schema implementation and covered by canonical compatibility tests.
+
+This is not a new qualification result: C-028v2 and the mandatory sample, OOS,
+walk-forward, robustness, regime, cost and freshness requirements are unchanged.
+Observed simulator output cannot grant statistical qualification by itself.
+Missing or unverifiable inputs cannot produce a successful canonical result;
+return an explicit failed/inconclusive state without fabricated references or
+statistics. #94 owns metric formulas and #95 owns OOS partition semantics.
+
+Implementation must use closed `(contract_id, schema_version)` dispatch, reject
+unsupported versions, and preserve old serialized payloads and identifiers.
+Schema-1/2-only readers must reject schema 3 rather than down-convert. Add
+compatibility and digest/reference tests before exposing the new result to
+consumers. No historical migration, rewrite, dependency installation or retained
+database change is authorized by accepting this ADR alone. If durable storage
+requires DDL, submit a separate reviewed migration before using it.
 
 #94/#95 and later validation consumers must consume exact backtest-result
 versions, not mutable "latest" simulations.
 
 ## Implementation order
 
-1. Complete #90 and the Wave 4 checkpoint.
-2. Implement #91 immutable point-in-time datasets.
+1. Complete #90 and the Wave 4 checkpoint (verified after #466).
+2. Implement #91 immutable point-in-time datasets (#447 merged; verified base
+   `fd4b31db16cda17e21648a5504d694793ca05f60`).
 3. Accept this ADR and resolve OD-0011.
 4. Refine #92 against #91 and #93 contract boundaries.
 5. Implement the internal deterministic execution kernel.
@@ -197,6 +252,17 @@ simulation authority for validation evidence.
 
 ## Approval
 
-Proposed under the delegated architecture authority for the PERSONAL_SPOT_RESEARCH
-and future PERSONAL_FUTURES_RESEARCH validation path. It becomes the accepted
-resolution of OD-0011 only when the repository owner merges the associated PR.
+PR #446 originally used ADR-0018 for this proposal. That number is now occupied
+by accepted development-governance architecture; this refresh consolidates the
+backtest proposal into ADR-0019 and removes the unmerged duplicate. The accepted
+ADR-0018 is not changed or superseded.
+
+The owner is asked to approve both the repository-owned engine choice and the
+additive C-027v3 contract boundary. This ADR remains Proposed until explicit owner
+approval/merge of #446; that merge constitutes acceptance of both decisions and
+resolution of OD-0011. Record Accepted/Resolved metadata and the exact approving
+merge in the subsequent implementation refinement before runtime edits.
+
+The initial runtime remains PERSONAL_SPOT_RESEARCH. Future Futures research must
+first satisfy #39 data and #61 analysis plus its own scoped simulation contracts;
+accepting this proposal does not authorize Futures delivery or trading execution.
