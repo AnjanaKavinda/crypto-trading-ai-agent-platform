@@ -207,6 +207,32 @@ def _restore_canonical_tuples(value: Any) -> Any:
     return value
 
 
+def _decode_market_context_payload(value: Any) -> MarketContextV5:
+    """Decode a C-006 payload with explicit identities for its assessment union."""
+    if type(value) is not dict:
+        raise LineageError("Expected C-006 payload.")
+    assessment_types = {
+        getattr(item, "contract_id", None): item
+        for item in get_args(VersionedAssessment)
+    }
+    decoded_assessments = []
+    for item in value.get("assessments", []):
+        if type(item) is not dict or set(item) != {
+            "assessment_contract_id",
+            "record",
+        }:
+            raise LineageError("C-006 assessment type identity is missing.")
+        assessment_type = assessment_types.get(item["assessment_contract_id"])
+        if assessment_type is None:
+            raise LineageError("Unsupported C-006 assessment type.")
+        decoded_assessments.append(_decode(assessment_type, item["record"]))
+    payload = dict(value)
+    payload["assessments"] = decoded_assessments
+    payload.setdefault("contract_id", "C-006")
+    payload.setdefault("schema_version", "5")
+    return _decode(MarketContextV5, payload)
+
+
 def encode(record: object) -> str:
     key_for(record)
     if type(record) is TechnicalAssessment:
@@ -232,6 +258,16 @@ def encode(record: object) -> str:
                     "record": item,
                 }
                 for item in record.assessments
+            )
+            result = canonical_json_dumps(envelope)
+        elif type(record) is AgentResult and type(record.output) is MarketContextV5:
+            envelope = _restore_canonical_tuples(json.loads(result))
+            envelope["payload"]["output"]["assessments"] = tuple(
+                {
+                    "assessment_contract_id": item.contract_id,
+                    "record": item,
+                }
+                for item in record.output.assessments
             )
             result = canonical_json_dumps(envelope)
     if len(result.encode("utf-8")) > MAX_DOCUMENT_BYTES:
@@ -277,7 +313,7 @@ def _decode(kind: Any, value: Any) -> Any:
             and value.get("contract_id") == "C-006"
             and value.get("schema_version") == "5"
         ):
-            return _decode(MarketContextV5, value)
+            return _decode_market_context_payload(value)
         raise LineageError("Unsupported C-062 output contract.")
     if isinstance(kind, type) and type(value) is kind:
         return value
@@ -379,22 +415,12 @@ def decode(document: str) -> object:
                 raise LineageError("Unsupported analysis contract version.")
         payload = dict(envelope["payload"])
         if contract_id == "C-006":
-            assessment_types = {
-                getattr(item, "contract_id", None): item
-                for item in get_args(VersionedAssessment)
-            }
-            decoded_assessments = []
-            for item in payload.get("assessments", []):
-                if type(item) is not dict or set(item) != {
-                    "assessment_contract_id",
-                    "record",
-                }:
-                    raise LineageError("C-006 assessment type identity is missing.")
-                assessment_type = assessment_types.get(item["assessment_contract_id"])
-                if assessment_type is None:
-                    raise LineageError("Unsupported C-006 assessment type.")
-                decoded_assessments.append(_decode(assessment_type, item["record"]))
-            payload["assessments"] = decoded_assessments
+            record = _decode_market_context_payload(payload)
+            if encode(record) != document:
+                raise LineageError(
+                    "Unsupported version or noncanonical lineage document."
+                )
+            return record
         if contract_id == "C-012":
             # C-012 v1 stores contract_id as a ClassVar, so it is envelope
             # metadata and must not be injected into its dataclass payload.
