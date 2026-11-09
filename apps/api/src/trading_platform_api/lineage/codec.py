@@ -221,7 +221,7 @@ def encode(record: object) -> str:
             envelope["payload"]["assessments"] = [
                 {
                     "assessment_contract_id": item.contract_id,
-                    "record": json.loads(canonical_json_dumps(item)),
+                    "record": item,
                 }
                 for item in record.assessments
             ]
