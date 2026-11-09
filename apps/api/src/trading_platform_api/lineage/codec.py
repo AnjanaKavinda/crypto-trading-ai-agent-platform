@@ -14,9 +14,16 @@ from trading_platform_api.agents.contracts import (
     AgentResult,
     ModelRoutingDecision,
 )
-from trading_platform_api.analysis.contracts import AnalyticalUncertainty, MarketRegime
+from trading_platform_api.analysis.contracts import (
+    AnalyticalUncertainty,
+    MarketRegime,
+    TechnicalAssessment,
+)
 from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
-from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
+from trading_platform_api.analysis.versioned_contracts import (
+    EvidenceItemV2,
+    VersionedAssessment,
+)
 from trading_platform_api.analysis.versioned_contracts_v4 import (
     AnalysisSnapshotV4,
     ConflictAssessmentV3,
@@ -27,6 +34,7 @@ from trading_platform_api.analysis.versioned_contracts_v5 import (
     MarketContextV5,
 )
 from trading_platform_api.contracts.serialization import (
+    CANONICAL_JSON_VERSION,
     MAX_DOCUMENT_BYTES,
     canonical_json_dumps,
     canonical_sha256,
@@ -79,6 +87,7 @@ MODELS = {
     "C-006": MarketContextV5,
     "C-009": ConfluenceAssessmentV3,
     "C-010": ConflictAssessmentV3,
+    "C-012": TechnicalAssessment,
     "C-019": AdversarialAssessmentV2,
     "C-020": Strategy,
     "C-021": StrategyVersionV2,
@@ -171,6 +180,8 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-009", str(record.assessment_id), record.schema_version)
     if type(record) is ConflictAssessmentV3:
         return LineageKey("C-010", str(record.assessment_id), record.schema_version)
+    if type(record) is TechnicalAssessment:
+        return LineageKey("C-012", str(record.assessment_id), "1")
     if type(record) is AdversarialAssessmentV2:
         return LineageKey("C-019", str(record.assessment_id), record.schema_version)
     if type(record) is StrategyEligibility:
@@ -188,9 +199,77 @@ def key_for(record: object) -> LineageKey:
     raise LineageError("Unsupported lineage contract type.")
 
 
+def _restore_canonical_tuples(value: Any) -> Any:
+    if type(value) is list:
+        return tuple(_restore_canonical_tuples(item) for item in value)
+    if type(value) is dict:
+        return {key: _restore_canonical_tuples(item) for key, item in value.items()}
+    return value
+
+
+def _decode_market_context_payload(value: Any) -> MarketContextV5:
+    """Decode a C-006 payload with explicit identities for its assessment union."""
+    if type(value) is not dict:
+        raise LineageError("Expected C-006 payload.")
+    assessment_types = {
+        getattr(item, "contract_id", None): item
+        for item in get_args(VersionedAssessment)
+    }
+    decoded_assessments = []
+    for item in value.get("assessments", []):
+        if type(item) is not dict or set(item) != {
+            "assessment_contract_id",
+            "record",
+        }:
+            raise LineageError("C-006 assessment type identity is missing.")
+        assessment_type = assessment_types.get(item["assessment_contract_id"])
+        if assessment_type is None:
+            raise LineageError("Unsupported C-006 assessment type.")
+        decoded_assessments.append(_decode(assessment_type, item["record"]))
+    payload = dict(value)
+    payload["assessments"] = decoded_assessments
+    payload.setdefault("contract_id", "C-006")
+    payload.setdefault("schema_version", "5")
+    return _decode(MarketContextV5, payload)
+
+
 def encode(record: object) -> str:
     key_for(record)
-    result = serialize_contract(record, payload_version="wire-1")
+    if type(record) is TechnicalAssessment:
+        # C-012 v1 predates the fixed dataclass-field metadata convention. Keep
+        # its established payload shape and carry the ClassVar contract identity
+        # in the canonical envelope, without changing the shared C-012 schema.
+        result = canonical_json_dumps(
+            {
+                "canonicalization_version": CANONICAL_JSON_VERSION,
+                "contract_id": "C-012",
+                "schema_version": "1",
+                "payload_version": "wire-1",
+                "payload": record,
+            }
+        )
+    else:
+        result = serialize_contract(record, payload_version="wire-1")
+        if type(record) is MarketContextV5:
+            envelope = _restore_canonical_tuples(json.loads(result))
+            envelope["payload"]["assessments"] = tuple(
+                {
+                    "assessment_contract_id": item.contract_id,
+                    "record": item,
+                }
+                for item in record.assessments
+            )
+            result = canonical_json_dumps(envelope)
+        elif type(record) is AgentResult and type(record.output) is MarketContextV5:
+            envelope = _restore_canonical_tuples(json.loads(result))
+            envelope["payload"]["output"]["assessments"] = tuple(
+                {
+                    "assessment_contract_id": item.contract_id,
+                    "record": item,
+                }
+                for item in record.output.assessments
+            )
+            result = canonical_json_dumps(envelope)
     if len(result.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise LineageError("Lineage document exceeds the size limit.")
     return result
@@ -234,8 +313,10 @@ def _decode(kind: Any, value: Any) -> Any:
             and value.get("contract_id") == "C-006"
             and value.get("schema_version") == "5"
         ):
-            return _decode(MarketContextV5, value)
+            return _decode_market_context_payload(value)
         raise LineageError("Unsupported C-062 output contract.")
+    if isinstance(kind, type) and type(value) is kind:
+        return value
     if isinstance(kind, type) and issubclass(kind, Enum):
         if type(value) is not str:
             raise LineageError("Expected canonical enum string.")
@@ -313,6 +394,7 @@ def decode(document: str) -> object:
                 "C-006": "5",
                 "C-009": "3",
                 "C-010": "3",
+                "C-012": "1",
                 "C-019": "2",
                 "C-020": "1",
                 "C-021": schema_version,
@@ -332,10 +414,23 @@ def decode(document: str) -> object:
             if expected_version is not None and schema_version != expected_version:
                 raise LineageError("Unsupported analysis contract version.")
         payload = dict(envelope["payload"])
-        payload.update(
-            contract_id=contract_id,
-            schema_version=schema_version,
-        )
+        if contract_id == "C-006":
+            record = _decode_market_context_payload(payload)
+            if encode(record) != document:
+                raise LineageError(
+                    "Unsupported version or noncanonical lineage document."
+                )
+            return record
+        if contract_id == "C-012":
+            # C-012 v1 stores contract_id as a ClassVar, so it is envelope
+            # metadata and must not be injected into its dataclass payload.
+            if payload.get("schema_version") != schema_version:
+                raise LineageError("C-012 payload schema version is mismatched.")
+        else:
+            payload.update(
+                contract_id=contract_id,
+                schema_version=schema_version,
+            )
         record = _decode(model, payload)
         if encode(record) != document:
             raise LineageError("Unsupported version or noncanonical lineage document.")

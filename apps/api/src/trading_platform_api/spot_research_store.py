@@ -20,22 +20,40 @@ from sqlalchemy import (
     Table,
     Text,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trading_platform_api.analysis.contracts import MarketRegime
+from trading_platform_api.analysis.contracts import (
+    AnalyticalUncertainty,
+    AssessmentStatus,
+    MarketRegime,
+    TechnicalAssessment,
+)
 from trading_platform_api.analysis.spot_meta_analysis import AgentIndependenceReport
 from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
-from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
-from trading_platform_api.contracts.serialization import canonical_json_dumps
+from trading_platform_api.analysis.versioned_contracts_v4 import (
+    AnalysisSnapshotV4,
+    ConflictAssessmentV3,
+    ConfluenceAssessmentV3,
+)
+from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
+from trading_platform_api.contracts.serialization import (
+    canonical_json_dumps,
+    canonical_sha256,
+)
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
 from trading_platform_api.lineage.codec import LineageError, LineageKey, decode_value
 from trading_platform_api.lineage.store import (
     SqlAlchemyLineageStore,
     append_validated_market_snapshot,
 )
-from trading_platform_api.lineage.tables import metadata, records
+from trading_platform_api.lineage.tables import (
+    metadata,
+    records,
+    spot_producer_request_reservations,
+)
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
     DataQualityReportV2,
@@ -46,6 +64,10 @@ from trading_platform_api.market_data.contracts import (
 )
 from trading_platform_api.market_data.providers import ProviderBatch, ProviderDataKind
 from trading_platform_api.market_data.quality import DataQualityPolicy, MetricBound
+from trading_platform_api.orchestration.spot_agent_producer import (
+    CompletedSpotAgentHandoff,
+    ProducerReservation,
+)
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SUPPORTED_SPOT_FINDING_DOMAINS,
     SpotAnalysisFanoutAssessment,
@@ -71,6 +93,16 @@ SUPPORTED_INSTRUMENTS = frozenset(
     }
 )
 SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
+
+
+def _freeze_json_sequences(value: object) -> object:
+    """Restore canonical tuple sequences after parsing persisted JSON arrays."""
+    if type(value) is list:
+        return tuple(_freeze_json_sequences(item) for item in value)
+    if type(value) is dict:
+        return {key: _freeze_json_sequences(item) for key, item in value.items()}
+    return value
+
 
 spot_research_snapshots = Table(
     "spot_research_snapshots",
@@ -475,6 +507,9 @@ class SqlAlchemySpotResearchStore:
         *,
         snapshot_id: str,
         handoff: SpotRequestAnalysisHandoff,
+        producer_handoff: CompletedSpotAgentHandoff,
+        request_sha256: str,
+        request_document: str,
     ) -> None:
         """Append the exact analysis closure for an already stored Spot snapshot."""
         if (
@@ -490,6 +525,14 @@ class SqlAlchemySpotResearchStore:
             or type(handoff.assessment.fanout.correlation_id) is not UUID
             or type(handoff.assessment.independence_report)
             is not AgentIndependenceReport
+            or type(handoff.confluence) is not ConfluenceAssessmentV3
+            or type(handoff.conflicts) is not tuple
+            or any(type(item) is not ConflictAssessmentV3 for item in handoff.conflicts)
+            or type(handoff.unavailable_technical.assessment) is not TechnicalAssessment
+            or handoff.unavailable_technical.assessment.status
+            is not AssessmentStatus.UNAVAILABLE
+            or type(handoff.unavailable_technical.uncertainty)
+            is not AnalyticalUncertainty
             or not 1 <= len(handoff.assessment.fanout.outcomes) <= 13
             or not all(
                 type(outcome) is SpotAnalysisTaskOutcome
@@ -512,9 +555,29 @@ class SqlAlchemySpotResearchStore:
             != manifest.bindings[0].market_snapshot.record_id
             or assessment.independence_report.quality_report_id
             != handoff.quality_report.report_id
+            or manifest.assessment_ids
+            != (handoff.unavailable_technical.assessment.assessment_id,)
         ):
             raise SpotResearchStoreError(
                 "Analysis lineage does not match the persisted Spot snapshot."
+            )
+        if (
+            type(producer_handoff) is not CompletedSpotAgentHandoff
+            or type(request_sha256) is not str
+            or len(request_sha256) != 64
+            or type(request_document) is not str
+            or producer_handoff.request_sha256 != request_sha256
+            or producer_handoff.request_document != request_document
+            or producer_handoff.context.analysis_snapshot.snapshot_id
+            != manifest.snapshot_id
+            or producer_handoff.context.analysis_snapshot.content_sha256
+            != manifest.content_sha256
+            or producer_handoff.context.context_id != producer_handoff.result.context_id
+            or producer_handoff.result.output != producer_handoff.context
+            or producer_handoff.correlation_id != assessment.fanout.correlation_id
+        ):
+            raise SpotResearchStoreError(
+                "Producer handoff does not bind the exact Spot request."
             )
         regime_ref = manifest.bindings[0].regime
         if regime_ref.contract_id != "C-005" or regime_ref.schema_version != "1":
@@ -563,11 +626,36 @@ class SqlAlchemySpotResearchStore:
                 for evidence in handoff.evidence:
                     await lineage.append_personal_spot_analysis_record(evidence)
                 await lineage.append_personal_spot_analysis_record(handoff.regime)
+                await lineage.append_personal_spot_analysis_record(handoff.confluence)
+                for conflict in handoff.conflicts:
+                    await lineage.append_personal_spot_analysis_record(conflict)
+                await lineage.append_personal_spot_analysis_record(
+                    handoff.unavailable_technical.uncertainty
+                )
+                await lineage.append_personal_spot_analysis_record(
+                    handoff.unavailable_technical.assessment
+                )
                 await lineage.append_personal_spot_analysis_record(manifest)
                 await lineage.append_personal_spot_analysis_record(report)
+                await lineage.append_personal_spot_analysis_record(
+                    producer_handoff.context.adversarial
+                )
             except LineageError as exc:
                 raise SpotResearchStoreError(
                     "Spot analysis lineage failed exact reference validation."
+                ) from exc
+            try:
+                await lineage.append_spot_agent_handoff(
+                    context=producer_handoff.context,
+                    result=producer_handoff.result,
+                    evaluation=producer_handoff.evaluation,
+                    correlation_id=producer_handoff.correlation_id,
+                    trace_id=producer_handoff.trace_id,
+                    created_at=datetime.now(UTC),
+                )
+            except LineageError as exc:
+                raise SpotResearchStoreError(
+                    "Spot producer handoff failed exact lineage validation."
                 ) from exc
             statement = (
                 insert(spot_research_analysis)
@@ -596,6 +684,187 @@ class SqlAlchemySpotResearchStore:
                     raise SpotResearchStoreError(
                         "Snapshot already has a different immutable analysis closure."
                     )
+            completed_at = datetime.now(UTC)
+            updated = await session.execute(
+                update(spot_producer_request_reservations)
+                .where(
+                    spot_producer_request_reservations.c.profile
+                    == "PERSONAL_SPOT_RESEARCH",
+                    spot_producer_request_reservations.c.request_sha256
+                    == request_sha256,
+                    spot_producer_request_reservations.c.request_document
+                    == request_document,
+                    spot_producer_request_reservations.c.snapshot_id == snapshot_id,
+                    spot_producer_request_reservations.c.status == "IN_PROGRESS",
+                )
+                .values(
+                    status="COMPLETED",
+                    context_contract_id="C-006",
+                    context_record_id=str(producer_handoff.context.context_id),
+                    context_version="5",
+                    context_sha256=canonical_sha256(producer_handoff.context),
+                    completed_at=completed_at,
+                )
+                .returning(spot_producer_request_reservations.c.request_sha256)
+            )
+            if updated.scalar_one_or_none() != request_sha256:
+                existing = (
+                    (
+                        await session.execute(
+                            select(spot_producer_request_reservations).where(
+                                spot_producer_request_reservations.c.profile
+                                == "PERSONAL_SPOT_RESEARCH",
+                                spot_producer_request_reservations.c.request_sha256
+                                == request_sha256,
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if (
+                    existing is None
+                    or existing["request_document"] != request_document
+                    or existing["snapshot_id"] != snapshot_id
+                    or existing["status"] != "COMPLETED"
+                    or existing["context_contract_id"] != "C-006"
+                    or existing["context_record_id"]
+                    != str(producer_handoff.context.context_id)
+                    or existing["context_version"] != "5"
+                    or existing["context_sha256"]
+                    != canonical_sha256(producer_handoff.context)
+                ):
+                    raise SpotResearchStoreError(
+                        "Producer reservation was not exclusively completable."
+                    )
+
+    async def reserve_producer_request(
+        self,
+        *,
+        request_sha256: str,
+        request_document: str,
+        snapshot_id: str,
+    ) -> ProducerReservation:
+        """Reserve one exact model invocation or return its immutable prior state."""
+        try:
+            identity = _freeze_json_sequences(json.loads(request_document))
+            if (
+                type(identity) is not dict
+                or canonical_json_dumps(identity) != request_document
+                or canonical_sha256(identity) != request_sha256
+                or len(request_document.encode("utf-8")) > 1_000_000
+                or str(UUID(snapshot_id)) != snapshot_id
+            ):
+                raise ValueError
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise SpotResearchStoreError(
+                "Producer request identity is invalid."
+            ) from None
+        async with transactional_session(self._session_factory) as session:
+            if not isinstance(session, AsyncSession):
+                raise SpotResearchStoreError("A PostgreSQL async session is required.")
+            inserted = await session.execute(
+                insert(spot_producer_request_reservations)
+                .values(
+                    profile="PERSONAL_SPOT_RESEARCH",
+                    request_sha256=request_sha256,
+                    request_document=request_document,
+                    snapshot_id=snapshot_id,
+                    status="IN_PROGRESS",
+                    created_at=datetime.now(UTC),
+                )
+                .on_conflict_do_nothing()
+                .returning(spot_producer_request_reservations.c.request_sha256)
+            )
+            if inserted.scalar_one_or_none() is not None:
+                return ProducerReservation("RESERVED")
+            row = (
+                (
+                    await session.execute(
+                        select(spot_producer_request_reservations).where(
+                            spot_producer_request_reservations.c.profile
+                            == "PERSONAL_SPOT_RESEARCH",
+                            spot_producer_request_reservations.c.request_sha256
+                            == request_sha256,
+                        )
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if (
+                row is None
+                or row["request_document"] != request_document
+                or row["snapshot_id"] != snapshot_id
+            ):
+                raise SpotResearchStoreError(
+                    "Producer reservation identity collision detected."
+                )
+            if row["status"] == "IN_PROGRESS":
+                return ProducerReservation("IN_PROGRESS")
+            if row["status"] == "FAILED":
+                return ProducerReservation("FAILED")
+            if row["status"] != "COMPLETED":
+                raise SpotResearchStoreError(
+                    "Producer reservation has an unknown status."
+                )
+            key = LineageKey(
+                row["context_contract_id"],
+                row["context_record_id"],
+                row["context_version"],
+            )
+            lineage = SqlAlchemyLineageStore(session, archive_store=self._archive_store)
+            try:
+                context = await lineage.get(key)
+                stored = await lineage.get_spot_agent_handoff(key)
+            except LineageError as exc:
+                raise SpotResearchStoreError(
+                    "Completed producer handoff could not be resolved."
+                ) from exc
+            if (
+                type(context) is not MarketContextV5
+                or stored is None
+                or canonical_sha256(context) != row["context_sha256"]
+            ):
+                raise SpotResearchStoreError(
+                    "Completed producer handoff digest verification failed."
+                )
+            result, evaluation, correlation_id, trace_id = stored
+            completed = CompletedSpotAgentHandoff(
+                context=context,
+                result=result,
+                evaluation=evaluation,
+                correlation_id=correlation_id,
+                trace_id=trace_id,
+                request_sha256=request_sha256,
+                request_document=request_document,
+                is_replay=True,
+            )
+            return ProducerReservation("COMPLETED", completed)
+
+    async def fail_producer_request(self, *, request_sha256: str) -> None:
+        """Mark a known terminal producer failure; leave interrupted calls reserved."""
+        if type(request_sha256) is not str or len(request_sha256) != 64:
+            raise SpotResearchStoreError("Producer request digest is invalid.")
+        async with transactional_session(self._session_factory) as session:
+            if not isinstance(session, AsyncSession):
+                raise SpotResearchStoreError("A PostgreSQL async session is required.")
+            result = await session.execute(
+                update(spot_producer_request_reservations)
+                .where(
+                    spot_producer_request_reservations.c.profile
+                    == "PERSONAL_SPOT_RESEARCH",
+                    spot_producer_request_reservations.c.request_sha256
+                    == request_sha256,
+                    spot_producer_request_reservations.c.status == "IN_PROGRESS",
+                )
+                .values(status="FAILED")
+                .returning(spot_producer_request_reservations.c.status)
+            )
+            if result.scalar_one_or_none() != "FAILED":
+                raise SpotResearchStoreError(
+                    "Producer request was not in a fail-able reserved state."
+                )
 
     async def read_latest(
         self,

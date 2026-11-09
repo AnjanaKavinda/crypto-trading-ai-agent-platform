@@ -1318,7 +1318,7 @@ def test_alembic_head_includes_registry_ddl_and_immutable_guards(monkeypatch):
     )
     config = Config(str(REPO_ROOT / "apps/api/alembic.ini"), output_buffer=output)
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["0010_strategy_signal_artifacts"]
+    assert scripts.get_heads() == ["0011_spot_producer_lineage"]
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue().upper()
     for table in (
@@ -1333,6 +1333,7 @@ def test_alembic_head_includes_registry_ddl_and_immutable_guards(monkeypatch):
     assert "CK_STRATEGY_REGISTRY_EVENT_SUSPENSION_RESOLUTION" in sql
     assert "CK_STRATEGY_REGISTRY_EVENT_TARGET_STATUS" in sql
     assert "CK_STRATEGY_REGISTRY_EVENT_ROLLBACK_TARGET" in sql
+    assert "CREATE TABLE SPOT_PRODUCER_REQUEST_RESERVATIONS" in sql
     assert "FK_STRATEGY_REGISTRY_EVENT_ROLLBACK_TARGET" in sql
     assert "CK_STRATEGY_REGISTRY_EVENT_ENVIRONMENT_MODE_SCOPE" in sql
     assert "environment" in sql.lower()

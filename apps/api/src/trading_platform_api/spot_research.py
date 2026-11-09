@@ -79,6 +79,13 @@ from trading_platform_api.market_data.quality import (
     assess_complete_binance_spot_batch,
     assess_data_quality,
 )
+from trading_platform_api.orchestration.spot_agent_producer import (
+    CompletedSpotAgentHandoff,
+    ProducerReservation,
+    SpotProducerRuntime,
+    SpotProducerUnavailable,
+    produce_spot_agent_handoff,
+)
 from trading_platform_api.orchestration.spot_request_handoff import (
     SpotRequestAnalysisHandoff,
     SpotRequestAnalysisUnavailable,
@@ -341,7 +348,20 @@ class SpotResearchRepository(Protocol):
         *,
         snapshot_id: str,
         handoff: SpotRequestAnalysisHandoff,
+        producer_handoff: CompletedSpotAgentHandoff,
+        request_sha256: str,
+        request_document: str,
     ) -> None: ...
+
+    async def reserve_producer_request(
+        self,
+        *,
+        request_sha256: str,
+        request_document: str,
+        snapshot_id: str,
+    ) -> ProducerReservation: ...
+
+    async def fail_producer_request(self, *, request_sha256: str) -> None: ...
 
     async def read_latest(
         self,
@@ -1224,6 +1244,7 @@ class SpotResearchService:
         provider_settings: BinanceSpotSettings | None,
         quality_policy: QualityPolicyTemplate | None,
         repository: SpotResearchRepository | None,
+        spot_agent_runtime: SpotProducerRuntime | None = None,
         provider_factory: Callable[[BinanceSpotSettings], MarketDataProvider]
         | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -1234,6 +1255,7 @@ class SpotResearchService:
         self.provider_settings = provider_settings
         self.quality_policy = quality_policy
         self.repository = repository
+        self.spot_agent_runtime = spot_agent_runtime
         self.provider_factory = provider_factory or BinanceSpotProvider
         self.clock = clock or (lambda: datetime.now(UTC))
         self.monotonic = monotonic or time.monotonic
@@ -1252,7 +1274,8 @@ class SpotResearchService:
     ) -> dict[str, Any]:
         if not _CORRELATION_ID.fullmatch(correlation_id):
             correlation_id = str(uuid4())
-        if self.provider_settings is None or self.repository is None:
+        repository = self.repository
+        if self.provider_settings is None or repository is None:
             raise SpotResearchError(
                 status=503,
                 code="RESEARCH_SERVICE_UNAVAILABLE",
@@ -1441,7 +1464,7 @@ class SpotResearchService:
                     )
                     await _await_cancellable(
                         asyncio.create_task(
-                            self.repository.persist(
+                            repository.persist(
                                 batch=batch,
                                 quality=quality,
                                 policy=policy,
@@ -1533,27 +1556,109 @@ class SpotResearchService:
                 if isinstance(handoff, SpotRequestAnalysisUnavailable):
                     analysis_unavailable_reason = handoff.reason_code
                 else:
+                    trace_id = uuid5(
+                        UUID("8e306d9a-6c92-589c-b025-35a8cc7ce39f"),
+                        f"trace:{analysis_correlation_id}",
+                    )
                     try:
-                        await _await_cancellable(
+                        runtime_deadline = (
+                            self.spot_agent_runtime.provider_deadline_seconds + 2
+                            if self.spot_agent_runtime is not None
+                            else 1
+                        )
+                        produced = await _await_cancellable(
                             asyncio.create_task(
-                                self.repository.persist_analysis(
-                                    snapshot_id=str(snapshot.snapshot_id),
+                                produce_spot_agent_handoff(
                                     handoff=handoff,
+                                    snapshot=snapshot,
+                                    quality_report=handoff.quality_report,
+                                    observations=batch.market_data,
+                                    sources=batch.source_records,
+                                    correlation_id=analysis_correlation_id,
+                                    trace_id=trace_id,
+                                    now=self.clock().astimezone(UTC),
+                                    runtime=self.spot_agent_runtime,
+                                    reserve_request=lambda request_sha256, request_document, request_snapshot_id: (
+                                        repository.reserve_producer_request(
+                                            request_sha256=request_sha256,
+                                            request_document=request_document,
+                                            snapshot_id=request_snapshot_id,
+                                        )
+                                    ),
+                                    fail_request=lambda request_sha256: (
+                                        repository.fail_producer_request(
+                                            request_sha256=request_sha256
+                                        )
+                                    ),
                                 )
                             ),
                             is_disconnected=is_disconnected,
-                            timeout_seconds=self.persistence_deadline_seconds,
-                            timeout_status=503,
-                            timeout_code="ANALYSIS_PERSISTENCE_TIMEOUT",
-                            timeout_title="Analysis persistence timed out",
-                            timeout_detail="The exact analysis lineage missed its persistence deadline.",
+                            timeout_seconds=min(60, runtime_deadline),
+                            timeout_status=504,
+                            timeout_code="ANALYSIS_PROVIDER_TIMEOUT",
+                            timeout_title="Spot analysis provider timed out",
+                            timeout_detail="The bounded analysis provider did not finish before its deadline.",
                         )
                     except asyncio.CancelledError:
                         raise
+                    except SpotResearchError as exc:
+                        if exc.code == "ANALYSIS_PROVIDER_TIMEOUT":
+                            analysis_unavailable_reason = exc.code
+                        else:
+                            raise
                     except Exception:
-                        analysis_unavailable_reason = "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                        analysis_unavailable_reason = "ANALYSIS_HANDOFF_UNAVAILABLE"
                     else:
-                        analysis_handoff = handoff
+                        if isinstance(produced, SpotProducerUnavailable):
+                            analysis_unavailable_reason = produced.reason_code
+                        elif produced.is_replay:
+                            analysis_handoff = handoff
+                        else:
+                            try:
+                                await _await_cancellable(
+                                    asyncio.create_task(
+                                        repository.persist_analysis(
+                                            snapshot_id=str(snapshot.snapshot_id),
+                                            handoff=handoff,
+                                            producer_handoff=produced,
+                                            request_sha256=produced.request_sha256,
+                                            request_document=produced.request_document,
+                                        )
+                                    ),
+                                    is_disconnected=is_disconnected,
+                                    timeout_seconds=self.persistence_deadline_seconds,
+                                    timeout_status=503,
+                                    timeout_code="ANALYSIS_PERSISTENCE_TIMEOUT",
+                                    timeout_title="Analysis persistence timed out",
+                                    timeout_detail="The complete validated handoff missed its persistence deadline.",
+                                )
+                            except asyncio.CancelledError:
+                                raise
+                            except SpotResearchError as exc:
+                                if exc.code == "ANALYSIS_PERSISTENCE_TIMEOUT":
+                                    analysis_unavailable_reason = exc.code
+                                else:
+                                    try:
+                                        await repository.fail_producer_request(
+                                            request_sha256=produced.request_sha256
+                                        )
+                                    except Exception:
+                                        pass
+                                    analysis_unavailable_reason = (
+                                        "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                                    )
+                            except Exception:
+                                try:
+                                    await repository.fail_producer_request(
+                                        request_sha256=produced.request_sha256
+                                    )
+                                except Exception:
+                                    pass
+                                analysis_unavailable_reason = (
+                                    "ANALYSIS_PERSISTENCE_UNAVAILABLE"
+                                )
+                            else:
+                                analysis_handoff = handoff
             response = await _response(
                 # Request correlation text is normalized into a UUID for C-093
                 # without changing the existing HTTP correlation contract.

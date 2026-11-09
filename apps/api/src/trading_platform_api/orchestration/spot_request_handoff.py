@@ -17,6 +17,18 @@ from trading_platform_api.analysis.spot_market_regime import (
     SpotMarketRegimeError,
     calculate_spot_market_regime,
 )
+from trading_platform_api.analysis.spot_meta_analysis import (
+    AgentIndependenceReport,
+    C093Registry,
+    ConflictCalculationState,
+    calculate_spot_conflicts_v3,
+    calculate_spot_confluence_v3,
+)
+from trading_platform_api.analysis.spot_unavailable_context import (
+    SpotUnavailableTechnicalContext,
+    build_spot_unavailable_technical_context,
+    unavailable_technical_assessment_id,
+)
 from trading_platform_api.analysis.versioned_contracts import (
     AnalysisRecordReference,
     EvidenceItemV2,
@@ -25,6 +37,8 @@ from trading_platform_api.analysis.versioned_contracts import (
 from trading_platform_api.analysis.versioned_contracts_v4 import (
     AnalysisOutputReferenceV4,
     AnalysisSnapshotV4,
+    ConflictAssessmentV3,
+    ConfluenceAssessmentV3,
     InputModalityV4,
     ResolvedSpotOHLCVBindingV4,
     SpotOHLCVBindingV4,
@@ -64,6 +78,77 @@ _REGIME_PROFILE = VersionReference(
 )
 
 
+def _validate_final_manifest_outputs(
+    *,
+    manifest: AnalysisSnapshotV4,
+    quality_report: DataQualityReportV2,
+    confluence: ConfluenceAssessmentV3,
+    conflicts: tuple[ConflictAssessmentV3, ...],
+    independence: AgentIndependenceReport,
+) -> None:
+    """Check the exact C-007 output closure before any model invocation."""
+    expected = tuple(
+        sorted(
+            (
+                *(
+                    item
+                    for item in manifest.analysis_outputs
+                    if item.contract_id in {"C-005", "C-008"}
+                ),
+                AnalysisOutputReferenceV4(
+                    "C-009",
+                    confluence.assessment_id,
+                    "3",
+                    "3",
+                    canonical_sha256(confluence),
+                ),
+                *(
+                    AnalysisOutputReferenceV4(
+                        "C-010",
+                        item.assessment_id,
+                        "3",
+                        "3",
+                        canonical_sha256(item),
+                    )
+                    for item in conflicts
+                ),
+                C093Registry.reference(independence),
+            ),
+            key=lambda item: (item.contract_id, str(item.record_id)),
+        )
+    )
+    actual = tuple(
+        sorted(
+            manifest.analysis_outputs,
+            key=lambda item: (item.contract_id, str(item.record_id)),
+        )
+    )
+    if actual != expected:
+        raise ValueError("C-007 outputs differ from the deterministic producer set.")
+    if (
+        confluence.input_snapshot_id != manifest.snapshot_id
+        or confluence.input_snapshot_schema_version != manifest.schema_version
+        or confluence.expires_at > manifest.expires_at
+        or confluence.data_quality_reports
+        != (manifest.bindings[0].data_quality_report,)
+        or independence.manifest_id != manifest.snapshot_id
+        or independence.snapshot_id
+        != UUID(manifest.bindings[0].market_snapshot.record_id)
+        or independence.quality_report_id != quality_report.report_id
+        or independence.binding_id != manifest.bindings[0].binding_id
+        or independence.binding_sha256 != canonical_sha256(manifest.bindings[0])
+        or independence.expires_at > manifest.expires_at
+        or any(
+            item.input_snapshot_id != manifest.snapshot_id
+            or item.input_snapshot_schema_version != manifest.schema_version
+            or item.expires_at > manifest.expires_at
+            or item.data_quality_reports != (manifest.bindings[0].data_quality_report,)
+            for item in conflicts
+        )
+    ):
+        raise ValueError("C-007 output scope or provenance is invalid.")
+
+
 @dataclass(frozen=True, slots=True)
 class SpotRequestAnalysisUnavailable:
     reason_code: str
@@ -75,7 +160,11 @@ class SpotRequestAnalysisHandoff:
     quality_report: DataQualityReportV2
     regime: MarketRegime
     evidence: tuple[EvidenceItemV2, ...]
+    resolved_bindings: tuple[ResolvedSpotOHLCVBindingV4, ...]
     assessment: SpotAnalysisFanoutAssessment
+    confluence: ConfluenceAssessmentV3
+    conflicts: tuple[ConflictAssessmentV3, ...]
+    unavailable_technical: SpotUnavailableTechnicalContext
 
 
 def _to_evidence_v2(
@@ -127,6 +216,7 @@ def build_spot_analysis_manifest(
     policy: DataQualityPolicy,
     timeframe: str,
     now: datetime,
+    unavailable_technical: bool = False,
 ) -> tuple[
     AnalysisSnapshotV4,
     DataQualityReportV2,
@@ -266,11 +356,18 @@ def build_spot_analysis_manifest(
             key=lambda item: (item.contract_id, str(item.record_id)),
         )
     )
+    assessment_id = (
+        unavailable_technical_assessment_id(snapshot, quality_v2)
+        if unavailable_technical
+        else regime_result.regime.regime_id
+    )
+    manifest_identity = (
+        f"spot-analysis-manifest-v1:{snapshot.snapshot_id}:{binding_id}"
+        if not unavailable_technical
+        else f"spot-analysis-manifest-v1:{snapshot.snapshot_id}:{binding_id}:{assessment_id}"
+    )
     manifest = create_analysis_snapshot_v4(
-        snapshot_id=uuid5(
-            _IDENTITY_NAMESPACE,
-            f"spot-analysis-manifest-v1:{snapshot.snapshot_id}:{binding_id}",
-        ),
+        snapshot_id=uuid5(_IDENTITY_NAMESPACE, manifest_identity),
         asset=snapshot.instrument_id.split("-", maxsplit=1)[0],
         instrument_id=snapshot.instrument_id,
         venue_id=snapshot.venue_id,
@@ -279,9 +376,9 @@ def build_spot_analysis_manifest(
         created_at=quality_v2.assessed_at,
         expires_at=expires_at,
         bindings=(binding,),
-        # C-007 v4 requires assessment identities; the C-005 regime is the sole
-        # profile assessment in this bounded request path.
-        assessment_ids=(regime_result.regime.regime_id,),
+        # C-005 is represented by its exact regime binding. The approved
+        # producer profile records its C-012 assessment identity separately.
+        assessment_ids=(assessment_id,),
         evidence_ids=tuple(sorted((item.evidence_id for item in evidence), key=str)),
         provenance=(_REGIME_METHOD, _REGIME_PROFILE),
         analysis_outputs=analysis_outputs,
@@ -321,6 +418,7 @@ async def run_spot_analysis_request_handoff(
                 policy=policy,
                 timeframe=timeframe,
                 now=now,
+                unavailable_technical=True,
             )
         )
     except SpotMarketRegimeError:
@@ -356,12 +454,117 @@ async def run_spot_analysis_request_handoff(
         for outcome in assessment.fanout.outcomes
     ):
         return SpotRequestAnalysisUnavailable("ANALYSIS_TASK_FAILED")
+    try:
+        confluence_result, confluence_independence = calculate_spot_confluence_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            findings=assessment.fanout.findings,
+            now=now,
+        )
+        conflict_result = calculate_spot_conflicts_v3(
+            manifest=manifest,
+            resolved_bindings=resolved,
+            evidence=evidence,
+            findings=assessment.fanout.findings,
+            now=now,
+        )
+        # An INDETERMINATE C-009 is still a valid, provenance-bound result: it
+        # records that this single-source Spot profile cannot establish enough
+        # evidence or independence for confluence. Preserve it in the final
+        # manifest so downstream consumers can fail closed on its status.
+        if (
+            conflict_result.state
+            not in {
+                ConflictCalculationState.NOT_ASSESSED,
+                ConflictCalculationState.NO_CONFLICT,
+                ConflictCalculationState.ASSESSED,
+            }
+            or confluence_independence != assessment.independence_report
+        ):
+            return SpotRequestAnalysisUnavailable("META_ANALYSIS_UNAVAILABLE")
+        confluence = confluence_result.assessment
+        conflicts = conflict_result.assessments
+        independence_ref = C093Registry.reference(assessment.independence_report)
+        outputs = tuple(
+            sorted(
+                (
+                    *(
+                        item
+                        for item in manifest.analysis_outputs
+                        if item.contract_id in {"C-005", "C-008"}
+                    ),
+                    AnalysisOutputReferenceV4(
+                        "C-009",
+                        confluence.assessment_id,
+                        "3",
+                        "3",
+                        canonical_sha256(confluence),
+                    ),
+                    *(
+                        AnalysisOutputReferenceV4(
+                            "C-010",
+                            item.assessment_id,
+                            "3",
+                            "3",
+                            canonical_sha256(item),
+                        )
+                        for item in conflicts
+                    ),
+                    independence_ref,
+                ),
+                key=lambda item: (item.contract_id, str(item.record_id)),
+            )
+        )
+        manifest = create_analysis_snapshot_v4(
+            snapshot_id=manifest.snapshot_id,
+            asset=manifest.asset,
+            instrument_id=manifest.instrument_id,
+            venue_id=manifest.venue_id,
+            timeframe=manifest.timeframe,
+            analysis_cutoff=manifest.analysis_cutoff,
+            created_at=manifest.created_at,
+            expires_at=manifest.expires_at,
+            bindings=manifest.bindings,
+            assessment_ids=manifest.assessment_ids,
+            evidence_ids=manifest.evidence_ids,
+            provenance=manifest.provenance,
+            analysis_outputs=outputs,
+        )
+        _validate_final_manifest_outputs(
+            manifest=manifest,
+            quality_report=quality_v2,
+            confluence=confluence,
+            conflicts=conflicts,
+            independence=assessment.independence_report,
+        )
+        resolved = resolve_analysis_snapshot_v4(
+            manifest,
+            now=now,
+            snapshots={snapshot.snapshot_id: snapshot},
+            reports={quality_v2.report_id: quality_v2},
+            observations={item.market_data_id: item for item in observations},
+            sources={item.source_record_id: item for item in sources},
+            regimes={regime.regime_id: regime},
+            evidence=evidence,
+        )
+        unavailable = build_spot_unavailable_technical_context(
+            snapshot=snapshot,
+            quality_report=quality_v2,
+            manifest=manifest,
+        )
+    except (ValueError, TypeError):
+        return SpotRequestAnalysisUnavailable("FINAL_ANALYSIS_CLOSURE_INVALID")
     return SpotRequestAnalysisHandoff(
         manifest,
         quality_v2,
         regime,
         evidence_items,
+        resolved,
         assessment,
+        confluence,
+        conflicts,
+        unavailable,
     )
 
 

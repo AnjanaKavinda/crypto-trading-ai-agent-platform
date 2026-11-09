@@ -14,6 +14,9 @@ from typing import Mapping
 from uuid import UUID, uuid5
 
 from trading_platform_api.analysis.contracts import (
+    AnalyticalUncertainty,
+    AssessmentStatus,
+    TechnicalAssessment,
     VersionReference,
     _text_tuple,
     _time,
@@ -32,6 +35,8 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     AnalysisOutputReferenceV4,
     AnalysisSnapshotReferenceV4,
     AnalysisSnapshotV4,
+    ConflictAssessmentV3,
+    ConfluenceAssessmentV3,
     MarketContextV4,
     ResolvedSpotOHLCVBindingV4,
     validate_market_context_v4,
@@ -269,4 +274,174 @@ def build_spot_market_context_v5(
     return context
 
 
-__all__ = ["SpotAdversarialDraft", "build_spot_market_context_v5"]
+def build_spot_market_context_v5_direct(
+    *,
+    manifest: AnalysisSnapshotV4,
+    resolved_bindings: tuple[ResolvedSpotOHLCVBindingV4, ...],
+    evidence: Mapping[UUID, EvidenceItemV2],
+    technical_assessment: TechnicalAssessment,
+    confluence: ConfluenceAssessmentV3,
+    conflicts: tuple[ConflictAssessmentV3, ...],
+    uncertainty: AnalyticalUncertainty,
+    supported_independence_reports: tuple[AnalysisOutputReferenceV4, ...],
+    supported_adversarial_versions: tuple[VersionReference, ...],
+    draft: SpotAdversarialDraft,
+    now: datetime,
+) -> MarketContextV5:
+    """Construct C-006 v5 directly without a fabricated C-019 v1 base.
+
+    The deterministic closure and its C-007/C-012/C-069 identities are supplied
+    by the validated Spot producer. The final C-006v5 validator independently
+    checks the complete C-007/C-008/C-009/C-010/C-093/C-019 closure.
+    """
+    at = _time("now", now)
+    if (
+        type(manifest) is not AnalysisSnapshotV4
+        or len(resolved_bindings) != 1
+        or type(technical_assessment) is not TechnicalAssessment
+        or technical_assessment.status is not AssessmentStatus.UNAVAILABLE
+        or technical_assessment.findings
+        or technical_assessment.observations
+        or technical_assessment.evidence_ids
+        or technical_assessment.contradiction_ids
+        or technical_assessment.uncertainty_ids != (uncertainty.uncertainty_id,)
+        or manifest.assessment_ids != (technical_assessment.assessment_id,)
+        or type(confluence) is not ConfluenceAssessmentV3
+        or type(conflicts) is not tuple
+        or any(type(item) is not ConflictAssessmentV3 for item in conflicts)
+        or type(uncertainty) is not AnalyticalUncertainty
+        or type(draft) is not SpotAdversarialDraft
+    ):
+        raise AnalysisV2ContractError("Direct Spot C-006v5 inputs are invalid.")
+    binding = resolved_bindings[0]
+    selected_ids = tuple(
+        sorted(
+            set(draft.supporting_evidence_ids) | set(draft.falsification_evidence_ids),
+            key=str,
+        )
+    )
+    if not selected_ids:
+        raise AnalysisV2ContractError(
+            "Supporting and falsification evidence must be supplied."
+        )
+    selected: list[EvidenceItemV2] = []
+    for evidence_id in selected_ids:
+        item = evidence.get(evidence_id)
+        if item is None or not item.usable:
+            raise AnalysisV2ContractError(
+                "Adversarial evidence must resolve to usable C-008 v2 records."
+            )
+        selected.append(item)
+    expires_at = min(
+        manifest.expires_at,
+        binding.dependency_expires_at,
+        binding.regime.expires_at,
+        technical_assessment.expires_at,
+        confluence.expires_at,
+        *(item.expires_at for item in conflicts),
+        uncertainty.expires_at,
+        *(item.expires_at for item in selected),
+    )
+    if expires_at <= at or expires_at <= manifest.analysis_cutoff:
+        raise AnalysisV2ContractError(
+            "Spot adversarial evidence is stale or has no valid remaining lifetime."
+        )
+    supported_versions = _typed_tuple(
+        "supported_adversarial_versions",
+        supported_adversarial_versions,
+        VersionReference,
+        empty=False,
+    )
+    required_versions = {draft.method, draft.model, draft.prompt}
+    _unique("supported adversarial versions", supported_versions)
+    if not required_versions.issubset(set(supported_versions)):
+        raise AnalysisV2ContractError(
+            "Draft method/model/prompt versions are not resolved by the caller registry."
+        )
+    evidence_refs = tuple(
+        AdversarialEvidenceReferenceV2(
+            AnalysisOutputReferenceV4(
+                "C-008", item.evidence_id, "2", "2", canonical_sha256(item)
+            ),
+            item.binding_ids,
+            item.observation_ids,
+            item.source_record_ids,
+        )
+        for item in selected
+    )
+    assessment_id = uuid5(
+        _IDENTITY_NAMESPACE,
+        "c019-v2-direct:" + canonical_sha256((manifest, draft, tuple(selected))),
+    )
+    snapshot_ref = AnalysisSnapshotReferenceV4(
+        manifest.snapshot_id, manifest.schema_version, manifest.content_sha256
+    )
+    adversarial = AdversarialAssessmentV2(
+        assessment_id=assessment_id,
+        asset=manifest.asset,
+        instrument_id=manifest.instrument_id,
+        timeframe=manifest.timeframe,
+        coverage_start=binding.binding.window_start,
+        coverage_end=binding.binding.window_end,
+        snapshot_as_of=binding.binding.snapshot_as_of,
+        analysis_cutoff=manifest.analysis_cutoff,
+        as_of=manifest.analysis_cutoff,
+        expires_at=expires_at,
+        counter_thesis=draft.counter_thesis,
+        alternative_hypotheses=draft.alternative_hypotheses,
+        evidence=evidence_refs,
+        contradictory_evidence_ids=draft.falsification_evidence_ids,
+        failure_conditions=draft.failure_conditions,
+        data_limitations=tuple(
+            sorted(set((*draft.data_limitations, *draft.coverage_gaps)))
+        ),
+        measurement_error_risks=draft.measurement_error_risks,
+        confirmation_bias_concerns=draft.confirmation_bias_concerns,
+        analytical_confidence=AnalyticalConfidenceV2(
+            AnalyticalConfidenceStateV2.UNAVAILABLE,
+            None,
+            None,
+            AnalyticalConfidenceReasonV2.NOT_ASSESSED,
+        ),
+        analysis_snapshot=snapshot_ref,
+        data_quality_report=binding.binding.data_quality_report,
+        method=draft.method,
+        model=draft.model,
+        prompt=draft.prompt,
+    )
+    context = MarketContextV5(
+        context_id=uuid5(
+            _IDENTITY_NAMESPACE,
+            "c006-v5-direct:" + canonical_sha256((manifest, assessment_id)),
+        ),
+        asset=manifest.asset,
+        instrument_id=manifest.instrument_id,
+        as_of=manifest.analysis_cutoff,
+        expires_at=expires_at,
+        multi_timeframe_state=("UNAVAILABLE:CROSS_TIMEFRAME_NOT_REQUESTED",),
+        regime=binding.regime,
+        assessments=(technical_assessment,),
+        confluence=confluence,
+        conflicts=conflicts,
+        adversarial=adversarial,
+        uncertainties=(uncertainty,),
+        evidence_ids=manifest.evidence_ids,
+        analysis_snapshot=snapshot_ref,
+    )
+    validate_market_context_v5(
+        context,
+        manifest,
+        resolved_bindings=resolved_bindings,
+        evidence=evidence,
+        supported_independence_reports=supported_independence_reports,
+        supported_adversarial_versions=supported_versions,
+        now=at,
+    )
+    return context
+
+
+__all__ = [
+    "SpotAdversarialDraft",
+    "build_spot_market_context_v5",
+    "build_spot_market_context_v5_direct",
+]
