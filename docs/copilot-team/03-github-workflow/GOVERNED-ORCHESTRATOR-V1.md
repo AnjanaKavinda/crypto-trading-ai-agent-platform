@@ -24,6 +24,36 @@ current controller does not inspect or prove which native custom-agent profile
 was selected. The owner must record that profile selection in the issue
 handoff.
 
+### Dispatch-key correction and existing-assignment recovery
+
+`DISPATCH_READY` JSON includes the generated `dispatch_key`, equal to its
+correlation ID and standalone footer; its prompt hash remains mandatory. Early
+V2 bot-authored records omitted the JSON field. Readers may normalize only that
+exact representation when the single SHA-256 footer equals the correlation ID,
+both controller versions are V2, and normal assignment/prompt checks pass.
+Owner-authored copies, explicit null keys, conflicting/duplicate footers and
+tampered prompts are rejected. Historical comments are never rewritten.
+
+New records separately pin `base_sha` from the checked owner Execution Packet;
+`commit_sha` remains workflow provenance and may refer to a different default
+branch. Recovery compares the dispatched base, not the workflow SHA. Legacy
+records without that field recover only if their recorded commit exactly equals
+the approved packet base; otherwise fresh dispatch evidence is required.
+
+After the correction is merged, the owner can post the exact command
+`/copilot-confirm-assignment` on the issue to retry confirmation of an already
+assigned Copilot bot. This reruns the existing actor allowlist, automation switch,
+Execution Packet, trusted handoff, prompt hash and bot-identity checks, writes
+assignment audit/completion evidence, and is idempotent for an already completed
+key. Confirmation requires an open issue with exactly one active state (ready,
+agent-running, review or changes-requested). Blocked, human-decision-required,
+ready-to-merge, complete and missing/ambiguous states fail before any write.
+Confirmation preserves all labels and records the unchanged workflow state in
+its audit; it does not advance the state machine or authorize a relaunch.
+It does not select a custom profile, assign/reassign Copilot, start a new
+implementation, refresh scope, waive review, or merge. The command is ignored
+on PRs and when posted by anyone other than the configured human owner.
+
 Repository protection/ruleset verification is currently unavailable under the
 present GitHub repository/account capability. The incomplete
 `setup-branch-rulesets.ps1` is not evidence of active protection. Until a
