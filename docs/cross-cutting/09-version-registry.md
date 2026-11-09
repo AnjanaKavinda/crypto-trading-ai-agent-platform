@@ -5,17 +5,34 @@ It preserves exact historical resolution for trades, decisions, validations,
 experiments, and rollback actions without redefining canonical contract
 schemas.
 
-## Pending ADR-0019 — proposed C-027 schema 3
+## ADR-0019 — C-027 schema 3 compatibility foundation
 
-PR #446 proposes additive `BacktestResultV3`, binding exact C-021, C-092/C-103,
-C-027v2 cost assumptions and deterministic simulator/trace provenance. This is
-pending owner approval, not a registered runtime schema. C-027v1 BacktestResult
-and C-027v2 CostAssumptionSetV2 retain their layouts, meanings and identities.
-The proposed result hash excludes the generated ID and hash field; deterministic
-UUIDv5 identity uses a fixed versioned method namespace and explicit replay
-timestamps. Closed schema dispatch and canonical compatibility tests are required
-before use. No migration or historical rewrite is approved here. See ADR-0019
-for the proposed boundary and approval gate.
+Owner merge of #446 (`9f749089fb26d10c3914f47cf8d548d7e314945a`, 2026-11-09)
+accepted additive `BacktestResultV3`, binding exact C-021v2, C-092/C-103,
+C-027v2 cost assumptions and deterministic simulator/trace provenance. C-027v1
+BacktestResult and C-027v2 CostAssumptionSetV2 retain their layouts, meanings and
+identities. The generic canonical serializer continues to preserve all schemas.
+The bounded lineage codec now dispatches C-027 schemas 2 and 3 explicitly; its
+historical schema-1 rejection remains unchanged.
+
+Schema-3 result identity is UUIDv5 under the namespace derived by
+`uuid5(NAMESPACE_URL, "trading-platform:C-027:3:backtest-result-identity-v1")`.
+Its name input is the canonical digest of all result fields except `result_id`
+and `content_sha256`, including fixed metadata and explicit replay timestamps.
+No wall-clock value or random identifier is generated during result building.
+Canonical UTC normalization preserves identity across equivalent offsets.
+
+Embedded dataset/manifest identities, coverage, cutoff, full digests and source
+membership must agree. OBSERVED requires PASSED data-integrity and point-in-time
+checks; FAILED/INCONCLUSIVE require explicit reasons. Missing metrics remain
+`METRICS_NOT_COMPUTED`, and observed results never grant qualification. Fixed
+Spot/BACKTEST metadata cannot be overwritten through the builder. Environments
+are bounded to existing DEV/TEST enums for this foundation.
+
+This contract/codec foundation does not implement a simulator, validate trace
+authenticity, or publish durable results. Lineage-store append is explicitly
+blocked until a governed simulation-trace resolver can prove the full closure.
+No DDL, historical rewrite, cost/metric formula, OOS or execution is introduced.
 
 ## Issue #70 — C-062 AgentResult schema 1
 

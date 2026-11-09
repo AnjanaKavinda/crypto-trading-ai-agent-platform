@@ -92,6 +92,7 @@ from trading_platform_api.validation.contracts_v2 import (
     QualificationValidationResultV2,
     ValidationArtifactReferenceV2,
 )
+from trading_platform_api.validation.contracts_v3 import BacktestResultV3
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +172,10 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) is BacktestResultV3:
+        raise LineageError(
+            "C-027v3 persistence requires a governed simulation trace resolver."
+        )
     result: list[Reference] = []
     if type(record) is AgentResult:
         result.append(
