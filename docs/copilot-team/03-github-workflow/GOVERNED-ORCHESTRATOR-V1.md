@@ -34,6 +34,12 @@ both controller versions are V2, and normal assignment/prompt checks pass.
 Owner-authored copies, explicit null keys, conflicting/duplicate footers and
 tampered prompts are rejected. Historical comments are never rewritten.
 
+New records separately pin `base_sha` from the checked owner Execution Packet;
+`commit_sha` remains workflow provenance and may refer to a different default
+branch. Recovery compares the dispatched base, not the workflow SHA. Legacy
+records without that field recover only if their recorded commit exactly equals
+the approved packet base; otherwise fresh dispatch evidence is required.
+
 After the correction is merged, the owner can post the exact command
 `/copilot-confirm-assignment` on the issue to retry confirmation of an already
 assigned Copilot bot. This reruns the existing actor allowlist, automation switch,

@@ -274,6 +274,7 @@ def build_dispatch_ready(payload: dict, *, issue_id: int, base_branch: str,
     key = payload.get("dispatch_key")
     if (not isinstance(key, str) or re.fullmatch(r"[0-9a-f]{64}", key) is None
             or payload.get("correlation_id") != key
+            or not isinstance(payload.get("base_sha"), str) or not payload["base_sha"].strip()
             or payload.get("prompt_hash") != sha256(prompt.encode()).hexdigest()):
         raise GovernanceError("generated dispatch key or prompt binding is invalid")
     return {**payload, "issue_id": issue_id, "base_branch": base_branch,
@@ -393,7 +394,11 @@ def main() -> int:
             (issue.get("assignees") or []) if confirm_existing
             else [event.get("assignee") or {}],
             kind="DISPATCH_READY")
-        if confirm_existing and (record.get("commit_sha") != packet["base_sha"]
+        # GITHUB_SHA is workflow provenance, not necessarily the dispatched dev
+        # revision. New records pin that revision explicitly. Old records can
+        # recover only when their recorded commit exactly matches the packet.
+        dispatched_base = record.get("base_sha", record.get("commit_sha"))
+        if confirm_existing and (dispatched_base != packet["base_sha"]
                                  or record["agent_role"] != packet["agent_role"]):
             raise GovernanceError("assignment recovery packet does not match the handoff")
         if record.get("_completed"):
@@ -528,7 +533,8 @@ def main() -> int:
                       "labels[]=workflow:agent-running")
         return 0
     audit = AppendOnlyAudit()
-    payload = {"correlation_id": request["dispatch_key"],
+    payload = {"base_sha": execution_packet["base_sha"],
+               "correlation_id": request["dispatch_key"],
                "dispatch_key": request["dispatch_key"], "issue_id": int(issue_id),
                "canonical_backlog": eligibility["canonical_backlog"], "agent": eligibility["agent"],
                "agent_role": eligibility["agent"], "capability_tier": capability_tier,

@@ -2102,7 +2102,8 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
             "controller_version": "v2", "implementer_session_id": "synthetic-session",
             "routing_reason": "test", "retry_count": 0,
             "prompt_hash": sha256(b"bounded prompt").hexdigest(),
-            "dispatch_key": key, "correlation_id": key, "commit_sha": "approved-base",
+            "dispatch_key": key, "correlation_id": key, "base_sha": "approved-base",
+            "commit_sha": "workflow-default-head",
         }
 
     def ready(self):
@@ -2128,7 +2129,7 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
         self.assertEqual(result["review_tier"], "R3")
 
     def test_producer_refuses_missing_or_inconsistent_key_or_prompt(self):
-        for field, value in (("dispatch_key", None), ("correlation_id", "wrong"),
+        for field, value in (("dispatch_key", None), ("base_sha", None), ("correlation_id", "wrong"),
                              ("prompt_hash", "wrong")):
             with self.subTest(field=field), self.assertRaises(GovernanceError):
                 orchestrate_issue.build_dispatch_ready(
@@ -2193,6 +2194,8 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
     def test_confirmation_entrypoint_repairs_legacy_assignment_without_relaunch(self):
         ready = self.ready()
         key = ready.pop("dispatch_key")
+        ready.pop("base_sha")
+        ready["commit_sha"] = "approved-base"
         packet = {"issue_id": 93, "base_branch": "dev", "base_sha": "approved-base",
                   "scope_profile": "PERSONAL_SPOT_RESEARCH", "architecture_state": "FROZEN",
                   "agent_role": "Trading Intelligence Engineer", "satisfied_dependencies": [],
@@ -2233,6 +2236,11 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
                 self.assertIn("ASSIGNMENT_COMPLETED", comments[-1]["body"])
                 self.assertIn(key, comments[-1]["body"])
                 count = len(writes)
+                self.assertEqual(orchestrate_issue.main(), 0)
+                self.assertEqual(len(writes), count)
+                # A new handoff must recover even when the workflow/default
+                # branch SHA differs from the dispatched dev base.
+                comments[1] = self.comment(self.ready(), key)
                 self.assertEqual(orchestrate_issue.main(), 0)
                 self.assertEqual(len(writes), count)
                 comments[0]["body"] = "EXECUTION_PACKET " + json.dumps({**packet, "base_sha": "different-base"})
