@@ -381,9 +381,7 @@ def decode(document: str) -> object:
                     "assessment_contract_id",
                     "record",
                 }:
-                    raise LineageError(
-                        "C-006 assessment type identity is missing."
-                    )
+                    raise LineageError("C-006 assessment type identity is missing.")
                 assessment_type = assessment_types.get(item["assessment_contract_id"])
                 if assessment_type is None:
                     raise LineageError("Unsupported C-006 assessment type.")
