@@ -159,10 +159,7 @@ def build_spot_cost_assumption_set(
 
     with localcontext(_CONTEXT):
         fee = profile.taker_fee_bps
-        spread = _round_bounded(profile.spread_bps * profile.stress_multiplier)
-        slippage = _round_bounded(profile.slippage_bps * profile.stress_multiplier)
-        _decimal("stressed spread assumption", spread, positive=True)
-        _decimal("stressed slippage assumption", slippage, positive=True)
+        spread, slippage = _stressed_rates(profile)
         model = profile.model_reference
         assumptions = (
             ResearchAssumptionV2(
@@ -259,10 +256,9 @@ def estimate_spot_execution_cost(
             if liquidity_role is LiquidityRole.MAKER
             else profile.taker_fee_bps
         )
-        charged_spread_bps = (
-            profile.spread_bps * profile.stress_multiplier / Decimal("2")
-        )
-        slippage_bps = profile.slippage_bps * profile.stress_multiplier
+        full_spread_bps, slippage_bps = _stressed_rates(profile)
+        charged_spread_bps = _round_bounded(full_spread_bps / Decimal("2"))
+        _decimal("charged spread assumption", charged_spread_bps, positive=True)
         total_bps = fee_bps + charged_spread_bps + slippage_bps
         fee = _round_bounded(notional * fee_bps / _BPS)
         spread = _round_bounded(notional * charged_spread_bps / _BPS)
@@ -296,6 +292,15 @@ def calculate_spot_notional(*, quantity: Decimal, gross_price: Decimal) -> Decim
     with localcontext(_CONTEXT):
         notional = _round_bounded(quantity * gross_price)
     return _decimal("notional", notional, positive=True)
+
+
+def _stressed_rates(profile: SpotExecutionCostProfile) -> tuple[Decimal, Decimal]:
+    with localcontext(_CONTEXT):
+        spread = _round_bounded(profile.spread_bps * profile.stress_multiplier)
+        slippage = _round_bounded(profile.slippage_bps * profile.stress_multiplier)
+    _decimal("stressed spread assumption", spread, positive=True)
+    _decimal("stressed slippage assumption", slippage, positive=True)
+    return spread, slippage
 
 
 def _round_bounded(value: Decimal) -> Decimal:

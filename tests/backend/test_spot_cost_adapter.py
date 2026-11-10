@@ -8,6 +8,7 @@ from uuid import UUID
 import pytest
 from trading_platform_api.config import DeploymentEnvironment
 from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.validation import AssumptionCategory
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
 from trading_platform_api.validation.cost_models import (
     CostSourceKind,
@@ -208,3 +209,24 @@ def test_positive_assumed_charges_do_not_disappear_below_output_precision() -> N
     request = replace(request, quantity=Decimal("1e-18"))
     with pytest.raises(SimulationUnavailable, match="fee must be"):
         adapter.quote(request)
+
+
+def test_adapter_charges_exact_normalized_pinned_rates() -> None:
+    adapter, request = adapter_and_request(
+        spread_bps=Decimal("1e-18"),
+        slippage_bps=Decimal("1e-18"),
+        stress_multiplier=Decimal("1.5"),
+    )
+    request = replace(
+        request,
+        quantity=Decimal("1e20"),
+        gross_price=Decimal("1"),
+    )
+    pinned = {item.category: item for item in adapter.assumptions.assumptions}
+
+    quote = adapter.quote(request)
+
+    assert pinned[AssumptionCategory.SPREAD].value == Decimal("2e-18")
+    assert pinned[AssumptionCategory.SLIPPAGE].value == Decimal("2e-18")
+    assert quote.spread == Decimal("0.01")
+    assert quote.slippage == Decimal("0.02")

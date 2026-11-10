@@ -253,6 +253,28 @@ def test_cost_quote_math_uses_full_spread_as_half_spread_charge() -> None:
     assert result.total == Decimal("2.4")
 
 
+def test_normalized_fractional_stress_rates_match_pinned_assumptions() -> None:
+    model = profile(
+        spread_bps=Decimal("1e-18"),
+        slippage_bps=Decimal("1e-18"),
+        stress_multiplier=Decimal("1.5"),
+    )
+    costs = build_spot_cost_assumption_set(
+        profile=model, strategy_version_id=STRATEGY_ID, as_of=NOW
+    )
+    assumptions = {item.category: item for item in costs.assumptions}
+    result = estimate_spot_execution_cost(
+        profile=model,
+        notional=Decimal("1e20"),
+        as_of=NOW,
+    )
+
+    assert assumptions[AssumptionCategory.SPREAD].value == Decimal("2e-18")
+    assert assumptions[AssumptionCategory.SLIPPAGE].value == Decimal("2e-18")
+    assert result.spread == Decimal("0.01")
+    assert result.slippage == Decimal("0.02")
+
+
 def test_positive_costs_cannot_round_silently_to_zero() -> None:
     with pytest.raises(CostModelError, match="positive"):
         estimate_spot_execution_cost(
