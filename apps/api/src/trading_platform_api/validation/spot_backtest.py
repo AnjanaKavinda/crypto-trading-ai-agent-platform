@@ -212,6 +212,7 @@ class SpotBacktestRunRequest:
             or self.cost_assumptions.strategy_version_id
             != self.parameters.strategy_version_id
             or self.cost_assumptions.instrument_type != "SPOT"
+            or self.cost_assumptions.asset != self.replay_inputs.scope.asset
             or self.parameters.quantity % self.execution_policy.quantity_step != 0
             or (
                 self.execution_policy.venue,
@@ -250,6 +251,22 @@ class SpotBacktestAnalysisClosure:
     evidence: tuple[EvidenceItemV2, ...]
     independence_report: AgentIndependenceReport
 
+    def __post_init__(self) -> None:
+        if (
+            type(self.debate) is not SpotDebateResult
+            or type(self.manifest) is not AnalysisSnapshotV4
+            or type(self.fanout) is not SpotAnalysisFanoutResult
+            or type(self.resolved_bindings) is not tuple
+            or any(
+                type(item) is not ResolvedSpotOHLCVBindingV4
+                for item in self.resolved_bindings
+            )
+            or type(self.evidence) is not tuple
+            or any(type(item) is not EvidenceItemV2 for item in self.evidence)
+            or type(self.independence_report) is not AgentIndependenceReport
+        ):
+            raise ValueError("Archived analysis closure requires exact immutable inputs.")
+
 
 @dataclass(frozen=True, slots=True)
 class SpotBacktestDecision:
@@ -284,6 +301,7 @@ class SpotBacktestTrade:
 @dataclass(frozen=True, slots=True)
 class SpotBacktestTrace:
     method: str
+    replay_request: SpotReplayInputRequest
     input_journal_sha256: str
     execution_dataset_sha256: str
     execution_manifest_sha256: str
@@ -374,43 +392,6 @@ def _artifact(
     )
 
 
-def _validate_analysis_match(
-    *,
-    record: SpotReplayDecisionRecord,
-    context: MarketContextV5,
-    manifest: object,
-    decision_time: datetime,
-) -> None:
-    raise NotImplementedError
-
-
-def _decision_content(
-    *,
-    record: SpotReplayDecisionRecord,
-    inputs: object,
-    pin: SpotBacktestArchivePin,
-    no_trade: NoTradeDecisionV2 | None,
-    environment,
-) -> SpotBacktestDecision:
-    raise NotImplementedError
-
-
-def _build_orders(
-    decisions: tuple[SpotBacktestDecision, ...],
-    parameters: SpotBacktestParameters,
-) -> tuple[ScenarioOrder, ...]:
-    raise NotImplementedError
-
-
-def _build_trade(
-    entry_order: ScenarioOrder,
-    exit_order: ScenarioOrder,
-    entry_fills: tuple[SimulationFill, ...],
-    exit_fills: tuple[SimulationFill, ...],
-) -> SpotBacktestTrade:
-    raise NotImplementedError
-
-
 def _inconclusive(reason: str, journal=None, execution_data=None) -> SpotBacktestBundle:
     return SpotBacktestBundle(
         SpotBacktestOutcome.INCONCLUSIVE,
@@ -485,8 +466,16 @@ async def run_spot_backtest(
                 or canonical_sha256(agent_result) != pin.agent_result_sha256
                 or agent_evaluation.evaluation_id != pin.agent_evaluation_id
                 or canonical_sha256(agent_evaluation) != pin.agent_evaluation_sha256
+                or any(
+                    moment > record.decision_time
+                    for moment in (
+                        agent_evaluation.started_at,
+                        agent_evaluation.ended_at,
+                        agent_evaluation.evaluated_at,
+                    )
+                )
             ):
-                raise _ReplayUnavailable("ARCHIVED_ANALYSIS_PIN_MISMATCH")
+                raise _ReplayUnavailable("ARCHIVED_ANALYSIS_PIN_OR_TIME_MISMATCH")
             inputs = await _compose_persisted_spot_debate(
                 session=session,
                 store=lineage_store,
@@ -623,6 +612,7 @@ async def run_spot_backtest(
 
         trace = SpotBacktestTrace(
             _METHOD,
+            request.replay_inputs,
             journal.content_sha256,
             execution_data.dataset_sha256,
             execution_data.manifest_sha256,
@@ -678,6 +668,8 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
         or bundle.outcome is not SpotBacktestOutcome.OBSERVED
         or type(bundle.result) is not BacktestResultV3
         or type(bundle.trace) is not SpotBacktestTrace
+        or type(bundle.input_journal) is not SpotReplayInputJournal
+        or type(bundle.execution_dataset) is not LoadedValidationDataset
     ):
         raise ValueError("Only a complete observed replay bundle can be resolved.")
     result = decode(encode(bundle.result))
@@ -718,16 +710,161 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
                 type(assumptions) is not CostAssumptionSetV2
                 or assumptions.assumption_set_id != reference.artifact_id
                 or assumptions.content_sha256 != reference.content_sha256
+                or assumptions != bundle.trace.cost_assumptions
             ):
                 raise ValueError("C-027 cost artifact digest mismatch.")
         elif sha256(document.encode("utf-8")).hexdigest() != reference.content_sha256:
             raise ValueError("Canonical backtest artifact digest mismatch.")
+        elif reference == result.parameter_set and document != canonical_json_dumps(
+            bundle.trace.parameters
+        ):
+            raise ValueError("Backtest parameter artifact differs from its trace.")
+        elif reference == result.simulator and document != canonical_json_dumps(
+            {
+                "method": _METHOD,
+                "version": "1",
+                "kernel_method": "spot-bar-execution-scenario-v1",
+            }
+        ):
+            raise ValueError("Backtest simulator artifact differs from its method.")
+        elif reference == result.execution_model and document != canonical_json_dumps(
+            {
+                "method": "spot-bar-execution-scenario-v1",
+                "policy": bundle.trace.policy,
+                "parameters": bundle.trace.parameters,
+                "cost_profile": json.loads(document)["cost_profile"],
+                "cost_adapter": bundle.trace.cost_adapter,
+            }
+        ):
+            raise ValueError("Backtest execution model differs from its trace.")
     if (
         result.trace.content_sha256 != bundle.trace.content_sha256
         or result.trace not in records
+        or records[result.trace] != canonical_json_dumps(bundle.trace)
         or result.content_sha256 != canonical_sha256(result.identity_payload())
+        or bundle.trace.input_journal_sha256 != bundle.input_journal.content_sha256
+        or bundle.input_journal.method != "spot-per-decision-replay-input-v1"
+        or bundle.input_journal.content_sha256
+        != canonical_sha256(
+            {
+                "method": bundle.input_journal.method,
+                "decisions": tuple(
+                    (item.decision_id, item.content_sha256)
+                    for item in bundle.input_journal.decisions
+                ),
+            }
+        )
+        or bundle.trace.execution_dataset_sha256
+        != bundle.execution_dataset.dataset_sha256
+        or bundle.trace.execution_manifest_sha256
+        != bundle.execution_dataset.manifest_sha256
+        or result.dataset_sha256 != bundle.execution_dataset.dataset_sha256
+        or result.manifest_sha256 != bundle.execution_dataset.manifest_sha256
+        or result.dataset != bundle.execution_dataset.dataset
+        or result.reconstruction_manifest
+        != bundle.execution_dataset.reconstruction.manifest
+        or bundle.trace.replay_request.strategy.strategy_version_id
+        != bundle.trace.parameters.strategy_version_id
+        or bundle.trace.replay_request.strategy.content_sha256
+        != bundle.trace.parameters.strategy_sha256
+        or result.simulated_fill_ids
+        != tuple(
+            fill.fill_id
+            for simulation in (bundle.trace.entry_trace, bundle.trace.exit_trace)
+            if simulation is not None
+            for fill in simulation.fills
+        )
+        or result.simulated_trade_ids
+        != tuple(trade.trade_id for trade in bundle.trace.trades)
     ):
         raise ValueError("Backtest trace/result closure mismatch.")
+    configuration = {
+        "method": _METHOD,
+        "input_request": bundle.trace.replay_request,
+        "input_journal_sha256": bundle.input_journal.content_sha256,
+        "archive_pins": tuple(item.archive_pin for item in bundle.trace.decisions),
+        "execution_dataset_sha256": bundle.execution_dataset.dataset_sha256,
+        "execution_manifest_sha256": bundle.execution_dataset.manifest_sha256,
+        "execution_policy": bundle.trace.policy,
+        "result_as_of": result.as_of,
+        "created_at": result.created_at,
+        "expires_at": result.expires_at,
+    }
+    if records[result.configuration] != canonical_json_dumps(configuration):
+        raise ValueError("Backtest configuration does not bind its exact inputs.")
+    if len(bundle.trace.decisions) != len(bundle.input_journal.decisions):
+        raise ValueError("Backtest decision journal closure is incomplete.")
+    for decision, record in zip(
+        bundle.trace.decisions, bundle.input_journal.decisions, strict=True
+    ):
+        if (
+            type(decision) is not SpotBacktestDecision
+            or type(record) is not SpotReplayDecisionRecord
+            or type(decision.archived_analysis) is not SpotBacktestAnalysisClosure
+        ):
+            raise ValueError("Backtest archived analysis is not immutable and typed.")
+        analysis = decision.archived_analysis
+        if type(analysis.debate) is not SpotDebateResult:
+            raise ValueError("Backtest debate reference is not immutable and typed.")
+        if type(decision.archive_pin) is not SpotBacktestArchivePin:
+            raise ValueError("Backtest archive pin is not immutable and typed.")
+        pin = decision.archive_pin
+        debate = analysis.debate
+        context = debate.market_context
+        if (
+            decision.decision_id != record.decision_id
+            or decision.decision_time != record.decision_time
+            or type(context) is not MarketContextV5
+            or type(analysis.manifest) is not AnalysisSnapshotV4
+            or type(analysis.fanout) is not SpotAnalysisFanoutResult
+            or type(analysis.independence_report) is not AgentIndependenceReport
+            or type(debate.agent_result) is not AgentResult
+            or type(debate.agent_evaluation) is not AgentEvaluation
+            or debate.independence_report != analysis.independence_report
+            or context.context_id != pin.context_id
+            or canonical_sha256(context) != pin.context_sha256
+            or canonical_sha256(analysis.manifest) != pin.manifest_sha256
+            or analysis.manifest.snapshot_id != context.analysis_snapshot.snapshot_id
+            or debate.agent_result.result_id != pin.agent_result_id
+            or canonical_sha256(debate.agent_result) != pin.agent_result_sha256
+            or debate.agent_evaluation.evaluation_id != pin.agent_evaluation_id
+            or canonical_sha256(debate.agent_evaluation)
+            != pin.agent_evaluation_sha256
+            or any(
+                moment > decision.decision_time
+                for moment in (
+                    debate.agent_evaluation.started_at,
+                    debate.agent_evaluation.ended_at,
+                    debate.agent_evaluation.evaluated_at,
+                )
+            )
+            or canonical_sha256(debate.agent_result.output) != canonical_sha256(context)
+            or debate.agent_evaluation.result_id != debate.agent_result.result_id
+            or sha256(
+                canonical_json_dumps(analysis.fanout.outcomes).encode("utf-8")
+            ).hexdigest()
+            != pin.fanout_sha256
+        ):
+            raise ValueError("Archived analysis reference closure is invalid.")
+        _validate_analysis_match(
+            record=record,
+            context=context,
+            manifest=analysis.manifest,
+            decision_time=decision.decision_time,
+        )
+        if decision.recorded_no_trade is not None and (
+            type(decision.recorded_no_trade) is not NoTradeDecisionV2
+            or pin.recorded_no_trade is None
+            or canonical_sha256(decision.recorded_no_trade)
+            != pin.recorded_no_trade.content_sha256
+            or decision.recorded_no_trade.market_context_id != context.context_id
+            or decision.recorded_no_trade.strategy_version_id
+            != record.strategy.version.strategy_version_id
+            or decision.recorded_no_trade.decided_at != decision.decision_time
+        ):
+            raise ValueError("Recorded NO_TRADE reference closure is invalid.")
+        if (decision.recorded_no_trade is None) != (pin.recorded_no_trade is None):
+            raise ValueError("NO_TRADE reference is missing or unexpected.")
     return result
 
 
@@ -738,8 +875,6 @@ def _validate_analysis_match(
     manifest: object,
     decision_time: datetime,
 ) -> None:
-    from trading_platform_api.analysis.versioned_contracts_v4 import AnalysisSnapshotV4
-
     if type(manifest) is not AnalysisSnapshotV4 or len(manifest.bindings) != 1:
         raise _ReplayUnavailable("ANALYSIS_MANIFEST_UNAVAILABLE")
     binding = manifest.bindings[0]
@@ -1139,6 +1274,7 @@ def _build_result(
         "method": "spot-bar-execution-scenario-v1",
         "policy": request.execution_policy,
         "parameters": request.parameters,
+        "cost_profile": request.cost_adapter.profile,
         "cost_adapter": request.cost_adapter.adapter_reference,
     }
     execution_reference = _artifact(
