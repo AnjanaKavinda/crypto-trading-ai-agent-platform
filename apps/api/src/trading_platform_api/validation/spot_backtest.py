@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from hashlib import sha256
+from typing import cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +21,7 @@ from trading_platform_api.analysis.versioned_contracts_v4 import (
     ResolvedSpotOHLCVBindingV4,
 )
 from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
-from trading_platform_api.config import OperatingMode
+from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import (
     canonical_json_dumps,
     canonical_sha256,
@@ -60,7 +61,10 @@ from trading_platform_api.strategy.setup_detection import (
     SetupDetectionOutcome,
     evaluate_strategy_setup,
 )
-from trading_platform_api.strategy_api import _compose_persisted_spot_debate
+from trading_platform_api.strategy_api import (
+    PersistedSpotDebateInputs,
+    _compose_persisted_spot_debate,
+)
 from trading_platform_api.validation.contracts import CheckOutcome
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
@@ -169,10 +173,7 @@ class SpotBacktestParameters:
                 raise ValueError(f"{name} must be a positive explicit interval.")
         if self.maximum_entries != 1:
             raise ValueError("This replay method supports one explicit entry only.")
-        if (
-            self.partial_fill_policy
-            != "EXIT_FILLED_QUANTITY_AFTER_LAST_FILL_V1"
-        ):
+        if self.partial_fill_policy != "EXIT_FILLED_QUANTITY_AFTER_LAST_FILL_V1":
             raise ValueError("Unsupported partial-fill policy.")
 
 
@@ -198,7 +199,9 @@ class SpotBacktestRunRequest:
             or not self.replay_inputs.decisions
             or type(self.archive_pins) is not tuple
             or len(self.archive_pins) != len(self.replay_inputs.decisions)
-            or any(type(item) is not SpotBacktestArchivePin for item in self.archive_pins)
+            or any(
+                type(item) is not SpotBacktestArchivePin for item in self.archive_pins
+            )
             or type(self.execution_policy) is not SpotExecutionPolicy
             or type(self.parameters) is not SpotBacktestParameters
             or type(self.cost_assumptions) is not CostAssumptionSetV2
@@ -214,8 +217,7 @@ class SpotBacktestRunRequest:
             != self.replay_inputs.strategy.strategy_version_id
             or self.parameters.strategy_sha256
             != self.replay_inputs.strategy.content_sha256
-            or self.cost_assumptions
-            != self.cost_adapter.assumptions
+            or self.cost_assumptions != self.cost_adapter.assumptions
             or self.cost_assumptions.strategy_version_id
             != self.parameters.strategy_version_id
             or self.cost_assumptions.instrument_type != "SPOT"
@@ -280,7 +282,9 @@ class SpotBacktestAnalysisClosure:
             or self.fanout.correlation_id != self.debate.correlation_id
             or len({item.evidence_id for item in self.evidence}) != len(self.evidence)
         ):
-            raise ValueError("Archived analysis closure requires exact immutable inputs.")
+            raise ValueError(
+                "Archived analysis closure requires exact immutable inputs."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,17 +530,20 @@ async def run_spot_backtest(
                 manifest=manifest,
                 decision_time=record.decision_time,
             )
-            no_trade = None
+            no_trade: NoTradeDecisionV2 | None = None
             if pin.recorded_no_trade is not None:
                 ref = pin.recorded_no_trade
                 no_trade_key = LineageKey("C-026", str(ref.artifact_id), ref.version)
                 resolved_no_trade = await lineage_store.resolve((no_trade_key,))
-                no_trade = resolved_no_trade.get(no_trade_key)
+                resolved_no_trade_record = resolved_no_trade.get(no_trade_key)
+                if type(resolved_no_trade_record) is not NoTradeDecisionV2:
+                    raise _ReplayUnavailable("RECORDED_NO_TRADE_PIN_MISMATCH")
+                no_trade = cast(NoTradeDecisionV2, resolved_no_trade_record)
                 if (
-                    type(no_trade) is not NoTradeDecisionV2
-                    or canonical_sha256(no_trade) != ref.content_sha256
+                    canonical_sha256(no_trade) != ref.content_sha256
                     or no_trade.market_context_id != context.context_id
-                    or no_trade.strategy_version_id != strategy.version.strategy_version_id
+                    or no_trade.strategy_version_id
+                    != strategy.version.strategy_version_id
                     or no_trade.decided_at != record.decision_time
                     or no_trade.expires_at <= record.decision_time
                 ):
@@ -618,7 +625,9 @@ async def run_spot_backtest(
                 if fill.order_id == entry_orders[0].order_id
             )
             exit_fills = tuple(
-                fill for fill in exit_trace.fills if fill.order_id == exit_order.order_id
+                fill
+                for fill in exit_trace.fills
+                if fill.order_id == exit_order.order_id
             )
             if (
                 not entry_fills
@@ -626,7 +635,9 @@ async def run_spot_backtest(
                 != exit_order.quantity
             ):
                 raise _ReplayUnavailable("EXIT_FILL_HISTORY_UNPROVEN")
-            trades = (_build_trade(entry_orders[0], exit_order, entry_fills, exit_fills),)
+            trades = (
+                _build_trade(entry_orders[0], exit_order, entry_fills, exit_fills),
+            )
 
         trace = SpotBacktestTrace(
             _METHOD,
@@ -673,7 +684,9 @@ async def run_spot_backtest(
     except DatasetLoadError as exc:
         return _inconclusive(f"EXECUTION_DATA_{exc.reason.value}")
     except (LineageError, _ReplayUnavailable, SimulationUnavailable) as exc:
-        reason = exc.reason if isinstance(exc, _ReplayUnavailable) else type(exc).__name__
+        reason = (
+            exc.reason if isinstance(exc, _ReplayUnavailable) else type(exc).__name__
+        )
         return _inconclusive(reason)
     except (OverflowError, ValueError):
         return _inconclusive("INVALID_OR_STALE_ARCHIVED_ANALYSIS")
@@ -716,8 +729,7 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
             if (
                 strategy.strategy_version_id != reference.artifact_id
                 or strategy.content_sha256 != reference.content_sha256
-                or strategy_version_content_sha256(strategy)
-                != reference.content_sha256
+                or strategy_version_content_sha256(strategy) != reference.content_sha256
             ):
                 raise ValueError("C-021 strategy artifact digest mismatch.")
         elif reference.artifact_type == "C-027":
@@ -818,9 +830,12 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
         raise ValueError("Backtest configuration does not bind its exact inputs.")
     execution_model = json.loads(records[result.execution_model])
     profile = decode_value(SpotExecutionCostProfile, execution_model["cost_profile"])
-    if SpotExecutionCostAdapter(
-        profile, bundle.trace.cost_assumptions
-    ).adapter_reference != bundle.trace.cost_adapter:
+    if (
+        SpotExecutionCostAdapter(
+            profile, bundle.trace.cost_assumptions
+        ).adapter_reference
+        != bundle.trace.cost_adapter
+    ):
         raise ValueError("Cost adapter profile does not match its pinned reference.")
     if len(bundle.trace.decisions) != len(bundle.input_journal.decisions):
         raise ValueError("Backtest decision journal closure is incomplete.")
@@ -858,8 +873,7 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
             or debate.agent_result.result_id != pin.agent_result_id
             or canonical_sha256(debate.agent_result) != pin.agent_result_sha256
             or debate.agent_evaluation.evaluation_id != pin.agent_evaluation_id
-            or canonical_sha256(debate.agent_evaluation)
-            != pin.agent_evaluation_sha256
+            or canonical_sha256(debate.agent_evaluation) != pin.agent_evaluation_sha256
             or not _evaluation_is_point_in_time(
                 debate.agent_evaluation, decision.decision_time
             )
@@ -910,10 +924,8 @@ def _validate_analysis_match(
         or manifest.created_at > decision_time
         or manifest.expires_at <= decision_time
         or context.expires_at <= decision_time
-        or (context.asset, context.instrument_id)
-        != (scope.asset, scope.instrument_id)
-        or (manifest.venue_id, manifest.timeframe)
-        != (scope.venue_id, scope.timeframe)
+        or (context.asset, context.instrument_id) != (scope.asset, scope.instrument_id)
+        or (manifest.venue_id, manifest.timeframe) != (scope.venue_id, scope.timeframe)
         or (binding.venue_id, binding.instrument_id, binding.timeframe)
         != (scope.venue_id, scope.instrument_id, scope.timeframe)
         or (binding.window_start, binding.window_end)
@@ -952,10 +964,7 @@ def _validate_analysis_match(
             canonical_sha256(source),
         )
         for identity, source in sorted(
-            (
-                (identity, sources[identity])
-                for identity in expected_source_ids
-            ),
+            ((identity, sources[identity]) for identity in expected_source_ids),
             key=lambda item: str(item[0]),
         )
     )
@@ -969,10 +978,10 @@ def _validate_analysis_match(
 def _decision_content(
     *,
     record: SpotReplayDecisionRecord,
-    inputs: object,
+    inputs: PersistedSpotDebateInputs,
     pin: SpotBacktestArchivePin,
     no_trade: NoTradeDecisionV2 | None,
-    environment,
+    environment: DeploymentEnvironment,
 ) -> SpotBacktestDecision:
     strategy = record.strategy
     context = inputs.debate.market_context
@@ -1164,7 +1173,9 @@ def _exit_order(
         return None
     with localcontext(_ARITHMETIC):
         quantity = sum((fill.quantity for fill in fills), Decimal(0))
-    decision_time = max(fill.observed_at for fill in fills) + parameters.holding_interval
+    decision_time = (
+        max(fill.observed_at for fill in fills) + parameters.holding_interval
+    )
     if not policy.period_start <= decision_time < policy.period_end:
         raise _ReplayUnavailable("EXIT_DECISION_OUTSIDE_PINNED_EXECUTION_PERIOD")
     fill_revision_ids = tuple(sorted({fill.revision_id for fill in fills}, key=str))
@@ -1372,18 +1383,14 @@ def _build_result(
     }
     result = BacktestResultV3.build(**values)
     artifacts = (
-        SpotBacktestArtifact(
-            strategy_reference, canonical_json_dumps(strategy)
-        ),
+        SpotBacktestArtifact(strategy_reference, canonical_json_dumps(strategy)),
         SpotBacktestArtifact(
             parameter_reference, canonical_json_dumps(request.parameters)
         ),
         SpotBacktestArtifact(
             configuration_reference, canonical_json_dumps(configuration)
         ),
-        SpotBacktestArtifact(
-            simulator_reference, canonical_json_dumps(simulator)
-        ),
+        SpotBacktestArtifact(simulator_reference, canonical_json_dumps(simulator)),
         SpotBacktestArtifact(
             execution_reference, canonical_json_dumps(execution_model)
         ),

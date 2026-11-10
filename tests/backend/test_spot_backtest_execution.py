@@ -87,5 +87,7 @@ def test_verified_journal_rejects_tampered_decision_revision():
         decisions=(changed, *journal.decisions[1:]),
     )
 
-    with pytest.raises(SimulationUnavailable, match="DECISION_REVISION_SELECTION_MISMATCH"):
+    with pytest.raises(
+        SimulationUnavailable, match="DECISION_REVISION_SELECTION_MISMATCH"
+    ):
         _verified_decision_revisions(tampered, strategy, policy)

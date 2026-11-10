@@ -586,7 +586,8 @@ def _run(
     for revision in decision_revisions:
         existing = known_revisions.get(revision.revision_id)
         _require(
-            existing is None or canonical_sha256(existing) == canonical_sha256(revision),
+            existing is None
+            or canonical_sha256(existing) == canonical_sha256(revision),
             "DECISION_REVISION_MISMATCH",
         )
         known_revisions[revision.revision_id] = revision
@@ -612,8 +613,7 @@ def _run(
                 and _known_before(known_revisions[identity], order.decision_time)
                 and (
                     decision_journal is None
-                    or identity
-                    in decision_revision_ids.get(order.decision_time, set())
+                    or identity in decision_revision_ids.get(order.decision_time, set())
                 )
                 for identity in order.known_revision_ids
             ),
@@ -942,7 +942,9 @@ def _verified_decision_revisions(
         selected_by_id = {
             item.revision_id: item for item in loaded.reconstruction.selected_revisions
         }
-        source_pins = {item.evidence_id: item.content_sha256 for item in manifest.source_pins}
+        source_pins = {
+            item.evidence_id: item.content_sha256 for item in manifest.source_pins
+        }
         revision_pins = {
             item.evidence_id: item.content_sha256 for item in manifest.revision_pins
         }
@@ -967,7 +969,9 @@ def _verified_decision_revisions(
         expected_usable = tuple(
             item
             for item in loaded.reconstruction.selected_revisions
-            if record.lookback_start <= item.observation.event_time < record.lookback_end
+            if record.lookback_start
+            <= item.observation.event_time
+            < record.lookback_end
             and item.finalized_interval_end is not None
             and item.finalized_interval_end <= record.information_cutoff
             and item.availability_time <= record.information_cutoff
@@ -1028,7 +1032,9 @@ def _verified_decision_revisions(
             )
             revisions[revision.revision_id] = revision
         prior_time = record.decision_time
-    return tuple(revisions[key] for key in sorted(revisions, key=str)), revisions_by_time
+    return tuple(
+        revisions[key] for key in sorted(revisions, key=str)
+    ), revisions_by_time
 
 
 def _known_before(revision: ObservationRevision, at: datetime) -> bool:

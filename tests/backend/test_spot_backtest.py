@@ -46,9 +46,7 @@ def test_later_timestamp_on_any_archived_evaluation_edge_is_rejected():
     assert not _evaluation_is_point_in_time(
         evaluation, evaluation.ended_at - timedelta(microseconds=1)
     )
-    assert not _evaluation_is_point_in_time(
-        evaluation, NOW - timedelta(seconds=2)
-    )
+    assert not _evaluation_is_point_in_time(evaluation, NOW - timedelta(seconds=2))
 
 
 def test_public_backtest_entry_fails_closed_without_trusted_offline_resolvers():
