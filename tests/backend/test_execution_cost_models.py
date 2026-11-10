@@ -282,3 +282,33 @@ def test_positive_costs_cannot_round_silently_to_zero() -> None:
             notional=Decimal("1e-18"),
             as_of=NOW,
         )
+
+
+@pytest.mark.parametrize("precision", [6, 28, 80])
+@pytest.mark.parametrize(
+    ("spread_bps", "stress", "pinned_spread", "expected_charge"),
+    [
+        ("2e-18", "1.5", "3e-18", "0.015"),
+        ("1e-18", "1", "1e-18", "0.005"),
+        ("1e-18", "5", "5e-18", "0.025"),
+    ],
+)
+def test_odd_normalized_spread_preserves_exact_half_until_money_rounding(
+    precision: int,
+    spread_bps: str,
+    stress: str,
+    pinned_spread: str,
+    expected_charge: str,
+) -> None:
+    model = profile(spread_bps=Decimal(spread_bps), stress_multiplier=Decimal(stress))
+    with localcontext() as context:
+        context.prec = precision
+        costs = build_spot_cost_assumption_set(
+            profile=model, strategy_version_id=STRATEGY_ID, as_of=NOW
+        )
+        result = estimate_spot_execution_cost(
+            profile=model, notional=Decimal("1e20"), as_of=NOW
+        )
+    pinned = {item.category: item for item in costs.assumptions}
+    assert pinned[AssumptionCategory.SPREAD].value == Decimal(pinned_spread)
+    assert result.spread == Decimal(expected_charge)

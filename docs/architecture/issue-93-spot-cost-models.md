@@ -38,9 +38,10 @@ inputs are unavailable, never substituted with zero.
 
 The profile's spread is the full quoted spread in basis points. The C-027v2
 spread assumption retains that full-spread value (after stress), while the
-adverse per-fill charge uses half of it. Slippage is charged in full after the
-stress multiplier. The selected fee is applied to gross quote-currency notional;
-fees are not stress-multiplied. This bounded model does not infer a fee currency
+adverse per-fill charge uses its exact half without another rate quantization;
+the resulting monetary charge is then rounded to 18 fractional places. Slippage
+is charged in full after the stress multiplier. The selected fee is applied to
+gross quote-currency notional; fees are not stress-multiplied. This bounded model does not infer a fee currency
 different from the configured quote unit.
 
 Maker and taker rates remain explicit profile metadata. The production adapter

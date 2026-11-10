@@ -257,8 +257,9 @@ def estimate_spot_execution_cost(
             else profile.taker_fee_bps
         )
         full_spread_bps, slippage_bps = _stressed_rates(profile)
-        charged_spread_bps = _round_bounded(full_spread_bps / Decimal("2"))
-        _decimal("charged spread assumption", charged_spread_bps, positive=True)
+        # C-027v2 pins the normalized full spread. Its exact half can require
+        # 19 fractional places; round the monetary charge, not this derived rate.
+        charged_spread_bps = full_spread_bps / Decimal("2")
         total_bps = fee_bps + charged_spread_bps + slippage_bps
         fee = _round_bounded(notional * fee_bps / _BPS)
         spread = _round_bounded(notional * charged_spread_bps / _BPS)

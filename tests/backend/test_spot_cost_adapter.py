@@ -230,3 +230,29 @@ def test_adapter_charges_exact_normalized_pinned_rates() -> None:
     assert pinned[AssumptionCategory.SLIPPAGE].value == Decimal("2e-18")
     assert quote.spread == Decimal("0.01")
     assert quote.slippage == Decimal("0.02")
+
+
+@pytest.mark.parametrize(
+    ("spread_bps", "stress", "pinned_spread", "expected_charge"),
+    [
+        ("2e-18", "1.5", "3e-18", "0.015"),
+        ("1e-18", "1", "1e-18", "0.005"),
+        ("1e-18", "5", "5e-18", "0.025"),
+    ],
+)
+def test_adapter_preserves_exact_half_of_odd_normalized_full_spread(
+    spread_bps: str,
+    stress: str,
+    pinned_spread: str,
+    expected_charge: str,
+) -> None:
+    adapter, request = adapter_and_request(
+        spread_bps=Decimal(spread_bps),
+        stress_multiplier=Decimal(stress),
+    )
+    request = replace(request, quantity=Decimal("1e20"), gross_price=Decimal("1"))
+    pinned = {item.category: item for item in adapter.assumptions.assumptions}
+    quote = adapter.quote(request)
+    assert pinned[AssumptionCategory.SPREAD].value == Decimal(pinned_spread)
+    assert quote.spread == Decimal(expected_charge)
+    assert quote.request_sha256 == canonical_sha256(request)
