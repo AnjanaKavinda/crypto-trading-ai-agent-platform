@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from hashlib import sha256
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -27,6 +27,10 @@ from trading_platform_api.contracts.serialization import (
 )
 from trading_platform_api.lineage.codec import LineageError, LineageKey, decode, encode
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
+from trading_platform_api.orchestration.spot_analysis_fanout import (
+    SpotAnalysisFanoutResult,
+)
+from trading_platform_api.orchestration.spot_debate import SpotDebateResult
 from trading_platform_api.strategy.condition_evaluator import (
     SpotConditionContext,
     StrategyConditionEvaluation,
@@ -43,7 +47,6 @@ from trading_platform_api.strategy.eligibility import (
     evaluate_strategy_eligibility,
 )
 from trading_platform_api.strategy.registry import (
-    StrategyVersionResolver,
     strategy_version_content_sha256,
 )
 from trading_platform_api.strategy.setup_detection import (
@@ -52,10 +55,6 @@ from trading_platform_api.strategy.setup_detection import (
     evaluate_strategy_setup,
 )
 from trading_platform_api.strategy_api import _compose_persisted_spot_debate
-from trading_platform_api.orchestration.spot_analysis_fanout import (
-    SpotAnalysisFanoutResult,
-)
-from trading_platform_api.orchestration.spot_debate import SpotDebateResult
 from trading_platform_api.validation.contracts import CheckOutcome
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
@@ -86,6 +85,7 @@ from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayInputJournal,
     SpotReplayInputRequest,
     SpotReplayInputUnavailable,
+    StrategyVersionResolver,
     build_spot_replay_input_journal,
 )
 
@@ -378,6 +378,19 @@ def _utc(value: object, name: str) -> datetime:
     return value.astimezone(UTC)
 
 
+def _evaluation_is_point_in_time(
+    evaluation: AgentEvaluation, decision_time: datetime
+) -> bool:
+    return type(evaluation) is AgentEvaluation and all(
+        moment <= decision_time
+        for moment in (
+            evaluation.started_at,
+            evaluation.ended_at,
+            evaluation.evaluated_at,
+        )
+    )
+
+
 def _artifact(
     artifact_type: str, version: str, value: object, *, digest: str | None = None
 ) -> ValidationArtifactReferenceV2:
@@ -466,13 +479,8 @@ async def run_spot_backtest(
                 or canonical_sha256(agent_result) != pin.agent_result_sha256
                 or agent_evaluation.evaluation_id != pin.agent_evaluation_id
                 or canonical_sha256(agent_evaluation) != pin.agent_evaluation_sha256
-                or any(
-                    moment > record.decision_time
-                    for moment in (
-                        agent_evaluation.started_at,
-                        agent_evaluation.ended_at,
-                        agent_evaluation.evaluated_at,
-                    )
+                or not _evaluation_is_point_in_time(
+                    agent_evaluation, record.decision_time
                 )
             ):
                 raise _ReplayUnavailable("ARCHIVED_ANALYSIS_PIN_OR_TIME_MISMATCH")
@@ -830,13 +838,8 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
             or debate.agent_evaluation.evaluation_id != pin.agent_evaluation_id
             or canonical_sha256(debate.agent_evaluation)
             != pin.agent_evaluation_sha256
-            or any(
-                moment > decision.decision_time
-                for moment in (
-                    debate.agent_evaluation.started_at,
-                    debate.agent_evaluation.ended_at,
-                    debate.agent_evaluation.evaluated_at,
-                )
+            or not _evaluation_is_point_in_time(
+                debate.agent_evaluation, decision.decision_time
             )
             or canonical_sha256(debate.agent_result.output) != canonical_sha256(context)
             or debate.agent_evaluation.result_id != debate.agent_result.result_id
