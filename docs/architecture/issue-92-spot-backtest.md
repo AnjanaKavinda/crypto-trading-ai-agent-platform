@@ -22,8 +22,10 @@ references.
 ## Focused coverage in the repository
 
 The `test_spot_backtest*.py` tests cover the archived-evaluation point-in-time
-predicate and its fail-closed public entry guard. Existing adjacent tests provide
-focused coverage of the component seams:
+predicate, fail-closed public entry guard, and exact decision-journal validation
+at the execution-kernel seam, including overlap deduplication and post-cutoff
+revision rejection. Existing adjacent tests provide focused coverage of the
+component seams:
 
 - `test_spot_replay_inputs.py` covers deterministic per-decision journal
   identity, exact dataset/source/strategy pin rejection, per-decision cutoff
@@ -73,10 +75,12 @@ readiness claim follows from these tests.
 
 ## Verification report for this change
 
-On the current implementation head, Ruff passed for the four affected production
-files. Focused existing strategy, eligibility, execution, replay-input, and
-research API regressions passed **151 tests / 68 skipped**. These checks do not
-include the new `test_spot_backtest*.py` tests. The required integrated
-`run_spot_backtest` PostgreSQL replay, result readback, and acceptance scenarios
-remain unverified. Hosted Product/Governance CI and independent R3 review must
-also run on the final head; no hosted result is claimed here.
+On the current implementation head, Ruff passed for the affected production
+files and the new kernel-journal test. Focused existing strategy, eligibility,
+execution, replay-input, and research API regressions passed **151 tests / 68
+skipped**; execution and replay-input regressions passed **70 tests / 1
+skipped**; the new kernel-journal tests passed **2 tests**. The new
+public-entry/timestamp test file was not run after its addition. The required
+integrated `run_spot_backtest` PostgreSQL replay, result readback, and acceptance
+scenarios remain unverified. Hosted Product/Governance CI and independent R3
+review must also run on the final head; no hosted result is claimed here.

@@ -554,11 +554,6 @@ async def run_spot_backtest(
         decision_tuple, entry_orders = _build_orders(
             tuple(decisions), journal.decisions, request.parameters
         )
-        decision_revisions = tuple(
-            revision
-            for record in journal.decisions
-            for revision in record.usable_revisions
-        )
         entry_result = run_spot_execution_scenario(
             data=execution_data,
             strategy=strategy.version,
@@ -567,7 +562,7 @@ async def run_spot_backtest(
             cost_assumptions=request.cost_assumptions,
             cost_adapter_reference=request.cost_adapter.adapter_reference,
             cost_adapter=request.cost_adapter,
-            decision_revisions=decision_revisions,
+            decision_journal=journal,
         )
         if entry_result.outcome != "COMPLETED" or entry_result.trace is None:
             raise _ReplayUnavailable(
