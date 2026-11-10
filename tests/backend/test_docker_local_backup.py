@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Callable
 from unittest.mock import patch
 
 import pytest
@@ -148,6 +149,7 @@ def test_windows_file_protection_uses_isolated_powershell_and_exact_acl_policy(
     assert run.call_args.kwargs["env"] == {
         "PSModulePath": "isolated-windows-powershell-modules"
     }
+    assert run.call_args.kwargs["timeout"] == 60
     acl_environment.assert_called_once()
 
 
@@ -680,3 +682,76 @@ def test_windows_backup_acl_rejects_broad_everyone_access(tmp_path: Path) -> Non
         pytest.skip("Could not create a disposable broad-access ACL fixture.")
     with pytest.raises(DockerBackupError, match="ACL is not owner-restricted"):
         _validate_protected_file(protected)
+
+
+@pytest.mark.parametrize("operation", [_protect_windows_file, _validate_protected_file])
+def test_windows_acl_cold_start_has_a_separate_bounded_deadline(
+    tmp_path: Path,
+    operation: Callable[[Path], None],
+) -> None:
+    protected = tmp_path / "protected.env"
+    protected.write_text("safe=value\n", encoding="utf-8")
+
+    def cold_start(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        # Simulate a 20-second cold start without delaying the test. The old
+        # Docker preflight deadline fails even though the ACL operation succeeds.
+        if float(kwargs["timeout"]) < 20:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.os",
+            SimpleNamespace(name="nt"),
+        ),
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._windows_acl_environment",
+            return_value={},
+        ),
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.subprocess.run",
+            side_effect=cold_start,
+        ) as run,
+    ):
+        operation(protected)
+    assert run.call_args.kwargs["timeout"] == 60
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize("operation", [_protect_windows_file, _validate_protected_file])
+@pytest.mark.parametrize("failure", ["timeout", "unavailable", "denied"])
+def test_windows_acl_failure_still_rejects_without_retry_or_exposing_output(
+    tmp_path: Path,
+    operation: Callable[[Path], None],
+    failure: str,
+) -> None:
+    protected = tmp_path / "protected.env"
+    protected.write_text("safe=value\n", encoding="utf-8")
+    sensitive_output = b"synthetic private settings must not be logged"
+    outcome = subprocess.CompletedProcess([], 5, sensitive_output, sensitive_output)
+    error = (
+        subprocess.TimeoutExpired("powershell.exe", 60, output=sensitive_output)
+        if failure == "timeout"
+        else OSError("synthetic private settings must not be logged")
+    )
+    with (
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.os",
+            SimpleNamespace(name="nt"),
+        ),
+        patch(
+            "trading_platform_api.lineage.docker_local_backup._windows_acl_environment",
+            return_value={},
+        ),
+        patch(
+            "trading_platform_api.lineage.docker_local_backup.subprocess.run",
+            side_effect=error if failure != "denied" else None,
+            return_value=outcome,
+        ) as run,
+        pytest.raises(DockerBackupError) as caught,
+    ):
+        operation(protected)
+    assert "synthetic private settings" not in str(caught.value)
+    run.assert_called_once()

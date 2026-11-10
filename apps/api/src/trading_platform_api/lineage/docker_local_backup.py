@@ -31,6 +31,9 @@ _POSTGRES_PORT = 5432
 _BACKUP_IMAGE = "trading-platform-lineage-backup:local"
 _COMMAND_TIMEOUT = 1800
 _DOCKER_PREFLIGHT_TIMEOUT = 10
+# Windows PowerShell can cold-start slowly on a hosted runner. ACL operations
+# have their own bounded deadline; Docker preflight retains its shorter limit.
+_WINDOWS_ACL_TIMEOUT = 60
 
 
 def _find_repository_root() -> Path:
@@ -127,7 +130,7 @@ def _protect_windows_file(path: Path) -> None:
             check=False,
             capture_output=True,
             env=_windows_acl_environment(),
-            timeout=_DOCKER_PREFLIGHT_TIMEOUT,
+            timeout=_WINDOWS_ACL_TIMEOUT,
         )
     except (OSError, subprocess.TimeoutExpired):
         raise DockerBackupError(
@@ -221,7 +224,7 @@ def _validate_protected_file(path: Path) -> None:
                 check=False,
                 capture_output=True,
                 env=_windows_acl_environment(),
-                timeout=_DOCKER_PREFLIGHT_TIMEOUT,
+                timeout=_WINDOWS_ACL_TIMEOUT,
             )
         except (OSError, subprocess.TimeoutExpired):
             raise DockerBackupError(

@@ -71,7 +71,8 @@ kernel.
 Fee, spread, slippage, latency and explicit NOT_APPLICABLE Spot funding must be
 required C-027v2 categories. Extra required categories, unknown applicability,
 scope/digest mismatch or mismatched latency are unsupported. The request includes
-the exact policy, order, quantity, gross price, availability time and cost set.
+the exact policy, order, quantity, gross price, decision/observation times,
+allocation-bar interval, source-revision identity/digest and cost set.
 
 A quote binds the full request digest, assumption-set ID/digest and exact adapter
 reference. Monetary components must be finite/nonnegative and cannot silently
@@ -81,9 +82,16 @@ repeatable across runs. Known unavailable/stale models raise
 `SimulationUnavailable`; no free-cost fallback exists. Unexpected programming
 errors propagate instead of being hidden as successful simulations.
 
-No fee/slippage/spread formula or provider/tier profile is implemented here.
-#93 owns those models and their venue/instrument/time validity. Test-only quotes
-are synthetic and must not be substituted for that production integration.
+Issue #93 supplies the bounded configured Spot TAKER profile and production
+`SpotExecutionCostAdapter`. The internal request binds the allocation bar's
+actual start/end interval and exact source-revision ID/digest in addition to the
+order, fill quantity/gross price, observed time, policy, and C-027v2 set. Profile
+effective validity is checked against that bar interval, not a guessed interval
+from a later availability timestamp. Configured costs are not represented as a
+verified exchange fee feed. See
+[`issue-93-spot-cost-models.md`](issue-93-spot-cost-models.md) for formulas,
+identity, and failure behavior. Other test-only quotes remain synthetic and are
+not substitutes for the production adapter.
 
 ## Verification and remaining gates
 
@@ -98,16 +106,24 @@ The PostgreSQL integration persists a synthetic historical closure, loads it
 through #91 in read-only transactions across fresh sessions, and reproduces the
 same execution trace. No retained database, real provider or exchange is used.
 
-Final local checks: full backend **1,794 passed / 89 skipped** without optional
-database configuration; targeted execution/loader/result tests **102 passed**
-with disposable PostgreSQL; Ruff, formatting, mypy (124 source files), secrets
-hook and diff checks passed. Skips are not counted as passes. Hosted Product and
-Governance CI must pass on the exact published head before merge readiness.
+At the #92 implementation baseline, local checks were full backend
+**1,794 passed / 89 skipped** without optional database configuration and
+**102 passed** for targeted execution/loader/result tests with disposable
+PostgreSQL. For the #93 change, the full backend suite passed **1,829 / 89
+skipped** without database configuration; the production adapter's
+PostgreSQL-backed read-only loader/kernel replay passed **1 test**. Focused
+cost/execution tests passed **75 / 1 skipped**. Full backend Ruff, formatting,
+mypy (126 source files), Product CI workflow-contract tests, Governance CI
+orchestrator tests, wheel build, dependency check, secret scan, and diff checks
+passed locally. Skips are not counted as passes. Hosted Product and Governance
+CI must pass on the exact published head before merge readiness.
 
 Remaining #92 work: repository-owned historical strategy replay to real candidate/
-NO_TRADE artifacts; a validated #93 cost adapter; trace/fill/trade resolution and
-canonical C-027v3 publication; complete integrated acceptance. A final-cutoff
-manifest cannot silently substitute later revisions for the versions known at
-each decision; unresolved per-decision history must remain unavailable.
+NO_TRADE artifacts; trace/fill/trade resolution and canonical C-027v3 publication;
+complete integrated acceptance. The #93 production adapter and synthetic
+loader/kernel integration now exist, but do not close #92 or establish a
+production strategy replay. A final-cutoff manifest cannot silently substitute
+later revisions for the versions known at each decision; unresolved per-decision
+history must remain unavailable.
 #94 metrics and #95 OOS remain separate. Futures, risk, approval, exchange orders,
 paper/testnet/live execution and UI changes are outside this slice.

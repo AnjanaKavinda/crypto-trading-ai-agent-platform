@@ -190,8 +190,42 @@ class ExecutionCostRequest:
     kind: OrderKind
     quantity: Decimal
     gross_price: Decimal
+    decision_time: datetime
+    bar_start: datetime
+    bar_end: datetime
+    source_revision_id: UUID
+    source_revision_sha256: str
     observed_at: datetime
     assumptions: CostAssumptionSetV2
+
+    def __post_init__(self) -> None:
+        _require(
+            type(self.policy) is SpotExecutionPolicy, "INVALID_COST_REQUEST_POLICY"
+        )
+        _require(type(self.order_id) is UUID, "INVALID_COST_REQUEST_ORDER")
+        _require(
+            type(self.side) is OrderSide and type(self.kind) is OrderKind,
+            "INVALID_COST_REQUEST_ORDER",
+        )
+        _number(self.quantity, positive=True)
+        _number(self.gross_price, positive=True)
+        for name in ("decision_time", "bar_start", "bar_end", "observed_at"):
+            object.__setattr__(self, name, _time(getattr(self, name)))
+        _require(
+            self.decision_time < self.bar_start < self.bar_end <= self.observed_at,
+            "INVALID_COST_REQUEST_INTERVAL",
+        )
+        _require(
+            type(self.source_revision_id) is UUID
+            and type(self.source_revision_sha256) is str
+            and len(self.source_revision_sha256) == 64
+            and all(c in "0123456789abcdef" for c in self.source_revision_sha256),
+            "INVALID_COST_REQUEST_REVISION",
+        )
+        _require(
+            type(self.assumptions) is CostAssumptionSetV2,
+            "INVALID_COST_REQUEST_ASSUMPTIONS",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -643,6 +677,11 @@ def _run(
                 order.kind,
                 qty,
                 price,
+                order.decision_time,
+                bar.opened,
+                bar.ended,
+                bar.revision.revision_id,
+                canonical_sha256(bar.revision),
                 bar.available,
                 costs,
             )

@@ -78,6 +78,11 @@ operation on retained research data.
    closed if the ACL check cannot run. Store encryption keys outside the repo
    and retain every key needed by existing bundles.
 
+   Each ACL protection or verification process has a 60-second deadline to
+   allow Windows PowerShell cold startup. Timeout, launch failure, or a rejected
+   ACL still stops the operation without retry; Docker preflight retains its
+   separate 10-second deadline.
+
    To replace inherited access with only the allowed principals on each file,
    run this PowerShell snippet after creating the files (it prints no file
    contents or secret values):
