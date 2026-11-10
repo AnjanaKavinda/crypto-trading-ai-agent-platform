@@ -1,0 +1,942 @@
+"""Persisted offline Spot replay against an isolated PostgreSQL schema."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+from datetime import timedelta
+from decimal import Decimal
+from hashlib import sha256
+from io import StringIO
+from uuid import uuid4
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from test_lineage_postgresql import database_url as database_url
+from test_spot_research_api import (
+    INSTRUMENT,
+    refresh_body,
+)
+from test_spot_research_api import persisted_service as persisted_service
+from test_strategy_condition_evaluator import _setup
+from trading_platform_api.analysis.contracts import AnalyticalDirection
+from trading_platform_api.analysis.spot_meta_analysis import FindingReadiness
+from trading_platform_api.analysis.versioned_contracts_v4 import (
+    AnalysisSnapshotV4,
+    ResolvedSpotOHLCVBindingV4,
+)
+from trading_platform_api.config import (
+    AppSettings,
+    DeploymentEnvironment,
+    OperatingMode,
+)
+from trading_platform_api.contracts.serialization import (
+    canonical_json_dumps,
+    canonical_sha256,
+)
+from trading_platform_api.lineage.codec import LineageKey
+from trading_platform_api.lineage.store import SqlAlchemyLineageStore
+from trading_platform_api.main import create_app
+from trading_platform_api.market_data.contracts import (
+    DatasetVersion,
+    DataSourceRecord,
+    MarketData,
+    MetricValue,
+)
+from trading_platform_api.market_data.history_contracts import (
+    HistoricalUniverse,
+    ObservationRevision,
+)
+from trading_platform_api.market_data.history_selection import reconstruct_history
+from trading_platform_api.spot_research_store import (
+    SqlAlchemySpotResearchStore,
+    spot_producer_request_reservations,
+)
+from trading_platform_api.strategy.condition_evaluator import (
+    build_spot_condition_context,
+)
+from trading_platform_api.strategy.contracts import (
+    ConditionOperator,
+    StrategyCondition,
+    StrategyLifecycle,
+    VersionReference,
+)
+from trading_platform_api.strategy.registry import (
+    ArtifactVersionLifecycle,
+    LifecycleAxis,
+    ResolvedLifecycleReference,
+    StrategyAvailability,
+    StrategyRegistry,
+    build_personal_spot_strategy_v2,
+    strategy_version_content_sha256,
+)
+from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegistryStore
+from trading_platform_api.strategy_api import _compose_persisted_spot_debate
+from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
+from trading_platform_api.validation.cost_models import (
+    CostSourceKind,
+    SpotExecutionCostProfile,
+    build_spot_cost_assumption_set,
+)
+from trading_platform_api.validation.spot_backtest import (
+    SpotBacktestArchivePin,
+    SpotBacktestOutcome,
+    SpotBacktestParameters,
+    SpotBacktestRunRequest,
+    resolve_spot_backtest_result,
+    run_spot_backtest,
+)
+from trading_platform_api.validation.spot_cost_adapter import SpotExecutionCostAdapter
+from trading_platform_api.validation.spot_execution import SpotExecutionPolicy
+from trading_platform_api.validation.spot_replay_inputs import (
+    SpotReplayDecisionRequest,
+    SpotReplayInputRequest,
+    SpotReplayLimits,
+    SpotReplayScope,
+    SpotReplayStrategyPin,
+)
+
+D = Decimal
+STEP = timedelta(minutes=1)
+
+
+class _ReferenceResolver:
+    def __init__(self) -> None:
+        self.references: dict[VersionReference, ResolvedLifecycleReference] = {}
+
+    def bind(self, reference: VersionReference, subject_id, status: str) -> None:
+        self.references[reference] = ResolvedLifecycleReference(
+            reference, status, subject_id
+        )
+
+    async def resolve(self, reference: VersionReference, *, at):
+        return self.references.get(reference)
+
+
+def _reference(kind: str) -> VersionReference:
+    return VersionReference(kind, uuid4(), "1", "a" * 64)
+
+
+def _bind_transition(
+    resolver: _ReferenceResolver,
+    subject_id,
+    *,
+    evidence_kind: str = "C-030",
+    evidence_status: str = "AVAILABLE",
+):
+    decision = _reference("C-057")
+    evidence = _reference(evidence_kind)
+    resolver.bind(decision, subject_id, "APPROVED")
+    resolver.bind(evidence, subject_id, evidence_status)
+    return decision, (evidence,)
+
+
+async def _register_backtest_strategy(
+    registry: StrategyRegistry,
+    resolver: _ReferenceResolver,
+    identity,
+    parent,
+    version,
+    *,
+    effective_at,
+    register_identity: bool = True,
+) -> None:
+    if register_identity:
+        decision, evidence = _bind_transition(resolver, identity.strategy_id)
+        await registry.register_strategy(
+            identity,
+            actor="synthetic-postgres-replay",
+            reason="isolated persisted backtest fixture",
+            decision_reference=decision,
+            evidence_references=evidence,
+            effective_at=effective_at,
+        )
+    for item in (parent, version) if parent is not None else (version,):
+        decision = _reference("C-057")
+        resolver.bind(decision, item.strategy_version_id, "APPROVED")
+        evidence = item.provenance
+        for reference in evidence:
+            resolver.bind(reference, item.strategy_version_id, "AVAILABLE")
+        await registry.register_version(
+            item,
+            actor="synthetic-postgres-replay",
+            reason="explicit immutable BACKTEST strategy fixture",
+            decision_reference=decision,
+            evidence_references=evidence,
+            effective_at=effective_at,
+        )
+    decision, evidence = _bind_transition(
+        resolver,
+        version.strategy_version_id,
+        evidence_kind="C-028",
+        evidence_status="PASSED",
+    )
+    result = await registry.transition(
+        axis=LifecycleAxis.C021_VERSION,
+        strategy_id=version.strategy_id,
+        strategy_version_id=version.strategy_version_id,
+        to_status="VALIDATED",
+        actor="synthetic-postgres-replay",
+        reason="synthetic exact-version replay eligibility",
+        decision_reference=decision,
+        evidence_references=evidence,
+        environment=DeploymentEnvironment.TEST,
+        operating_mode=OperatingMode.BACKTEST,
+        effective_at=effective_at + timedelta(seconds=1),
+    )
+    assert result.accepted
+    for offset, status in enumerate(
+        (
+            ArtifactVersionLifecycle.CANDIDATE.value,
+            ArtifactVersionLifecycle.VALIDATED.value,
+        ),
+        start=2,
+    ):
+        decision, evidence = _bind_transition(
+            resolver,
+            version.strategy_version_id,
+            evidence_kind="C-028" if status.endswith("VALIDATED") else "C-030",
+            evidence_status="PASSED" if status.endswith("VALIDATED") else "AVAILABLE",
+        )
+        result = await registry.transition(
+            axis=LifecycleAxis.ARTIFACT_VERSION,
+            strategy_id=version.strategy_id,
+            strategy_version_id=version.strategy_version_id,
+            to_status=status,
+            actor="synthetic-postgres-replay",
+            reason="synthetic exact-version replay eligibility",
+            decision_reference=decision,
+            evidence_references=evidence,
+            environment=DeploymentEnvironment.TEST,
+            operating_mode=OperatingMode.BACKTEST,
+            effective_at=effective_at + timedelta(seconds=offset),
+        )
+        assert result.accepted
+
+
+def _market_records(
+    observations: tuple[MarketData, ...],
+    sources: tuple[DataSourceRecord, ...],
+    *,
+    cutoff,
+    dataset_id: str,
+    venue: str,
+    instrument_id: str,
+    extra_bars: int = 0,
+    extra_start=None,
+):
+    source_by_id = {item.source_record_id: item for item in sources}
+    revisions: list[ObservationRevision] = []
+    all_observations = list(observations)
+    all_sources = list(sources)
+
+    for index in range(extra_bars):
+        opened = (extra_start or cutoff) + (index + 1) * STEP
+        closed = opened + STEP
+        source_id = uuid4()
+        template = sources[0]
+        source = DataSourceRecord(
+            source_id,
+            template.provider_id,
+            template.provider_version,
+            opened,
+            closed,
+            closed,
+            template.raw_schema_version,
+            template.adapter_version,
+            template.licensing_reference,
+            canonical_sha256((dataset_id, opened, "source")),
+        )
+        prior_close = (
+            next(
+                item.value
+                for item in all_observations[-1].metrics
+                if item.metric_name == "close"
+            )
+            if all_observations
+            else D("100")
+        )
+        opened_price = prior_close
+        closed_price = prior_close + D("1")
+        observation = MarketData(
+            uuid4(),
+            instrument_id,
+            venue,
+            "OHLCV",
+            opened,
+            closed,
+            closed,
+            closed,
+            source_id,
+            (
+                MetricValue("open", opened_price, "USDT"),
+                MetricValue("high", closed_price + D("1"), "USDT"),
+                MetricValue("low", opened_price - D("1"), "USDT"),
+                MetricValue("close", closed_price, "USDT"),
+                MetricValue("volume", D("10"), "BTC"),
+            ),
+        )
+        all_sources.append(source)
+        all_observations.append(observation)
+        source_by_id[source_id] = source
+
+    for observation in all_observations:
+        source = source_by_id[observation.source_record_id]
+        finality = observation.event_time + STEP
+        publication = max(
+            observation.provider_time, source.provider_event_time, finality
+        )
+        ingestion = max(publication, observation.ingestion_time, source.retrieval_time)
+        availability = max(
+            ingestion, observation.availability_time, source.availability_time
+        )
+        revisions.append(
+            ObservationRevision(
+                uuid4(),
+                source.provider_id,
+                str(observation.market_data_id),
+                None,
+                observation,
+                publication,
+                ingestion,
+                availability,
+                finality,
+            )
+        )
+
+    universe_source = min(all_sources, key=lambda item: item.availability_time)
+    universe = HistoricalUniverse(
+        f"synthetic-{dataset_id}",
+        "1",
+        "synthetic-spot-universe-v1",
+        venue,
+        min(item.event_time for item in all_observations) - STEP,
+        cutoff + timedelta(days=1),
+        universe_source.provider_event_time,
+        universe_source.retrieval_time,
+        universe_source.availability_time,
+        (instrument_id,),
+        (universe_source.source_record_id,),
+        True,
+    )
+    used_source_ids = {
+        universe_source.source_record_id,
+        *(item.observation.source_record_id for item in revisions),
+    }
+    used_sources = tuple(
+        sorted(
+            (item for item in all_sources if item.source_record_id in used_source_ids),
+            key=lambda item: str(item.source_record_id),
+        )
+    )
+    lineage_sha256 = canonical_sha256(
+        {
+            "sources": tuple(canonical_sha256(item) for item in used_sources),
+            "revisions": tuple(canonical_sha256(item) for item in revisions),
+        }
+    )
+    dataset = DatasetVersion(
+        dataset_id,
+        "1",
+        cutoff,
+        min(item.event_time for item in all_observations),
+        cutoff,
+        cutoff,
+        tuple(sorted(used_source_ids, key=str)),
+        "1",
+        lineage_sha256,
+    )
+    reconstruction = reconstruct_history(
+        cutoff=cutoff,
+        universe=universe,
+        revisions=tuple(revisions),
+        sources=used_sources,
+        dataset=dataset,
+        expected_universe_sha256=canonical_sha256(universe),
+        expected_lineage_sha256=lineage_sha256,
+    )
+    records = (
+        *used_sources,
+        universe,
+        dataset,
+        *all_observations,
+        *revisions,
+        reconstruction.manifest,
+    )
+    return dataset, reconstruction.manifest, records, reconstruction
+
+
+async def _append_dataset(store: SqlAlchemyLineageStore, records) -> None:
+    for record in records:
+        await store.append(record)
+
+
+def _cost_adapter(*, version, scope, as_of, valid_until):
+    profile = SpotExecutionCostProfile(
+        scope.venue_id,
+        scope.instrument_id,
+        scope.asset,
+        scope.price_unit,
+        scope.volume_unit,
+        "synthetic-taker-tier-v1",
+        # Explicit test configuration reference; no exchange fee claim is made.
+        source_reference=ValidationArtifactReferenceV2(
+            "SYNTHETIC_COST_CONFIGURATION", uuid4(), "1", "c" * 64
+        ),
+        source_kind=CostSourceKind.CONFIGURED_RESEARCH_ASSUMPTION,
+        methodology_version="spot-cost-model-v1",
+        maker_fee_bps=D("10"),
+        taker_fee_bps=D("10"),
+        spread_bps=D("4"),
+        slippage_bps=D("6"),
+        latency_bars=0,
+        stress_multiplier=D("1"),
+        available_at=as_of,
+        effective_from=as_of,
+        valid_until=valid_until,
+    )
+    assumptions = build_spot_cost_assumption_set(
+        profile=profile,
+        strategy_version_id=version.strategy_version_id,
+        as_of=as_of,
+    )
+    return SpotExecutionCostAdapter(profile, assumptions)
+
+
+def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
+    persisted_service,
+    database_url,
+    monkeypatch,
+):
+    research, market_calls, _, now = persisted_service
+    migration_output = StringIO()
+    command.upgrade(
+        Config("apps/api/alembic.ini", output_buffer=migration_output),
+        "head",
+        sql=True,
+    )
+    schema = f"spot_backtest_test_{uuid4().hex}"
+
+    async def check():
+        url = make_url(database_url)
+        assert url.drivername == "postgresql+asyncpg"
+        assert url.host in ("127.0.0.1", "localhost")
+        assert url.database == "lineage_test"
+        admin = create_async_engine(database_url)
+        engine = create_async_engine(
+            database_url,
+            connect_args={"server_settings": {"search_path": schema}},
+        )
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        created = False
+        try:
+            async with admin.begin() as connection:
+                await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            created = True
+            async with engine.connect() as connection:
+                raw = await connection.get_raw_connection()
+                await raw.driver_connection.execute(migration_output.getvalue())
+
+            repository = SqlAlchemySpotResearchStore(sessions)
+            research.repository = repository
+            app = create_app(
+                settings=AppSettings(
+                    environment=DeploymentEnvironment.TEST,
+                    mode=OperatingMode.RESEARCH,
+                ),
+                research_service=research,
+            )
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://127.0.0.1"
+            ) as client:
+                response = await client.post(
+                    f"/api/research/spot/{INSTRUMENT}/refresh",
+                    json=refresh_body(timeframe="1m", limit=50, now=now),
+                )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["analysis_fanout"]["status"] == "AVAILABLE"
+
+            async with sessions.begin() as session:
+                reservation = (
+                    (
+                        await session.execute(
+                            select(spot_producer_request_reservations).where(
+                                spot_producer_request_reservations.c.snapshot_id
+                                == payload["snapshot_id"],
+                                spot_producer_request_reservations.c.status
+                                == "COMPLETED",
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                context_key = LineageKey(
+                    reservation["context_contract_id"],
+                    reservation["context_record_id"],
+                    reservation["context_version"],
+                )
+                lineage = SqlAlchemyLineageStore(session)
+                handoff = await lineage.get_spot_agent_handoff(context_key)
+                assert handoff is not None
+                agent_result, agent_evaluation, correlation_id, trace_id = handoff
+                context = await lineage.get(context_key)
+                assert context is not None
+                decision_time = max(
+                    context.as_of, agent_evaluation.ended_at, agent_result.generated_at
+                ) + timedelta(seconds=2)
+                inputs = await _compose_persisted_spot_debate(
+                    session=session,
+                    store=lineage,
+                    context_key=context_key,
+                    context=context,
+                    result=agent_result,
+                    evaluation=agent_evaluation,
+                    correlation_id=correlation_id,
+                    trace_id=trace_id,
+                    now=decision_time,
+                )
+                assert type(inputs.manifest) is AnalysisSnapshotV4
+                assert len(inputs.resolved_bindings) == 1
+                binding = inputs.resolved_bindings[0]
+                assert type(binding) is ResolvedSpotOHLCVBindingV4
+                assert binding.observations
+                assert binding.sources
+                assert tuple(
+                    item.observation.record_id
+                    for item in inputs.manifest.bindings[0].observations
+                ) == tuple(str(item.market_data_id) for item in binding.observations)
+                archive_sources = tuple(
+                    (item.record_id, item.content_sha256)
+                    for item in binding.binding.source_records
+                )
+                expected_archive_sources = tuple(
+                    (
+                        str(source_id),
+                        canonical_sha256(
+                            next(
+                                source
+                                for source in binding.sources
+                                if source.source_record_id == source_id
+                            )
+                        ),
+                    )
+                    for source_id in dict.fromkeys(
+                        item.source_record_id for item in binding.observations
+                    )
+                )
+                assert archive_sources == expected_archive_sources, (
+                    archive_sources,
+                    expected_archive_sources,
+                )
+
+                raw_resolved, _ = _setup()
+                identity = replace(
+                    raw_resolved.strategy, created_at=now - timedelta(days=2)
+                )
+                parent = replace(
+                    raw_resolved.version,
+                    created_at=now - timedelta(days=1),
+                    environments=(DeploymentEnvironment.TEST,),
+                    supported_timeframes=("1m",),
+                    operating_modes=(OperatingMode.BACKTEST,),
+                )
+                parent = replace(
+                    parent, content_sha256=strategy_version_content_sha256(parent)
+                )
+                base_version = build_personal_spot_strategy_v2(
+                    parent,
+                    strategy_version_id=uuid4(),
+                    created_at=now - timedelta(hours=1),
+                )
+                context_features = build_spot_condition_context(
+                    strategy=replace(
+                        raw_resolved,
+                        strategy=identity,
+                        version=base_version,
+                        availability=StrategyAvailability.ACTIVE,
+                        c021_lifecycle=StrategyLifecycle.VALIDATED,
+                        artifact_lifecycle=ArtifactVersionLifecycle.VALIDATED,
+                    ),
+                    debate=inputs.debate,
+                    fanout=inputs.fanout,
+                    now=decision_time,
+                    mode=OperatingMode.BACKTEST,
+                )
+                persisted_finding = inputs.fanout.findings[0]
+                assert persisted_finding.direction is AnalyticalDirection.BULLISH
+                assert persisted_finding.readiness is FindingReadiness.PARTIAL
+                assert not any(
+                    feature.path == f"spot.finding.{persisted_finding.domain}.direction"
+                    for feature in context_features.features
+                )
+                condition = StrategyCondition(
+                    uuid4(),
+                    f"spot.finding.{persisted_finding.domain}.direction",
+                    ConditionOperator.EQUALS,
+                    (persisted_finding.direction.value,),
+                    "1",
+                )
+                version = replace(
+                    base_version,
+                    semantic_version="2.0.1",
+                    conditions=(condition,),
+                    condition_groups=(
+                        replace(
+                            base_version.condition_groups[0],
+                            condition_ids=(condition.condition_id,),
+                        ),
+                    ),
+                    content_sha256="0" * 64,
+                )
+                version = replace(
+                    version, content_sha256=strategy_version_content_sha256(version)
+                )
+                version_pin = SpotReplayStrategyPin(
+                    version.strategy_id,
+                    version.strategy_version_id,
+                    version.semantic_version,
+                    version.content_sha256,
+                )
+                resolver = _ReferenceResolver()
+                registry = StrategyRegistry(
+                    SqlAlchemyStrategyRegistryStore(session),
+                    reference_resolver=resolver,
+                    clock=lambda: decision_time - timedelta(seconds=1),
+                )
+                await _register_backtest_strategy(
+                    registry,
+                    resolver,
+                    identity,
+                    parent,
+                    version,
+                    effective_at=decision_time - timedelta(minutes=2),
+                )
+
+                scope = SpotReplayScope(
+                    binding.binding.venue_id,
+                    binding.binding.instrument_id,
+                    context.asset,
+                    "USDT",
+                    "BTC",
+                    binding.binding.timeframe,
+                    DeploymentEnvironment.TEST,
+                    decision_time,
+                    now + timedelta(minutes=20),
+                )
+                input_dataset, input_manifest, input_records, _ = _market_records(
+                    binding.observations,
+                    binding.sources,
+                    cutoff=context.as_of,
+                    dataset_id=f"decision-{uuid4()}",
+                    venue=scope.venue_id,
+                    instrument_id=scope.instrument_id,
+                )
+                await _append_dataset(lineage, input_records)
+                decision = SpotReplayDecisionRequest(
+                    decision_time,
+                    context.as_of,
+                    canonical_sha256(input_dataset),
+                    canonical_sha256(input_manifest),
+                    binding.binding.window_start,
+                    binding.binding.window_end,
+                )
+                replay_inputs = SpotReplayInputRequest(
+                    scope,
+                    version_pin,
+                    (decision,),
+                    SpotReplayLimits(4, 4096, 2000),
+                )
+                pin = SpotBacktestArchivePin(
+                    context.context_id,
+                    canonical_sha256(context),
+                    canonical_sha256(inputs.manifest),
+                    agent_result.result_id,
+                    canonical_sha256(agent_result),
+                    agent_evaluation.evaluation_id,
+                    canonical_sha256(agent_evaluation),
+                    sha256(
+                        canonical_json_dumps(inputs.fanout.outcomes).encode("utf-8")
+                    ).hexdigest(),
+                )
+
+                execution_cutoff = context.as_of + timedelta(minutes=10)
+                execution_dataset, execution_manifest, execution_records, _ = (
+                    _market_records(
+                        binding.observations,
+                        binding.sources,
+                        cutoff=execution_cutoff,
+                        dataset_id=f"execution-{uuid4()}",
+                        venue=scope.venue_id,
+                        instrument_id=scope.instrument_id,
+                        extra_bars=10,
+                        extra_start=context.as_of - STEP,
+                    )
+                )
+                await _append_dataset(lineage, execution_records)
+                policy = SpotExecutionPolicy(
+                    scope.venue_id,
+                    scope.instrument_id,
+                    scope.asset,
+                    scope.price_unit,
+                    scope.volume_unit,
+                    scope.timeframe,
+                    scope.environment,
+                    context.as_of,
+                    execution_cutoff,
+                    D("1"),
+                    D("0.1"),
+                    D("1000"),
+                    D("0"),
+                    0,
+                    0,
+                )
+                adapter = _cost_adapter(
+                    version=version,
+                    scope=scope,
+                    as_of=context.as_of,
+                    valid_until=execution_cutoff + timedelta(days=1),
+                )
+                parameters = SpotBacktestParameters(
+                    version.strategy_version_id,
+                    version.content_sha256,
+                    D("1"),
+                    timedelta(minutes=3),
+                    STEP,
+                    timedelta(minutes=3),
+                    1,
+                    "EXIT_FILLED_QUANTITY_AFTER_LAST_FILL_V1",
+                )
+                request = SpotBacktestRunRequest(
+                    replay_inputs,
+                    (pin,),
+                    canonical_sha256(execution_dataset),
+                    canonical_sha256(execution_manifest),
+                    policy,
+                    parameters,
+                    adapter.assumptions,
+                    adapter,
+                    execution_cutoff,
+                    execution_cutoff + timedelta(seconds=1),
+                    execution_cutoff + timedelta(days=1),
+                )
+                before_model_calls = research.spot_agent_runtime.provider.calls
+                bundle = await run_spot_backtest(
+                    request=request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                assert bundle.outcome is SpotBacktestOutcome.OBSERVED, (
+                    bundle.reason_codes
+                )
+                assert bundle.trace is not None
+                assert bundle.trace.entry_trace is not None
+                assert bundle.trace.decisions[0].kind.value == "NO_ORDER"
+                assert bundle.trace.decisions[0].setup.reason_codes == (
+                    "ELIGIBILITY_INSUFFICIENT_DATA",
+                )
+                assert (
+                    bundle.trace.decisions[0].eligibility_evaluation.state.value
+                    == "INSUFFICIENT_DATA"
+                )
+                assert bundle.trace.decisions[0].condition_evaluation.truth.value == (
+                    "UNKNOWN"
+                )
+                assert not bundle.trace.entry_trace.fills
+                assert bundle.trace.exit_trace is None
+                assert not bundle.trace.trades
+                assert bundle.result is not None
+                assert resolve_spot_backtest_result(bundle) == bundle.result
+                assert research.spot_agent_runtime.provider.calls == before_model_calls
+
+                no_setup_condition = replace(
+                    condition, condition_id=uuid4(), expected_values=("never",)
+                )
+                no_order_version = replace(
+                    version,
+                    strategy_version_id=uuid4(),
+                    semantic_version="2.0.2",
+                    parent_version_id=version.strategy_version_id,
+                    conditions=(no_setup_condition,),
+                    condition_groups=(
+                        replace(
+                            version.condition_groups[0],
+                            condition_ids=(no_setup_condition.condition_id,),
+                        ),
+                    ),
+                    created_at=now - timedelta(minutes=30),
+                    content_sha256="0" * 64,
+                )
+                no_order_version = replace(
+                    no_order_version,
+                    content_sha256=strategy_version_content_sha256(no_order_version),
+                )
+                await _register_backtest_strategy(
+                    registry,
+                    resolver,
+                    identity,
+                    None,
+                    no_order_version,
+                    effective_at=decision_time - timedelta(minutes=1),
+                    register_identity=False,
+                )
+                no_order_pin = SpotReplayStrategyPin(
+                    no_order_version.strategy_id,
+                    no_order_version.strategy_version_id,
+                    no_order_version.semantic_version,
+                    no_order_version.content_sha256,
+                )
+                no_order_inputs = replace(replay_inputs, strategy=no_order_pin)
+                no_order_adapter = _cost_adapter(
+                    version=no_order_version,
+                    scope=scope,
+                    as_of=context.as_of,
+                    valid_until=execution_cutoff + timedelta(days=1),
+                )
+                no_order_request = replace(
+                    request,
+                    replay_inputs=no_order_inputs,
+                    parameters=replace(
+                        parameters,
+                        strategy_version_id=no_order_version.strategy_version_id,
+                        strategy_sha256=no_order_version.content_sha256,
+                    ),
+                    cost_assumptions=no_order_adapter.assumptions,
+                    cost_adapter=no_order_adapter,
+                )
+                no_order = await run_spot_backtest(
+                    request=no_order_request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                assert no_order.outcome is SpotBacktestOutcome.OBSERVED, (
+                    no_order.reason_codes
+                )
+                assert no_order.trace is not None
+                assert no_order.trace.entry_trace is not None
+                assert not no_order.trace.entry_trace.fills
+                assert no_order.trace.exit_trace is None
+                assert not no_order.trace.trades
+                assert resolve_spot_backtest_result(no_order) == no_order.result
+
+                mismatch = replace(
+                    request,
+                    archive_pins=(replace(pin, context_sha256="f" * 64),),
+                )
+                rejected_archive = await run_spot_backtest(
+                    request=mismatch,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                assert rejected_archive.outcome is SpotBacktestOutcome.INCONCLUSIVE
+                assert rejected_archive.reason_codes == (
+                    "ARCHIVED_ANALYSIS_PIN_OR_TIME_MISMATCH",
+                )
+
+                with pytest.raises(ValueError):
+                    resolve_spot_backtest_result(
+                        replace(bundle, artifacts=bundle.artifacts[:-1])
+                    )
+                with pytest.raises(ValueError):
+                    resolve_spot_backtest_result(
+                        replace(
+                            bundle,
+                            artifacts=tuple(
+                                replace(item, document=f"{item.document} ")
+                                if item.reference == bundle.result.trace
+                                else item
+                                for item in bundle.artifacts
+                            ),
+                        )
+                    )
+
+                original_revision = bundle.input_journal.decisions[0].usable_revisions[
+                    0
+                ]
+                original_observation = original_revision.observation
+                original_source = next(
+                    item
+                    for item in bundle.input_journal.decisions[0].dataset.sources
+                    if item.source_record_id == original_observation.source_record_id
+                )
+                corrected_at = decision_time + STEP
+                corrected_source = replace(
+                    original_source,
+                    source_record_id=uuid4(),
+                    provider_event_time=corrected_at,
+                    retrieval_time=corrected_at,
+                    availability_time=corrected_at,
+                    content_sha256=canonical_sha256(
+                        (original_source.source_record_id, corrected_at)
+                    ),
+                )
+                corrected_observation = replace(
+                    original_observation,
+                    market_data_id=uuid4(),
+                    provider_time=corrected_at,
+                    ingestion_time=corrected_at,
+                    availability_time=corrected_at,
+                    source_record_id=corrected_source.source_record_id,
+                    metrics=tuple(
+                        replace(metric, value=metric.value + D("1"))
+                        if metric.metric_name == "close"
+                        else metric
+                        for metric in original_observation.metrics
+                    ),
+                )
+                correction = ObservationRevision(
+                    uuid4(),
+                    original_revision.provider_id,
+                    original_revision.observation_key,
+                    original_revision.revision_id,
+                    corrected_observation,
+                    corrected_at,
+                    corrected_at,
+                    corrected_at,
+                    original_revision.finalized_interval_end,
+                )
+                await lineage.append(corrected_source)
+                await lineage.append(corrected_observation)
+                await lineage.append(correction)
+                replay_after_correction = await run_spot_backtest(
+                    request=request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                assert replay_after_correction == bundle
+
+            async with sessions() as session:
+                assert (
+                    await session.scalar(
+                        select(spot_producer_request_reservations.c.status)
+                        .where(
+                            spot_producer_request_reservations.c.snapshot_id
+                            == payload["snapshot_id"]
+                        )
+                        .limit(1)
+                    )
+                    == "COMPLETED"
+                )
+        finally:
+            await engine.dispose()
+            try:
+                if created:
+                    async with admin.begin() as connection:
+                        await connection.execute(
+                            text(f'DROP SCHEMA "{schema}" CASCADE')
+                        )
+            finally:
+                await admin.dispose()
+
+    asyncio.run(check())
+    assert market_calls == [1]

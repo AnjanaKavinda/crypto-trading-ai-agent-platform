@@ -27,6 +27,7 @@ from trading_platform_api.analysis.versioned_contracts import (
     ConfluenceEvidenceStrengthV2,
 )
 from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
+from trading_platform_api.config import OperatingMode
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisFanoutResult,
     SpotAnalysisTaskStatus,
@@ -218,6 +219,7 @@ def build_spot_condition_context(
     debate: SpotDebateResult,
     fanout: SpotAnalysisFanoutResult,
     now: datetime,
+    mode: OperatingMode = OperatingMode.RESEARCH,
 ) -> SpotConditionContext:
     """Resolve only exact, typed features carried by the current Spot outputs."""
 
@@ -252,7 +254,9 @@ def build_spot_condition_context(
         context.asset not in version.supported_assets
         or context.instrument_id not in version.supported_instruments
         or context.adversarial.timeframe not in version.supported_timeframes
-        or not any(item.value == "research" for item in version.operating_modes)
+        or type(mode) is not OperatingMode
+        or mode not in version.operating_modes
+        or mode not in {OperatingMode.RESEARCH, OperatingMode.BACKTEST}
     ):
         raise ValueError("Spot context is outside the exact strategy profile")
 

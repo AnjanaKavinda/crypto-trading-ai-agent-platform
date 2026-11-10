@@ -186,7 +186,7 @@ def evaluate_strategy_eligibility(
         ):
             insufficient("MISSING_OR_INVALID_OPERATING_CONTEXT")
         elif (
-            mode is not OperatingMode.RESEARCH
+            mode not in {OperatingMode.RESEARCH, OperatingMode.BACKTEST}
             or mode not in version.operating_modes
             or environment not in version.environments
         ):
