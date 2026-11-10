@@ -408,12 +408,47 @@ def _cost_adapter(*, version, scope, as_of, valid_until):
     return SpotExecutionCostAdapter(profile, assumptions)
 
 
+@pytest.mark.parametrize("synthetic_ready", [False, True])
 def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
     persisted_service,
+    synthetic_ready,
     database_url,
     monkeypatch,
 ):
     research, market_calls, _, now = persisted_service
+    if synthetic_ready:
+        # Explicit synthetic analysis producer, invoked before persistence.
+        # This exercises the supported task interface without changing RSI policy.
+        from trading_platform_api.analysis.spot_meta_analysis import SpotMetaFinding
+        from trading_platform_api.analysis.versioned_contracts import (
+            ConfluenceEvidenceStrengthV2,
+        )
+        from trading_platform_api.orchestration.spot_analysis_fanout import (
+            SpotAnalysisTask,
+        )
+
+        def synthetic_task(*, resolved_binding, **kwargs):
+            async def run():
+                b = resolved_binding
+                return SpotMetaFinding(
+                    uuid4(),
+                    "spot-trend",
+                    b.regime.direction,
+                    b.evidence[0].relation,
+                    ConfluenceEvidenceStrengthV2.MODERATE,
+                    FindingReadiness.READY,
+                    tuple(sorted((e.evidence_id for e in b.evidence), key=str)),
+                    (b.binding.binding_id,),
+                    b.binding.regime_method,
+                )
+
+            return SpotAnalysisTask(uuid4(), "spot-trend", run)
+
+        monkeypatch.setattr(
+            "trading_platform_api.orchestration.spot_request_handoff.build_spot_rsi14_task",
+            synthetic_task,
+        )
+
     migration_output = StringIO()
     command.upgrade(
         Config("apps/api/alembic.ini", output_buffer=migration_output),
@@ -571,10 +606,18 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 )
                 persisted_finding = inputs.fanout.findings[0]
                 assert persisted_finding.direction is AnalyticalDirection.BULLISH
-                assert persisted_finding.readiness is FindingReadiness.PARTIAL
-                assert not any(
-                    feature.path == f"spot.finding.{persisted_finding.domain}.direction"
-                    for feature in context_features.features
+                assert persisted_finding.readiness is (
+                    FindingReadiness.READY
+                    if synthetic_ready
+                    else FindingReadiness.PARTIAL
+                )
+                assert (
+                    any(
+                        feature.path
+                        == f"spot.finding.{persisted_finding.domain}.direction"
+                        for feature in context_features.features
+                    )
+                    is synthetic_ready
                 )
                 condition = StrategyCondition(
                     uuid4(),
@@ -586,6 +629,9 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 version = replace(
                     base_version,
                     semantic_version="2.0.1",
+                    preferred_regimes=("trend",),
+                    acceptable_regimes=(),
+                    incompatible_regimes=(),
                     conditions=(condition,),
                     condition_groups=(
                         replace(
@@ -738,20 +784,47 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 )
                 assert bundle.trace is not None
                 assert bundle.trace.entry_trace is not None
-                assert bundle.trace.decisions[0].kind.value == "NO_ORDER"
-                assert bundle.trace.decisions[0].setup.reason_codes == (
-                    "ELIGIBILITY_INSUFFICIENT_DATA",
-                )
-                assert (
-                    bundle.trace.decisions[0].eligibility_evaluation.state.value
-                    == "INSUFFICIENT_DATA"
-                )
-                assert bundle.trace.decisions[0].condition_evaluation.truth.value == (
-                    "UNKNOWN"
-                )
-                assert not bundle.trace.entry_trace.fills
-                assert bundle.trace.exit_trace is None
-                assert not bundle.trace.trades
+                if synthetic_ready:
+                    assert bundle.trace.entry_trace.fills, [
+                        (
+                            d.eligibility_evaluation.reason_codes,
+                            d.condition_evaluation.truth,
+                        )
+                        for d in bundle.trace.decisions
+                    ]
+                    assert bundle.trace.exit_trace is not None
+                    assert bundle.trace.exit_trace.fills
+                    assert bundle.trace.trades
+                    fills = (
+                        *bundle.trace.entry_trace.fills,
+                        *bundle.trace.exit_trace.fills,
+                    )
+                    assert all(fill.costs.fee > 0 for fill in fills)
+                    assert all(fill.costs.spread > 0 for fill in fills)
+                    assert all(fill.observed_at > decision_time for fill in fills)
+                    assert bundle.trace.entry_trace.final_inventory > 0
+                    assert bundle.trace.exit_trace.final_inventory == 0
+                    for trade in bundle.trace.trades:
+                        assert trade.entry_cash_outflow > 0
+                        assert trade.exit_cash_inflow > 0
+                        assert trade.realized_cash_delta == (
+                            trade.exit_cash_inflow - trade.entry_cash_outflow
+                        )
+                else:
+                    assert bundle.trace.decisions[0].kind.value == "NO_ORDER"
+                    assert bundle.trace.decisions[0].setup.reason_codes == (
+                        "ELIGIBILITY_INSUFFICIENT_DATA",
+                    )
+                    assert (
+                        bundle.trace.decisions[0].eligibility_evaluation.state.value
+                        == "INSUFFICIENT_DATA"
+                    )
+                    assert bundle.trace.decisions[
+                        0
+                    ].condition_evaluation.truth.value == ("UNKNOWN")
+                    assert not bundle.trace.entry_trace.fills
+                    assert bundle.trace.exit_trace is None
+                    assert not bundle.trace.trades
                 assert bundle.result is not None
                 assert resolve_spot_backtest_result(bundle) == bundle.result
                 assert research.spot_agent_runtime.provider.calls == before_model_calls
