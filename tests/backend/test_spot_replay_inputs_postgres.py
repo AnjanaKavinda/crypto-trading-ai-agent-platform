@@ -224,13 +224,14 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
             early_source = next(
                 item
                 for item in early_decision.dataset.sources
-                if item.source_record_id
-                == early_revision.observation.source_record_id
+                if item.source_record_id == early_revision.observation.source_record_id
             )
             assert early_decision.lookback_end < early_decision.information_cutoff
             assert early_decision.information_cutoff.second == 30
             assert early_decision.decision_time.second == 45
-            assert early_source.availability_time > early_revision.finalized_interval_end
+            assert (
+                early_source.availability_time > early_revision.finalized_interval_end
+            )
             assert early_source.availability_time <= early_decision.information_cutoff
             assert full_first.decisions[1].usable_revisions[0].revision_id != (
                 first_early.decisions[0].usable_revisions[0].revision_id
