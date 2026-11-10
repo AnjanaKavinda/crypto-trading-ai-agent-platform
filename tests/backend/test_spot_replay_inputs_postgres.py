@@ -160,13 +160,14 @@ def _counts():
 
 
 def test_postgresql_read_only_journal_survives_later_correction(database_url):
+    request, closures, resolved, _, _ = _case(dataset_prefix=f"postgres-{uuid4()}")
+
     async def check():
         url = make_url(database_url)
         assert url.drivername == "postgresql+asyncpg"
         assert url.host in ("127.0.0.1", "localhost") and url.database == "lineage_test"
         engine = create_async_engine(database_url)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
-        request, closures, resolved, _, _ = _case(dataset_prefix=f"postgres-{uuid4()}")
         early_closure = _merge_records(
             closures, manifest_sha256=request.decisions[0].manifest_sha256
         )
@@ -183,10 +184,11 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
             async def replay(run_request: SpotReplayInputRequest):
                 async with sessions.begin() as session:
                     await session.execute(text("SET TRANSACTION READ ONLY"))
-                    before = tuple(
-                        (await session.execute(statement)).scalar_one()
-                        for statement in _counts()
-                    )
+                    before_counts = []
+                    for statement in _counts():
+                        before_counts.append(
+                            (await session.execute(statement)).scalar_one()
+                        )
                     journal = await build_spot_replay_input_journal(
                         resolver=SqlAlchemyLineageStore(session),
                         strategy_registry=StrategyRegistry(
@@ -196,11 +198,12 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
                         ),
                         request=run_request,
                     )
-                    after = tuple(
-                        (await session.execute(statement)).scalar_one()
-                        for statement in _counts()
-                    )
-                    assert after == before
+                    after_counts = []
+                    for statement in _counts():
+                        after_counts.append(
+                            (await session.execute(statement)).scalar_one()
+                        )
+                    assert after_counts == before_counts
                     return journal
 
             early_request = replace_request(request, (request.decisions[0],))
@@ -216,6 +219,19 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
             full_second = await replay(request)
             assert full_first == full_second
             assert full_first.decisions[0] == first_early.decisions[0]
+            early_decision = full_first.decisions[0]
+            early_revision = early_decision.usable_revisions[0]
+            early_source = next(
+                item
+                for item in early_decision.dataset.sources
+                if item.source_record_id
+                == early_revision.observation.source_record_id
+            )
+            assert early_decision.lookback_end < early_decision.information_cutoff
+            assert early_decision.information_cutoff.second == 30
+            assert early_decision.decision_time.second == 45
+            assert early_source.availability_time > early_revision.finalized_interval_end
+            assert early_source.availability_time <= early_decision.information_cutoff
             assert full_first.decisions[1].usable_revisions[0].revision_id != (
                 first_early.decisions[0].usable_revisions[0].revision_id
             )

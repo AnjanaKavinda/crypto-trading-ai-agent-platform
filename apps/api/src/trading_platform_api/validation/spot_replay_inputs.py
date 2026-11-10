@@ -322,8 +322,10 @@ def _validate_request(
                     raise ValueError("Information cutoffs must be nondecreasing.")
                 if not period_start <= decision_time < period_end:
                     raise ValueError("Decision time is outside the declared period.")
-                if cutoff > decision_time or lookback_end != cutoff:
-                    raise ValueError("Information cutoff/lookback end is inconsistent.")
+                if not lookback_end <= cutoff <= decision_time:
+                    raise ValueError(
+                        "Lookback, information cutoff, and decision time are inconsistent."
+                    )
                 if (
                     lookback_start >= lookback_end
                     or not _aligned(lookback_start, scope.timeframe)
@@ -458,7 +460,6 @@ def _validate_strategy(
         raise ValueError("Strategy identity or version was created after the decision.")
     if (
         not resolved.selectable_for_research
-        or resolved.c021_lifecycle is StrategyLifecycle.RESEARCH
         or resolved.c021_lifecycle
         in {
             StrategyLifecycle.REJECTED,

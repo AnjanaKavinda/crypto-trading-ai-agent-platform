@@ -8,8 +8,10 @@ PERSONAL_SPOT_RESEARCH replay work. Issue #92 remains open.
 `build_spot_replay_input_journal` accepts an immutable request with a finite,
 strictly increasing tuple of decision times. Each decision carries exact C-092
 and C-103 SHA-256 pins, its information cutoff, and its required lookback
-interval. The interval end must equal the information cutoff; there is no
-implicit warmup, forward filling, or fallback to a final-cutoff manifest.
+interval. Lookback boundaries align to the timeframe and satisfy
+`lookback_start < lookback_end <= information_cutoff <= decision_time`; the
+cutoff and decision time need not align to a bar. There is no implicit warmup,
+forward filling, or fallback to a final-cutoff manifest.
 
 Every decision is independently loaded through `load_validation_dataset` using
 the supplied trusted lineage resolver. The persisted dataset and manifest
@@ -19,14 +21,17 @@ exactly the declared Spot instrument at the declared venue and be both effective
 and available at the cutoff. The usable view contains only finalized OHLCV bars
 whose exact lookback coverage is continuous, whose units match the request, and
 whose publication, ingestion, retrieval, availability, event, and finality
-times do not exceed the cutoff.
+times do not exceed the cutoff. Source retrieval/availability may follow a
+bar's close, provided the exact persisted closure makes it available by cutoff.
 
 The strategy pin contains the C-020 identity, exact C-021v2 ID, semantic version,
 and content digest. Resolution uses `StrategyRegistry.resolve_version` with
-`as_of=decision_time`. A version created after that decision, one without
-complete historical lifecycle state, a non-selectable or research-only
-lifecycle, or a version that does not explicitly allow the declared Spot,
-environment, timeframe, and BACKTEST scope is unavailable.
+`as_of=decision_time`. Lifecycle maturity and operating-mode eligibility are
+separate axes: a selectable C-021 `RESEARCH` lifecycle is permitted when the
+exact version explicitly allows BACKTEST. A version created after the decision,
+one without complete historical lifecycle state, one that is not selectable,
+or one that does not explicitly allow the declared Spot, environment,
+timeframe, and BACKTEST scope is unavailable.
 
 ## Bounds and deterministic identity
 

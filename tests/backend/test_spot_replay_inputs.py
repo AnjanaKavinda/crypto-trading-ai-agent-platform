@@ -35,8 +35,12 @@ from trading_platform_api.validation.spot_replay_inputs import (
 )
 
 STEP = timedelta(minutes=1)
-EARLY_CUTOFF = T + 3 * STEP
-LATER_CUTOFF = T + 6 * STEP
+EARLY_CUTOFF = T + 3 * STEP + timedelta(seconds=30)
+LATER_CUTOFF = T + 6 * STEP + timedelta(seconds=30)
+EARLY_DECISION = EARLY_CUTOFF + timedelta(seconds=15)
+LATER_DECISION = LATER_CUTOFF + timedelta(seconds=15)
+EARLY_LOOKBACK_END = T + 3 * STEP
+LATER_LOOKBACK_END = T + 6 * STEP
 
 
 class MemoryResolver:
@@ -83,6 +87,8 @@ def _strategy() -> ResolvedStrategyVersion:
         strategy_version_id=uuid4(),
         created_at=T - timedelta(days=1),
     )
+    version = replace(version, parent_version_id=None, content_sha256="0" * 64)
+    version = replace(version, content_sha256=strategy_version_content_sha256(version))
     strategy = replace(original.strategy, created_at=T - timedelta(days=2))
     return ResolvedStrategyVersion(
         strategy,
@@ -98,6 +104,32 @@ def _history(*, omit_open: datetime | None = None, nonfinal: bool = False):
     universe = base.reconstruction.universe
     revisions = list(base.reconstruction.selected_revisions)
     sources = list(base.sources)
+    parent = revisions[1]
+    parent_observation = parent.observation
+    delayed_source_availability = (
+        parent_observation.event_time + STEP + timedelta(seconds=15)
+    )
+    delayed_source = next(
+        item
+        for item in sources
+        if item.source_record_id == parent_observation.source_record_id
+    )
+    sources[sources.index(delayed_source)] = replace(
+        delayed_source,
+        retrieval_time=delayed_source_availability,
+        availability_time=delayed_source_availability,
+    )
+    revisions[1] = replace(
+        parent,
+        observation=replace(
+            parent_observation,
+            ingestion_time=delayed_source_availability,
+            availability_time=delayed_source_availability,
+        ),
+        publication_time=delayed_source_availability,
+        ingestion_time=delayed_source_availability,
+        availability_time=delayed_source_availability,
+    )
     parent = revisions[1]
     parent_observation = parent.observation
     later_source = replace(
@@ -220,20 +252,20 @@ def _case(*, omit_open=None, nonfinal=False, dataset_prefix="decision"):
     )
     decisions = (
         SpotReplayDecisionRequest(
-            EARLY_CUTOFF,
+            EARLY_DECISION,
             EARLY_CUTOFF,
             pins[EARLY_CUTOFF][0],
             pins[EARLY_CUTOFF][1],
             T + STEP,
-            EARLY_CUTOFF,
+            EARLY_LOOKBACK_END,
         ),
         SpotReplayDecisionRequest(
-            LATER_CUTOFF,
+            LATER_DECISION,
             LATER_CUTOFF,
             pins[LATER_CUTOFF][0],
             pins[LATER_CUTOFF][1],
             T + STEP,
-            LATER_CUTOFF,
+            LATER_LOOKBACK_END,
         ),
     )
     request = SpotReplayInputRequest(
@@ -273,6 +305,63 @@ def test_point_in_time_journal_is_stable_and_uses_only_available_correction():
     ]
 
 
+def test_non_bar_aligned_cutoffs_allow_delayed_source_availability():
+    request, closures, resolved, _, _ = _case()
+    journal = asyncio.run(
+        build_spot_replay_input_journal(
+            resolver=MemoryResolver(closures),
+            strategy_registry=MemoryRegistry(resolved),
+            request=request,
+        )
+    )
+    record = journal.decisions[0]
+    revision = record.usable_revisions[0]
+    source = next(
+        item
+        for item in record.dataset.sources
+        if item.source_record_id == revision.observation.source_record_id
+    )
+    assert request.decisions[0].information_cutoff.second == 30
+    assert request.decisions[0].decision_time.second == 45
+    assert record.lookback_end < record.information_cutoff
+    assert source.availability_time > revision.finalized_interval_end
+    assert source.availability_time <= record.information_cutoff
+
+
+def test_future_source_availability_is_rejected(monkeypatch):
+    request, closures, resolved, _, _ = _case()
+    load_dataset = spot_replay_inputs.load_validation_dataset
+
+    async def load_with_future_source(*args, **kwargs):
+        loaded = await load_dataset(*args, **kwargs)
+        used_source_id = next(
+            revision.observation.source_record_id
+            for revision in loaded.reconstruction.selected_revisions
+            if revision.observation.event_time == T + STEP
+        )
+        cutoff = request.decisions[0].information_cutoff
+        sources = tuple(
+            replace(item, availability_time=cutoff + timedelta(seconds=1))
+            if item.source_record_id == used_source_id
+            else item
+            for item in loaded.sources
+        )
+        return replace(loaded, sources=sources)
+
+    monkeypatch.setattr(
+        spot_replay_inputs, "load_validation_dataset", load_with_future_source
+    )
+    with pytest.raises(SpotReplayInputUnavailable) as error:
+        asyncio.run(
+            build_spot_replay_input_journal(
+                resolver=MemoryResolver(closures),
+                strategy_registry=MemoryRegistry(resolved),
+                request=request,
+            )
+        )
+    assert error.value.reason is SpotReplayInputFailure.BAR_UNAVAILABLE
+
+
 def test_oversized_journal_preimage_is_rejected_before_encoding(monkeypatch):
     monkeypatch.setattr(
         spot_replay_inputs,
@@ -306,6 +395,17 @@ def test_oversized_journal_preimage_is_rejected_before_encoding(monkeypatch):
                     information_cutoff=T + 2 * STEP,
                     lookback_end=T + 2 * STEP,
                 ),
+            ),
+        ),
+        lambda req: replace(
+            req,
+            decisions=(
+                replace(
+                    req.decisions[0],
+                    decision_time=T + 5 * STEP,
+                    lookback_end=T + 4 * STEP,
+                ),
+                req.decisions[1],
             ),
         ),
     ],
@@ -459,10 +559,14 @@ def test_tampered_source_and_strategy_hashes_are_rejected():
 @pytest.mark.parametrize(
     "resolved_change",
     [
-        lambda value: replace(value, c021_lifecycle=StrategyLifecycle.RESEARCH),
+        lambda value: replace(value, c021_lifecycle=StrategyLifecycle.REJECTED),
+        lambda value: replace(value, c021_lifecycle=StrategyLifecycle.RETIRED),
         lambda value: replace(value, availability=StrategyAvailability.SUSPENDED),
         lambda value: replace(
             value, artifact_lifecycle=ArtifactVersionLifecycle.RETIRED
+        ),
+        lambda value: replace(
+            value, artifact_lifecycle=ArtifactVersionLifecycle.REJECTED
         ),
     ],
 )
@@ -473,6 +577,39 @@ def test_ineligible_historical_strategy_lifecycle_is_rejected(resolved_change):
             build_spot_replay_input_journal(
                 resolver=MemoryResolver(closures),
                 strategy_registry=MemoryRegistry(resolved_change(resolved)),
+                request=request,
+            )
+        )
+    assert error.value.reason is SpotReplayInputFailure.STRATEGY_UNAVAILABLE
+
+
+def test_selectable_research_lifecycle_with_backtest_mode_is_accepted():
+    request, closures, resolved, _, _ = _case()
+    research = replace(resolved, c021_lifecycle=StrategyLifecycle.RESEARCH)
+    assert research.selectable_for_research
+    assert research.version.operating_modes == (OperatingMode.BACKTEST,)
+    journal = asyncio.run(
+        build_spot_replay_input_journal(
+            resolver=MemoryResolver(closures),
+            strategy_registry=MemoryRegistry(research),
+            request=request,
+        )
+    )
+    assert journal.decisions[0].strategy.c021_lifecycle is StrategyLifecycle.RESEARCH
+
+
+def test_missing_historical_strategy_resolution_fails_closed():
+    request, closures, _, _, _ = _case()
+
+    class MissingRegistry:
+        async def resolve_version(self, **kwargs):
+            raise StrategyRegistryError("historical version unavailable")
+
+    with pytest.raises(SpotReplayInputUnavailable) as error:
+        asyncio.run(
+            build_spot_replay_input_journal(
+                resolver=MemoryResolver(closures),
+                strategy_registry=MissingRegistry(),
                 request=request,
             )
         )
@@ -502,19 +639,19 @@ def test_late_strategy_creation_and_non_backtest_scope_are_rejected():
             )
         )
     assert error.value.reason is SpotReplayInputFailure.STRATEGY_UNAVAILABLE
-    research_version = replace(
+    research_only_mode_version = replace(
         resolved.version,
         operating_modes=(OperatingMode.RESEARCH,),
         content_sha256="0" * 64,
     )
-    research_version = replace(
-        research_version,
-        content_sha256=strategy_version_content_sha256(research_version),
+    research_only_mode_version = replace(
+        research_only_mode_version,
+        content_sha256=strategy_version_content_sha256(research_only_mode_version),
     )
     research_request = replace(
         request,
         strategy=replace(
-            request.strategy, content_sha256=research_version.content_sha256
+            request.strategy, content_sha256=research_only_mode_version.content_sha256
         ),
     )
     with pytest.raises(SpotReplayInputUnavailable):
@@ -522,7 +659,7 @@ def test_late_strategy_creation_and_non_backtest_scope_are_rejected():
             build_spot_replay_input_journal(
                 resolver=MemoryResolver(closures),
                 strategy_registry=MemoryRegistry(
-                    replace(resolved, version=research_version)
+                    replace(resolved, version=research_only_mode_version)
                 ),
                 request=research_request,
             )
