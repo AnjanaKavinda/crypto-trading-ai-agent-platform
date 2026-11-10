@@ -25,7 +25,13 @@ from trading_platform_api.contracts.serialization import (
     canonical_json_dumps,
     canonical_sha256,
 )
-from trading_platform_api.lineage.codec import LineageError, LineageKey, decode, encode
+from trading_platform_api.lineage.codec import (
+    LineageError,
+    LineageKey,
+    decode,
+    decode_value,
+    encode,
+)
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisFanoutResult,
@@ -64,6 +70,7 @@ from trading_platform_api.validation.contracts_v3 import (
     BacktestOutcomeV3,
     BacktestResultV3,
 )
+from trading_platform_api.validation.cost_models import SpotExecutionCostProfile
 from trading_platform_api.validation.dataset_loader import (
     DatasetLoadError,
     LoadedValidationDataset,
@@ -261,9 +268,17 @@ class SpotBacktestAnalysisClosure:
                 type(item) is not ResolvedSpotOHLCVBindingV4
                 for item in self.resolved_bindings
             )
+            or len(self.resolved_bindings) != len(self.manifest.bindings)
+            or tuple(item.binding for item in self.resolved_bindings)
+            != self.manifest.bindings
             or type(self.evidence) is not tuple
             or any(type(item) is not EvidenceItemV2 for item in self.evidence)
             or type(self.independence_report) is not AgentIndependenceReport
+            or type(self.debate.market_context) is not MarketContextV5
+            or self.debate.market_context.analysis_snapshot.snapshot_id
+            != self.manifest.snapshot_id
+            or self.fanout.correlation_id != self.debate.correlation_id
+            or len({item.evidence_id for item in self.evidence}) != len(self.evidence)
         ):
             raise ValueError("Archived analysis closure requires exact immutable inputs.")
 
@@ -665,7 +680,7 @@ async def run_spot_backtest(
     except (LineageError, _ReplayUnavailable, SimulationUnavailable) as exc:
         reason = exc.reason if isinstance(exc, _ReplayUnavailable) else type(exc).__name__
         return _inconclusive(reason)
-    except ValueError:
+    except (OverflowError, ValueError):
         return _inconclusive("INVALID_OR_STALE_ARCHIVED_ANALYSIS")
 
 
@@ -702,8 +717,6 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
         if canonical_json_dumps(json.loads(document)) != document:
             raise ValueError("Backtest artifact document is not canonical.")
         if reference.artifact_type == "C-021":
-            from trading_platform_api.lineage.codec import decode_value
-
             strategy = decode_value(StrategyVersionV2, json.loads(document))
             if (
                 strategy.strategy_version_id != reference.artifact_id
@@ -747,6 +760,14 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
             raise ValueError("Backtest execution model differs from its trace.")
     if (
         result.trace.content_sha256 != bundle.trace.content_sha256
+        or result.strategy_version != bundle.trace.strategy
+        or result.cost_assumptions
+        != ValidationArtifactReferenceV2(
+            "C-027",
+            bundle.trace.cost_assumptions.assumption_set_id,
+            "2",
+            bundle.trace.cost_assumptions.content_sha256,
+        )
         or result.trace not in records
         or records[result.trace] != canonical_json_dumps(bundle.trace)
         or result.content_sha256 != canonical_sha256(result.identity_payload())
@@ -800,6 +821,12 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
     }
     if records[result.configuration] != canonical_json_dumps(configuration):
         raise ValueError("Backtest configuration does not bind its exact inputs.")
+    execution_model = json.loads(records[result.execution_model])
+    profile = decode_value(SpotExecutionCostProfile, execution_model["cost_profile"])
+    if SpotExecutionCostAdapter(
+        profile, bundle.trace.cost_assumptions
+    ).adapter_reference != bundle.trace.cost_adapter:
+        raise ValueError("Cost adapter profile does not match its pinned reference.")
     if len(bundle.trace.decisions) != len(bundle.input_journal.decisions):
         raise ValueError("Backtest decision journal closure is incomplete.")
     for decision, record in zip(
