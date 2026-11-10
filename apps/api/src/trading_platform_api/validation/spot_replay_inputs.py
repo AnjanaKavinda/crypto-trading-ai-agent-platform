@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from enum import StrEnum
+from enum import Enum, StrEnum
 from hashlib import sha256
-from typing import Protocol
+from typing import NoReturn, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
@@ -234,7 +235,9 @@ def _aligned(value: datetime, timeframe: str) -> bool:
     )
 
 
-def _validate_request(request: SpotReplayInputRequest) -> tuple[datetime, ...]:
+def _validate_request(
+    request: SpotReplayInputRequest,
+) -> tuple[SpotReplayScope, tuple[datetime, ...]]:
     if type(request) is not SpotReplayInputRequest:
         raise _unavailable(
             SpotReplayInputFailure.INVALID_REQUEST,
@@ -302,6 +305,7 @@ def _validate_request(request: SpotReplayInputRequest) -> tuple[datetime, ...]:
             )
         moments: list[datetime] = []
         prior: datetime | None = None
+        prior_cutoff: datetime | None = None
         timeframe_seconds = _TIMEFRAMES[scope.timeframe]
         for index, item in enumerate(decisions):
             decision_time: datetime | None = None
@@ -314,6 +318,8 @@ def _validate_request(request: SpotReplayInputRequest) -> tuple[datetime, ...]:
                 lookback_end = _utc(item.lookback_end, "lookback_end")
                 if prior is not None and decision_time <= prior:
                     raise ValueError("Decision times must be strictly increasing.")
+                if prior_cutoff is not None and cutoff < prior_cutoff:
+                    raise ValueError("Information cutoffs must be nondecreasing.")
                 if not period_start <= decision_time < period_end:
                     raise ValueError("Decision time is outside the declared period.")
                 if cutoff > decision_time or lookback_end != cutoff:
@@ -343,6 +349,7 @@ def _validate_request(request: SpotReplayInputRequest) -> tuple[datetime, ...]:
                     )
                 moments.append(decision_time)
                 prior = decision_time
+                prior_cutoff = cutoff
             except (TypeError, ValueError, OverflowError) as exc:
                 raise _unavailable(
                     SpotReplayInputFailure.INVALID_SCHEDULE,
@@ -350,14 +357,74 @@ def _validate_request(request: SpotReplayInputRequest) -> tuple[datetime, ...]:
                     index=index,
                     decision_time=decision_time,
                 ) from exc
-        return tuple(moments)
+        return (
+            SpotReplayScope(
+                scope.venue_id,
+                scope.instrument_id,
+                scope.asset,
+                scope.price_unit,
+                scope.volume_unit,
+                scope.timeframe,
+                scope.environment,
+                period_start,
+                period_end,
+            ),
+            tuple(moments),
+        )
     except SpotReplayInputUnavailable:
         raise
     except (TypeError, ValueError, OverflowError) as exc:
         raise _unavailable(SpotReplayInputFailure.INVALID_REQUEST, str(exc)) from exc
 
 
+def _canonical_size_upper_bound(value: object, active: set[int]) -> int:
+    if value is None or isinstance(value, (str, bool)):
+        return 2 + 6 * len(value) if isinstance(value, str) else 5
+    if isinstance(value, int):
+        return len(str(value))
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Canonical digest inputs must be finite.")
+        return len(value.as_tuple().digits) + abs(int(value.as_tuple().exponent)) + 4
+    if isinstance(value, datetime):
+        return 40
+    if isinstance(value, UUID):
+        return 38
+    if isinstance(value, Enum):
+        return _canonical_size_upper_bound(value.value, active)
+    if isinstance(value, (tuple, Mapping)) or (
+        is_dataclass(value) and not isinstance(value, type)
+    ):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("Canonical digest input contains a cycle.")
+        active.add(identity)
+        try:
+            if isinstance(value, tuple):
+                return 2 + sum(
+                    _canonical_size_upper_bound(item, active) + 1 for item in value
+                )
+            if isinstance(value, Mapping):
+                return 2 + sum(
+                    6 * len(key) + 4 + _canonical_size_upper_bound(item, active)
+                    for key, item in value.items()
+                )
+            return 2 + sum(
+                6 * len(item.name)
+                + 4
+                + _canonical_size_upper_bound(getattr(value, item.name), active)
+                for item in fields(value)
+            )
+        finally:
+            active.remove(identity)
+    raise ValueError(
+        f"Unsupported canonical digest input type: {type(value).__name__}."
+    )
+
+
 def _sha256_bounded(value: object) -> str:
+    if _canonical_size_upper_bound(value, set()) > MAX_JOURNAL_PREIMAGE_BYTES:
+        raise ValueError("Replay journal canonical preimage exceeds its byte budget.")
     encoded = canonical_json_dumps(value).encode("utf-8")
     if len(encoded) > MAX_JOURNAL_PREIMAGE_BYTES:
         raise ValueError("Replay journal canonical preimage exceeds its byte budget.")
@@ -428,7 +495,7 @@ def _validate_dataset(
     moment = _utc(decision.decision_time, "decision_time")
     cutoff = _utc(decision.information_cutoff, "information_cutoff")
 
-    def fail(reason: SpotReplayInputFailure, message: str) -> None:
+    def fail(reason: SpotReplayInputFailure, message: str) -> NoReturn:
         raise _unavailable(reason, message, index=index, decision_time=moment)
 
     if type(loaded) is not LoadedValidationDataset:
@@ -444,8 +511,6 @@ def _validate_dataset(
         or loaded.manifest_sha256 != decision.manifest_sha256
         or not _valid_digest(loaded.dataset_sha256)
         or not _valid_digest(loaded.manifest_sha256)
-        or _sha256_bounded(dataset) != decision.dataset_sha256
-        or _sha256_bounded(manifest) != decision.manifest_sha256
         or dataset.schema_version != "1"
         or dataset.canonical_schema_version != "1"
         or manifest.schema_version != "1"
@@ -456,6 +521,11 @@ def _validate_dataset(
             SpotReplayInputFailure.DATASET_INTEGRITY_MISMATCH,
             "Exact C-092/C-103 pins, schemas, or selection policy do not match.",
         )
+    try:
+        _bounded_text(dataset.dataset_id, "dataset_id")
+        _bounded_text(dataset.version, "dataset_version")
+    except ValueError as exc:
+        fail(SpotReplayInputFailure.DATASET_INTEGRITY_MISMATCH, str(exc))
     if manifest.cutoff != cutoff or dataset.point_in_time_cutoff != cutoff:
         fail(
             SpotReplayInputFailure.DATASET_CUTOFF_MISMATCH,
@@ -492,10 +562,6 @@ def _validate_dataset(
         len(sources) != len(loaded.sources)
         or set(sources) != set(dataset.source_record_ids)
         or set(sources) != set(source_pins)
-        or any(
-            _sha256_bounded(source) != source_pins[source_id]
-            for source_id, source in sources.items()
-        )
         or tuple(revision.revision_id for revision in selected)
         != manifest.selected_revision_ids
         or len(revision_pins) != len(manifest.revision_pins)
@@ -516,14 +582,18 @@ def _validate_dataset(
     for revision in selected:
         observation = revision.observation
         source = sources.get(observation.source_record_id)
+        if source is None:
+            fail(
+                SpotReplayInputFailure.HISTORICAL_SCOPE_MISMATCH,
+                "Selected revision has no pinned source record.",
+            )
         if (
             revision.schema_version != "1"
             or observation.observation_type != "OHLCV"
             or observation.venue_id != scope.venue_id
             or observation.instrument_id != scope.instrument_id
-            or source is None
             or source.provider_id != revision.provider_id
-            or revision_pins.get(revision.revision_id) != _sha256_bounded(revision)
+            or revision.revision_id not in revision_pins
         ):
             fail(
                 SpotReplayInputFailure.HISTORICAL_SCOPE_MISMATCH,
@@ -579,6 +649,10 @@ def _validate_dataset(
                     type(value) is not Decimal or not value.is_finite()
                     for value in values.values()
                 )
+                or any(
+                    value.adjusted() > 30 or int(value.as_tuple().exponent) < -18
+                    for value in values.values()
+                )
                 or any(values[name] <= 0 for name in ("open", "high", "low", "close"))
                 or values["volume"] < 0
                 or values["high"] < max(values["open"], values["close"])
@@ -616,7 +690,7 @@ async def build_spot_replay_input_journal(
     request: SpotReplayInputRequest,
 ) -> SpotReplayInputJournal:
     """Resolve every exact decision input or fail without returning a partial journal."""
-    decision_times = _validate_request(request)
+    scope, decision_times = _validate_request(request)
     budget = _BudgetedResolver(
         resolver,
         total_records=request.limits.maximum_total_records,
@@ -647,16 +721,14 @@ async def build_spot_replay_input_journal(
                 index=index,
                 decision_time=decision_time,
             ) from exc
-        usable = _validate_dataset(loaded, decision, request.scope, index=index)
+        usable = _validate_dataset(loaded, decision, scope, index=index)
         try:
             lifecycle = await strategy_registry.resolve_version(
                 strategy_id=request.strategy.strategy_id,
                 strategy_version_id=request.strategy.strategy_version_id,
                 as_of=decision_time,
             )
-            _validate_strategy(
-                lifecycle, request.strategy, request.scope, decision_time
-            )
+            _validate_strategy(lifecycle, request.strategy, scope, decision_time)
         except StrategyRegistryError as exc:
             raise _unavailable(
                 SpotReplayInputFailure.STRATEGY_UNAVAILABLE,
@@ -679,7 +751,7 @@ async def build_spot_replay_input_journal(
             ),
             "lookback_start": _utc(decision.lookback_start, "lookback_start"),
             "lookback_end": _utc(decision.lookback_end, "lookback_end"),
-            "scope": request.scope,
+            "scope": scope,
             "dataset_identity": (loaded.dataset.dataset_id, loaded.dataset.version),
             "dataset_sha256": loaded.dataset_sha256,
             "manifest_sha256": loaded.manifest_sha256,
@@ -714,7 +786,7 @@ async def build_spot_replay_input_journal(
                 _utc(decision.information_cutoff, "information_cutoff"),
                 _utc(decision.lookback_start, "lookback_start"),
                 _utc(decision.lookback_end, "lookback_end"),
-                request.scope,
+                scope,
                 loaded,
                 loaded.reconstruction.manifest.source_pins,
                 loaded.reconstruction.manifest.revision_pins,

@@ -22,6 +22,7 @@ from trading_platform_api.strategy.registry import (
     build_personal_spot_strategy_v2,
     strategy_version_content_sha256,
 )
+from trading_platform_api.validation import spot_replay_inputs
 from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayDecisionRequest,
     SpotReplayInputFailure,
@@ -272,6 +273,16 @@ def test_point_in_time_journal_is_stable_and_uses_only_available_correction():
     ]
 
 
+def test_oversized_journal_preimage_is_rejected_before_encoding(monkeypatch):
+    monkeypatch.setattr(
+        spot_replay_inputs,
+        "canonical_json_dumps",
+        lambda value: pytest.fail("oversized value reached canonical encoding"),
+    )
+    with pytest.raises(ValueError, match="byte budget"):
+        spot_replay_inputs._sha256_bounded({"payload": "x" * 170_000})
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -284,6 +295,17 @@ def test_point_in_time_journal_is_stable_and_uses_only_available_correction():
             decisions=(
                 replace(req.decisions[0], decision_time=datetime(2026, 1, 1)),
                 req.decisions[1],
+            ),
+        ),
+        lambda req: replace(
+            req,
+            decisions=(
+                req.decisions[0],
+                replace(
+                    req.decisions[1],
+                    information_cutoff=T + 2 * STEP,
+                    lookback_end=T + 2 * STEP,
+                ),
             ),
         ),
     ],
@@ -329,6 +351,11 @@ def test_later_manifest_cannot_be_substituted_for_earlier_decision():
         ({"nonfinal": True}, {}, SpotReplayInputFailure.BAR_UNAVAILABLE),
         ({"omit_open": T + 2 * STEP}, {}, SpotReplayInputFailure.LOOKBACK_UNAVAILABLE),
         ({}, {"venue_id": "other"}, SpotReplayInputFailure.HISTORICAL_SCOPE_MISMATCH),
+        (
+            {},
+            {"instrument_id": "ETH-USDT-SPOT"},
+            SpotReplayInputFailure.HISTORICAL_SCOPE_MISMATCH,
+        ),
         ({}, {"price_unit": "BTC"}, SpotReplayInputFailure.BAR_UNAVAILABLE),
     ],
 )
@@ -346,6 +373,24 @@ def test_invalid_bar_scope_finality_and_coverage_fail_closed(
             )
         )
     assert error.value.reason is expected
+
+
+def test_wrong_timeframe_is_rejected_without_using_shorter_bars():
+    request, closures, resolved, _, _ = _case()
+    request = replace(
+        request,
+        scope=replace(request.scope, timeframe="3m"),
+        decisions=tuple(replace(item, lookback_start=T) for item in request.decisions),
+    )
+    with pytest.raises(SpotReplayInputUnavailable) as error:
+        asyncio.run(
+            build_spot_replay_input_journal(
+                resolver=MemoryResolver(closures),
+                strategy_registry=MemoryRegistry(resolved),
+                request=request,
+            )
+        )
+    assert error.value.reason is SpotReplayInputFailure.BAR_UNAVAILABLE
 
 
 def test_exact_dataset_hash_and_total_resolution_budget_are_required():
@@ -372,6 +417,43 @@ def test_exact_dataset_hash_and_total_resolution_budget_are_required():
     assert (
         budget_error.value.reason is SpotReplayInputFailure.RESOLUTION_BUDGET_EXHAUSTED
     )
+
+
+def test_tampered_source_and_strategy_hashes_are_rejected():
+    request, closures, resolved, _, _ = _case()
+    early_key = next(
+        key
+        for key in closures
+        if key.contract_id == "C-103"
+        and key.record_id == request.decisions[0].manifest_sha256
+    )
+    corrupted = {key: dict(records) for key, records in closures.items()}
+    early_records = corrupted[early_key]
+    source = next(
+        value
+        for value in early_records.values()
+        if getattr(value, "contract_id", None) == "C-091"
+    )
+    early_records[key_for(source)] = replace(source, licensing_reference="changed")
+    with pytest.raises(SpotReplayInputUnavailable) as source_error:
+        asyncio.run(
+            build_spot_replay_input_journal(
+                resolver=MemoryResolver(corrupted),
+                strategy_registry=MemoryRegistry(resolved),
+                request=request,
+            )
+        )
+    assert source_error.value.reason is SpotReplayInputFailure.DATASET_UNAVAILABLE
+    bad_strategy = replace(request.strategy, content_sha256="f" * 64)
+    with pytest.raises(SpotReplayInputUnavailable) as strategy_error:
+        asyncio.run(
+            build_spot_replay_input_journal(
+                resolver=MemoryResolver(closures),
+                strategy_registry=MemoryRegistry(resolved),
+                request=replace(request, strategy=bad_strategy),
+            )
+        )
+    assert strategy_error.value.reason is SpotReplayInputFailure.STRATEGY_UNAVAILABLE
 
 
 @pytest.mark.parametrize(
@@ -412,7 +494,7 @@ def test_late_strategy_creation_and_non_backtest_scope_are_rejected():
     )
     late_request = replace(request, strategy=late_pin)
     with pytest.raises(SpotReplayInputUnavailable) as error:
-        __import__("asyncio").run(
+        asyncio.run(
             build_spot_replay_input_journal(
                 resolver=MemoryResolver(closures),
                 strategy_registry=MemoryRegistry(late),
@@ -436,7 +518,7 @@ def test_late_strategy_creation_and_non_backtest_scope_are_rejected():
         ),
     )
     with pytest.raises(SpotReplayInputUnavailable):
-        __import__("asyncio").run(
+        asyncio.run(
             build_spot_replay_input_journal(
                 resolver=MemoryResolver(closures),
                 strategy_registry=MemoryRegistry(
