@@ -183,15 +183,15 @@ def _closure(base, universe, revisions, sources, cutoff, dataset_id):
     return dataset, reconstruction.manifest, records
 
 
-def _case(*, omit_open=None, nonfinal=False):
+def _case(*, omit_open=None, nonfinal=False, dataset_prefix="decision"):
     base, universe, revisions, sources = _history(
         omit_open=omit_open, nonfinal=nonfinal
     )
     closures = {}
     pins = {}
     for cutoff, dataset_id in (
-        (EARLY_CUTOFF, "decision-early"),
-        (LATER_CUTOFF, "decision-later"),
+        (EARLY_CUTOFF, f"{dataset_prefix}-early"),
+        (LATER_CUTOFF, f"{dataset_prefix}-later"),
     ):
         dataset, manifest, records = _closure(
             base, universe, revisions, sources, cutoff, dataset_id

@@ -166,7 +166,7 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
         assert url.host in ("127.0.0.1", "localhost") and url.database == "lineage_test"
         engine = create_async_engine(database_url)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
-        request, closures, resolved, _, _ = _case()
+        request, closures, resolved, _, _ = _case(dataset_prefix=f"postgres-{uuid4()}")
         early_closure = _merge_records(
             closures, manifest_sha256=request.decisions[0].manifest_sha256
         )
