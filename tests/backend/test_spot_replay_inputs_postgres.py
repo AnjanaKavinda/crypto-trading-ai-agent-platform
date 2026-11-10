@@ -1,8 +1,11 @@
 """Disposable PostgreSQL replay-input tests with explicitly synthetic records."""
 
 import asyncio
+from io import StringIO
 from uuid import uuid4
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -161,12 +164,23 @@ def _counts():
 
 def test_postgresql_read_only_journal_survives_later_correction(database_url):
     request, closures, resolved, _, _ = _case(dataset_prefix=f"postgres-{uuid4()}")
+    # Apply the real migration DDL in a private disposable schema. Committed
+    # fixture records must not pollute the shared registry integration tests.
+    migration_output = StringIO()
+    command.upgrade(
+        Config("apps/api/alembic.ini", output_buffer=migration_output), "head", sql=True
+    )
+    schema = f"replay_inputs_test_{uuid4().hex}"
 
     async def check():
         url = make_url(database_url)
         assert url.drivername == "postgresql+asyncpg"
         assert url.host in ("127.0.0.1", "localhost") and url.database == "lineage_test"
-        engine = create_async_engine(database_url)
+        admin = create_async_engine(database_url)
+        engine = create_async_engine(
+            database_url, connect_args={"server_settings": {"search_path": schema}}
+        )
+        schema_created = False
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         early_closure = _merge_records(
             closures, manifest_sha256=request.decisions[0].manifest_sha256
@@ -175,6 +189,16 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
             closures, manifest_sha256=request.decisions[1].manifest_sha256
         )
         try:
+            async with admin.begin() as connection:
+                before_shared = [
+                    (await connection.execute(statement)).scalar_one()
+                    for statement in _counts()
+                ]
+                await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            schema_created = True
+            async with engine.connect() as connection:
+                raw = await connection.get_raw_connection()
+                await raw.driver_connection.execute(migration_output.getvalue())
             async with sessions.begin() as session:
                 await _register_strategy(session, resolved)
                 store = SqlAlchemyLineageStore(session)
@@ -238,6 +262,19 @@ def test_postgresql_read_only_journal_survives_later_correction(database_url):
             )
         finally:
             await engine.dispose()
+            try:
+                if schema_created:
+                    async with admin.begin() as connection:
+                        await connection.execute(
+                            text(f'DROP SCHEMA "{schema}" CASCADE')
+                        )
+                        after_shared = [
+                            (await connection.execute(statement)).scalar_one()
+                            for statement in _counts()
+                        ]
+                        assert after_shared == before_shared
+            finally:
+                await admin.dispose()
 
     asyncio.run(check())
 
