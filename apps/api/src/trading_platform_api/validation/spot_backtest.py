@@ -336,7 +336,7 @@ class SpotBacktestTrace:
 
     @property
     def content_sha256(self) -> str:
-        return canonical_sha256(self)
+        return canonical_sha256(_trace_payload(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +384,56 @@ def _digest(name: str, value: object) -> None:
         or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ValueError(f"{name} must be lowercase SHA-256.")
+
+
+def _duration_microseconds(value: timedelta) -> int:
+    return (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
+
+
+def _parameters_payload(parameters: SpotBacktestParameters) -> dict[str, object]:
+    return {
+        "strategy_version_id": parameters.strategy_version_id,
+        "strategy_sha256": parameters.strategy_sha256,
+        "quantity": parameters.quantity,
+        "entry_expiry_microseconds": _duration_microseconds(parameters.entry_expiry),
+        "holding_interval_microseconds": _duration_microseconds(
+            parameters.holding_interval
+        ),
+        "exit_expiry_microseconds": _duration_microseconds(parameters.exit_expiry),
+        "maximum_entries": parameters.maximum_entries,
+        "partial_fill_policy": parameters.partial_fill_policy,
+    }
+
+
+def _trace_payload(trace: SpotBacktestTrace) -> dict[str, object]:
+    return {
+        "method": trace.method,
+        "replay_request": trace.replay_request,
+        "input_journal_sha256": trace.input_journal_sha256,
+        "execution_dataset_sha256": trace.execution_dataset_sha256,
+        "execution_manifest_sha256": trace.execution_manifest_sha256,
+        "strategy": trace.strategy,
+        "parameters": _parameters_payload(trace.parameters),
+        "policy": trace.policy,
+        "cost_assumptions": trace.cost_assumptions,
+        "cost_adapter": trace.cost_adapter,
+        "decisions": trace.decisions,
+        "entry_trace": trace.entry_trace,
+        "exit_trace": trace.exit_trace,
+        "trades": trace.trades,
+    }
+
+
+def _canonical_wire_value(value: object) -> object:
+    if isinstance(value, list):
+        return tuple(_canonical_wire_value(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: _canonical_wire_value(item)
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
+    return value
 
 
 def _positive_decimal(name: str, value: object) -> None:
@@ -577,11 +627,15 @@ async def run_spot_backtest(
                 if entry_result.reason_codes
                 else "ENTRY_SIMULATION_UNAVAILABLE"
             )
-        exit_order = _exit_order(
-            entry_result.trace,
-            entry_orders,
-            request.parameters,
-            request.execution_policy,
+        exit_order = (
+            _exit_order(
+                entry_result.trace,
+                entry_orders,
+                request.parameters,
+                request.execution_policy,
+            )
+            if entry_orders
+            else None
         )
         exit_trace = None
         trades: tuple[SpotBacktestTrade, ...] = ()
@@ -722,7 +776,10 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
         raise ValueError("C-027v3 artifact closure is incomplete.")
     for reference in expected_references:
         document = records[reference]
-        if canonical_json_dumps(json.loads(document)) != document:
+        if (
+            canonical_json_dumps(_canonical_wire_value(json.loads(document)))
+            != document
+        ):
             raise ValueError("Backtest artifact document is not canonical.")
         if reference.artifact_type == "C-021":
             strategy = decode_value(StrategyVersionV2, json.loads(document))
@@ -744,7 +801,7 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
         elif sha256(document.encode("utf-8")).hexdigest() != reference.content_sha256:
             raise ValueError("Canonical backtest artifact digest mismatch.")
         elif reference == result.parameter_set and document != canonical_json_dumps(
-            bundle.trace.parameters
+            _parameters_payload(bundle.trace.parameters)
         ):
             raise ValueError("Backtest parameter artifact differs from its trace.")
         elif reference == result.simulator and document != canonical_json_dumps(
@@ -759,7 +816,7 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
             {
                 "method": "spot-bar-execution-scenario-v1",
                 "policy": bundle.trace.policy,
-                "parameters": bundle.trace.parameters,
+                "parameters": _parameters_payload(bundle.trace.parameters),
                 "cost_profile": json.loads(document)["cost_profile"],
                 "cost_adapter": bundle.trace.cost_adapter,
             }
@@ -776,7 +833,7 @@ def resolve_spot_backtest_result(bundle: SpotBacktestBundle) -> BacktestResultV3
             bundle.trace.cost_assumptions.content_sha256,
         )
         or result.trace not in records
-        or records[result.trace] != canonical_json_dumps(bundle.trace)
+        or records[result.trace] != canonical_json_dumps(_trace_payload(bundle.trace))
         or result.content_sha256 != canonical_sha256(result.identity_payload())
         or bundle.trace.input_journal_sha256 != bundle.input_journal.content_sha256
         or bundle.input_journal.method != "spot-per-decision-replay-input-v1"
@@ -958,15 +1015,15 @@ def _validate_analysis_match(
     )
     if actual_pairs != expected_pairs:
         raise _ReplayUnavailable("ANALYSIS_C001_C091_ORDER_OR_DIGEST_MISMATCH")
+    ordered_source_ids = tuple(
+        dict.fromkeys(
+            revision.observation.source_record_id
+            for revision in record.usable_revisions
+        )
+    )
     expected_sources = tuple(
-        (
-            str(identity),
-            canonical_sha256(source),
-        )
-        for identity, source in sorted(
-            ((identity, sources[identity]) for identity in expected_source_ids),
-            key=lambda item: str(item[0]),
-        )
+        (str(identity), canonical_sha256(sources[identity]))
+        for identity in ordered_source_ids
     )
     actual_sources = tuple(
         (item.record_id, item.content_sha256) for item in binding.source_records
@@ -1102,7 +1159,7 @@ def _build_orders(
             (
                 "ENTRY",
                 record.content_sha256,
-                parameters,
+                _parameters_payload(parameters),
             )
         ),
     )
@@ -1187,7 +1244,7 @@ def _exit_order(
                 entry_order.order_id,
                 tuple(fill.fill_id for fill in fills),
                 decision_time,
-                parameters,
+                _parameters_payload(parameters),
             )
         ),
     )
@@ -1281,7 +1338,9 @@ def _build_result(
         strategy.content_sha256,
     )
     parameter_reference = _artifact(
-        "PARAMETER_SET", "spot-backtest-parameters-v1", request.parameters
+        "PARAMETER_SET",
+        "spot-backtest-parameters-v1",
+        _parameters_payload(request.parameters),
     )
     configuration = {
         "method": _METHOD,
@@ -1309,7 +1368,7 @@ def _build_result(
     execution_model = {
         "method": "spot-bar-execution-scenario-v1",
         "policy": request.execution_policy,
-        "parameters": request.parameters,
+        "parameters": _parameters_payload(request.parameters),
         "cost_profile": request.cost_adapter.profile,
         "cost_adapter": request.cost_adapter.adapter_reference,
     }
@@ -1385,7 +1444,8 @@ def _build_result(
     artifacts = (
         SpotBacktestArtifact(strategy_reference, canonical_json_dumps(strategy)),
         SpotBacktestArtifact(
-            parameter_reference, canonical_json_dumps(request.parameters)
+            parameter_reference,
+            canonical_json_dumps(_parameters_payload(request.parameters)),
         ),
         SpotBacktestArtifact(
             configuration_reference, canonical_json_dumps(configuration)
@@ -1395,7 +1455,9 @@ def _build_result(
             execution_reference, canonical_json_dumps(execution_model)
         ),
         SpotBacktestArtifact(cost_reference, encode(request.cost_assumptions)),
-        SpotBacktestArtifact(trace_reference, canonical_json_dumps(trace)),
+        SpotBacktestArtifact(
+            trace_reference, canonical_json_dumps(_trace_payload(trace))
+        ),
     )
     if any(
         sha256(item.document.encode("utf-8")).hexdigest()

@@ -967,14 +967,22 @@ def _verified_decision_revisions(
             "DECISION_DATASET_LINEAGE_MISMATCH",
         )
         expected_usable = tuple(
-            item
-            for item in loaded.reconstruction.selected_revisions
-            if record.lookback_start
-            <= item.observation.event_time
-            < record.lookback_end
-            and item.finalized_interval_end is not None
-            and item.finalized_interval_end <= record.information_cutoff
-            and item.availability_time <= record.information_cutoff
+            sorted(
+                (
+                    item
+                    for item in loaded.reconstruction.selected_revisions
+                    if record.lookback_start
+                    <= item.observation.event_time
+                    < record.lookback_end
+                    and item.finalized_interval_end is not None
+                    and item.finalized_interval_end <= record.information_cutoff
+                    and item.availability_time <= record.information_cutoff
+                ),
+                key=lambda item: (
+                    item.observation.event_time,
+                    str(item.revision_id),
+                ),
+            )
         )
         _require(
             record.usable_revisions == expected_usable,

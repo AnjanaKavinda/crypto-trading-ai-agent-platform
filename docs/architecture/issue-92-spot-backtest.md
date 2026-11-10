@@ -42,45 +42,35 @@ component seams:
 - `test_wave4_persisted_handoff.py` checks persisted synthetic producer
   handoff/recomposition and artifact reads. Its producer stage uses test-owned
   providers; it is not an end-to-end `run_spot_backtest` fixture.
+- `test_spot_backtest_postgres.py` runs the real public runner in an isolated
+  PostgreSQL schema. It joins persisted producer outputs, exact archive pins,
+  synthetic per-decision history and execution data, and an explicitly
+  BACKTEST-enabled registered strategy. It verifies canonical C-027v3 readback,
+  no-order behavior, archive-pin mismatch rejection, artifact tamper rejection,
+  and stability after a later source correction.
 
-These are component tests, not evidence that the full strategy replay path has
-been exercised. In particular, they do not establish persisted positive
-`run_spot_backtest` execution/readback, genuine end-to-end `NO_ORDER` or
-recorded `NO_TRADE`, archive-missing/mismatch rejection through the public
-runner, or tamper rejection of a persisted backtest result.
+## Integrated fixture result and remaining blocker
 
-## Integrated fixture blocker and remaining tests
+The PostgreSQL test reaches the public runner with mutually bound persisted
+analysis and per-decision inputs, and the resulting observed no-order bundle
+passes `resolve_spot_backtest_result`. It also confirms that replay itself
+makes no model call. The archived producer finding is bullish but has
+`FindingReadiness.PARTIAL`; the condition-context builder therefore correctly
+omits `spot.finding.<domain>.direction`. The existing condition/setup path
+reports `CONDITIONS_UNKNOWN`, so there is no confirmed long setup and no
+responsible way to assert an entry, exit, fills, or itemized fill costs from
+these authentic archived records. Changing or supplementing the archived
+finding to force a setup would invalidate the requested provenance.
 
-A truthful positive persisted fixture must join all of the following using
-synthetic records: the per-decision C-092/C-103 closures and historical strategy
-lifecycle; a separate execution dataset; persisted C-006 context plus its
-matching C-091/C-001-backed analysis snapshot, fanout, evidence and persisted
-agent handoff; and exact archive pins whose decision times, cutoffs, lookback
-window, bindings, and hashes agree. The current fixtures build these pieces at
-different seams, but do not produce that mutually consistent archive/input
-closure. The persisted producer fixture can produce synthetic archived analysis
-separately, but its generated context bindings/window are not proven to match
-the replay fixture's exact pinned per-decision history. Directly composing the
-two fixtures would therefore not truthfully establish a persisted positive
-offline replay. No provider or model call belongs inside the replay itself.
-
-The required follow-up is to build a fully synthetic archived analysis closure
-whose provenance and bindings are derived from the exact per-decision records,
-persist it with the strategy and execution closures in an isolated disposable
-PostgreSQL schema, then assert repeatable public-runner output, successful
-`resolve_spot_backtest_result` readback, `NO_ORDER`/`NO_TRADE`, missing and
-mismatched archive rejection, digest/tamper rejection, and no effect on earlier
-decisions after a later correction. No market-performance or production
-readiness claim follows from these tests.
+The test does not claim a positive trade. A positive replay still requires
+authentic archived analysis with a READY, evidence-backed long finding matched
+to the exact per-decision C-001/C-091 closure. No model call, fabricated
+analysis, qualification claim, or live execution is part of this verification.
 
 ## Verification report for this change
 
-On the current implementation head, Ruff passed for the affected production
-files and the new kernel-journal test. Focused existing strategy, eligibility,
-execution, replay-input, and research API regressions passed **151 tests / 68
-skipped**; execution and replay-input regressions passed **70 tests / 1
-skipped**; the new kernel-journal tests passed **2 tests**. The new
-public-entry/timestamp test file was not run after its addition. The required
-integrated `run_spot_backtest` PostgreSQL replay, result readback, and acceptance
-scenarios remain unverified. Hosted Product/Governance CI and independent R3
-review must also run on the final head; no hosted result is claimed here.
+The isolated PostgreSQL integration test passes for canonical readback,
+no-order, archive mismatch, tamper rejection, and correction stability. It does
+not demonstrate positive entry/exit/fills because the persisted producer
+finding is PARTIAL. Hosted Product/Governance CI and independent R3 review must
+also run on the final head; no hosted result is claimed here.
