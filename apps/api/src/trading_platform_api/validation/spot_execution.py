@@ -451,6 +451,7 @@ def run_spot_execution_scenario(
     cost_assumptions: CostAssumptionSetV2,
     cost_adapter_reference: ValidationArtifactReferenceV2,
     cost_adapter: ExecutionCostAdapter | None,
+    decision_revisions: tuple[ObservationRevision, ...] = (),
 ) -> ExecutionScenarioResult:
     """Run explicit order scenarios; never manufacture a strategy-backtest result.
 
@@ -468,6 +469,7 @@ def run_spot_execution_scenario(
                 cost_assumptions,
                 cost_adapter_reference,
                 cost_adapter,
+                decision_revisions,
             )
     except SimulationUnavailable as exc:
         return ExecutionScenarioResult("INCONCLUSIVE", (str(exc),), None)
@@ -481,6 +483,7 @@ def _run(
     costs: CostAssumptionSetV2,
     adapter_ref: ValidationArtifactReferenceV2,
     adapter: ExecutionCostAdapter | None,
+    decision_revisions: tuple[ObservationRevision, ...],
 ) -> ExecutionScenarioResult:
     _require(
         type(policy) is SpotExecutionPolicy and type(strategy) is StrategyVersionV2,
@@ -559,6 +562,21 @@ def _run(
         "INVALID_ORDER_PLAN",
     )
     selected = {r.revision_id: r for r in data.reconstruction.selected_revisions}
+    _require(
+        type(decision_revisions) is tuple
+        and all(type(item) is ObservationRevision for item in decision_revisions)
+        and len({item.revision_id for item in decision_revisions})
+        == len(decision_revisions),
+        "INVALID_DECISION_EVIDENCE",
+    )
+    known_revisions = dict(selected)
+    for revision in decision_revisions:
+        existing = known_revisions.get(revision.revision_id)
+        _require(
+            existing is None or canonical_sha256(existing) == canonical_sha256(revision),
+            "DECISION_REVISION_MISMATCH",
+        )
+        known_revisions[revision.revision_id] = revision
     plan = tuple(sorted(orders, key=lambda o: (o.decision_time, str(o.order_id))))
     groups: dict[str, list[ScenarioOrder]] = {}
     for order in plan:
@@ -576,9 +594,9 @@ def _run(
         )
         _require(
             all(
-                identity in selected
-                and selected[identity].availability_time <= order.decision_time
-                and _known_before(selected[identity], order.decision_time)
+                identity in known_revisions
+                and known_revisions[identity].availability_time <= order.decision_time
+                and _known_before(known_revisions[identity], order.decision_time)
                 for identity in order.known_revision_ids
             ),
             "FUTURE_OR_UNRESOLVED_DECISION_EVIDENCE",
