@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 from hashlib import sha256
 from io import StringIO
 from uuid import uuid4
@@ -93,6 +93,16 @@ from trading_platform_api.validation.spot_backtest import (
 )
 from trading_platform_api.validation.spot_cost_adapter import SpotExecutionCostAdapter
 from trading_platform_api.validation.spot_execution import SpotExecutionPolicy
+from trading_platform_api.validation.spot_metrics import (
+    METHOD as METRICS_METHOD,
+)
+from trading_platform_api.validation.spot_metrics import (
+    InitialRisk,
+    MetricsInputError,
+    MetricsPolicy,
+    MetricState,
+    calculate_spot_performance_metrics,
+)
 from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayDecisionRequest,
     SpotReplayInputRequest,
@@ -829,6 +839,95 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert resolve_spot_backtest_result(bundle) == bundle.result
                 assert research.spot_agent_runtime.provider.calls == before_model_calls
 
+                metrics_policy = MetricsPolicy(
+                    METRICS_METHOD,
+                    "1",
+                    "USDT",
+                    "BAR_CLOSE",
+                    60,
+                    D(525600),
+                    D(0),
+                    D(0),
+                    30,
+                    2,
+                    request.created_at,
+                )
+                report = calculate_spot_performance_metrics(bundle, metrics_policy)
+                assert report.result_id == bundle.result.result_id
+                assert report.result_sha256 == bundle.result.content_sha256
+                assert report.get("total_trades").metric.value == int(synthetic_ready)
+                assert (
+                    report.get("cumulative_return").reason == "PRICE_PATH_NOT_PROVIDED"
+                )
+                assert report == calculate_spot_performance_metrics(
+                    bundle, metrics_policy
+                )
+                marked = calculate_spot_performance_metrics(
+                    bundle,
+                    metrics_policy,
+                    price_path=bundle.execution_dataset,
+                )
+                assert marked.equity
+                assert marked.get("cumulative_return").state is MetricState.AVAILABLE
+                assert marked.equity[-1].inventory == 0
+                assert (
+                    marked.get("benchmark_relative_return").reason
+                    == "BENCHMARK_NOT_PROVIDED"
+                )
+                if synthetic_ready:
+                    trade = bundle.trace.trades[0]
+                    assert (
+                        report.get("net_realized_profit").metric.value
+                        == trade.realized_cash_delta
+                    )
+                    with localcontext(Context(prec=50)):
+                        assert (
+                            report.trades[0].cash_return
+                            == trade.realized_cash_delta / trade.entry_cash_outflow
+                        )
+                    assert marked.equity[-1].cash == bundle.trace.exit_trace.final_cash
+                    assert (
+                        marked.trades[0].excursion_reason
+                        == "PARTIAL_EXIT_BAR_AMBIGUITY"
+                    )
+                    risk = InitialRisk(
+                        trade.trade_id,
+                        D(10),
+                        "USDT",
+                        "synthetic-initial-risk-v1",
+                        ValidationArtifactReferenceV2("C-034", uuid4(), "1", "b" * 64),
+                    )
+                    risk_report = calculate_spot_performance_metrics(
+                        bundle, metrics_policy, initial_risks=(risk,)
+                    )
+                    assert (
+                        risk_report.get("average_r").metric.value
+                        == trade.realized_cash_delta / 10
+                    )
+                    with pytest.raises(MetricsInputError, match="RISK_ID_OR_UNIT"):
+                        calculate_spot_performance_metrics(
+                            bundle, metrics_policy, initial_risks=(risk, risk)
+                        )
+                else:
+                    assert report.get("win_rate").state is MetricState.UNDEFINED
+                    assert marked.get("cumulative_return").metric.value == 0
+                with pytest.raises(MetricsInputError):
+                    calculate_spot_performance_metrics(
+                        replace(bundle, artifacts=()), metrics_policy
+                    )
+                with pytest.raises(MetricsInputError, match="QUOTE_UNIT"):
+                    calculate_spot_performance_metrics(
+                        bundle, replace(metrics_policy, quote_unit="USD")
+                    )
+                with pytest.raises(MetricsInputError, match="PRICE_PATH_PIN"):
+                    calculate_spot_performance_metrics(
+                        bundle,
+                        metrics_policy,
+                        price_path=replace(
+                            bundle.execution_dataset, dataset_sha256="f" * 64
+                        ),
+                    )
+
                 no_setup_condition = replace(
                     condition, condition_id=uuid4(), expected_values=("never",)
                 )
@@ -987,6 +1086,20 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     lineage_store=lineage,
                 )
                 assert replay_after_correction == bundle
+                assert (
+                    calculate_spot_performance_metrics(
+                        replay_after_correction, metrics_policy
+                    )
+                    == report
+                )
+                assert (
+                    calculate_spot_performance_metrics(
+                        replay_after_correction,
+                        metrics_policy,
+                        price_path=replay_after_correction.execution_dataset,
+                    )
+                    == marked
+                )
 
             async with sessions() as session:
                 assert (
