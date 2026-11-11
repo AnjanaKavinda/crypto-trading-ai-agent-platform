@@ -473,5 +473,73 @@ Expected paths (create/modify only when needed):
                     reviews=[invalid], **kwargs)
 
 
+class WorkflowRequestInterpreterTests(unittest.TestCase):
+    def test_request_block_builds_each_tier_in_an_isolated_interpreter(self):
+        import os
+        import re
+        import subprocess
+        import sys
+        import tempfile
+        import textwrap
+
+        root = Path(__file__).resolve().parents[2]
+        path = ".github/workflows/governed-independent-review.yml"
+        workflow = (root / path).read_text()
+        blocks = re.findall(r"          python - <<'PY'\n(.*?)\n          PY", workflow, re.S)
+        request_blocks = [block for block in blocks if "request_values = dict(" in block]
+        self.assertEqual(len(request_blocks), 1)
+        code = textwrap.dedent(request_blocks[0])
+        for direct_owner in (True, False):
+            for tier, risk in (("R1", "low"), ("R2", None), ("R3", "high")):
+                with self.subTest(direct_owner=direct_owner, tier=tier):
+                    with tempfile.TemporaryDirectory() as directory:
+                        location = Path(directory)
+                        issue = {
+                            "number": 475, "title": "Isolated workflow regression",
+                            "body": "# Issue 009 — Isolated regression\n\n## Allowed paths\n- `" + path + "`\n",
+                            "labels": [{"name": "agent:backend-foundation"}],
+                        }
+                        if risk:
+                            issue["labels"].append({"name": "risk:" + risk})
+                        snapshots = {
+                            "pr.json": {"number": 476, "head": {"sha": "exact-head"},
+                                        "base": {"ref": "dev"}, "body": "Closes #475",
+                                        "user": {"login": "owner" if direct_owner else "implementer"}},
+                            "issue.json": issue, "files.json": [{"filename": path}],
+                        }
+                        for name, value in snapshots.items():
+                            (location / name).write_text(json.dumps(value))
+                        (location / "pr.diff").write_text(
+                            "diff --git a/" + path + " b/" + path + "\n+bounded correction\n")
+                        environment = dict(os.environ,
+                            GITHUB_REPOSITORY="o/r", GOVERNED_CONTROLLER="owner",
+                            GOVERNED_AI_REVIEWER_ROLE="QA/Security Reviewer",
+                            GOVERNED_IMPLEMENTER_SESSION="separate-implementation-session",
+                            REQUIRED_CHECKS="governance-ci", REVIEW_CONTEXT_MAX_BYTES="120000")
+                        result = subprocess.run(
+                            [sys.executable, "-c", code.replace("/tmp/", directory + "/")],
+                            cwd=root, env=environment, capture_output=True, text=True,
+                            timeout=15,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        request = json.loads((location / "reviewer-request.json").read_text())
+                        context = json.loads((location / "reviewer-context.json").read_text())
+                        self.assertEqual(request["required_review_tier"], tier)
+                        self.assertEqual(request["head_sha"], "exact-head")
+                        self.assertEqual(request["github_issue_id"], 475)
+                        self.assertEqual(request["changed_files"], [path])
+                        self.assertEqual(context["pull_request"]["head_sha"], "exact-head")
+                        self.assertIn("governance-ci", request["required_checks"])
+                        if direct_owner:
+                            self.assertEqual(request["implementation_origin"], "DIRECT_OWNER")
+                            self.assertEqual(request["implementation_identity"], "github-user:owner")
+                            self.assertIn("product-ci", request["required_checks"])
+                            self.assertNotIn("implementation_session_id", request)
+                        else:
+                            self.assertEqual(request["implementation_session_id"],
+                                             "separate-implementation-session")
+                            self.assertNotIn("implementation_origin", request)
+
+
 if __name__ == "__main__":
     unittest.main()
