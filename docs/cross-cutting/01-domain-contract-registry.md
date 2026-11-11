@@ -91,7 +91,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-068 | FibonacciAssessment | Technical Analysis | MarketContext, Strategy | Fibonacci findings are reproducible from deterministic inputs and include invalidation context. |
 | C-069 | AnalyticalUncertainty | Analysis | Strategy, UX, Safety | Uncertainty must be explicit and cannot be converted into trade authority. |
 | C-070 | Signal | Signal Engine | Risk, Approval, UX | Schema 1 remains frozen; schema 2 binds exact candidate/strategy/evidence/qualification/validation lineage. Qualified signal only; never executable authority and never a substitute for `ExecutionIntent`. |
-| C-071 | OOSResult | Quant Validation | ValidationResult, Governance, Risk | Out-of-sample evidence is explicitly partitioned from in-sample optimization. |
+| C-071 | OOSResult | Quant Validation | ValidationResult, Governance, Risk | Out-of-sample evidence is explicitly partitioned from in-sample optimization. ADR-0022 adds observation-only schema 2 for exact Spot C-027v3/dataset/metrics/protocol/journal closure and zero/inconclusive samples; v1 unchanged. No schema-2 qualification or retained storage approval. |
 | C-072 | MonteCarloResult | Quant Validation | RobustnessResult, Risk, Governance | Simulation assumptions, sample size, and seed context are traceable and reproducible. |
 | C-073 | SensitivityResult | Quant Validation | RobustnessResult, Risk | Parameter sensitivity must expose degradation boundaries, not only best-case points. |
 | C-074 | RegimeValidationResult | Quant Validation | ValidationResult, Strategy, Risk | Validation must state regime scope and reject regime-mismatched deployment. |

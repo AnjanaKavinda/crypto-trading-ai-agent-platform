@@ -547,3 +547,20 @@ record and preserves them without decoding the signal payload. Existing
 C-023/C-024v2/C-025v2/C-026v2/C-028v2 meanings are unchanged. Lifecycle events,
 expiry processing, invalidation evaluation, supersession, WATCH, persistence,
 and API routes remain assigned to later issues.
+
+
+## ADR-0022 — C-071 schema-2 observation compatibility
+
+C-071 schema 1 (`OOSResult`) retains its UUID dataset field, wire payload,
+identity and qualification-reader meaning. Additive schema 2 (`OOSResultV2`)
+preserves native C-092 string IDs/versions through exact embedded C-027v3 runs,
+plus dataset/manifest digests, metrics references, frozen protocol and journal.
+It represents zero-trade, unavailable, inconclusive and contaminated evidence.
+Closed `(C-071, schema_version)` codec dispatch accepts only 1/2, without
+conversion. Canonical UUIDv5 identity excludes generated result ID and own digest;
+method is `spot-oos-observation-v1`. Existing qualification allowlists still
+reject schema 2. No history migration, retained storage or DDL is authorized;
+the lineage store rejects C-071 retention explicitly.
+
+See [ADR-0022](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md) and
+[workflow usage](../architecture/issue-95-spot-oos.md).

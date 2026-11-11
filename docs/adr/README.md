@@ -31,6 +31,8 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0020 | [Personal Spot strategy artifact persistence for the Strategy/Signal API](ADR-0020-proposed-personal-spot-strategy-artifact-persistence.md) | Accepted | 2026-11-05 | Platform Architect / AnjanaKavinda (core decision: #90 refinement; input closure: owner approval 2026-11-06) | — | C-023v1, C-024v2, C-025v2, C-026v2, C-028v2, C-070v2; C-062v1, C-066v1, C-067v1 persistence-only input closure | ADR-0017 storage/migration prohibition for #90 only | — |
 | ADR-0021 | [PERSONAL_SPOT_RESEARCH analysis producer path](ADR-0021-proposed-personal-spot-analysis-producer-path.md) | Accepted | 2026-11-06 | Platform Architect / AnjanaKavinda | OD-0027 | No contract version changes; additive C-012 lineage allowlist and producer reservation table | — | PR #464 |
 
+| ADR-0022 | [Spot OOS protocol and result boundary](ADR-0022-spot-oos-protocol-and-result-boundary.md) | Accepted | 2026-11-11 | AnjanaKavinda (explicit owner approval) | — | Additive C-071 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
+
 ## Creating an ADR
 
 1. Confirm the decision is not already explicitly required by the Master Playbook.

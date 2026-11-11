@@ -66,11 +66,13 @@ from trading_platform_api.strategy.contracts_v2 import (
     SignalV2,
     StrategyVersionV2,
 )
+from trading_platform_api.validation.contracts import OOSResult
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
     QualificationValidationResultV2,
 )
 from trading_platform_api.validation.contracts_v3 import BacktestResultV3
+from trading_platform_api.validation.oos_contracts_v2 import OOSResultV2
 
 MODELS = {
     "C-001": MarketData,
@@ -98,6 +100,7 @@ MODELS = {
     "C-025": SignalQualificationV2,
     "C-026": NoTradeDecisionV2,
     "C-027": CostAssumptionSetV2,
+    "C-071": OOSResultV2,
     "C-028": QualificationValidationResultV2,
     "C-069": AnalyticalUncertainty,
     "C-070": SignalV2,
@@ -189,6 +192,10 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-022", str(record.eligibility_id), record.schema_version)
     if type(record) is CostAssumptionSetV2:
         return LineageKey("C-027", str(record.assumption_set_id), record.schema_version)
+    if type(record) is OOSResult:
+        return LineageKey("C-071", str(record.result_id), record.schema_version)
+    if type(record) is OOSResultV2:
+        return LineageKey("C-071", str(record.result_id), record.schema_version)
     if type(record) is BacktestResultV3:
         return LineageKey("C-027", str(record.result_id), record.schema_version)
     if type(record) is AnalyticalUncertainty:
@@ -383,6 +390,10 @@ def decode(document: str) -> object:
                 raise LineageError("Unsupported C-003 schema version.")
         else:
             model = MODELS[contract_id]
+            if contract_id == "C-071":
+                model = {"1": OOSResult, "2": OOSResultV2}.get(schema_version)
+                if model is None:
+                    raise LineageError("Unsupported C-071 schema version.")
             if contract_id == "C-027":
                 model = {"2": CostAssumptionSetV2, "3": BacktestResultV3}.get(
                     schema_version
@@ -413,6 +424,7 @@ def decode(document: str) -> object:
                 "C-025": "2",
                 "C-026": "2",
                 "C-027": schema_version,
+                "C-071": schema_version,
                 "C-028": "2",
                 "C-069": "1",
                 "C-070": "2",

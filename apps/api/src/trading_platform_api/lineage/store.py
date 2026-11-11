@@ -87,12 +87,14 @@ from trading_platform_api.strategy.contracts_v2 import (
     StrategyVersionV2,
     _qualification_digest,
 )
+from trading_platform_api.validation.contracts import OOSResult
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
     QualificationValidationResultV2,
     ValidationArtifactReferenceV2,
 )
 from trading_platform_api.validation.contracts_v3 import BacktestResultV3
+from trading_platform_api.validation.oos_contracts_v2 import OOSResultV2
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +174,10 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) in (OOSResult, OOSResultV2):
+        raise LineageError(
+            "C-071 retention is not authorized by the OOS runtime boundary."
+        )
     if type(record) is BacktestResultV3:
         raise LineageError(
             "C-027v3 persistence requires a governed simulation trace resolver."

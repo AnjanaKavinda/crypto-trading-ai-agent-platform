@@ -77,11 +77,17 @@ from trading_platform_api.strategy.registry import (
 )
 from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegistryStore
 from trading_platform_api.strategy_api import _compose_persisted_spot_debate
+from trading_platform_api.validation.contracts import DataPartition, PartitionPurpose
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
 from trading_platform_api.validation.cost_models import (
     CostSourceKind,
     SpotExecutionCostProfile,
     build_spot_cost_assumption_set,
+)
+from trading_platform_api.validation.oos_contracts_v2 import (
+    OOSOutcome,
+    OOSSelectionMode,
+    OOSWindow,
 )
 from trading_platform_api.validation.spot_backtest import (
     SpotBacktestArchivePin,
@@ -102,6 +108,13 @@ from trading_platform_api.validation.spot_metrics import (
     MetricsPolicy,
     MetricState,
     calculate_spot_performance_metrics,
+)
+from trading_platform_api.validation.spot_oos import (
+    OOSResearchJournal,
+    candidate_from_request,
+    freeze_spot_oos_protocol,
+    resolve_spot_oos_result,
+    run_spot_oos,
 )
 from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayDecisionRequest,
@@ -928,6 +941,136 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         ),
                     )
 
+                # Explicit synthetic recorder authority: verifies the recorded
+                # experiment, not the absence of off-system owner research.
+                recorded_at = request.created_at + timedelta(days=2)
+                oos_metrics_policy = replace(metrics_policy, min_trade_sample=1)
+                recorder = OOSResearchJournal(
+                    journal_id=uuid4(),
+                    authority=ValidationArtifactReferenceV2(
+                        "SYNTHETIC_RESEARCH_RECORDER", uuid4(), "1", "e" * 64
+                    ),
+                    clock=lambda: recorded_at,
+                    declared_complete=True,
+                )
+                partitions = (
+                    DataPartition(
+                        uuid4(),
+                        PartitionPurpose.TRAIN,
+                        policy.period_start - 20 * STEP,
+                        policy.period_start - 10 * STEP,
+                        policy.period_start,
+                        True,
+                    ),
+                    DataPartition(
+                        uuid4(),
+                        PartitionPurpose.VALIDATION,
+                        policy.period_start - 10 * STEP,
+                        policy.period_start,
+                        policy.period_start,
+                        False,
+                    ),
+                    DataPartition(
+                        uuid4(),
+                        PartitionPurpose.TEST,
+                        policy.period_start,
+                        policy.period_end,
+                        request.result_as_of,
+                        False,
+                    ),
+                )
+                oos_window = OOSWindow(
+                    policy.venue,
+                    policy.instrument_id,
+                    policy.timeframe,
+                    policy.period_start,
+                    policy.period_end,
+                )
+                protocol = freeze_spot_oos_protocol(
+                    journal=recorder,
+                    window=oos_window,
+                    partitions=partitions,
+                    candidates=(candidate_from_request(request),),
+                    selection_mode=OOSSelectionMode.FIXED,
+                    metrics_policy=oos_metrics_policy,
+                    warmup_bars=64,
+                    embargo_seconds=0,
+                    mark_equity=True,
+                    environment=policy.environment,
+                )
+                oos_kwargs = dict(
+                    journal=recorder,
+                    protocol=protocol,
+                    request=request,
+                    metrics_policy=oos_metrics_policy,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=request.result_as_of,
+                    expires_at=recorded_at + timedelta(days=1),
+                )
+                oos_bundle = await run_spot_oos(**oos_kwargs)
+                assert oos_bundle.outcome is (
+                    OOSOutcome.OBSERVED if synthetic_ready else OOSOutcome.INCONCLUSIVE
+                ), oos_bundle.reason_codes
+                oos_result = resolve_spot_oos_result(oos_bundle, journal=recorder)
+                assert oos_result.sample_size == int(synthetic_ready)
+                assert oos_result.contamination.value == "PASSED"
+                assert (
+                    oos_result.runs[0].backtest.dataset.dataset_id
+                    == execution_dataset.dataset_id
+                )
+                assert (
+                    oos_result.runs[0].backtest.dataset.version
+                    == execution_dataset.version
+                )
+                assert (
+                    oos_result.runs[0].backtest.dataset_sha256
+                    == request.execution_dataset_sha256
+                )
+                assert (
+                    oos_result.runs[0].backtest.manifest_sha256
+                    == request.execution_manifest_sha256
+                )
+                if not synthetic_ready:
+                    assert (
+                        next(
+                            m for m in oos_result.metrics if m.name == "win_rate"
+                        ).state
+                        == "UNDEFINED"
+                    )
+                    assert "INSUFFICIENT_OOS_TRADE_SAMPLE" in oos_result.reason_codes
+                assert await run_spot_oos(**oos_kwargs) == oos_bundle
+                altered_report = replace(oos_bundle.reports[0], result_sha256="f" * 64)
+                with pytest.raises(ValueError, match="METRICS_CLOSURE"):
+                    resolve_spot_oos_result(
+                        replace(oos_bundle, reports=(altered_report,)), journal=recorder
+                    )
+                # A new plan ID or later revision cannot make inspected dates unseen.
+                reused_protocol = freeze_spot_oos_protocol(
+                    journal=recorder,
+                    window=oos_window,
+                    partitions=tuple(
+                        replace(part, partition_id=uuid4()) for part in partitions
+                    ),
+                    candidates=(candidate_from_request(request),),
+                    selection_mode=OOSSelectionMode.FIXED,
+                    metrics_policy=oos_metrics_policy,
+                    warmup_bars=64,
+                    embargo_seconds=0,
+                    mark_equity=True,
+                    environment=policy.environment,
+                )
+                reused = await run_spot_oos(
+                    **dict(oos_kwargs, protocol=reused_protocol)
+                )
+                assert reused.outcome is OOSOutcome.FAILED
+                assert "HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED" in reused.reason_codes
+                assert not reused.replays
+                assert (
+                    resolve_spot_oos_result(oos_bundle, journal=recorder) == oos_result
+                )
+
                 no_setup_condition = replace(
                     condition, condition_id=uuid4(), expected_values=("never",)
                 )
@@ -1086,6 +1229,10 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     lineage_store=lineage,
                 )
                 assert replay_after_correction == bundle
+                assert await run_spot_oos(**oos_kwargs) == oos_bundle
+                assert (
+                    resolve_spot_oos_result(oos_bundle, journal=recorder) == oos_result
+                )
                 assert (
                     calculate_spot_performance_metrics(
                         replay_after_correction, metrics_policy
