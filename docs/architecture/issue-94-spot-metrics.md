@@ -47,7 +47,10 @@ python -m pytest -q tests/backend/test_spot_metrics.py
 The pure function resolves the canonical bundle before calculating. It verifies
 unique fills/trades, sides, completion ordering, exact entry/exit quantities,
 recorded fee/spread/slippage cash movements, and both simulation terminal balances.
-Entry/exit fees are already included in trade cash deltas and are never charged
+The combined fill stream is ordered by completion time and fill ID and must keep
+cash and inventory nonnegative at every event. This single-entry replay requires
+all entry fills to complete before any exit fill; terminal balances reconcile in
+that same chronological order. Entry/exit fees are already included in trade cash deltas and are never charged
 again in trade statistics. Equity reconstruction applies each fill's gross cash
 movement and three recorded costs exactly once.
 

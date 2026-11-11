@@ -333,3 +333,56 @@ def test_extreme_annualization_is_unavailable_without_losing_other_metrics():
     metrics, _ = equity_metrics([1, 100, 10000], periods_per_year=D(31536000))
     assert metrics["cagr"].reason == "ANNUALIZED_NUMERIC_RANGE_EXCEEDED"
     assert value(metrics, "cumulative_return") == 9999
+
+
+@pytest.mark.parametrize("exit_offset", [-30, 30, 120])
+def test_global_fill_chronology_rejects_cross_phase_inversions(exit_offset):
+    from types import SimpleNamespace
+
+    from test_spot_execution import fixture, run
+    from trading_platform_api.validation.spot_execution import OrderSide
+    from trading_platform_api.validation.spot_metrics import (
+        _equity_path,
+        _fill_cash,
+        _verified_fills,
+    )
+
+    case = fixture()
+    entry = run(case).trace
+    assert entry is not None and len(entry.fills) == 2
+    sell = replace(
+        entry.fills[0],
+        fill_id=UUID(int=99),
+        order_id=UUID(int=100),
+        side=OrderSide.SELL,
+        observed_at=entry.fills[0].observed_at + timedelta(seconds=exit_offset),
+    )
+    exit_ = replace(
+        entry,
+        fills=(sell,),
+        final_cash=entry.final_cash + _fill_cash(sell),
+        final_inventory=entry.final_inventory - sell.quantity,
+    )
+    trace = SimpleNamespace(
+        policy=case["policy"], entry_trace=entry, exit_trace=exit_, trades=()
+    )
+    # Both phases reconcile in isolation; the entire replay must also respect time.
+    if exit_offset <= 30:
+        with pytest.raises(
+            MetricsInputError, match="CHRONOLOGICAL_BALANCE|CROSS_PHASE"
+        ):
+            _verified_fills(trace)
+        if exit_offset < 0:
+            ordered = tuple(
+                sorted(
+                    (*entry.fills, sell), key=lambda f: (f.observed_at, str(f.fill_id))
+                )
+            )
+            with pytest.raises(MetricsInputError, match="CHRONOLOGICAL_BALANCE"):
+                _equity_path(case["data"], trace, ordered, policy())
+    else:
+        ordered = _verified_fills(trace)
+        assert ordered[-1] == sell
+        points = _equity_path(case["data"], trace, ordered, policy())
+        assert points[-1].inventory == exit_.final_inventory
+        assert points[-1].cash == exit_.final_cash

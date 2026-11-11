@@ -328,7 +328,24 @@ def _verified_fills(trace: SpotBacktestTrace) -> tuple[SimulationFill, ...]:
             == trade.realized_cash_delta,
             "TRADE_CASH_RECONCILIATION_FAILED",
         )
-    return tuple(sorted(fills, key=lambda f: (f.observed_at, str(f.fill_id))))
+    ordered = tuple(sorted(fills, key=lambda f: (f.observed_at, str(f.fill_id))))
+    cash, inventory = trace.policy.initial_cash, trace.policy.initial_inventory
+    for fill in ordered:
+        cash += _fill_cash(fill)
+        inventory += fill.quantity if fill.side is OrderSide.BUY else -fill.quantity
+        _require(cash >= 0 and inventory >= 0, "INVALID_CHRONOLOGICAL_BALANCE")
+    if trace.entry_trace.fills and trace.exit_trace and trace.exit_trace.fills:
+        _require(
+            max(f.observed_at for f in trace.entry_trace.fills)
+            < min(f.observed_at for f in trace.exit_trace.fills),
+            "CROSS_PHASE_FILL_CHRONOLOGY",
+        )
+    terminal = trace.exit_trace or trace.entry_trace
+    _require(
+        (cash, inventory) == (terminal.final_cash, terminal.final_inventory),
+        "CHRONOLOGICAL_TERMINAL_BALANCE_MISMATCH",
+    )
+    return ordered
 
 
 def _trade_metrics(
@@ -658,6 +675,7 @@ def _equity_path(
                 inventory += (
                     fill.quantity if fill.side is OrderSide.BUY else -fill.quantity
                 )
+                _require(cash >= 0 and inventory >= 0, "INVALID_CHRONOLOGICAL_BALANCE")
             index += 1
         close = next(
             m.value
