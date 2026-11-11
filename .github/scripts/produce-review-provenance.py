@@ -66,7 +66,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from orchestrator import AppendOnlyAudit, GovernanceError
+from orchestrator import AppendOnlyAudit, GovernanceError, resolve_canonical_number
 from independent_reviewer import (
     DirectOwnerReviewerExecutionRequest, ReviewerExecutionError,
     ReviewerExecutionResult, ReviewerExecutionRequest,
@@ -103,6 +103,7 @@ def resolve_execution_evidence(*, result: dict,
                 __import__("independent_reviewer", fromlist=["Finding"]).Finding.from_mapping(item)
                 for item in result.get("findings", []))})
         issue_id = extract_linked_issue(pr.get("body") or "")
+        canonical_issue_id, _ = resolve_canonical_number(issue.get("body") or "")
         required = required_review_tier_from_labels(issue.get("labels", []))
         direct_owner = isinstance(original_request, DirectOwnerReviewerExecutionRequest)
         if direct_owner and (issue.get("state") != "open"
@@ -154,7 +155,7 @@ def resolve_execution_evidence(*, result: dict,
                 original_request.head_sha != pr.get("head_sha") or
                 original_request.base_branch != pr.get("base") or
                 original_request.github_issue_id != issue_id or
-                original_request.canonical_issue_id != issue_id or
+                original_request.canonical_issue_id != canonical_issue_id or
                 original_request.required_review_tier != required or
                 (direct_owner and original_request.implementation_identity !=
                  f"github-user:{controller}") or

@@ -402,7 +402,7 @@ Expected paths (create/modify only when needed):
         kwargs = dict(
             pr={"number": 7, "repository": "o/r", "head_sha": "head",
                 "base": "dev", "body": "Closes #211"},
-            issue={"number": 211, "labels": [{"name": "risk:high"}]},
+            issue={"number": 211, "body": "# Issue 211 — Review fixture", "labels": [{"name": "risk:high"}]},
             reviewer_configuration={"reviewer-bot": {"tier": "R3", "session_id": "review-session"}},
             reviewer_roles={"reviewer-bot": "QA/Security Reviewer"},
             implementer_session_id="implementation-session", controller="human-owner",
@@ -539,6 +539,102 @@ class WorkflowRequestInterpreterTests(unittest.TestCase):
                             self.assertEqual(request["implementation_session_id"],
                                              "separate-implementation-session")
                             self.assertNotIn("implementation_origin", request)
+
+
+class CanonicalIssueProvenanceTests(unittest.TestCase):
+    def _case(self, direct_owner, *, canonical=9, github=211):
+        values = dict(make_request("R2").__dict__)
+        values.pop("integrity_hash")
+        values.update(canonical_issue_id=canonical, github_issue_id=github)
+        if direct_owner:
+            for key in ("schema_version", "agent_role", "implementation_session_id"):
+                values.pop(key)
+            request = build_direct_owner_request(
+                **values, implementation_identity="github-user:human-owner",
+                controller_identity="human-owner")
+        else:
+            request = build_request(**values)
+        result = OpenAIReviewerAdapter(
+            api_key=response.__name__, model_mapping=MODEL_MAPPING,
+            transport=lambda payload, timeout: response("approved", model="gpt-5.6-terra"),
+        ).review(request)
+        handoff = response.__name__
+        attestation = sign_execution_handoff(request, result, handoff)
+        kwargs = dict(
+            pr={"number": 7, "repository": "o/r", "head_sha": "head", "base": "dev",
+                "body": "Closes #211", "state": "open",
+                "author": "human-owner" if direct_owner else "implementer"},
+            issue={"number": 211, "body": "# Issue 009 — Regression", "state": "open", "labels": []},
+            reviewer_configuration={"reviewer-bot": {"tier": "R3", "session_id": "review-session"}},
+            reviewer_roles={"reviewer-bot": "QA/Security Reviewer"},
+            implementer_session_id="" if direct_owner else "implementation-session",
+            controller="human-owner", preferred_reviewer="reviewer-bot", model_mapping=MODEL_MAPPING,
+        )
+        return request, result, attestation, handoff, kwargs
+
+    def test_canonical_and_github_identities_are_bound_independently(self):
+        for direct_owner in (False, True):
+            for canonical, github, accepted in ((9, 211, True), (211, 211, False), (9, 212, False)):
+                with self.subTest(direct_owner=direct_owner, canonical=canonical, github=github):
+                    request, result, attestation, handoff, kwargs = self._case(
+                        direct_owner, canonical=canonical, github=github)
+                    def resolve():
+                        return review_producer.resolve_execution_evidence(
+                            result=result.to_dict(), original_request=request,
+                            execution_handoff=attestation, handoff_secret=handoff, **kwargs)
+                    if accepted:
+                        evidence = resolve()
+                        self.assertEqual(evidence["issue_id"], 211)
+                        self.assertEqual(evidence["request_integrity_hash"], request.integrity_hash)
+                    else:
+                        with self.assertRaisesRegex(Exception, "original reviewer request is not bound"):
+                            resolve()
+
+    def test_distinct_identities_survive_full_model_to_signed_artifact_path(self):
+        import io
+        import os
+        import tempfile
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        for direct_owner in (False, True):
+            with self.subTest(direct_owner=direct_owner), tempfile.TemporaryDirectory() as directory:
+                request, result, attestation, handoff, kwargs = self._case(direct_owner)
+                root = Path(directory)
+                pr = dict(kwargs["pr"])
+                pr.update(head={"sha": pr.pop("head_sha")}, base={"ref": "dev"},
+                          user={"login": pr.pop("author")})
+                documents = [pr, [], kwargs["issue"], result.to_dict(), request.__dict__, attestation]
+                paths = []
+                for index, document in enumerate(documents):
+                    path = root / (str(index) + ".json")
+                    path.write_text(json.dumps(document))
+                    paths.append(str(path))
+                handoff_path = root / "handoff.txt"
+                handoff_path.write_text(handoff)
+                environment = {
+                    "GOVERNED_CONTROLLER": "human-owner", "GOVERNED_IMPLEMENTER_SESSION": "implementation-session",
+                    "GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "123456",
+                    "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/governed-independent-review.yml@refs/heads/dev",
+                    "GOVERNANCE_PROVENANCE_SIGNING_KEY": handoff,
+                    "GOVERNED_REVIEW_HANDOFF_KEY_FILE": str(handoff_path),
+                    "GOVERNED_REVIEWER_TIERS": json.dumps(kwargs["reviewer_configuration"]),
+                    "GOVERNED_REVIEWER_ROLES": json.dumps(kwargs["reviewer_roles"]),
+                    "GOVERNED_REVIEWER_MODEL_MAPPING": json.dumps(MODEL_MAPPING),
+                    "GOVERNED_AI_REVIEWER": "reviewer-bot", "GOVERNED_BASE": "dev",
+                    "GOVERNED_AUDIT_LOG": str(root / "audit.jsonl"),
+                }
+                output = io.StringIO()
+                with patch.object(review_producer.sys, "argv", ["produce-review-provenance.py", *paths]), \
+                        patch.dict(os.environ, environment, clear=False), redirect_stdout(output):
+                    code = review_producer.main()
+                self.assertEqual(code, 0)
+                artifact = json.loads(output.getvalue())
+                self.assertEqual(artifact["issue_id"], 211)
+                self.assertEqual(artifact["head_sha"], "head")
+                self.assertEqual(artifact["disposition"], "approved")
+                self.assertTrue(artifact["integrity_signature"])
+                self.assertEqual(artifact["schema_version"], "1.3" if direct_owner else "1.2")
 
 
 if __name__ == "__main__":
