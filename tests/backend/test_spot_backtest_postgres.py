@@ -1009,11 +1009,123 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     as_of=request.result_as_of,
                     expires_at=recorded_at + timedelta(days=1),
                 )
+                # Return a complete, canonically valid replay for different
+                # requested pins. Internal replay consistency alone is insufficient.
+                alternate_requests = {
+                    "dataset_id": replace(
+                        request,
+                        execution_dataset_sha256=canonical_sha256(
+                            replace(execution_dataset, dataset_id="different-native-id")
+                        ),
+                    ),
+                    "dataset_version": replace(
+                        request,
+                        execution_dataset_sha256=canonical_sha256(
+                            replace(execution_dataset, version="different-version")
+                        ),
+                    ),
+                    "dataset_digest": replace(
+                        request, execution_dataset_sha256="1" * 64
+                    ),
+                    "manifest_digest": replace(
+                        request, execution_manifest_sha256="2" * 64
+                    ),
+                    "archive_pin": replace(
+                        request,
+                        archive_pins=(
+                            replace(request.archive_pins[0], context_id=uuid4()),
+                            *request.archive_pins[1:],
+                        ),
+                    ),
+                    "replay_inputs": replace(
+                        request,
+                        replay_inputs=replace(
+                            request.replay_inputs,
+                            decisions=(
+                                replace(
+                                    request.replay_inputs.decisions[0],
+                                    dataset_sha256="3" * 64,
+                                ),
+                                *request.replay_inputs.decisions[1:],
+                            ),
+                        ),
+                    ),
+                    "replay_as_of": replace(
+                        request, result_as_of=request.result_as_of - STEP
+                    ),
+                }
+
+                async def substituted_replay(**kwargs):
+                    return bundle
+
+                for changed_pin, alternate in alternate_requests.items():
+                    isolated_recorder = OOSResearchJournal(
+                        journal_id=uuid4(),
+                        authority=recorder.snapshot.authority,
+                        clock=lambda: recorded_at,
+                        declared_complete=True,
+                    )
+                    isolated_protocol = freeze_spot_oos_protocol(
+                        journal=isolated_recorder,
+                        window=oos_window,
+                        partitions=partitions,
+                        candidates=(candidate_from_request(alternate),),
+                        selection_mode=OOSSelectionMode.FIXED,
+                        metrics_policy=oos_metrics_policy,
+                        warmup_bars=64,
+                        embargo_seconds=0,
+                        mark_equity=True,
+                        environment=policy.environment,
+                    )
+                    with monkeypatch.context() as patch:
+                        patch.setattr(
+                            "trading_platform_api.validation.spot_oos.run_spot_backtest",
+                            substituted_replay,
+                        )
+                        rejected = await run_spot_oos(
+                            **dict(
+                                oos_kwargs,
+                                journal=isolated_recorder,
+                                protocol=isolated_protocol,
+                                request=alternate,
+                                as_of=alternate.result_as_of,
+                            )
+                        )
+                    assert rejected.outcome is OOSOutcome.FAILED, changed_pin
+                    assert (
+                        "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH" in rejected.reason_codes
+                    )
+                    assert not rejected.replays and not rejected.reports
+                    assert (
+                        resolve_spot_oos_result(rejected, journal=isolated_recorder)
+                        == rejected.result
+                    )
+
                 oos_bundle = await run_spot_oos(**oos_kwargs)
                 assert oos_bundle.outcome is (
                     OOSOutcome.OBSERVED if synthetic_ready else OOSOutcome.INCONCLUSIVE
                 ), oos_bundle.reason_codes
                 oos_result = resolve_spot_oos_result(oos_bundle, journal=recorder)
+                assert oos_result.as_of == request.result_as_of == bundle.result.as_of
+                result_values = {
+                    name: value
+                    for name, value in oos_result.identity_payload().items()
+                    if name
+                    not in {"method", "contract_id", "schema_version", "operating_mode"}
+                }
+                with pytest.raises(ValueError, match="OOS_AS_OF_REPLAY_MISMATCH"):
+                    type(oos_result).build(
+                        **dict(result_values, as_of=oos_result.as_of - STEP)
+                    )
+                with pytest.raises(ValueError, match="OOS_AS_OF_REQUEST_MISMATCH"):
+                    await run_spot_oos(
+                        **dict(oos_kwargs, as_of=request.result_as_of - STEP)
+                    )
+                with pytest.raises(ValueError, match="OOS_REQUEST_RECEIPT_MISMATCH"):
+                    resolve_spot_oos_result(
+                        replace(oos_bundle, request=alternate_requests["archive_pin"]),
+                        journal=recorder,
+                    )
                 assert oos_result.sample_size == int(synthetic_ready)
                 assert oos_result.contamination.value == "PASSED"
                 assert (

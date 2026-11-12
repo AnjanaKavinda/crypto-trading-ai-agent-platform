@@ -245,6 +245,7 @@ def test_incomplete_history_is_inconclusive_and_not_a_clean_holdout(monkeypatch)
     assert "JOURNAL_COMPLETENESS_UNPROVEN" in bundle.reason_codes
     assert bundle.result.sample_size == 0 and bundle.result.metrics == ()
     assert resolve_spot_oos_result(bundle, journal=journal) == bundle.result
+    assert asyncio.run(execute(request, metrics, journal, protocol)) == bundle
     altered = dict(
         bundle.result.identity_payload(), outcome=OOSOutcome.OBSERVED, reason_codes=()
     )
@@ -281,7 +282,10 @@ def test_missing_selection_receipt_is_inconclusive_before_holdout_access(monkeyp
     assert "EXACT_SELECTION_RECEIPT_UNRESOLVED" in bundle.reason_codes
     assert "OOS_REQUEST_NOT_SELECTED_STRATEGY" not in bundle.reason_codes
     assert not bundle.replays
-    assert [event.kind for event in journal.snapshot.events] == [OOSEventKind.FREEZE]
+    assert [event.kind for event in journal.snapshot.events] == [
+        OOSEventKind.FREEZE,
+        OOSEventKind.RESULT,
+    ]
     assert resolve_spot_oos_result(bundle, journal=journal) == bundle.result
 
 
@@ -525,3 +529,54 @@ def test_self_consistent_forged_result_is_not_a_recorder_issued_result():
     forged = OOSResultV2.build(**dict(values, warnings=("FORGED_DECLARATION",)))
     with pytest.raises(ValueError, match="UNAUTHENTICATED_OOS_RESULT"):
         resolve_spot_oos_result(replace(bundle, result=forged), journal=journal)
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_as_of_mismatch_is_rejected_before_any_holdout_access(monkeypatch, complete):
+    request, metrics, journal, parts = case(complete=complete)
+    protocol = freeze(request, metrics, journal, parts)
+    before = journal.snapshot
+
+    async def forbidden(**kwargs):
+        pytest.fail("mismatched as-of reached replay")
+
+    monkeypatch.setattr(
+        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
+    )
+    with pytest.raises(ValueError, match="OOS_AS_OF_REQUEST_MISMATCH"):
+        asyncio.run(
+            run_spot_oos(
+                journal=journal,
+                protocol=protocol,
+                request=request,
+                metrics_policy=metrics,
+                session=object(),
+                strategy_registry=object(),
+                lineage_store=object(),
+                as_of=request.result_as_of - STEP,
+                expires_at=T + timedelta(days=3),
+            )
+        )
+    assert journal.snapshot == before
+
+
+def test_inconclusive_readback_binds_original_request_and_as_of():
+    request, metrics, journal, parts = case(complete=False)
+    protocol = freeze(request, metrics, journal, parts)
+    bundle = asyncio.run(execute(request, metrics, journal, protocol))
+    assert bundle.result.as_of == request.result_as_of
+    with pytest.raises(ValueError, match="OOS_AS_OF_REQUEST_MISMATCH"):
+        resolve_spot_oos_result(
+            replace(
+                bundle,
+                request=replace(request, result_as_of=request.result_as_of - STEP),
+            ),
+            journal=journal,
+        )
+    with pytest.raises(ValueError, match="OOS_REQUEST_RECEIPT_MISMATCH"):
+        resolve_spot_oos_result(
+            replace(
+                bundle, request=replace(request, execution_manifest_sha256="f" * 64)
+            ),
+            journal=journal,
+        )

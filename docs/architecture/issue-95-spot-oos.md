@@ -78,6 +78,21 @@ successful/replay-inconclusive requests return their original bundle despite
 later corrections. New requests cannot reuse inspected holdout. Readback
 requires recorder issuance and exact replay/report closure, not hashes alone.
 
+Each development TRIAL and final RESULT journal event binds a
+`SPOT_OOS_REQUEST@1` reference: a deterministic UUID and SHA-256 of the exact
+replay inputs, archive pins, execution dataset/manifest digests, execution and
+parameter/cost pins, and replay timestamps. Dataset digests bind native identity
+and version. The coordinator reconstructs these pins from the canonical returned
+replay and compares them with the originating request before calculating metrics.
+Substituted evidence is FAILED. Readback repeats the comparison against the
+recorded request receipt; even a preflight-inconclusive result retains that receipt.
+The internal bundle retains its originating request for this verification.
+
+The OOS `as_of` must equal the request's `result_as_of` before any holdout access
+or cache lookup. When a held-out replay resolves, its C-027v3 `as_of` must also
+match; construction and readback enforce this for observed and inconclusive
+results alike. Creation/expiry remain the separately pinned research timestamps.
+
 The codec preserves C-071v1 and rejects unknown schemas. C-071 retention is
 blocked; no DDL. Qualification rejects v2. Strategy readiness, risk/approval,
 providers and trading gates are unchanged.

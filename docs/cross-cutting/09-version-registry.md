@@ -562,5 +562,11 @@ method is `spot-oos-observation-v1`. Existing qualification allowlists still
 reject schema 2. No history migration, retained storage or DDL is authorized;
 the lineage store rejects C-071 retention explicitly.
 
+`SPOT_OOS_REQUEST@1` is an internal journal reference, not a new C-number or
+retention permission. Its canonical digest pins originating replay inputs,
+archive pins, execution dataset/manifest, policy/parameters/costs and timestamps.
+TRIAL/RESULT receipts bind it into C-071v2; returned replay pins must match.
+OOS as-of equals the held-out request and any resolved C-027v3 as-of.
+
 See [ADR-0022](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md) and
 [workflow usage](../architecture/issue-95-spot-oos.md).

@@ -462,6 +462,15 @@ class OOSResultV2:
             and self.protocol.frozen_at <= self.created_at,
             "INVALID_OOS_RESULT_TIME",
         )
+        held = tuple(
+            r
+            for r in self.runs
+            if r.partition_id == self.protocol.partitions[-1].partition_id
+        )
+        require(
+            all(r.backtest.as_of == self.as_of for r in held),
+            "OOS_AS_OF_REPLAY_MISMATCH",
+        )
         require(
             type(self.reason_codes) is tuple and type(self.warnings) is tuple,
             "INVALID_OOS_REASONS",
@@ -476,11 +485,6 @@ class OOSResultV2:
                 and self.selected_candidate is not None
                 and not self.reason_codes,
                 "OBSERVED_OOS_REQUIRES_VALID_EVIDENCE",
-            )
-            held = tuple(
-                r
-                for r in self.runs
-                if r.partition_id == self.protocol.partitions[-1].partition_id
             )
             require(
                 len(held) == 1

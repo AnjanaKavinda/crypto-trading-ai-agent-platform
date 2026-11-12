@@ -40,6 +40,9 @@ replay and #94 metrics; keep development and holdout runs separate.
 Bind protocol, journal snapshot, exact C-027v3/C-092/manifest and metrics pins,
 availability, sample checks and timestamps. Canonical UUIDv5 identity excludes
 generated ID and own digest. Readback verifies recorder issuance and replay/metrics closure.
+TRIAL/RESULT events bind the originating request digest, including exact archive,
+dataset/manifest, replay inputs and timestamps. Returned replay pins must equal
+that request; OOS as-of equals the held-out request and any resolved replay.
 
 Contamination is FAILED; unresolved evidence or insufficient samples are
 INCONCLUSIVE. OBSERVED meets recorded integrity and raw sample requirements
