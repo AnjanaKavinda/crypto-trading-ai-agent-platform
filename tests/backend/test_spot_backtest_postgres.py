@@ -431,6 +431,46 @@ def _cost_adapter(*, version, scope, as_of, valid_until):
     return SpotExecutionCostAdapter(profile, assumptions)
 
 
+def _oos_substitution_requests(request, execution_dataset):
+    return {
+        "dataset_id": replace(
+            request,
+            execution_dataset_sha256=canonical_sha256(
+                replace(execution_dataset, dataset_id="different-native-id")
+            ),
+        ),
+        "dataset_version": replace(
+            request,
+            execution_dataset_sha256=canonical_sha256(
+                replace(execution_dataset, version="different-version")
+            ),
+        ),
+        "dataset_digest": replace(request, execution_dataset_sha256="1" * 64),
+        "manifest_digest": replace(request, execution_manifest_sha256="2" * 64),
+        "archive_pin": replace(
+            request,
+            archive_pins=(
+                replace(request.archive_pins[0], context_id=uuid4()),
+                *request.archive_pins[1:],
+            ),
+        ),
+        "replay_inputs": replace(
+            request,
+            replay_inputs=replace(
+                request.replay_inputs,
+                decisions=(
+                    replace(
+                        request.replay_inputs.decisions[0],
+                        dataset_sha256="3" * 64,
+                    ),
+                    *request.replay_inputs.decisions[1:],
+                ),
+            ),
+        ),
+        "replay_as_of": replace(request, result_as_of=request.result_as_of - STEP),
+    }
+
+
 @pytest.mark.parametrize("synthetic_ready", [False, True])
 def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
     persisted_service,
@@ -986,7 +1026,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     policy.period_start,
                     policy.period_end,
                 )
-                protocol = freeze_spot_oos_protocol(
+                freeze_kwargs = dict(
                     journal=recorder,
                     window=oos_window,
                     partitions=partitions,
@@ -998,6 +1038,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     mark_equity=True,
                     environment=policy.environment,
                 )
+                protocol = freeze_spot_oos_protocol(**freeze_kwargs)
                 oos_kwargs = dict(
                     journal=recorder,
                     protocol=protocol,
@@ -1011,49 +1052,9 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 )
                 # Return a complete, canonically valid replay for different
                 # requested pins. Internal replay consistency alone is insufficient.
-                alternate_requests = {
-                    "dataset_id": replace(
-                        request,
-                        execution_dataset_sha256=canonical_sha256(
-                            replace(execution_dataset, dataset_id="different-native-id")
-                        ),
-                    ),
-                    "dataset_version": replace(
-                        request,
-                        execution_dataset_sha256=canonical_sha256(
-                            replace(execution_dataset, version="different-version")
-                        ),
-                    ),
-                    "dataset_digest": replace(
-                        request, execution_dataset_sha256="1" * 64
-                    ),
-                    "manifest_digest": replace(
-                        request, execution_manifest_sha256="2" * 64
-                    ),
-                    "archive_pin": replace(
-                        request,
-                        archive_pins=(
-                            replace(request.archive_pins[0], context_id=uuid4()),
-                            *request.archive_pins[1:],
-                        ),
-                    ),
-                    "replay_inputs": replace(
-                        request,
-                        replay_inputs=replace(
-                            request.replay_inputs,
-                            decisions=(
-                                replace(
-                                    request.replay_inputs.decisions[0],
-                                    dataset_sha256="3" * 64,
-                                ),
-                                *request.replay_inputs.decisions[1:],
-                            ),
-                        ),
-                    ),
-                    "replay_as_of": replace(
-                        request, result_as_of=request.result_as_of - STEP
-                    ),
-                }
+                alternate_requests = _oos_substitution_requests(
+                    request, execution_dataset
+                )
 
                 async def substituted_replay(**kwargs):
                     return bundle
@@ -1066,16 +1067,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         declared_complete=True,
                     )
                     isolated_protocol = freeze_spot_oos_protocol(
-                        journal=isolated_recorder,
-                        window=oos_window,
-                        partitions=partitions,
-                        candidates=(candidate_from_request(alternate),),
-                        selection_mode=OOSSelectionMode.FIXED,
-                        metrics_policy=oos_metrics_policy,
-                        warmup_bars=64,
-                        embargo_seconds=0,
-                        mark_equity=True,
-                        environment=policy.environment,
+                        **dict(freeze_kwargs, journal=isolated_recorder)
                     )
                     with monkeypatch.context() as patch:
                         patch.setattr(
@@ -1160,18 +1152,12 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     )
                 # A new plan ID or later revision cannot make inspected dates unseen.
                 reused_protocol = freeze_spot_oos_protocol(
-                    journal=recorder,
-                    window=oos_window,
-                    partitions=tuple(
-                        replace(part, partition_id=uuid4()) for part in partitions
-                    ),
-                    candidates=(candidate_from_request(request),),
-                    selection_mode=OOSSelectionMode.FIXED,
-                    metrics_policy=oos_metrics_policy,
-                    warmup_bars=64,
-                    embargo_seconds=0,
-                    mark_equity=True,
-                    environment=policy.environment,
+                    **dict(
+                        freeze_kwargs,
+                        partitions=tuple(
+                            replace(part, partition_id=uuid4()) for part in partitions
+                        ),
+                    )
                 )
                 reused = await run_spot_oos(
                     **dict(oos_kwargs, protocol=reused_protocol)

@@ -59,6 +59,16 @@ D = Decimal
 STEP = timedelta(minutes=1)
 
 
+@pytest.fixture(autouse=True)
+def forbid_unexpected_replay(monkeypatch):
+    async def forbidden(**kwargs):
+        pytest.fail("unexpected replay; negative preflight must prevent holdout access")
+
+    monkeypatch.setattr(
+        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
+    )
+
+
 def case(*, complete=True):
     inputs, _, resolved, _, _ = _case()
     simulation = production_cost_case(dict(fixture(), strategy=resolved.version))
@@ -145,7 +155,7 @@ def freeze(request, metrics, journal, partitions, **changes):
     return freeze_spot_oos_protocol(**dict(values, **changes))
 
 
-async def execute(request, metrics, journal, protocol):
+async def execute(request, metrics, journal, protocol, **changes):
     return await run_spot_oos(
         journal=journal,
         protocol=protocol,
@@ -154,7 +164,7 @@ async def execute(request, metrics, journal, protocol):
         session=object(),
         strategy_registry=object(),
         lineage_store=object(),
-        as_of=request.result_as_of,
+        as_of=changes.get("as_of", request.result_as_of),
         expires_at=T + timedelta(days=3),
     )
 
@@ -215,12 +225,6 @@ def test_previously_inspected_or_tuned_holdout_fails_before_replay(monkeypatch, 
     )
     protocol = freeze(request, metrics, journal, parts)
 
-    async def forbidden(**kwargs):
-        pytest.fail("contaminated holdout reached the replay engine")
-
-    monkeypatch.setattr(
-        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
-    )
     result = asyncio.run(execute(request, metrics, journal, protocol))
     assert result.outcome is OOSOutcome.FAILED
     assert "HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED" in result.reason_codes
@@ -233,12 +237,6 @@ def test_incomplete_history_is_inconclusive_and_not_a_clean_holdout(monkeypatch)
     request, metrics, journal, parts = case(complete=False)
     protocol = freeze(request, metrics, journal, parts)
 
-    async def forbidden(**kwargs):
-        pytest.fail("incomplete journal reached replay")
-
-    monkeypatch.setattr(
-        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
-    )
     bundle = asyncio.run(execute(request, metrics, journal, protocol))
     assert bundle.outcome is OOSOutcome.INCONCLUSIVE
     assert bundle.result.contamination is CheckOutcome.INCONCLUSIVE
@@ -270,12 +268,6 @@ def test_missing_selection_receipt_is_inconclusive_before_holdout_access(monkeyp
         selection_mode=OOSSelectionMode.VALIDATION_NET_PROFIT,
     )
 
-    async def forbidden(**kwargs):
-        pytest.fail("unselected strategy reached final holdout replay")
-
-    monkeypatch.setattr(
-        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
-    )
     bundle = asyncio.run(execute(request, metrics, journal, protocol))
     assert bundle.outcome is OOSOutcome.INCONCLUSIVE
     assert bundle.result.contamination is CheckOutcome.INCONCLUSIVE
@@ -424,12 +416,6 @@ def test_changed_request_pins_are_rejected_before_replay(change, monkeypatch):
             request, parameters=replace(request.parameters, quantity=D("0.5"))
         )
 
-    async def forbidden(**kwargs):
-        pytest.fail("mismatched request reached replay")
-
-    monkeypatch.setattr(
-        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
-    )
     result = asyncio.run(execute(request, metrics, journal, protocol))
     assert result.outcome is OOSOutcome.FAILED
     assert not result.replays
@@ -537,24 +523,10 @@ def test_as_of_mismatch_is_rejected_before_any_holdout_access(monkeypatch, compl
     protocol = freeze(request, metrics, journal, parts)
     before = journal.snapshot
 
-    async def forbidden(**kwargs):
-        pytest.fail("mismatched as-of reached replay")
-
-    monkeypatch.setattr(
-        "trading_platform_api.validation.spot_oos.run_spot_backtest", forbidden
-    )
     with pytest.raises(ValueError, match="OOS_AS_OF_REQUEST_MISMATCH"):
         asyncio.run(
-            run_spot_oos(
-                journal=journal,
-                protocol=protocol,
-                request=request,
-                metrics_policy=metrics,
-                session=object(),
-                strategy_registry=object(),
-                lineage_store=object(),
-                as_of=request.result_as_of - STEP,
-                expires_at=T + timedelta(days=3),
+            execute(
+                request, metrics, journal, protocol, as_of=request.result_as_of - STEP
             )
         )
     assert journal.snapshot == before
