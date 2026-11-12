@@ -549,27 +549,8 @@ expiry processing, invalidation evaluation, supersession, WATCH, persistence,
 and API routes remain assigned to later issues.
 
 
-## ADR-0022 — C-071 schema-2 observation compatibility
+## ADR-0022 — C-071
 
-C-071 schema 1 (`OOSResult`) retains its UUID dataset field, wire payload,
-identity and qualification-reader meaning. Additive schema 2 (`OOSResultV2`)
-preserves native C-092 string IDs/versions through exact embedded C-027v3 runs,
-plus dataset/manifest digests, metrics references, frozen protocol and journal.
-It represents zero-trade, unavailable, inconclusive and contaminated evidence.
-Closed `(C-071, schema_version)` codec dispatch accepts only 1/2, without
-conversion. Canonical UUIDv5 identity excludes generated result ID and own digest;
-method is `spot-oos-observation-v1`. Existing qualification allowlists still
-reject schema 2. No history migration, retained storage or DDL is authorized;
-the lineage store rejects C-071 retention explicitly.
+V1 payload/UUID dataset/identity/qualification readers stay frozen. Observation-only v2 binds native C-092 IDs/versions, C-027v3 runs, dataset/manifest, #94 reports and protocol/journal; zero/unavailable/inconclusive/contaminated samples remain explicit. Closed codec 1/2, no conversion; UUIDv5 excludes own ID/digest, method `spot-oos-observation-v1`. V2 qualification and C-071 retention rejected; no migration/DDL.
 
-`SPOT_OOS_REQUEST@1` is an internal journal reference, not a new C-number or
-retention permission. Its canonical digest pins originating replay inputs,
-archive pins, execution dataset/manifest, policy/parameters/costs and timestamps.
-TRIAL/RESULT receipts bind it into C-071v2; returned replay pins must match.
-OOS as-of equals the held-out request and any resolved C-027v3 as-of.
-The unreleased schema-2 boundary separates integrity, contamination and sample
-checks, and embeds canonical run configuration/model artifacts and cost inputs
-for semantic codec validation. Existing schema 1 remains frozen.
-
-See [ADR-0022](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md) and
-[workflow usage](../architecture/issue-95-spot-oos.md).
+Internal SPOT_OOS_REQUEST@1 binds request/archive/data/execution/parameter/cost/timestamps, without retention authority. Require canonical artifacts/reports and live issuance/recomputation. As-of equals held-out request/replay; expiry cannot exceed request/any replay. [ADR](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md).

@@ -125,8 +125,6 @@ class OOSWindow:
         require(self.start < self.end, "EMPTY_OOS_WINDOW")
 
     def overlaps(self, other: OOSWindow) -> bool:
-        # A new venue, timeframe or data revision does not erase knowledge of
-        # the same instrument's held-out market period.
         return (
             self.instrument_id == other.instrument_id
             and self.start < other.end
@@ -474,7 +472,6 @@ class OOSRunBindingV2:
         self.resolve_report()
 
     def resolve_report(self):
-        # Late import keeps the codec independent of runtime import ordering.
         from trading_platform_api.lineage.codec import decode_value
         from trading_platform_api.validation.spot_metrics import (
             _NAMESPACE as metric_namespace,
@@ -650,6 +647,10 @@ class OOSResultV2:
             all(r.backtest.as_of == self.as_of for r in held),
             "OOS_AS_OF_REPLAY_MISMATCH",
         )
+        require(
+            all(self.expires_at <= r.backtest.expires_at for r in self.runs),
+            "OOS_EXPIRY_EXCEEDS_RUN",
+        )
         require(bool(held) or not self.metrics, "OOS_METRICS_WITHOUT_HOLDOUT")
         require(
             len(held) <= 1
@@ -709,8 +710,6 @@ class OOSResultV2:
         )
         freezes = tuple(e for e in events if e.kind is OOSEventKind.FREEZE)
         selections = tuple(e for e in events if e.kind is OOSEventKind.SELECT)
-        # Inconclusive records may explicitly lack a freeze/selection receipt;
-        # no successful evidence may use that exception.
         if self.outcome is OOSOutcome.OBSERVED or any(
             r.partition_id == protocol.partitions[-1].partition_id for r in self.runs
         ):

@@ -115,7 +115,7 @@ def case(*, complete=True):
         2,
         request.created_at,
     )
-    operational_time = T + timedelta(days=2)
+    operational_time = T + timedelta(hours=2)
     journal = OOSResearchJournal(
         journal_id=uuid4(),
         authority=ValidationArtifactReferenceV2(
@@ -165,7 +165,7 @@ async def execute(request, metrics, journal, protocol, **changes):
         strategy_registry=object(),
         lineage_store=object(),
         as_of=changes.get("as_of", request.result_as_of),
-        expires_at=T + timedelta(days=3),
+        expires_at=changes.get("expires_at", request.expires_at),
     )
 
 
@@ -432,73 +432,51 @@ def test_development_cutoff_cannot_reveal_the_final_holdout():
         freeze(request, metrics, journal, parts)
 
 
-def test_logged_selection_uses_only_complete_declared_development_trials():
-    from decimal import localcontext
-    from types import SimpleNamespace
-
-    from trading_platform_api.validation.contracts import MetricValue
-
+def test_selection_rejects_empty_or_untyped_trial_evidence():
     request, metrics, journal, parts = case()
-    first = candidate_from_request(request)
-    second = replace(
-        first,
-        parameters=ValidationArtifactReferenceV2(
-            "PARAMETER_SET", uuid4(), first.parameters.version, "e" * 64
-        ),
-    )
+    candidate = candidate_from_request(request)
     protocol = freeze(
         request,
         metrics,
         journal,
         parts,
-        candidates=(first, second),
         selection_mode=OOSSelectionMode.VALIDATION_NET_PROFIT,
     )
     with pytest.raises(ValueError, match="INCOMPLETE_SELECTION_HISTORY"):
         select_spot_oos_candidate(
-            journal=journal, protocol=protocol, candidate_id=first.candidate_id
+            journal=journal, protocol=protocol, candidate_id=candidate.candidate_id
         )
-    scores = (
-        D("0.1000000000000000000000000000000001"),
-        D("0.1000000000000000000000000000000002"),
-    )
-    # Test-owned stand-ins for reports already validated by run_spot_oos_partition.
-    # This isolates selection policy and does not publish synthetic performance.
-    for partition in parts[:2]:
-        window = OOSWindow(
+    event = journal._append(
+        OOSEventKind.TRIAL,
+        OOSWindow(
             protocol.window.venue,
             protocol.window.instrument_id,
             protocol.window.timeframe,
-            partition.start,
-            partition.end,
-        )
-        for candidate, score in zip((first, second), scores, strict=True):
-            event = journal._append(
-                OOSEventKind.TRIAL,
-                window,
-                protocol=protocol,
-                candidate=candidate,
-                purpose=partition.purpose.value,
-            )
-            report = SimpleNamespace(
-                get=lambda name, value=score: SimpleNamespace(
-                    metric=MetricValue(
-                        name, value, "USDT", "synthetic-selection-unit-v1"
-                    )
-                )
-            )
-            journal._trials[event.content_sha256] = (None, report)
-    with localcontext() as context:
-        context.prec = 6
-        with pytest.raises(ValueError, match="SELECTION_CRITERION_MISMATCH"):
-            select_spot_oos_candidate(
-                journal=journal, protocol=protocol, candidate_id=first.candidate_id
-            )
+            parts[0].start,
+            parts[0].end,
+        ),
+        protocol=protocol,
+        candidate=candidate,
+        purpose="TRAIN",
+    )
+    journal._trials[event.content_sha256] = (None, object())
+    before = journal.snapshot
+    with pytest.raises(ValueError, match="UNRESOLVED_TRIAL_EVIDENCE"):
         select_spot_oos_candidate(
-            journal=journal, protocol=protocol, candidate_id=second.candidate_id
+            journal=journal, protocol=protocol, candidate_id=candidate.candidate_id
         )
-    assert journal.snapshot.events[-1].candidate_id == second.candidate_id
-    assert _preflight(journal, protocol) == ([], [])
+    assert journal.snapshot == before
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_expiry_is_rejected_before_holdout_access(expired):
+    request, metrics, journal, parts = case()
+    protocol = freeze(request, metrics, journal, parts)
+    before = journal.snapshot
+    expiry = protocol.frozen_at if expired else request.expires_at + STEP
+    with pytest.raises(ValueError, match="OOS_EXPIRY"):
+        asyncio.run(execute(request, metrics, journal, protocol, expires_at=expiry))
+    assert journal.snapshot == before
 
 
 def test_self_consistent_forged_result_is_not_a_recorder_issued_result():

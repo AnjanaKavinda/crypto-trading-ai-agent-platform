@@ -131,7 +131,6 @@ def _request_digest(request: SpotBacktestRunRequest) -> str:
 
 
 def _replay_request_digest(replay: SpotBacktestBundle) -> str:
-    """Reconstruct the originating request pins after canonical replay resolution."""
     result = resolve_spot_backtest_result(replay)
     assert replay.trace is not None
     trace = replay.trace
@@ -159,12 +158,7 @@ def _request_ref(sha: str) -> ValidationArtifactReferenceV2:
 
 
 class OOSResearchJournal:
-    """Injected trusted recorder. Completeness is an explicit source assumption.
-
-    This process-local recorder owns event sequencing and its clock. Exported
-    hash chains alone cannot authenticate a research history or resume a session.
-    No durable write or universal claim about off-system experiments is made.
-    """
+    """Process-local trusted recorder; completeness covers supplied history only."""
 
     def __init__(
         self,
@@ -336,9 +330,7 @@ def _selected(
     )
 
 
-def select_spot_oos_candidate(
-    *, journal: OOSResearchJournal, protocol: OOSProtocolV2, candidate_id: UUID
-) -> None:
+def _verify_selection(journal, protocol, candidate_id):
     require(_receipt(journal, protocol) is not None, "UNRESOLVED_FREEZE_RECEIPT")
     candidate = next(
         (c for c in protocol.candidates if c.candidate_id == candidate_id), None
@@ -347,7 +339,6 @@ def select_spot_oos_candidate(
     if protocol.selection_mode is OOSSelectionMode.VALIDATION_NET_PROFIT:
         scores = []
         for item in protocol.candidates:
-            trial_reports = []
             for partition in protocol.partitions[:2]:
                 matches = tuple(
                     e
@@ -361,13 +352,20 @@ def select_spot_oos_candidate(
                     len(matches) == 1 and matches[0].content_sha256 in journal._trials,
                     "INCOMPLETE_SELECTION_HISTORY",
                 )
-                trial_reports.append(journal._trials[matches[0].content_sha256][1])
-            metric = trial_reports[-1].get("net_realized_profit").metric
+                _, report = _resolve_trial(journal, protocol, matches[0])
+            metric = report.get("net_realized_profit").metric
             require(metric is not None, "VALIDATION_SELECTION_METRIC_UNAVAILABLE")
             assert metric is not None
             scores.append((metric.value, str(item.candidate_id), item.candidate_id))
         winner = sorted(scores, key=lambda x: (x[0].copy_negate(), x[1]))[0][2]
         require(candidate_id == winner, "SELECTION_CRITERION_MISMATCH")
+    return candidate
+
+
+def select_spot_oos_candidate(
+    *, journal: OOSResearchJournal, protocol: OOSProtocolV2, candidate_id: UUID
+) -> None:
+    candidate = _verify_selection(journal, protocol, candidate_id)
     journal._append(
         OOSEventKind.SELECT,
         protocol.window,
@@ -404,7 +402,6 @@ def _preflight(
         if event.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL):
             failed.append("HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED")
         if event.kind is OOSEventKind.SELECT and event.sequence < receipt.sequence:
-            # A prior selection on a reused market window is not a new holdout.
             if any(
                 e.kind is OOSEventKind.ACCESS
                 and e.window.overlaps(protocol.window)
@@ -468,7 +465,7 @@ def _validate_replay(
     partition: DataPartition,
     candidate: OOSCandidateV2,
     replay: SpotBacktestBundle,
-    request: SpotBacktestRunRequest,
+    request: SpotBacktestRunRequest | None = None,
 ) -> None:
     require(
         replay.outcome is SpotBacktestOutcome.OBSERVED,
@@ -498,9 +495,30 @@ def _validate_replay(
         "OOS_DECISION_OUTSIDE_PARTITION",
     )
     result = resolve_spot_backtest_result(replay)
+    if request is not None:
+        require(
+            _replay_request_digest(replay) == _request_digest(request),
+            "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH",
+        )
+    p = replay.trace.policy
     require(
-        _replay_request_digest(replay) == _request_digest(request),
-        "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH",
+        (p.venue, p.instrument_id, p.timeframe, p.environment)
+        == (
+            protocol.window.venue,
+            protocol.window.instrument_id,
+            protocol.window.timeframe,
+            protocol.environment,
+        ),
+        "OOS_SCOPE_OR_UNIT_MISMATCH",
+    )
+    require(
+        all(
+            d.lookback_start
+            >= partition.start
+            - protocol.warmup_bars * timedelta(seconds=_TIMEFRAMES[p.timeframe])
+            for d in replay.trace.replay_request.decisions
+        ),
+        "OOS_WARMUP_EXCEEDED",
     )
     require(
         _candidate_from_replay(replay) == candidate, "OOS_REPLAY_CANDIDATE_MISMATCH"
@@ -599,6 +617,50 @@ def _run_binding(partition, replay, report) -> OOSRunBindingV2:
     )
 
 
+def _resolve_trial(journal, protocol, event):
+    trial = journal._trials.get(event.content_sha256)
+    require(
+        type(trial) is tuple
+        and len(trial) == 2
+        and type(trial[0]) is SpotBacktestBundle
+        and type(trial[1]) is SpotPerformanceReport,
+        "UNRESOLVED_TRIAL_EVIDENCE",
+    )
+    replay, report = trial
+    partition = next(
+        (p for p in protocol.partitions[:2] if _window(protocol, p) == event.window),
+        None,
+    )
+    candidate = next(
+        (c for c in protocol.candidates if c.candidate_id == event.candidate_id), None
+    )
+    receipt = _receipt(journal, protocol)
+    require(
+        partition is not None
+        and candidate is not None
+        and receipt is not None
+        and event.kind is OOSEventKind.TRIAL
+        and event.protocol_sha256 == protocol.content_sha256
+        and event.purpose == partition.purpose.value
+        and receipt.sequence < event.sequence,
+        "OOS_TRIAL_BINDING_MISMATCH",
+    )
+    _validate_replay(protocol, partition, candidate, replay)
+    binding = _run_binding(partition, replay, report)
+    require(
+        event.evidence == (_backtest_ref(replay), _metrics_ref(report), binding.request)
+        and canonical_sha256(report.policy) == protocol.metrics_policy_sha256
+        and calculate_spot_performance_metrics(
+            replay,
+            report.policy,
+            price_path=replay.execution_dataset if protocol.mark_equity else None,
+        )
+        == report,
+        "OOS_TRIAL_EVIDENCE_MISMATCH",
+    )
+    return replay, report
+
+
 def _assemble(
     *,
     journal: OOSResearchJournal,
@@ -615,7 +677,6 @@ def _assemble(
 ) -> SpotOOSBundle:
     selected = _selected(journal, protocol)
     runs = []
-    # Include every resolved development trial, without pooling it into holdout metrics.
     for event in journal.snapshot.events:
         if (
             event.kind is OOSEventKind.TRIAL
@@ -625,7 +686,7 @@ def _assemble(
             if trial is None:
                 missing.append("SELECTION_TRIAL_UNRESOLVED")
                 continue
-            replay, report = trial
+            replay, report = _resolve_trial(journal, protocol, event)
             partition = next(
                 p
                 for p in protocol.partitions[:2]
@@ -668,6 +729,10 @@ def _assemble(
         else OOSOutcome.OBSERVED
     )
     require(utc(as_of) == request.result_as_of, "OOS_AS_OF_REQUEST_MISMATCH")
+    require(
+        utc(expires_at) <= request.expires_at,
+        "OOS_EXPIRY_EXCEEDS_REQUEST",
+    )
     if held:
         require(
             resolve_spot_backtest_result(held[0]).as_of == utc(as_of),
@@ -677,8 +742,6 @@ def _assemble(
         (_backtest_ref(held[0]), _metrics_ref(held[1])) if held else ()
     )
     previous = journal.snapshot.events[-1] if journal.snapshot.events else None
-    # Repeating a preflight-only outcome must not manufacture a new journal
-    # event and result identity when no input or recorded history has changed.
     if not (
         previous is not None
         and previous.kind is OOSEventKind.RESULT
@@ -753,12 +816,32 @@ async def run_spot_oos(
     as_of: datetime,
     expires_at: datetime,
 ) -> SpotOOSBundle:
-    """Run one exact held-out experiment after its authenticated local precommitment."""
+    """Execute the selected holdout after authenticated precommitment."""
     require(
         type(journal) is OOSResearchJournal and type(protocol) is OOSProtocolV2,
         "INVALID_OOS_JOURNAL_OR_PROTOCOL",
     )
     require(utc(as_of) == request.result_as_of, "OOS_AS_OF_REQUEST_MISMATCH")
+    require(
+        utc(journal._clock()) < utc(expires_at) <= request.expires_at,
+        "OOS_EXPIRY_EXCEEDS_REQUEST",
+    )
+    for event in journal.snapshot.events:
+        if (
+            event.kind is OOSEventKind.TRIAL
+            and event.protocol_sha256 == protocol.content_sha256
+        ):
+            trial, _ = _resolve_trial(journal, protocol, event)
+            require(
+                utc(expires_at) <= resolve_spot_backtest_result(trial).expires_at,
+                "OOS_EXPIRY_EXCEEDS_RUN",
+            )
+    selected = _selected(journal, protocol)
+    if (
+        selected is not None
+        and protocol.selection_mode is OOSSelectionMode.VALIDATION_NET_PROFIT
+    ):
+        _verify_selection(journal, protocol, selected.candidate_id)
     require(
         (journal.snapshot.journal_id, journal.snapshot.authority)
         == (protocol.journal_id, protocol.authority),
@@ -859,7 +942,7 @@ async def run_spot_oos(
 def resolve_spot_oos_result(
     bundle: SpotOOSBundle, *, journal: OOSResearchJournal
 ) -> OOSResultV2:
-    """Verify canonical readback, recorder receipt, replay and report closure."""
+    """Resolve canonical, recorder-issued evidence."""
     require(
         type(bundle) is SpotOOSBundle and type(bundle.result) is OOSResultV2,
         "OOS_RESULT_UNAVAILABLE",

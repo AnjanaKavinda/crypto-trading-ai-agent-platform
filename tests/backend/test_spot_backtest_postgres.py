@@ -632,7 +632,7 @@ async def _development_oos(
                 result_as_of=part.end,
                 created_at=max(request.created_at, part.end + timedelta(seconds=1)),
             )
-    at = request.created_at + timedelta(days=2)
+    at = request.created_at + timedelta(hours=2)
     journal = OOSResearchJournal(
         journal_id=uuid4(),
         authority=ValidationArtifactReferenceV2(
@@ -681,6 +681,48 @@ async def _development_oos(
             )
         )
     winner = sorted(scores, key=lambda x: (-x[0], x[1]))[0][2]
+    winner_id = candidate_from_request(requests[0, winner]).candidate_id
+    # Use the real public-runner trials; every corruption must fail before SELECT.
+    snapshot = journal.snapshot
+    event = snapshot.events[-1]
+    trial = journal._trials[event.content_sha256]
+    for altered in (
+        (None, trial[1]),
+        (trial[0], replace(trial[1], result_sha256="f" * 64)),
+        (
+            trial[0],
+            calculate_spot_performance_metrics(
+                trial[0],
+                replace(metrics, min_trade_sample=metrics.min_trade_sample + 1),
+                price_path=trial[0].execution_dataset,
+            ),
+        ),
+        journal._trials[
+            next(e.content_sha256 for e in snapshot.events if e.kind.value == "TRIAL")
+        ],
+    ):
+        journal._trials[event.content_sha256] = altered
+        with pytest.raises(ValueError):
+            select_spot_oos_candidate(
+                journal=journal, protocol=protocol, candidate_id=winner_id
+            )
+        assert journal.snapshot == snapshot
+    journal._trials[event.content_sha256] = trial
+    for evidence in (
+        (),
+        event.evidence[:2],
+        (*event.evidence[:2], replace(event.evidence[2], content_sha256="f" * 64)),
+    ):
+        altered = OOSJournalEvent.build(
+            **dict(payload(event, {"content_sha256"}), evidence=evidence)
+        )
+        journal._snapshot = replace(snapshot, events=(*snapshot.events[:-1], altered))
+        journal._trials[altered.content_sha256] = trial
+        with pytest.raises(ValueError, match="TRIAL_EVIDENCE"):
+            select_spot_oos_candidate(
+                journal=journal, protocol=protocol, candidate_id=winner_id
+            )
+    journal._snapshot = snapshot
     held = requests[2, winner]
     pending = await run_spot_oos(
         journal=journal,
@@ -691,7 +733,7 @@ async def _development_oos(
         strategy_registry=registry,
         lineage_store=lineage,
         as_of=held.result_as_of,
-        expires_at=at + timedelta(days=1),
+        expires_at=held.expires_at,
     )
     assert pending.outcome is OOSOutcome.INCONCLUSIVE
     assert len(resolve_spot_oos_result(pending, journal=journal).runs) == 4
@@ -704,6 +746,22 @@ async def _development_oos(
         candidate_id=candidate_from_request(requests[0, winner]).candidate_id,
     )
     held = requests[2, winner]
+    selected_snapshot = journal.snapshot
+    journal._trials[event.content_sha256] = (None, trial[1])
+    with pytest.raises(ValueError, match="TRIAL_EVIDENCE"):
+        await run_spot_oos(
+            journal=journal,
+            protocol=protocol,
+            request=held,
+            metrics_policy=metrics,
+            session=session,
+            strategy_registry=registry,
+            lineage_store=lineage,
+            as_of=held.result_as_of,
+            expires_at=held.expires_at,
+        )
+    assert journal.snapshot == selected_snapshot
+    journal._trials[event.content_sha256] = trial
     result = await run_spot_oos(
         journal=journal,
         protocol=protocol,
@@ -713,7 +771,7 @@ async def _development_oos(
         strategy_registry=registry,
         lineage_store=lineage,
         as_of=held.result_as_of,
-        expires_at=at + timedelta(days=1),
+        expires_at=held.expires_at,
     )
     resolved = resolve_spot_oos_result(result, journal=journal)
     assert len(resolved.runs) == 5
@@ -778,6 +836,13 @@ def _assert_oos_contract_rejections(result):
     with pytest.raises(LineageError, match="corrupt"):
         decode(json.dumps(raw))
     _assert_metric_projection_rejections(result, values)
+    with pytest.raises(ValueError, match="OOS_EXPIRY_EXCEEDS_RUN"):
+        type(result).build(
+            **dict(
+                values,
+                expires_at=max(r.backtest.expires_at for r in result.runs) + STEP,
+            )
+        )
 
 
 def _assert_metric_projection_rejections(result, values):
@@ -819,6 +884,17 @@ def _assert_metric_projection_rejections(result, values):
         )
 
     assert identity(original) == result.content_sha256
+    expired = json.loads(encode(result))
+    expired["payload"]["expires_at"] = (
+        (max(r.backtest.expires_at for r in result.runs) + STEP)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    sha = identity(expired)
+    expired["payload"]["content_sha256"] = sha
+    expired["payload"]["result_id"] = str(uuid5(NAMESPACE, "result:" + sha))
+    with pytest.raises(LineageError, match="corrupt"):
+        decode(json.dumps(expired))
     for at, altered in changes:
         metrics = (*result.metrics[:at], altered, *result.metrics[at + 1 :])
         with pytest.raises(ValueError, match="OOS_METRICS_REPORT_MISMATCH"):
@@ -1344,7 +1420,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
 
                 # Explicit synthetic recorder authority: verifies the recorded
                 # experiment, not the absence of off-system owner research.
-                recorded_at = request.created_at + timedelta(days=2)
+                recorded_at = request.created_at + timedelta(hours=2)
                 oos_metrics_policy = replace(metrics_policy, min_trade_sample=1)
                 development = await _development_oos(
                     request,
@@ -1422,7 +1498,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     strategy_registry=registry,
                     lineage_store=lineage,
                     as_of=request.result_as_of,
-                    expires_at=recorded_at + timedelta(days=1),
+                    expires_at=request.expires_at,
                 )
                 # Return a complete, canonically valid replay for different
                 # requested pins. Internal replay consistency alone is insufficient.
