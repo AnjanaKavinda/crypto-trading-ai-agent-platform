@@ -782,6 +782,7 @@ async def _development_oos(
         ).backtest.simulated_trade_ids
     )
     _assert_oos_contract_rejections(resolved)
+    _assert_selection_contract_rejections(resolved)
     return result
 
 
@@ -868,29 +869,14 @@ def _assert_metric_projection_rejections(result, values):
     )
     original = json.loads(encode(result))
 
-    def identity(raw):
-        return canonical_sha256(
-            _wire(
-                dict(
-                    {
-                        k: v
-                        for k, v in raw["payload"].items()
-                        if k not in {"result_id", "content_sha256"}
-                    },
-                    contract_id=raw["contract_id"],
-                    schema_version=raw["schema_version"],
-                )
-            )
-        )
-
-    assert identity(original) == result.content_sha256
+    assert _oos_wire_identity(original) == result.content_sha256
     expired = json.loads(encode(result))
     expired["payload"]["expires_at"] = (
         (max(r.backtest.expires_at for r in result.runs) + STEP)
         .isoformat()
         .replace("+00:00", "Z")
     )
-    sha = identity(expired)
+    sha = _oos_wire_identity(expired)
     expired["payload"]["content_sha256"] = sha
     expired["payload"]["result_id"] = str(uuid5(NAMESPACE, "result:" + sha))
     with pytest.raises(LineageError, match="corrupt"):
@@ -901,11 +887,119 @@ def _assert_metric_projection_rejections(result, values):
             type(result).build(**dict(values, metrics=metrics))
         raw = json.loads(encode(result))
         raw["payload"]["metrics"][at] = json.loads(canonical_json_dumps(altered))
-        sha = identity(raw)
+        sha = _oos_wire_identity(raw)
         raw["payload"]["content_sha256"] = sha
         raw["payload"]["result_id"] = str(uuid5(NAMESPACE, "result:" + sha))
         with pytest.raises(LineageError, match="corrupt"):
             decode(json.dumps(raw))
+
+
+def _oos_wire_identity(raw):
+    return canonical_sha256(
+        _wire(
+            dict(
+                {
+                    k: v
+                    for k, v in raw["payload"].items()
+                    if k not in {"result_id", "content_sha256"}
+                },
+                contract_id=raw["contract_id"],
+                schema_version=raw["schema_version"],
+            )
+        )
+    )
+
+
+def _assert_selection_contract_rejections(result):
+    values = {
+        k: v
+        for k, v in result.identity_payload().items()
+        if k not in {"method", "contract_id", "schema_version", "operating_mode"}
+    }
+
+    def rechain(events):
+        chain = []
+        for event in events:
+            chain.append(
+                OOSJournalEvent.build(
+                    **dict(
+                        payload(
+                            event, {"sequence", "previous_sha256", "content_sha256"}
+                        ),
+                        sequence=len(chain),
+                        previous_sha256=chain[-1].content_sha256 if chain else "0" * 64,
+                    )
+                )
+            )
+        return replace(result.journal, events=tuple(chain))
+
+    def reject(changes, match):
+        with pytest.raises(ValueError, match=match):
+            type(result).build(**dict(values, **changes))
+        raw = json.loads(encode(result))
+        raw["payload"].update(
+            {k: json.loads(canonical_json_dumps(v)) for k, v in changes.items()}
+        )
+        sha = _oos_wire_identity(raw)
+        raw["payload"].update(
+            content_sha256=sha, result_id=str(uuid5(NAMESPACE, "result:" + sha))
+        )
+        with pytest.raises(LineageError, match="corrupt"):
+            decode(json.dumps(raw))
+
+    reject({"runs": (*result.runs, result.runs[0])}, "DUPLICATE_OOS_RUN")
+    reject({"runs": result.runs[1:]}, "SELECTION_MATRIX")
+    select = next(e for e in result.journal.events if e.kind.value == "SELECT")
+    altered = OOSJournalEvent.build(
+        **dict(payload(select, {"content_sha256"}), purpose="FORGED_PURPOSE")
+    )
+    reject(
+        {
+            "journal": rechain(
+                altered if e == select else e for e in result.journal.events
+            )
+        },
+        "SELECTION_PURPOSE",
+    )
+    trial = next(e for e in result.journal.events if e.kind.value == "TRIAL")
+    reject(
+        {
+            "journal": rechain(
+                (*result.journal.events[:-1], trial, result.journal.events[-1])
+            )
+        },
+        "RUN_RECEIPT",
+    )
+    wrong = next(
+        c for c in result.protocol.candidates if c != result.selected_candidate
+    )
+    # Remove held-out evidence so only the frozen selection proof can reject this.
+    altered_events = []
+    for event in result.journal.events:
+        if event == select:
+            event = OOSJournalEvent.build(
+                **dict(
+                    payload(event, {"content_sha256"}), candidate_id=wrong.candidate_id
+                )
+            )
+        altered_events.append(event)
+    reject(
+        {
+            "journal": rechain(altered_events),
+            "selected_candidate": wrong,
+            "runs": tuple(
+                r
+                for r in result.runs
+                if r.partition_id != result.protocol.partitions[-1].partition_id
+            ),
+            "metrics": (),
+            "sample_size": 0,
+            "sample_sufficiency": result.sample_sufficiency.__class__.INCONCLUSIVE,
+            "outcome": OOSOutcome.INCONCLUSIVE,
+            "reason_codes": ("INSUFFICIENT_OOS_TRADE_SAMPLE",),
+        },
+        "SELECTION_CRITERION",
+    )
 
 
 @pytest.mark.parametrize("synthetic_ready", [False, True])

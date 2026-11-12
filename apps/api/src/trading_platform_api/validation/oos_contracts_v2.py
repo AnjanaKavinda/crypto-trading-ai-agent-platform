@@ -619,6 +619,13 @@ class OOSResultV2:
             and len({m.name for m in self.metrics}) == len(self.metrics),
             "INVALID_OOS_METRICS",
         )
+        for keys in (
+            [(r.partition_id, r.candidate.candidate_id) for r in self.runs],
+            [r.backtest.result_id for r in self.runs],
+            [r.metrics_report.artifact_id for r in self.runs],
+            [r.request.artifact_id for r in self.runs],
+        ):
+            require(len(set(keys)) == len(self.runs), "DUPLICATE_OOS_RUN")
         require(
             type(self.sample_size) is int
             and self.sample_size >= 0
@@ -710,6 +717,18 @@ class OOSResultV2:
         )
         freezes = tuple(e for e in events if e.kind is OOSEventKind.FREEZE)
         selections = tuple(e for e in events if e.kind is OOSEventKind.SELECT)
+        require(
+            all(e.purpose == protocol.selection_mode.value for e in selections),
+            "OOS_SELECTION_PURPOSE_MISMATCH",
+        )
+        if self.selected_candidate is not None:
+            require(
+                len(selections) == len(freezes) == 1
+                and selections[0].candidate_id == self.selected_candidate.candidate_id
+                and selections[0].window == protocol.window
+                and freezes[0].sequence < selections[0].sequence,
+                "OOS_SELECTION_RECEIPT_UNRESOLVED",
+            )
         if self.outcome is OOSOutcome.OBSERVED or any(
             r.partition_id == protocol.partitions[-1].partition_id for r in self.runs
         ):
@@ -756,6 +775,7 @@ class OOSResultV2:
                 and access[0].candidate_id == self.selected_candidate.candidate_id,
                 "OOS_CONTAMINATED_OBSERVED_JOURNAL",
             )
+        used_receipts = set()
         for run in self.runs:
             partition = next(
                 (p for p in protocol.partitions if p.partition_id == run.partition_id),
@@ -826,30 +846,44 @@ class OOSResultV2:
                     ),
                     "OOS_RUN_DECISION_BOUNDARY_MISMATCH",
                 )
-            receipt = next(
-                (
-                    e
-                    for e in events
-                    if e.kind is (OOSEventKind.RESULT if held else OOSEventKind.TRIAL)
-                    and e.candidate_id == run.candidate.candidate_id
-                    and e.window
-                    == OOSWindow(
-                        protocol.window.venue,
-                        protocol.window.instrument_id,
-                        protocol.window.timeframe,
-                        partition.start,
-                        partition.end,
-                    )
-                    and run.request in e.evidence
-                    and run.metrics_report in e.evidence
-                    and ValidationArtifactReferenceV2(
-                        "C-027", b.result_id, "3", b.content_sha256
-                    )
-                    in e.evidence
-                ),
-                None,
+            matches = tuple(
+                e
+                for e in events
+                if e.kind is (OOSEventKind.RESULT if held else OOSEventKind.TRIAL)
+                and e.candidate_id == run.candidate.candidate_id
+                and e.window
+                == OOSWindow(
+                    protocol.window.venue,
+                    protocol.window.instrument_id,
+                    protocol.window.timeframe,
+                    partition.start,
+                    partition.end,
+                )
+                and run.request in e.evidence
+                and run.metrics_report in e.evidence
+                and ValidationArtifactReferenceV2(
+                    "C-027", b.result_id, "3", b.content_sha256
+                )
+                in e.evidence
             )
-            require(receipt is not None, "OOS_RUN_RECEIPT_UNRESOLVED")
+            require(len(matches) == 1, "OOS_RUN_RECEIPT_UNRESOLVED")
+            receipt = matches[0]
+            require(
+                receipt.sequence not in used_receipts
+                and len(receipt.evidence) == 3
+                and (
+                    held
+                    or (
+                        receipt.purpose == partition.purpose.value
+                        and freezes[0].sequence < receipt.sequence
+                        and (
+                            not selections or receipt.sequence < selections[0].sequence
+                        )
+                    )
+                ),
+                "OOS_RUN_RECEIPT_REUSED_OR_UNORDERED",
+            )
+            used_receipts.add(receipt.sequence)
             if held:
                 assert receipt is not None
                 require(
@@ -857,11 +891,57 @@ class OOSResultV2:
                     and any(
                         e.kind is OOSEventKind.ACCESS
                         and e.purpose == "FINAL_HOLDOUT_EXECUTION"
+                        and e.window == protocol.window
+                        and e.candidate_id == run.candidate.candidate_id
                         and selections[0].sequence < e.sequence < receipt.sequence
                         for e in events
                     ),
                     "OOS_HOLDOUT_ACCESS_ORDER_MISMATCH",
                 )
+        if (
+            self.selected_candidate is not None
+            and protocol.selection_mode is OOSSelectionMode.VALIDATION_NET_PROFIT
+        ):
+            development = {
+                (r.partition_id, r.candidate.candidate_id): r
+                for r in self.runs
+                if r.partition_id != protocol.partitions[-1].partition_id
+            }
+            require(
+                set(development)
+                == {
+                    (p.partition_id, c.candidate_id)
+                    for p in protocol.partitions[:2]
+                    for c in protocol.candidates
+                }
+                and sum(e.kind is OOSEventKind.TRIAL for e in events)
+                == len(development),
+                "OOS_SELECTION_MATRIX_INCOMPLETE",
+            )
+            scores = []
+            for candidate in protocol.candidates:
+                metric = (
+                    development[
+                        protocol.partitions[1].partition_id, candidate.candidate_id
+                    ]
+                    .resolve_report()
+                    .get("net_realized_profit")
+                )
+                require(
+                    metric.state.value == "AVAILABLE" and metric.metric is not None,
+                    "OOS_SELECTION_METRIC_UNAVAILABLE",
+                )
+                scores.append(
+                    (
+                        metric.metric.value.copy_negate(),
+                        str(candidate.candidate_id),
+                        candidate,
+                    )
+                )
+            require(
+                self.selected_candidate == min(scores, key=lambda s: (s[0], s[1]))[2],
+                "OOS_SELECTION_CRITERION_MISMATCH",
+            )
 
     def identity_payload(self) -> dict[str, object]:
         return payload(self, {"result_id", "content_sha256"})
