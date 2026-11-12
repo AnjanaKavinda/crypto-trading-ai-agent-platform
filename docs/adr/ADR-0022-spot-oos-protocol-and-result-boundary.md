@@ -6,4 +6,6 @@ Preserve C-071v1; add observation-only v2 for native dataset IDs and zero trades
 
 The injected process-local journal owns clock/order/receipts/issuance; supplied completeness cannot prove absence of off-system research or authenticate restart. Bind exact protocol/journal/dataset/manifest/replay/report closure; originating request receipts and held-out as-of must match returned pins. Canonical SHA-256/UUIDv5 excludes generated ID/own digest.
 
+Contamination, integrity and raw-sample sufficiency are distinct checks. Schema-2 construction/decoding validates declared freeze/selection/access/result receipts and each run's partition, candidate, configuration/model artifacts, costs and request digest. Live recorder authentication and replay/report recomputation remain additional readback checks. Unresolved selection may retain development observations in an INCONCLUSIVE result.
+
 Contamination FAILED; missing evidence/sample INCONCLUSIVE; OBSERVED grants no qualification/profitability/execution authority. Preserve correction-stable readback. Limits: 512 events/16 candidates. No migration/storage/DDL/API. Robustness/Futures remain downstream; paper/testnet/live gated. [Usage/tests](../architecture/issue-95-spot-oos.md).

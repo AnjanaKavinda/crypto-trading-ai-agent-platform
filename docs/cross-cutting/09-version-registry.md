@@ -567,6 +567,9 @@ retention permission. Its canonical digest pins originating replay inputs,
 archive pins, execution dataset/manifest, policy/parameters/costs and timestamps.
 TRIAL/RESULT receipts bind it into C-071v2; returned replay pins must match.
 OOS as-of equals the held-out request and any resolved C-027v3 as-of.
+The unreleased schema-2 boundary separates integrity, contamination and sample
+checks, and embeds canonical run configuration/model artifacts and cost inputs
+for semantic codec validation. Existing schema 1 remains frozen.
 
 See [ADR-0022](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md) and
 [workflow usage](../architecture/issue-95-spot-oos.md).

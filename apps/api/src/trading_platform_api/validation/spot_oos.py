@@ -467,18 +467,11 @@ def _validate_replay(
     replay: SpotBacktestBundle,
     request: SpotBacktestRunRequest,
 ) -> None:
-    result = resolve_spot_backtest_result(replay)
     require(
-        _replay_request_digest(replay) == _request_digest(request),
-        "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH",
+        replay.outcome is SpotBacktestOutcome.OBSERVED,
+        "OOS_DEVELOPMENT_REPLAY_INCONCLUSIVE:" + ",".join(replay.reason_codes),
     )
-    require(
-        _candidate_from_replay(replay) == candidate, "OOS_REPLAY_CANDIDATE_MISMATCH"
-    )
-    require(
-        (result.period_start, result.period_end) == (partition.start, partition.end),
-        "OOS_RESULT_WINDOW_MISMATCH",
-    )
+    require(replay.trace is not None, "OOS_TRACE_UNRESOLVED")
     assert replay.trace is not None
     terminal = replay.trace.exit_trace or replay.trace.entry_trace
     require(
@@ -493,6 +486,25 @@ def _validate_replay(
             for f in trace.fills
         ),
         "OOS_FILL_OUTSIDE_PARTITION",
+    )
+    require(
+        all(
+            partition.start <= d.decision_time < partition.end
+            for d in replay.trace.decisions
+        ),
+        "OOS_DECISION_OUTSIDE_PARTITION",
+    )
+    result = resolve_spot_backtest_result(replay)
+    require(
+        _replay_request_digest(replay) == _request_digest(request),
+        "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH",
+    )
+    require(
+        _candidate_from_replay(replay) == candidate, "OOS_REPLAY_CANDIDATE_MISMATCH"
+    )
+    require(
+        (result.period_start, result.period_end) == (partition.start, partition.end),
+        "OOS_RESULT_WINDOW_MISMATCH",
     )
     require(
         result.as_of <= partition.point_in_time_cutoff, "OOS_RESULT_CUTOFF_MISMATCH"
@@ -567,6 +579,22 @@ def _metrics_ref(report: SpotPerformanceReport) -> ValidationArtifactReferenceV2
     )
 
 
+def _run_binding(partition, replay, report) -> OOSRunBindingV2:
+    result = resolve_spot_backtest_result(replay)
+    assert replay.trace is not None
+    artifacts = {a.reference: a.document for a in replay.artifacts}
+    return OOSRunBindingV2(
+        partition.partition_id,
+        result,
+        _metrics_ref(report),
+        _candidate_from_replay(replay),
+        artifacts[result.execution_model],
+        artifacts[result.configuration],
+        replay.trace.cost_assumptions,
+        _request_ref(_replay_request_digest(replay)),
+    )
+
+
 def _assemble(
     *,
     journal: OOSResearchJournal,
@@ -576,6 +604,7 @@ def _assemble(
     replays: tuple[SpotBacktestBundle, ...],
     reports: tuple[SpotPerformanceReport, ...],
     failed: list[str],
+    integrity_failed: list[str],
     missing: list[str],
     as_of: datetime,
     expires_at: datetime,
@@ -598,13 +627,7 @@ def _assemble(
                 for p in protocol.partitions[:2]
                 if _window(protocol, p) == event.window
             )
-            runs.append(
-                OOSRunBindingV2(
-                    partition.partition_id,
-                    resolve_spot_backtest_result(replay),
-                    _metrics_ref(report),
-                )
-            )
+            runs.append(_run_binding(partition, replay, report))
             replays = (*replays, replay)
             reports = (*reports, report)
     count = 0
@@ -623,13 +646,7 @@ def _assemble(
     if held:
         replay, report = held
         count = len(replay.result.simulated_trade_ids) if replay.result else 0
-        runs.append(
-            OOSRunBindingV2(
-                held_partition.partition_id,
-                resolve_spot_backtest_result(replay),
-                _metrics_ref(report),
-            )
-        )
+        runs.append(_run_binding(held_partition, replay, report))
         metrics = tuple(
             OOSMetricV2(
                 m.name, m.state.value, m.reason, m.metric, m.sample_count, m.warnings
@@ -638,10 +655,10 @@ def _assemble(
         )
     if count < protocol.minimum_trades:
         missing.append("INSUFFICIENT_OOS_TRADE_SAMPLE")
-    reasons = tuple(sorted(set(failed + missing)))
+    reasons = tuple(sorted(set(failed + integrity_failed + missing)))
     outcome = (
         OOSOutcome.FAILED
-        if failed
+        if failed or integrity_failed
         else OOSOutcome.INCONCLUSIVE
         if missing
         else OOSOutcome.OBSERVED
@@ -691,6 +708,11 @@ def _assemble(
                 "SELECTION_TRIAL_UNRESOLVED",
             )
         )
+        else CheckOutcome.PASSED,
+        integrity=CheckOutcome.FAILED
+        if integrity_failed
+        else CheckOutcome.INCONCLUSIVE
+        if any(r != "INSUFFICIENT_OOS_TRADE_SAMPLE" for r in missing)
         else CheckOutcome.PASSED,
         sample_sufficiency=CheckOutcome.PASSED
         if count >= protocol.minimum_trades
@@ -750,6 +772,7 @@ async def run_spot_oos(
     if key in journal._cache:
         return journal._cache[key]
     failed, missing = _preflight(journal, protocol)
+    integrity_failed: list[str] = []
     selected = _selected(journal, protocol)
     partition = protocol.partitions[-1]
     try:
@@ -757,8 +780,8 @@ async def run_spot_oos(
         if selected is not None:
             require(candidate == selected, "OOS_REQUEST_NOT_SELECTED_STRATEGY")
     except ValueError as error:
-        failed.append(str(error))
-    if failed or missing:
+        integrity_failed.append(str(error))
+    if failed or integrity_failed or missing:
         return _assemble(
             journal=journal,
             protocol=protocol,
@@ -767,6 +790,7 @@ async def run_spot_oos(
             replays=(),
             reports=(),
             failed=failed,
+            integrity_failed=integrity_failed,
             missing=missing,
             as_of=as_of,
             expires_at=expires_at,
@@ -796,7 +820,7 @@ async def run_spot_oos(
                 assert selected is not None
                 _validate_replay(protocol, partition, selected, replay, request)
             except ValueError as error:
-                failed.append(str(error))
+                integrity_failed.append(str(error))
             else:
                 try:
                     report = calculate_spot_performance_metrics(
@@ -817,6 +841,7 @@ async def run_spot_oos(
             replays=replays,
             reports=reports,
             failed=failed,
+            integrity_failed=integrity_failed,
             missing=missing,
             as_of=as_of,
             expires_at=expires_at,
@@ -841,6 +866,10 @@ def resolve_spot_oos_result(
         "OOS_CANONICAL_READBACK_MISMATCH",
     )
     assert isinstance(result, OOSResultV2)
+    require(
+        (bundle.outcome, bundle.reason_codes) == (result.outcome, result.reason_codes),
+        "OOS_BUNDLE_OUTCOME_MISMATCH",
+    )
     require(
         journal._issued.get(result.content_sha256) == result,
         "UNAUTHENTICATED_OOS_RESULT",

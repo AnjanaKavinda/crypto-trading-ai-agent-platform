@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -9,7 +10,10 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
-from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.contracts.serialization import (
+    canonical_json_dumps,
+    canonical_sha256,
+)
 from trading_platform_api.market_data.ohlcv import _TIMEFRAMES
 from trading_platform_api.validation.contracts import (
     CheckOutcome,
@@ -17,7 +21,10 @@ from trading_platform_api.validation.contracts import (
     MetricValue,
     PartitionPurpose,
 )
-from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
+from trading_platform_api.validation.contracts_v2 import (
+    CostAssumptionSetV2,
+    ValidationArtifactReferenceV2,
+)
 from trading_platform_api.validation.contracts_v3 import BacktestResultV3
 
 METHOD = "spot-oos-observation-v1"
@@ -69,6 +76,14 @@ def ref(
         and (version is None or value.version == version),
         "INVALID_OOS_REFERENCE",
     )
+
+
+def _wire(value):
+    if isinstance(value, list):
+        return tuple(_wire(v) for v in value)
+    if isinstance(value, dict):
+        return {k: _wire(v) for k, v in value.items()}
+    return value
 
 
 class OOSSelectionMode(StrEnum):
@@ -352,13 +367,103 @@ class OOSRunBindingV2:
     partition_id: UUID
     backtest: BacktestResultV3
     metrics_report: ValidationArtifactReferenceV2
+    candidate: OOSCandidateV2
+    execution_model: str
+    configuration: str
+    cost_assumptions: CostAssumptionSetV2
+    request: ValidationArtifactReferenceV2
 
     def __post_init__(self) -> None:
+        try:
+            self._validate()
+        except (KeyError, TypeError, AttributeError, RecursionError) as error:
+            raise ValueError("INVALID_OOS_RUN_DOCUMENT") from error
+
+    def _validate(self) -> None:
+        b, c = self.backtest, self.candidate
         require(
-            type(self.partition_id) is UUID and type(self.backtest) is BacktestResultV3,
+            type(self.partition_id) is UUID
+            and type(b) is BacktestResultV3
+            and type(c) is OOSCandidateV2
+            and type(self.cost_assumptions) is CostAssumptionSetV2,
             "INVALID_OOS_RUN_BINDING",
         )
         ref(self.metrics_report, "SPOT_PERFORMANCE_REPORT", "1")
+        ref(self.request, "SPOT_OOS_REQUEST", "1")
+        for document, reference in (
+            (self.execution_model, b.execution_model),
+            (self.configuration, b.configuration),
+        ):
+            require(
+                type(document) is str and len(document) <= 32768, "INVALID_RUN_DOCUMENT"
+            )
+            require(
+                canonical_json_dumps(_wire(json.loads(document))) == document
+                and canonical_sha256(_wire(json.loads(document)))
+                == reference.content_sha256,
+                "OOS_RUN_ARTIFACT_MISMATCH",
+            )
+        model, config = json.loads(self.execution_model), json.loads(self.configuration)
+        p = model["policy"]
+        require(
+            (b.strategy_version, b.parameter_set, b.cost_assumptions)
+            == (c.strategy, c.parameters, c.costs)
+            and self.cost_assumptions.content_sha256 == c.costs.content_sha256
+            and self.cost_assumptions.assumption_set_id == c.costs.artifact_id
+            and canonical_sha256(_wire(model["parameters"]))
+            == c.parameters.content_sha256
+            and model["parameters"]["strategy_version_id"]
+            == str(c.strategy.artifact_id)
+            and model["parameters"]["strategy_sha256"] == c.strategy.content_sha256
+            and config["input_request"]["strategy"]["strategy_version_id"]
+            == str(c.strategy.artifact_id)
+            and config["input_request"]["strategy"]["content_sha256"]
+            == c.strategy.content_sha256
+            and model["cost_adapter"]
+            == json.loads(canonical_json_dumps(c.cost_adapter))
+            and canonical_sha256(
+                {k: v for k, v in p.items() if k not in {"period_start", "period_end"}}
+            )
+            == c.execution_policy_sha256
+            and (b.venue, b.instrument_id, b.timeframe, b.environment)
+            == tuple(
+                p[k] for k in ("venue", "instrument_id", "timeframe", "environment")
+            )
+            and [p["period_start"], p["period_end"]]
+            == json.loads(canonical_json_dumps((b.period_start, b.period_end)))
+            and config["execution_policy"] == p
+            and (
+                config["execution_dataset_sha256"],
+                config["execution_manifest_sha256"],
+            )
+            == (b.dataset_sha256, b.manifest_sha256)
+            and [config[k] for k in ("result_as_of", "created_at", "expires_at")]
+            == json.loads(canonical_json_dumps((b.as_of, b.created_at, b.expires_at))),
+            "OOS_RUN_CANDIDATE_OR_POLICY_MISMATCH",
+        )
+        expected = canonical_sha256(
+            _wire(
+                dict(
+                    inputs=config["input_request"],
+                    archives=config["archive_pins"],
+                    dataset=b.dataset_sha256,
+                    manifest=b.manifest_sha256,
+                    execution=p,
+                    parameters=model["parameters"],
+                    costs=self.cost_assumptions,
+                    adapter=c.cost_adapter,
+                    as_of=b.as_of,
+                    created=b.created_at,
+                    expiry=b.expires_at,
+                )
+            )
+        )
+        require(
+            self.request.content_sha256 == expected
+            and self.request.artifact_id
+            == uuid5(NAMESPACE_URL, "spot-oos-request-v1:" + expected),
+            "OOS_RUN_REQUEST_DIGEST_MISMATCH",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,6 +508,7 @@ class OOSResultV2:
     runs: tuple[OOSRunBindingV2, ...]
     metrics: tuple[OOSMetricV2, ...]
     contamination: CheckOutcome
+    integrity: CheckOutcome
     sample_sufficiency: CheckOutcome
     sample_size: int
     outcome: OOSOutcome
@@ -452,6 +558,7 @@ class OOSResultV2:
         )
         require(
             type(self.contamination) is CheckOutcome
+            and type(self.integrity) is CheckOutcome
             and type(self.sample_sufficiency) is CheckOutcome,
             "INVALID_OOS_CHECKS",
         )
@@ -472,14 +579,24 @@ class OOSResultV2:
             "OOS_AS_OF_REPLAY_MISMATCH",
         )
         require(
+            len(held) <= 1
+            and self.sample_size
+            == (len(held[0].backtest.simulated_trade_ids) if held else 0)
+            and (self.sample_sufficiency is CheckOutcome.PASSED)
+            == (self.sample_size >= self.protocol.minimum_trades),
+            "OOS_SAMPLE_BINDING_MISMATCH",
+        )
+        require(
             type(self.reason_codes) is tuple and type(self.warnings) is tuple,
             "INVALID_OOS_REASONS",
         )
         for value in self.reason_codes + self.warnings:
             text(value)
+        self._validate_closure()
         if self.outcome is OOSOutcome.OBSERVED:
             require(
                 self.contamination is CheckOutcome.PASSED
+                and self.integrity is CheckOutcome.PASSED
                 and self.sample_sufficiency is CheckOutcome.PASSED
                 and self.sample_size >= self.protocol.minimum_trades
                 and self.selected_candidate is not None
@@ -494,10 +611,154 @@ class OOSResultV2:
         else:
             require(bool(self.reason_codes), "MISSING_OOS_FAILURE_REASON")
         require(
+            (self.outcome is OOSOutcome.FAILED)
+            == (CheckOutcome.FAILED in (self.contamination, self.integrity)),
+            "OOS_FAILURE_CHECK_MISMATCH",
+        )
+        require(
             self.content_sha256 == canonical_sha256(self.identity_payload())
             and self.result_id == uuid5(NAMESPACE, "result:" + self.content_sha256),
             "OOS_RESULT_DIGEST_MISMATCH",
         )
+
+    def _validate_closure(self) -> None:
+        try:
+            self._check_closure()
+        except (KeyError, TypeError, AttributeError, RecursionError) as error:
+            raise ValueError("INVALID_OOS_RESULT_CLOSURE") from error
+
+    def _check_closure(self) -> None:
+        protocol = self.protocol
+        events = tuple(
+            e
+            for e in self.journal.events
+            if e.protocol_sha256 == protocol.content_sha256
+        )
+        freezes = tuple(e for e in events if e.kind is OOSEventKind.FREEZE)
+        selections = tuple(e for e in events if e.kind is OOSEventKind.SELECT)
+        # Inconclusive records may explicitly lack a freeze/selection receipt;
+        # no successful evidence may use that exception.
+        if self.outcome is OOSOutcome.OBSERVED or any(
+            r.partition_id == protocol.partitions[-1].partition_id for r in self.runs
+        ):
+            require(
+                self.journal.declared_complete
+                and len(freezes) == len(selections) == 1
+                and freezes[0].recorded_at == protocol.frozen_at
+                and freezes[0].purpose == "PRECOMMITMENT"
+                and freezes[0].sequence < selections[0].sequence
+                and freezes[0].window == selections[0].window == protocol.window
+                and self.selected_candidate is not None
+                and selections[0].candidate_id == self.selected_candidate.candidate_id,
+                "OOS_PROTOCOL_RECEIPTS_UNRESOLVED",
+            )
+        elif self.runs:
+            require(
+                len(freezes) == 1 and freezes[0].recorded_at == protocol.frozen_at,
+                "OOS_PROTOCOL_RECEIPTS_UNRESOLVED",
+            )
+        require(
+            bool(events)
+            and events[-1] == self.journal.events[-1]
+            and events[-1].kind is OOSEventKind.RESULT
+            and events[-1].purpose == "RECORDED_OUTCOME"
+            and events[-1].window == protocol.window,
+            "OOS_RESULT_RECEIPT_UNRESOLVED",
+        )
+        require(
+            self.created_at == events[-1].recorded_at,
+            "OOS_RESULT_RECEIPT_TIME_MISMATCH",
+        )
+        if self.outcome is OOSOutcome.OBSERVED:
+            access = tuple(
+                e
+                for e in self.journal.events
+                if e.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL)
+                and e.window.overlaps(protocol.window)
+            )
+            require(
+                len(access) == 1
+                and access[0].protocol_sha256 == protocol.content_sha256
+                and access[0].purpose == "FINAL_HOLDOUT_EXECUTION"
+                and self.selected_candidate is not None
+                and access[0].candidate_id == self.selected_candidate.candidate_id,
+                "OOS_CONTAMINATED_OBSERVED_JOURNAL",
+            )
+        for run in self.runs:
+            partition = next(
+                (p for p in protocol.partitions if p.partition_id == run.partition_id),
+                None,
+            )
+            b = run.backtest
+            require(
+                partition is not None
+                and run.candidate in protocol.candidates
+                and (b.venue, b.instrument_id, b.timeframe, b.environment)
+                == (
+                    protocol.window.venue,
+                    protocol.window.instrument_id,
+                    protocol.window.timeframe,
+                    protocol.environment,
+                ),
+                "OOS_RUN_SCOPE_OR_PARTITION_MISMATCH",
+            )
+            assert partition is not None
+            held = partition == protocol.partitions[-1]
+            require(
+                (b.period_start, b.period_end) == (partition.start, partition.end)
+                and b.as_of <= partition.point_in_time_cutoff
+                and (not held or run.candidate == self.selected_candidate),
+                "OOS_RUN_WINDOW_CUTOFF_OR_SELECTION_MISMATCH",
+            )
+            for decision in json.loads(run.configuration)["input_request"]["decisions"]:
+                at = datetime.fromisoformat(decision["decision_time"])
+                require(
+                    partition.start <= at < partition.end
+                    and datetime.fromisoformat(decision["information_cutoff"]) <= at
+                    and datetime.fromisoformat(decision["lookback_start"])
+                    >= partition.start
+                    - timedelta(
+                        seconds=protocol.warmup_bars
+                        * _TIMEFRAMES[protocol.window.timeframe]
+                    ),
+                    "OOS_RUN_DECISION_BOUNDARY_MISMATCH",
+                )
+            receipt = next(
+                (
+                    e
+                    for e in events
+                    if e.kind is (OOSEventKind.RESULT if held else OOSEventKind.TRIAL)
+                    and e.candidate_id == run.candidate.candidate_id
+                    and e.window
+                    == OOSWindow(
+                        protocol.window.venue,
+                        protocol.window.instrument_id,
+                        protocol.window.timeframe,
+                        partition.start,
+                        partition.end,
+                    )
+                    and run.request in e.evidence
+                    and run.metrics_report in e.evidence
+                    and ValidationArtifactReferenceV2(
+                        "C-027", b.result_id, "3", b.content_sha256
+                    )
+                    in e.evidence
+                ),
+                None,
+            )
+            require(receipt is not None, "OOS_RUN_RECEIPT_UNRESOLVED")
+            if held:
+                assert receipt is not None
+                require(
+                    selections[0].sequence < receipt.sequence
+                    and any(
+                        e.kind is OOSEventKind.ACCESS
+                        and e.purpose == "FINAL_HOLDOUT_EXECUTION"
+                        and selections[0].sequence < e.sequence < receipt.sequence
+                        for e in events
+                    ),
+                    "OOS_HOLDOUT_ACCESS_ORDER_MISMATCH",
+                )
 
     def identity_payload(self) -> dict[str, object]:
         return payload(self, {"result_id", "content_sha256"})

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Context, Decimal, localcontext
@@ -21,6 +22,7 @@ from test_lineage_postgresql import database_url as database_url
 from test_spot_research_api import (
     INSTRUMENT,
     refresh_body,
+    spot_producer_runtime,
 )
 from test_spot_research_api import persisted_service as persisted_service
 from test_strategy_condition_evaluator import _setup
@@ -39,7 +41,7 @@ from trading_platform_api.contracts.serialization import (
     canonical_json_dumps,
     canonical_sha256,
 )
-from trading_platform_api.lineage.codec import LineageKey
+from trading_platform_api.lineage.codec import LineageError, LineageKey, decode, encode
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
 from trading_platform_api.main import create_app
 from trading_platform_api.market_data.contracts import (
@@ -85,9 +87,11 @@ from trading_platform_api.validation.cost_models import (
     build_spot_cost_assumption_set,
 )
 from trading_platform_api.validation.oos_contracts_v2 import (
+    OOSJournalEvent,
     OOSOutcome,
     OOSSelectionMode,
     OOSWindow,
+    payload,
 )
 from trading_platform_api.validation.spot_backtest import (
     SpotBacktestArchivePin,
@@ -115,6 +119,8 @@ from trading_platform_api.validation.spot_oos import (
     freeze_spot_oos_protocol,
     resolve_spot_oos_result,
     run_spot_oos,
+    run_spot_oos_partition,
+    select_spot_oos_candidate,
 )
 from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayDecisionRequest,
@@ -469,6 +475,305 @@ def _oos_substitution_requests(request, execution_dataset):
         ),
         "replay_as_of": replace(request, result_as_of=request.result_as_of - STEP),
     }
+
+
+async def _fresh_oos_archive(request, at, session, lineage, research, app):
+    clock, runtime, monotonic = (
+        research.clock,
+        research.spot_agent_runtime,
+        research.monotonic,
+    )
+    try:
+        research.clock = lambda: at
+        research.monotonic = lambda: monotonic() + (at - clock()).total_seconds()
+        research.spot_agent_runtime = spot_producer_runtime(at)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://127.0.0.1"
+        ) as client:
+            response = await client.post(
+                f"/api/research/spot/{INSTRUMENT}/refresh",
+                json=refresh_body(timeframe="1m", limit=50, now=at),
+            )
+        assert response.status_code == 200, response.text
+    finally:
+        research.clock, research.spot_agent_runtime, research.monotonic = (
+            clock,
+            runtime,
+            monotonic,
+        )
+    row = (
+        (
+            await session.execute(
+                select(spot_producer_request_reservations).where(
+                    spot_producer_request_reservations.c.snapshot_id
+                    == response.json()["snapshot_id"],
+                    spot_producer_request_reservations.c.status == "COMPLETED",
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    key = LineageKey(
+        row["context_contract_id"], row["context_record_id"], row["context_version"]
+    )
+    context = await lineage.get(key)
+    result, evaluation, correlation_id, trace_id = await lineage.get_spot_agent_handoff(
+        key
+    )
+    decision_time = max(
+        context.as_of, evaluation.ended_at, result.generated_at
+    ) + timedelta(seconds=2)
+    inputs = await _compose_persisted_spot_debate(
+        session=session,
+        store=lineage,
+        context_key=key,
+        context=context,
+        result=result,
+        evaluation=evaluation,
+        correlation_id=correlation_id,
+        trace_id=trace_id,
+        now=decision_time,
+    )
+    binding = inputs.resolved_bindings[0]
+    data, manifest, records, _ = _market_records(
+        binding.observations,
+        binding.sources,
+        cutoff=context.as_of,
+        dataset_id=f"decision-{uuid4()}",
+        venue=request.execution_policy.venue,
+        instrument_id=request.execution_policy.instrument_id,
+    )
+    await _append_dataset(lineage, records)
+    pin = SpotBacktestArchivePin(
+        context.context_id,
+        canonical_sha256(context),
+        canonical_sha256(inputs.manifest),
+        result.result_id,
+        canonical_sha256(result),
+        evaluation.evaluation_id,
+        canonical_sha256(evaluation),
+        sha256(canonical_json_dumps(inputs.fanout.outcomes).encode()).hexdigest(),
+    )
+    decision = SpotReplayDecisionRequest(
+        decision_time,
+        context.as_of,
+        canonical_sha256(data),
+        canonical_sha256(manifest),
+        binding.binding.window_start,
+        binding.binding.window_end,
+    )
+    return (pin,), replace(request.replay_inputs, decisions=(decision,)), binding
+
+
+async def _development_oos(
+    request, metrics, binding, session, registry, lineage, research, app
+):
+    metrics = replace(metrics, report_timestamp=request.created_at + timedelta(hours=1))
+    start = request.execution_policy.period_start
+    edges = (
+        start,
+        start + 5 * STEP,
+        start + 10 * STEP,
+        start + 15 * STEP,
+    )
+    parts = tuple(
+        DataPartition(uuid4(), role, edges[i], edges[i + 1], edges[i + 1], i == 0)
+        for i, role in enumerate(
+            (PartitionPurpose.TRAIN, PartitionPurpose.VALIDATION, PartitionPurpose.TEST)
+        )
+    )
+    requests = {}
+    for i, part in enumerate(parts):
+        pins, replay_inputs, current_binding = (
+            (request.archive_pins, request.replay_inputs, binding)
+            if i == 0
+            else await _fresh_oos_archive(
+                request, part.start, session, lineage, research, app
+            )
+        )
+        dataset, manifest, records, _ = _market_records(
+            current_binding.observations,
+            current_binding.sources,
+            cutoff=part.end,
+            dataset_id=f"development-{uuid4()}",
+            venue=request.execution_policy.venue,
+            instrument_id=request.execution_policy.instrument_id,
+            extra_bars=int((part.end - part.start) / STEP),
+            extra_start=part.start - STEP,
+        )
+        await _append_dataset(lineage, records)
+        for quantity in (D("1"), D("0.5")):
+            requests[i, quantity] = replace(
+                request,
+                archive_pins=pins,
+                replay_inputs=replace(
+                    replay_inputs,
+                    scope=replace(
+                        request.replay_inputs.scope,
+                        decision_period_start=part.start,
+                        decision_period_end=part.end,
+                    ),
+                    decisions=replay_inputs.decisions,
+                ),
+                execution_dataset_sha256=canonical_sha256(dataset),
+                execution_manifest_sha256=canonical_sha256(manifest),
+                execution_policy=replace(
+                    request.execution_policy,
+                    period_start=part.start,
+                    period_end=part.end,
+                ),
+                parameters=replace(
+                    request.parameters,
+                    quantity=quantity,
+                ),
+                result_as_of=part.end,
+                created_at=max(request.created_at, part.end + timedelta(seconds=1)),
+            )
+    at = request.created_at + timedelta(days=2)
+    journal = OOSResearchJournal(
+        journal_id=uuid4(),
+        authority=ValidationArtifactReferenceV2(
+            "SYNTHETIC_RECORDER", uuid4(), "1", "e" * 64
+        ),
+        clock=lambda: at,
+        declared_complete=True,
+    )
+    candidates = tuple(
+        candidate_from_request(requests[0, q]) for q in (D("1"), D("0.5"))
+    )
+    p = request.execution_policy
+    protocol = freeze_spot_oos_protocol(
+        journal=journal,
+        window=OOSWindow(
+            p.venue, p.instrument_id, p.timeframe, parts[-1].start, parts[-1].end
+        ),
+        partitions=parts,
+        candidates=candidates,
+        selection_mode=OOSSelectionMode.VALIDATION_NET_PROFIT,
+        metrics_policy=metrics,
+        warmup_bars=64,
+        embargo_seconds=0,
+        mark_equity=True,
+        environment=p.environment,
+    )
+    scores = []
+    for quantity in (D("1"), D("0.5")):
+        for i in (0, 1):
+            replay, report = await run_spot_oos_partition(
+                journal=journal,
+                protocol=protocol,
+                partition_id=parts[i].partition_id,
+                request=requests[i, quantity],
+                metrics_policy=metrics,
+                session=session,
+                strategy_registry=registry,
+                lineage_store=lineage,
+            )
+            assert replay.result.period_start == parts[i].start
+        scores.append(
+            (
+                report.get("net_realized_profit").metric.value,
+                str(candidate_from_request(requests[0, quantity]).candidate_id),
+                quantity,
+            )
+        )
+    winner = sorted(scores, key=lambda x: (-x[0], x[1]))[0][2]
+    held = requests[2, winner]
+    pending = await run_spot_oos(
+        journal=journal,
+        protocol=protocol,
+        request=held,
+        metrics_policy=metrics,
+        session=session,
+        strategy_registry=registry,
+        lineage_store=lineage,
+        as_of=held.result_as_of,
+        expires_at=at + timedelta(days=1),
+    )
+    assert pending.outcome is OOSOutcome.INCONCLUSIVE
+    assert len(resolve_spot_oos_result(pending, journal=journal).runs) == 4
+    assert not any(
+        e.purpose == "FINAL_HOLDOUT_EXECUTION" for e in journal.snapshot.events
+    )
+    select_spot_oos_candidate(
+        journal=journal,
+        protocol=protocol,
+        candidate_id=candidate_from_request(requests[0, winner]).candidate_id,
+    )
+    held = requests[2, winner]
+    result = await run_spot_oos(
+        journal=journal,
+        protocol=protocol,
+        request=held,
+        metrics_policy=metrics,
+        session=session,
+        strategy_registry=registry,
+        lineage_store=lineage,
+        as_of=held.result_as_of,
+        expires_at=at + timedelta(days=1),
+    )
+    resolved = resolve_spot_oos_result(result, journal=journal)
+    assert len(resolved.runs) == 5
+    assert sum(r.partition_id == parts[-1].partition_id for r in resolved.runs) == 1
+    assert resolved.sample_size == len(
+        next(
+            r for r in resolved.runs if r.partition_id == parts[-1].partition_id
+        ).backtest.simulated_trade_ids
+    )
+    _assert_oos_contract_rejections(resolved)
+    return result
+
+
+def _assert_oos_contract_rejections(result):
+    values = {
+        k: v
+        for k, v in result.identity_payload().items()
+        if k not in {"method", "contract_id", "schema_version", "operating_mode"}
+    }
+    for kind in ("FREEZE", "SELECT", "RESULT"):
+        events = []
+        for event in result.journal.events:
+            if event.kind.value == kind:
+                continue
+            events.append(
+                OOSJournalEvent.build(
+                    **dict(
+                        payload(
+                            event, {"sequence", "previous_sha256", "content_sha256"}
+                        ),
+                        sequence=len(events),
+                        previous_sha256=events[-1].content_sha256
+                        if events
+                        else "0" * 64,
+                    )
+                )
+            )
+        journal = replace(result.journal, events=tuple(events))
+        with pytest.raises(ValueError, match="RECEIPT"):
+            type(result).build(**dict(values, journal=journal))
+    with pytest.raises(ValueError, match="RECEIPT"):
+        type(result).build(
+            **dict(values, journal=replace(result.journal, declared_complete=False))
+        )
+    run = result.runs[0]
+    for altered in (
+        replace(run, partition_id=uuid4()),
+        replace(
+            run, metrics_report=replace(run.metrics_report, content_sha256="f" * 64)
+        ),
+    ):
+        with pytest.raises(ValueError):
+            type(result).build(**dict(values, runs=(altered, *result.runs[1:])))
+    for field in ("configuration", "execution_model"):
+        with pytest.raises(ValueError, match="ARTIFACT"):
+            replace(run, **{field: getattr(run, field) + " "})
+    with pytest.raises(ValueError, match="REQUEST_DIGEST"):
+        replace(run, request=replace(run.request, content_sha256="f" * 64))
+    raw = json.loads(encode(result))
+    raw["payload"]["journal"]["declared_complete"] = False
+    with pytest.raises(LineageError, match="corrupt"):
+        decode(json.dumps(raw))
 
 
 @pytest.mark.parametrize("synthetic_ready", [False, True])
@@ -985,6 +1290,19 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 # experiment, not the absence of off-system owner research.
                 recorded_at = request.created_at + timedelta(days=2)
                 oos_metrics_policy = replace(metrics_policy, min_trade_sample=1)
+                development = await _development_oos(
+                    request,
+                    oos_metrics_policy,
+                    binding,
+                    session,
+                    registry,
+                    lineage,
+                    research,
+                    app,
+                )
+                assert development.outcome is (
+                    OOSOutcome.OBSERVED if synthetic_ready else OOSOutcome.INCONCLUSIVE
+                ), development.reason_codes
                 recorder = OOSResearchJournal(
                     journal_id=uuid4(),
                     authority=ValidationArtifactReferenceV2(
@@ -1084,6 +1402,8 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                             )
                         )
                     assert rejected.outcome is OOSOutcome.FAILED, changed_pin
+                    assert rejected.result.integrity.value == "FAILED"
+                    assert rejected.result.contamination.value == "PASSED"
                     assert (
                         "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH" in rejected.reason_codes
                     )
@@ -1093,11 +1413,74 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         == rejected.result
                     )
 
+                trace = bundle.trace
+                terminal_name = "exit_trace" if trace.exit_trace else "entry_trace"
+                terminal = getattr(trace, terminal_name)
+                bad_traces = {
+                    "CROSS_BOUNDARY_OPEN_INVENTORY": replace(
+                        trace,
+                        **{terminal_name: replace(terminal, final_inventory=D("1"))},
+                    ),
+                    "OOS_DECISION_OUTSIDE_PARTITION": replace(
+                        trace,
+                        decisions=(
+                            replace(
+                                trace.decisions[0], decision_time=policy.period_end
+                            ),
+                            *trace.decisions[1:],
+                        ),
+                    ),
+                }
+                if trace.entry_trace.fills:
+                    for at in (
+                        policy.period_start,
+                        policy.period_end + timedelta(microseconds=1),
+                    ):
+                        bad_traces[f"OOS_FILL_OUTSIDE_PARTITION:{at}"] = replace(
+                            trace,
+                            entry_trace=replace(
+                                trace.entry_trace,
+                                fills=(
+                                    replace(trace.entry_trace.fills[0], observed_at=at),
+                                    *trace.entry_trace.fills[1:],
+                                ),
+                            ),
+                        )
+                for reason, bad_trace in bad_traces.items():
+                    isolated_recorder = OOSResearchJournal(
+                        journal_id=uuid4(),
+                        authority=recorder.snapshot.authority,
+                        clock=lambda: recorded_at,
+                        declared_complete=True,
+                    )
+                    isolated_protocol = freeze_spot_oos_protocol(
+                        **dict(freeze_kwargs, journal=isolated_recorder)
+                    )
+
+                    async def invalid_boundary(**kwargs):
+                        return replace(bundle, trace=bad_trace)
+
+                    with monkeypatch.context() as patch:
+                        patch.setattr(
+                            "trading_platform_api.validation.spot_oos.run_spot_backtest",
+                            invalid_boundary,
+                        )
+                        rejected = await run_spot_oos(
+                            **dict(
+                                oos_kwargs,
+                                journal=isolated_recorder,
+                                protocol=isolated_protocol,
+                            )
+                        )
+                    assert rejected.result.integrity.value == "FAILED"
+                    assert rejected.result.contamination.value == "PASSED"
+                    assert reason.split(":")[0] in rejected.reason_codes
                 oos_bundle = await run_spot_oos(**oos_kwargs)
                 assert oos_bundle.outcome is (
                     OOSOutcome.OBSERVED if synthetic_ready else OOSOutcome.INCONCLUSIVE
                 ), oos_bundle.reason_codes
                 oos_result = resolve_spot_oos_result(oos_bundle, journal=recorder)
+                _assert_oos_contract_rejections(oos_result)
                 assert oos_result.as_of == request.result_as_of == bundle.result.as_of
                 result_values = {
                     name: value
@@ -1370,4 +1753,4 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 await admin.dispose()
 
     asyncio.run(check())
-    assert market_calls == [1]
+    assert market_calls == [1, 1, 1]  # Initial plus two fresh research archives.

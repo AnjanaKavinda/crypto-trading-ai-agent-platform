@@ -229,6 +229,7 @@ def test_previously_inspected_or_tuned_holdout_fails_before_replay(monkeypatch, 
     assert result.outcome is OOSOutcome.FAILED
     assert "HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED" in result.reason_codes
     assert result.result.contamination is CheckOutcome.FAILED
+    assert result.result.integrity is CheckOutcome.PASSED
     assert not result.replays
     assert resolve_spot_oos_result(result, journal=journal) == result.result
 
@@ -240,6 +241,7 @@ def test_incomplete_history_is_inconclusive_and_not_a_clean_holdout(monkeypatch)
     bundle = asyncio.run(execute(request, metrics, journal, protocol))
     assert bundle.outcome is OOSOutcome.INCONCLUSIVE
     assert bundle.result.contamination is CheckOutcome.INCONCLUSIVE
+    assert bundle.result.integrity is CheckOutcome.INCONCLUSIVE
     assert "JOURNAL_COMPLETENESS_UNPROVEN" in bundle.reason_codes
     assert bundle.result.sample_size == 0 and bundle.result.metrics == ()
     assert resolve_spot_oos_result(bundle, journal=journal) == bundle.result
@@ -419,6 +421,8 @@ def test_changed_request_pins_are_rejected_before_replay(change, monkeypatch):
     result = asyncio.run(execute(request, metrics, journal, protocol))
     assert result.outcome is OOSOutcome.FAILED
     assert not result.replays
+    assert result.result.contamination is CheckOutcome.PASSED
+    assert result.result.integrity is CheckOutcome.FAILED
 
 
 def test_development_cutoff_cannot_reveal_the_final_holdout():
