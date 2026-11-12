@@ -9,7 +9,10 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.contracts.serialization import (
+    canonical_json_dumps,
+    canonical_sha256,
+)
 from trading_platform_api.lineage.codec import decode, encode
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
 from trading_platform_api.market_data.ohlcv import _TIMEFRAMES
@@ -592,6 +595,7 @@ def _run_binding(partition, replay, report) -> OOSRunBindingV2:
         artifacts[result.configuration],
         replay.trace.cost_assumptions,
         _request_ref(_replay_request_digest(replay)),
+        canonical_json_dumps(report),
     )
 
 

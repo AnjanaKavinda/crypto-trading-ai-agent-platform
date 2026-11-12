@@ -372,11 +372,18 @@ class OOSRunBindingV2:
     configuration: str
     cost_assumptions: CostAssumptionSetV2
     request: ValidationArtifactReferenceV2
+    report_document: str
 
     def __post_init__(self) -> None:
         try:
             self._validate()
-        except (KeyError, TypeError, AttributeError, RecursionError) as error:
+        except (
+            KeyError,
+            TypeError,
+            AttributeError,
+            RecursionError,
+            StopIteration,
+        ) as error:
             raise ValueError("INVALID_OOS_RUN_DOCUMENT") from error
 
     def _validate(self) -> None:
@@ -464,6 +471,71 @@ class OOSRunBindingV2:
             == uuid5(NAMESPACE_URL, "spot-oos-request-v1:" + expected),
             "OOS_RUN_REQUEST_DIGEST_MISMATCH",
         )
+        self.resolve_report()
+
+    def resolve_report(self):
+        # Late import keeps the codec independent of runtime import ordering.
+        from trading_platform_api.lineage.codec import decode_value
+        from trading_platform_api.validation.spot_metrics import (
+            _NAMESPACE as metric_namespace,
+        )
+        from trading_platform_api.validation.spot_metrics import METHOD as metric_method
+        from trading_platform_api.validation.spot_metrics import (
+            MetricState,
+            SpotPerformanceReport,
+        )
+
+        require(
+            type(self.report_document) is str
+            and len(self.report_document.encode()) <= 1_000_000,
+            "OOS_REPORT_DOCUMENT_BUDGET",
+        )
+        report = decode_value(SpotPerformanceReport, json.loads(self.report_document))
+        sha = canonical_sha256(payload(report, {"report_id", "content_sha256"}))
+        b = self.backtest
+        require(
+            canonical_json_dumps(report) == self.report_document
+            and sha == report.content_sha256 == self.metrics_report.content_sha256
+            and report.report_id
+            == self.metrics_report.artifact_id
+            == uuid5(metric_namespace, sha),
+            "OOS_REPORT_DIGEST_MISMATCH",
+        )
+        require(
+            report.method == metric_method
+            and report.policy.method == metric_method
+            and report.policy.version == "1"
+            and (
+                report.result_id,
+                report.result_schema,
+                report.result_sha256,
+                report.trace_sha256,
+                report.dataset_sha256,
+                report.manifest_sha256,
+                report.cost_sha256,
+                report.strategy_sha256,
+            )
+            == (
+                b.result_id,
+                b.schema_version,
+                b.content_sha256,
+                b.trace.content_sha256,
+                b.dataset_sha256,
+                b.manifest_sha256,
+                b.cost_assumptions.content_sha256,
+                b.strategy_version.content_sha256,
+            ),
+            "OOS_REPORT_INPUT_MISMATCH",
+        )
+        total = report.get("total_trades")
+        require(
+            sorted(t.trade_id for t in report.trades) == sorted(b.simulated_trade_ids)
+            and total.state is MetricState.AVAILABLE
+            and total.metric is not None
+            and total.metric.value == total.sample_count == len(report.trades),
+            "OOS_REPORT_SAMPLE_MISMATCH",
+        )
+        return report
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,6 +650,7 @@ class OOSResultV2:
             all(r.backtest.as_of == self.as_of for r in held),
             "OOS_AS_OF_REPLAY_MISMATCH",
         )
+        require(bool(held) or not self.metrics, "OOS_METRICS_WITHOUT_HOLDOUT")
         require(
             len(held) <= 1
             and self.sample_size
@@ -704,6 +777,37 @@ class OOSResultV2:
             )
             assert partition is not None
             held = partition == protocol.partitions[-1]
+            report = run.resolve_report()
+            require(
+                canonical_sha256(report.policy) == protocol.metrics_policy_sha256
+                and report.input_sha256
+                == canonical_sha256(
+                    (
+                        b.content_sha256,
+                        report.policy,
+                        b.dataset_sha256 if protocol.mark_equity else None,
+                        b.manifest_sha256 if protocol.mark_equity else None,
+                        (),
+                    )
+                ),
+                "OOS_REPORT_POLICY_MISMATCH",
+            )
+            if held:
+                require(
+                    self.metrics
+                    == tuple(
+                        OOSMetricV2(
+                            m.name,
+                            m.state.value,
+                            m.reason,
+                            m.metric,
+                            m.sample_count,
+                            m.warnings,
+                        )
+                        for m in report.metrics
+                    ),
+                    "OOS_METRICS_REPORT_MISMATCH",
+                )
             require(
                 (b.period_start, b.period_end) == (partition.start, partition.end)
                 and b.as_of <= partition.point_in_time_cutoff

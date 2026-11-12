@@ -9,7 +9,7 @@ from datetime import timedelta
 from decimal import Context, Decimal, localcontext
 from hashlib import sha256
 from io import StringIO
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 import pytest
 from alembic import command
@@ -87,10 +87,12 @@ from trading_platform_api.validation.cost_models import (
     build_spot_cost_assumption_set,
 )
 from trading_platform_api.validation.oos_contracts_v2 import (
+    NAMESPACE,
     OOSJournalEvent,
     OOSOutcome,
     OOSSelectionMode,
     OOSWindow,
+    _wire,
     payload,
 )
 from trading_platform_api.validation.spot_backtest import (
@@ -757,16 +759,17 @@ def _assert_oos_contract_rejections(result):
             **dict(values, journal=replace(result.journal, declared_complete=False))
         )
     run = result.runs[0]
-    for altered in (
-        replace(run, partition_id=uuid4()),
-        replace(
+    for alter in (
+        lambda: replace(run, partition_id=uuid4()),
+        lambda: replace(
             run, metrics_report=replace(run.metrics_report, content_sha256="f" * 64)
         ),
     ):
         with pytest.raises(ValueError):
+            altered = alter()
             type(result).build(**dict(values, runs=(altered, *result.runs[1:])))
-    for field in ("configuration", "execution_model"):
-        with pytest.raises(ValueError, match="ARTIFACT"):
+    for field in ("configuration", "execution_model", "report_document"):
+        with pytest.raises(ValueError, match="ARTIFACT|REPORT"):
             replace(run, **{field: getattr(run, field) + " "})
     with pytest.raises(ValueError, match="REQUEST_DIGEST"):
         replace(run, request=replace(run.request, content_sha256="f" * 64))
@@ -774,6 +777,59 @@ def _assert_oos_contract_rejections(result):
     raw["payload"]["journal"]["declared_complete"] = False
     with pytest.raises(LineageError, match="corrupt"):
         decode(json.dumps(raw))
+    _assert_metric_projection_rejections(result, values)
+
+
+def _assert_metric_projection_rejections(result, values):
+    index = next(i for i, m in enumerate(result.metrics) if m.name == "total_trades")
+    missing_index = next(
+        i for i, m in enumerate(result.metrics) if m.state == "UNAVAILABLE"
+    )
+    metric, missing = result.metrics[index], result.metrics[missing_index]
+    changes = (
+        (
+            index,
+            replace(
+                metric, value=replace(metric.value, value=metric.value.value + D(1))
+            ),
+        ),
+        (
+            index,
+            replace(metric, state="UNAVAILABLE", value=None, reason="ALTERED_STATE"),
+        ),
+        (missing_index, replace(missing, reason="ALTERED_REASON")),
+        (index, replace(metric, warnings=(*metric.warnings, "ALTERED_WARNING"))),
+        (index, replace(metric, sample_count=metric.sample_count + 1)),
+    )
+    original = json.loads(encode(result))
+
+    def identity(raw):
+        return canonical_sha256(
+            _wire(
+                dict(
+                    {
+                        k: v
+                        for k, v in raw["payload"].items()
+                        if k not in {"result_id", "content_sha256"}
+                    },
+                    contract_id=raw["contract_id"],
+                    schema_version=raw["schema_version"],
+                )
+            )
+        )
+
+    assert identity(original) == result.content_sha256
+    for at, altered in changes:
+        metrics = (*result.metrics[:at], altered, *result.metrics[at + 1 :])
+        with pytest.raises(ValueError, match="OOS_METRICS_REPORT_MISMATCH"):
+            type(result).build(**dict(values, metrics=metrics))
+        raw = json.loads(encode(result))
+        raw["payload"]["metrics"][at] = json.loads(canonical_json_dumps(altered))
+        sha = identity(raw)
+        raw["payload"]["content_sha256"] = sha
+        raw["payload"]["result_id"] = str(uuid5(NAMESPACE, "result:" + sha))
+        with pytest.raises(LineageError, match="corrupt"):
+            decode(json.dumps(raw))
 
 
 @pytest.mark.parametrize("synthetic_ready", [False, True])

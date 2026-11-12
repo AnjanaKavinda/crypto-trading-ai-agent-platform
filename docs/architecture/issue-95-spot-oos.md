@@ -26,4 +26,6 @@ TRIAL/RESULT receipts bind SPOT_OOS_REQUEST@1: replay inputs, archives, dataset/
 
 `integrity`, `contamination` and `sample_sufficiency` are separate checks. A substituted replay fails integrity without falsely marking an untouched holdout contaminated. The codec checks declared receipts and run/artifact/configuration/cost/candidate/partition closure; live issuance and recomputed replay/metrics are additionally required at readback. Development integration uses fresh producer archives for later partitions; expiry is preserved.
 
+Run bindings embed canonical #94 reports (at most 1 MB); decoding binds report pins, policy and the exact held-out metric projection.
+
 C-071v2 binds exact dataset/run/report closure. SHA-256/UUIDv5 excludes ID/own digest; events chain hashes. Limits: 512 events/16 candidates. Exact repeats/corrections preserve prior results; readback needs live issuance. V1 stays unchanged; unknown schemas, v2 qualification and C-071 retention are rejected. No durable journal/API/DDL/provider/trading changes.
