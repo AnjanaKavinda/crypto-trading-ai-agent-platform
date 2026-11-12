@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -35,8 +36,11 @@ from trading_platform_api.validation.oos_contracts_v2 import (
     OOSRunBindingV2,
     OOSSelectionMode,
     OOSWindow,
+    derive_integrity_status,
+    is_integrity_failure_reason,
     payload,
     require,
+    result_receipt_purpose,
     utc,
 )
 from trading_platform_api.validation.spot_backtest import (
@@ -176,9 +180,16 @@ class OOSResearchJournal:
         self._clock = clock
         self._protocols: dict[str, OOSProtocolV2] = {}
         self._trials: dict[str, tuple[SpotBacktestBundle, SpotPerformanceReport]] = {}
+        self._trial_cache: dict[
+            str, tuple[SpotBacktestBundle, SpotPerformanceReport]
+        ] = {}
+        self._trial_claims: dict[tuple[str, UUID, UUID], str] = {}
         self._cache: dict[str, SpotOOSBundle] = {}
         self._inflight: set[str] = set()
         self._issued: dict[str, OOSResultV2] = {}
+        self._reservations: dict[object, int] = {}
+        self._run_lock = asyncio.Lock()
+        self._trial_lock = asyncio.Lock()
 
     @property
     def snapshot(self) -> OOSJournalSnapshot:
@@ -194,12 +205,20 @@ class OOSResearchJournal:
         purpose: str,
         evidence: tuple[ValidationArtifactReferenceV2, ...] = (),
         at: datetime | None = None,
+        reservation: object | None = None,
     ) -> OOSJournalEvent:
         recorded = utc(self._clock()) if at is None else utc(at)
         events = self._snapshot.events
+        if reservation is None:
+            capacity_available = (
+                len(events) + sum(self._reservations.values()) < MAX_EVENTS
+            )
+        else:
+            capacity_available = (
+                self._reservations.get(reservation, 0) > 0 and len(events) < MAX_EVENTS
+            )
         require(
-            len(events) < MAX_EVENTS
-            and (not events or events[-1].recorded_at <= recorded),
+            capacity_available and (not events or events[-1].recorded_at <= recorded),
             "JOURNAL_CLOCK_OR_BUDGET_FAILURE",
         )
         event = OOSJournalEvent.build(
@@ -219,7 +238,28 @@ class OOSResearchJournal:
             self._snapshot.declared_complete,
             (*events, event),
         )
+        if reservation is not None:
+            remaining = self._reservations[reservation] - 1
+            if remaining:
+                self._reservations[reservation] = remaining
+            else:
+                del self._reservations[reservation]
         return event
+
+    def _reserve(self, count: int) -> object:
+        require(
+            type(count) is int
+            and count > 0
+            and len(self._snapshot.events) + sum(self._reservations.values()) + count
+            <= MAX_EVENTS,
+            "JOURNAL_SEQUENCE_CAPACITY_UNAVAILABLE",
+        )
+        token = object()
+        self._reservations[token] = count
+        return token
+
+    def _release(self, reservation: object) -> None:
+        self._reservations.pop(reservation, None)
 
     def record_access(
         self, window: OOSWindow, *, purpose: str = "INSPECTION"
@@ -532,7 +572,62 @@ def _validate_replay(
     )
 
 
+def _classify_terminal_reason(
+    reason: str, *, integrity_failed: list[str], missing: list[str]
+) -> None:
+    (integrity_failed if is_integrity_failure_reason(reason) else missing).append(
+        reason
+    )
+
+
 async def run_spot_oos_partition(
+    *,
+    journal: OOSResearchJournal,
+    protocol: OOSProtocolV2,
+    partition_id: UUID,
+    request: SpotBacktestRunRequest,
+    metrics_policy: MetricsPolicy,
+    session: AsyncSession,
+    strategy_registry: StrategyRegistry,
+    lineage_store: SqlAlchemyLineageStore,
+) -> tuple[SpotBacktestBundle, SpotPerformanceReport]:
+    """Serialize deterministic development trials and their receipts."""
+    candidate = candidate_from_request(request)
+    run_key = canonical_sha256(
+        (
+            protocol.content_sha256,
+            partition_id,
+            candidate,
+            _request_digest(request),
+            metrics_policy,
+        )
+    )
+    claim = (protocol.content_sha256, partition_id, candidate.candidate_id)
+    async with journal._trial_lock:
+        previous = journal._trial_claims.get(claim)
+        require(
+            previous is None or previous == run_key,
+            "OOS_DEVELOPMENT_DUPLICATE_CONFLICT",
+        )
+        if run_key in journal._trial_cache:
+            return journal._trial_cache[run_key]
+        require(previous is None, "OOS_DEVELOPMENT_PREVIOUS_ATTEMPT_FAILED")
+        journal._trial_claims[claim] = run_key
+        result = await _run_spot_oos_partition_locked(
+            journal=journal,
+            protocol=protocol,
+            partition_id=partition_id,
+            request=request,
+            metrics_policy=metrics_policy,
+            session=session,
+            strategy_registry=strategy_registry,
+            lineage_store=lineage_store,
+        )
+        journal._trial_cache[run_key] = result
+        return result
+
+
+async def _run_spot_oos_partition_locked(
     *,
     journal: OOSResearchJournal,
     protocol: OOSProtocolV2,
@@ -552,39 +647,58 @@ async def run_spot_oos_partition(
     assert partition is not None
     candidate = _validate_request(protocol, partition, request, metrics_policy)
     require(_selected(journal, protocol) is None, "TUNING_AFTER_SELECTION")
-    journal._append(
-        OOSEventKind.ACCESS,
-        _window(protocol, partition),
-        protocol=protocol,
-        candidate=candidate,
-        purpose="DEVELOPMENT",
-    )
-    replay = await run_spot_backtest(
-        request=request,
-        session=session,
-        strategy_registry=strategy_registry,
-        lineage_store=lineage_store,
-    )
-    _validate_replay(protocol, partition, candidate, replay, request)
-    report = calculate_spot_performance_metrics(
-        replay,
-        metrics_policy,
-        price_path=replay.execution_dataset if protocol.mark_equity else None,
-    )
-    event = journal._append(
-        OOSEventKind.TRIAL,
-        _window(protocol, partition),
-        protocol=protocol,
-        candidate=candidate,
-        purpose=partition.purpose.value,
-        evidence=(
-            _backtest_ref(replay),
-            _metrics_ref(report),
-            _request_ref(_request_digest(request)),
-        ),
-    )
-    journal._trials[event.content_sha256] = (replay, report)
-    return replay, report
+    reservation = journal._reserve(2)
+    access: OOSJournalEvent | None = None
+    try:
+        access = journal._append(
+            OOSEventKind.ACCESS,
+            _window(protocol, partition),
+            protocol=protocol,
+            candidate=candidate,
+            purpose="DEVELOPMENT",
+            reservation=reservation,
+        )
+        replay = await run_spot_backtest(
+            request=request,
+            session=session,
+            strategy_registry=strategy_registry,
+            lineage_store=lineage_store,
+        )
+        _validate_replay(protocol, partition, candidate, replay, request)
+        report = calculate_spot_performance_metrics(
+            replay,
+            metrics_policy,
+            price_path=replay.execution_dataset if protocol.mark_equity else None,
+        )
+        event = journal._append(
+            OOSEventKind.TRIAL,
+            _window(protocol, partition),
+            protocol=protocol,
+            candidate=candidate,
+            purpose=partition.purpose.value,
+            evidence=(
+                _backtest_ref(replay),
+                _metrics_ref(report),
+                _request_ref(_request_digest(request)),
+            ),
+            reservation=reservation,
+        )
+        journal._trials[event.content_sha256] = (replay, report)
+        return replay, report
+    except BaseException as error:
+        if access is not None and journal._reservations.get(reservation, 0):
+            journal._append(
+                OOSEventKind.TRIAL,
+                _window(protocol, partition),
+                protocol=protocol,
+                candidate=candidate,
+                purpose="DEVELOPMENT_ABORTED:" + type(error).__name__,
+                at=max(utc(journal._clock()), journal.snapshot.events[-1].recorded_at),
+                reservation=reservation,
+            )
+        raise
+    finally:
+        journal._release(reservation)
 
 
 def _backtest_ref(replay: SpotBacktestBundle) -> ValidationArtifactReferenceV2:
@@ -674,6 +788,7 @@ def _assemble(
     missing: list[str],
     as_of: datetime,
     expires_at: datetime,
+    reservation: object,
 ) -> SpotOOSBundle:
     selected = _selected(journal, protocol)
     runs = []
@@ -728,6 +843,30 @@ def _assemble(
         if missing
         else OOSOutcome.OBSERVED
     )
+    contamination = (
+        CheckOutcome.FAILED
+        if failed
+        else CheckOutcome.INCONCLUSIVE
+        if any(
+            r in missing
+            for r in (
+                "JOURNAL_COMPLETENESS_UNPROVEN",
+                "FREEZE_RECEIPT_UNRESOLVED",
+                "EXACT_SELECTION_RECEIPT_UNRESOLVED",
+                "SELECTION_TRIAL_UNRESOLVED",
+            )
+        )
+        else CheckOutcome.PASSED
+    )
+    integrity = derive_integrity_status(
+        failed=bool(integrity_failed),
+        unresolved=any(r != "INSUFFICIENT_OOS_TRADE_SAMPLE" for r in missing),
+    )
+    sample_sufficiency = (
+        CheckOutcome.PASSED
+        if count >= protocol.minimum_trades
+        else CheckOutcome.INCONCLUSIVE
+    )
     require(utc(as_of) == request.result_as_of, "OOS_AS_OF_REQUEST_MISMATCH")
     require(
         utc(expires_at) <= request.expires_at,
@@ -747,43 +886,42 @@ def _assemble(
         and previous.kind is OOSEventKind.RESULT
         and previous.protocol_sha256 == protocol.content_sha256
         and previous.evidence == evidence
+        and previous.purpose
+        == result_receipt_purpose(
+            outcome,
+            contamination,
+            integrity,
+            sample_sufficiency,
+            reasons,
+        )
     ):
         journal._append(
             OOSEventKind.RESULT,
             protocol.window,
             protocol=protocol,
             candidate=selected,
-            purpose="RECORDED_OUTCOME",
+            purpose=result_receipt_purpose(
+                outcome,
+                contamination,
+                integrity,
+                sample_sufficiency,
+                reasons,
+            ),
             evidence=evidence,
+            at=max(utc(journal._clock()), journal.snapshot.events[-1].recorded_at),
+            reservation=reservation,
         )
     snapshot = journal.snapshot
     result = OOSResultV2.build(
         protocol=protocol,
         journal=snapshot,
+        request_reference=_request_ref(_request_digest(request)),
         selected_candidate=selected,
         runs=tuple(runs),
         metrics=metrics,
-        contamination=CheckOutcome.FAILED
-        if failed
-        else CheckOutcome.INCONCLUSIVE
-        if any(
-            r in missing
-            for r in (
-                "JOURNAL_COMPLETENESS_UNPROVEN",
-                "FREEZE_RECEIPT_UNRESOLVED",
-                "EXACT_SELECTION_RECEIPT_UNRESOLVED",
-                "SELECTION_TRIAL_UNRESOLVED",
-            )
-        )
-        else CheckOutcome.PASSED,
-        integrity=CheckOutcome.FAILED
-        if integrity_failed
-        else CheckOutcome.INCONCLUSIVE
-        if any(r != "INSUFFICIENT_OOS_TRADE_SAMPLE" for r in missing)
-        else CheckOutcome.PASSED,
-        sample_sufficiency=CheckOutcome.PASSED
-        if count >= protocol.minimum_trades
-        else CheckOutcome.INCONCLUSIVE,
+        contamination=contamination,
+        integrity=integrity,
+        sample_sufficiency=sample_sufficiency,
         sample_size=count,
         outcome=outcome,
         reason_codes=reasons,
@@ -805,6 +943,34 @@ def _assemble(
 
 
 async def run_spot_oos(
+    *,
+    journal: OOSResearchJournal,
+    protocol: OOSProtocolV2,
+    request: SpotBacktestRunRequest,
+    metrics_policy: MetricsPolicy,
+    session: AsyncSession,
+    strategy_registry: StrategyRegistry,
+    lineage_store: SqlAlchemyLineageStore,
+    as_of: datetime,
+    expires_at: datetime,
+) -> SpotOOSBundle:
+    """Serialize one recorder's holdout mutation through terminalization."""
+    require(type(journal) is OOSResearchJournal, "INVALID_OOS_JOURNAL_OR_PROTOCOL")
+    async with journal._run_lock:
+        return await _run_spot_oos_locked(
+            journal=journal,
+            protocol=protocol,
+            request=request,
+            metrics_policy=metrics_policy,
+            session=session,
+            strategy_registry=strategy_registry,
+            lineage_store=lineage_store,
+            as_of=as_of,
+            expires_at=expires_at,
+        )
+
+
+async def _run_spot_oos_locked(
     *,
     journal: OOSResearchJournal,
     protocol: OOSProtocolV2,
@@ -867,30 +1033,41 @@ async def run_spot_oos(
         if selected is not None:
             require(candidate == selected, "OOS_REQUEST_NOT_SELECTED_STRATEGY")
     except ValueError as error:
-        integrity_failed.append(str(error))
+        reason = str(error)
+        if not is_integrity_failure_reason(reason):
+            raise
+        integrity_failed.append(reason)
     if failed or integrity_failed or missing:
-        return _assemble(
-            journal=journal,
-            protocol=protocol,
-            metrics_policy=metrics_policy,
-            request=request,
-            replays=(),
-            reports=(),
-            failed=failed,
-            integrity_failed=integrity_failed,
-            missing=missing,
-            as_of=as_of,
-            expires_at=expires_at,
-        )
+        reservation = journal._reserve(1)
+        try:
+            return _assemble(
+                journal=journal,
+                protocol=protocol,
+                metrics_policy=metrics_policy,
+                request=request,
+                replays=(),
+                reports=(),
+                failed=failed,
+                integrity_failed=integrity_failed,
+                missing=missing,
+                as_of=as_of,
+                expires_at=expires_at,
+                reservation=reservation,
+            )
+        finally:
+            journal._release(reservation)
     require(key not in journal._inflight, "OOS_RUN_ALREADY_IN_PROGRESS")
+    reservation = journal._reserve(2)
     journal._inflight.add(key)
+    access: OOSJournalEvent | None = None
     try:
-        journal._append(
+        access = journal._append(
             OOSEventKind.ACCESS,
             protocol.window,
             protocol=protocol,
             candidate=selected,
             purpose="FINAL_HOLDOUT_EXECUTION",
+            reservation=reservation,
         )
         replay = await run_spot_backtest(
             request=request,
@@ -901,13 +1078,19 @@ async def run_spot_oos(
         reports: tuple[SpotPerformanceReport, ...] = ()
         replays: tuple[SpotBacktestBundle, ...] = ()
         if replay.outcome is not SpotBacktestOutcome.OBSERVED:
-            missing.extend(("OOS_REPLAY_INCONCLUSIVE", *replay.reason_codes))
+            for reason in ("OOS_REPLAY_INCONCLUSIVE", *replay.reason_codes):
+                _classify_terminal_reason(
+                    reason, integrity_failed=integrity_failed, missing=missing
+                )
         else:
             try:
                 assert selected is not None
                 _validate_replay(protocol, partition, selected, replay, request)
             except ValueError as error:
-                integrity_failed.append(str(error))
+                reason = str(error)
+                if not is_integrity_failure_reason(reason):
+                    raise
+                integrity_failed.append(reason)
             else:
                 try:
                     report = calculate_spot_performance_metrics(
@@ -919,7 +1102,18 @@ async def run_spot_oos(
                     )
                     replays, reports = (replay,), (report,)
                 except ValueError as error:
-                    missing.append(str(error))
+                    _classify_terminal_reason(
+                        str(error),
+                        integrity_failed=integrity_failed,
+                        missing=missing,
+                    )
+        if any(
+            event.sequence > access.sequence
+            and event.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL)
+            and event.window.overlaps(protocol.window)
+            for event in journal.snapshot.events
+        ):
+            failed.append("HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED")
         bundle = _assemble(
             journal=journal,
             protocol=protocol,
@@ -932,11 +1126,37 @@ async def run_spot_oos(
             missing=missing,
             as_of=as_of,
             expires_at=expires_at,
+            reservation=reservation,
         )
         journal._cache[key] = bundle
         return bundle
+    except BaseException as error:
+        if (
+            access is not None
+            and journal._reservations.get(reservation, 0)
+            and journal.snapshot.events[-1].kind is not OOSEventKind.RESULT
+        ):
+            reasons = ("OOS_EXECUTION_ABORTED:" + type(error).__name__,)
+            journal._append(
+                OOSEventKind.RESULT,
+                protocol.window,
+                protocol=protocol,
+                candidate=selected,
+                purpose=result_receipt_purpose(
+                    OOSOutcome.INCONCLUSIVE,
+                    CheckOutcome.PASSED,
+                    CheckOutcome.INCONCLUSIVE,
+                    CheckOutcome.INCONCLUSIVE,
+                    reasons,
+                ),
+                evidence=(_request_ref(_request_digest(request)),),
+                at=max(utc(journal._clock()), journal.snapshot.events[-1].recorded_at),
+                reservation=reservation,
+            )
+        raise
     finally:
         journal._inflight.discard(key)
+        journal._release(reservation)
 
 
 def resolve_spot_oos_result(

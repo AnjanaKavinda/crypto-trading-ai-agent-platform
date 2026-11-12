@@ -32,6 +32,52 @@ NAMESPACE = uuid5(NAMESPACE_URL, "trading-platform:C-071:2:spot-oos-v1")
 MAX_EVENTS = 512
 MAX_CANDIDATES = 16
 
+_INTEGRITY_FAILURE_REASONS = frozenset(
+    {
+        "CROSS_BOUNDARY_OPEN_INVENTORY",
+        "OOS_CUTOFF_MISMATCH",
+        "OOS_DECISION_OUTSIDE_PARTITION",
+        "OOS_EXECUTION_WINDOW_MISMATCH",
+        "OOS_FILL_OUTSIDE_PARTITION",
+        "OOS_METRICS_POLICY_MISMATCH",
+        "OOS_REQUIRES_FLAT_POSITIVE_CAPITAL",
+        "OOS_REPLAY_CANDIDATE_MISMATCH",
+        "OOS_REPLAY_REQUEST_CLOSURE_MISMATCH",
+        "OOS_REQUEST_NOT_SELECTED_STRATEGY",
+        "OOS_RESULT_CUTOFF_MISMATCH",
+        "OOS_RESULT_WINDOW_MISMATCH",
+        "OOS_SCOPE_OR_UNIT_MISMATCH",
+        "OOS_STRATEGY_PARAMETERS_OR_COST_MISMATCH",
+        "OOS_TRACE_UNRESOLVED",
+        "OOS_WARMUP_EXCEEDED",
+        "INVALID_OOS_BACKTEST_REQUEST",
+    }
+)
+_CONTAMINATION_FAILURE_REASONS = frozenset(
+    {
+        "HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED",
+        "HOLDOUT_RESELECTION",
+        "SELECTION_CHANGED_AFTER_FREEZE",
+        "SELECTION_PRECEDES_FREEZE",
+    }
+)
+
+
+def is_integrity_failure_reason(reason: str) -> bool:
+    return reason.split(":", 1)[0] in _INTEGRITY_FAILURE_REASONS
+
+
+def is_contamination_failure_reason(reason: str) -> bool:
+    return reason.split(":", 1)[0] in _CONTAMINATION_FAILURE_REASONS
+
+
+def derive_integrity_status(*, failed: bool, unresolved: bool) -> CheckOutcome:
+    if failed:
+        return CheckOutcome.FAILED
+    if unresolved:
+        return CheckOutcome.INCONCLUSIVE
+    return CheckOutcome.PASSED
+
 
 def require(condition: bool, reason: str) -> None:
     if not condition:
@@ -42,6 +88,25 @@ def text(value: str) -> None:
     require(
         type(value) is str and 0 < len(value) <= 256 and value == value.strip(),
         "INVALID_OOS_TEXT",
+    )
+
+
+def result_receipt_purpose(
+    outcome: OOSOutcome,
+    contamination: CheckOutcome,
+    integrity: CheckOutcome,
+    sample_sufficiency: CheckOutcome,
+    reason_codes: tuple[str, ...],
+) -> str:
+    return ":".join(
+        (
+            "RECORDED_OUTCOME",
+            outcome.value,
+            contamination.value,
+            integrity.value,
+            sample_sufficiency.value,
+            canonical_sha256(reason_codes),
+        )
     )
 
 
@@ -226,8 +291,8 @@ class OOSProtocolV2:
                 "PARTITION_OVERLAP_OR_EMBARGO",
             )
         require(
-            all(p.point_in_time_cutoff <= holdout.start for p in self.partitions[:2]),
-            "DEVELOPMENT_CUTOFF_REACHES_HOLDOUT",
+            all(p.point_in_time_cutoff <= p.end for p in self.partitions),
+            "DEVELOPMENT_CUTOFF_EXCEEDS_PARTITION",
         )
         require(
             (holdout.start, holdout.end) == (self.window.start, self.window.end)
@@ -573,6 +638,7 @@ class OOSResultV2:
     content_sha256: str
     protocol: OOSProtocolV2
     journal: OOSJournalSnapshot
+    request_reference: ValidationArtifactReferenceV2
     selected_candidate: OOSCandidateV2 | None
     runs: tuple[OOSRunBindingV2, ...]
     metrics: tuple[OOSMetricV2, ...]
@@ -601,6 +667,12 @@ class OOSResultV2:
             (self.protocol.journal_id, self.protocol.authority)
             == (self.journal.journal_id, self.journal.authority),
             "OOS_JOURNAL_AUTHORITY_MISMATCH",
+        )
+        require(
+            type(self.request_reference) is ValidationArtifactReferenceV2
+            and self.request_reference.artifact_type == "SPOT_OOS_REQUEST"
+            and self.request_reference.version == "1",
+            "OOS_REQUEST_RECEIPT_MISMATCH",
         )
         require(
             self.selected_candidate is None
@@ -723,7 +795,8 @@ class OOSResultV2:
         )
         if self.selected_candidate is not None:
             require(
-                len(selections) == len(freezes) == 1
+                len(selections) >= 1
+                and len(freezes) == 1
                 and selections[0].candidate_id == self.selected_candidate.candidate_id
                 and selections[0].window == protocol.window
                 and freezes[0].sequence < selections[0].sequence,
@@ -752,7 +825,6 @@ class OOSResultV2:
             bool(events)
             and events[-1] == self.journal.events[-1]
             and events[-1].kind is OOSEventKind.RESULT
-            and events[-1].purpose == "RECORDED_OUTCOME"
             and events[-1].window == protocol.window,
             "OOS_RESULT_RECEIPT_UNRESOLVED",
         )
@@ -760,21 +832,85 @@ class OOSResultV2:
             self.created_at == events[-1].recorded_at,
             "OOS_RESULT_RECEIPT_TIME_MISMATCH",
         )
-        if self.outcome is OOSOutcome.OBSERVED:
-            access = tuple(
-                e
-                for e in self.journal.events
-                if e.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL)
-                and e.window.overlaps(protocol.window)
-            )
-            require(
-                len(access) == 1
-                and access[0].protocol_sha256 == protocol.content_sha256
-                and access[0].purpose == "FINAL_HOLDOUT_EXECUTION"
-                and self.selected_candidate is not None
-                and access[0].candidate_id == self.selected_candidate.candidate_id,
-                "OOS_CONTAMINATED_OBSERVED_JOURNAL",
-            )
+        access = tuple(
+            e
+            for e in self.journal.events
+            if e.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL)
+            and e.window.overlaps(protocol.window)
+        )
+        canonical_access = tuple(
+            e
+            for e in access
+            if e.kind is OOSEventKind.ACCESS
+            and e.protocol_sha256 == protocol.content_sha256
+            and e.purpose == "FINAL_HOLDOUT_EXECUTION"
+            and self.selected_candidate is not None
+            and e.candidate_id == self.selected_candidate.candidate_id
+        )
+        prior_results = tuple(e for e in events[:-1] if e.kind is OOSEventKind.RESULT)
+        prior_terminal_access = any(
+            access_event.sequence < result_event.sequence
+            for access_event in canonical_access
+            for result_event in prior_results
+        )
+        contaminated = (
+            len(access) != len(canonical_access)
+            or len(canonical_access) > 1
+            or prior_terminal_access
+            or len(selections) > 1
+        )
+        expected_contamination_reasons: set[str] = set()
+        if (
+            len(access) != len(canonical_access)
+            or len(canonical_access) > 1
+            or prior_terminal_access
+        ):
+            expected_contamination_reasons.add("HOLDOUT_PREVIOUSLY_ACCESSED_OR_REUSED")
+        if len(selections) > 1:
+            expected_contamination_reasons.add("SELECTION_CHANGED_AFTER_FREEZE")
+        if len(freezes) == 1:
+            freeze = freezes[0]
+            if any(
+                event.kind is OOSEventKind.SELECT
+                and event.window.overlaps(protocol.window)
+                and event.sequence < freeze.sequence
+                and any(
+                    access_event.kind is OOSEventKind.ACCESS
+                    and access_event.window.overlaps(protocol.window)
+                    and access_event.sequence < freeze.sequence
+                    for access_event in self.journal.events
+                )
+                for event in self.journal.events
+            ):
+                expected_contamination_reasons.add("HOLDOUT_RESELECTION")
+            if selections and selections[0].sequence <= freeze.sequence:
+                expected_contamination_reasons.add("SELECTION_PRECEDES_FREEZE")
+        declared_contamination_reasons = {
+            reason
+            for reason in self.reason_codes
+            if is_contamination_failure_reason(reason)
+        }
+        require(
+            declared_contamination_reasons == expected_contamination_reasons,
+            "OOS_CONTAMINATION_REASON_MISMATCH",
+        )
+        protocol_receipts_resolved = (
+            self.journal.declared_complete
+            and len(freezes) == len(selections) == 1
+            and freezes[0].recorded_at == protocol.frozen_at
+            and freezes[0].purpose == "PRECOMMITMENT"
+            and freezes[0].sequence < selections[0].sequence
+            and freezes[0].window == selections[0].window == protocol.window
+            and self.selected_candidate is not None
+            and selections[0].candidate_id == self.selected_candidate.candidate_id
+        )
+        expected_contamination = (
+            CheckOutcome.FAILED
+            if contaminated
+            else CheckOutcome.PASSED
+            if protocol_receipts_resolved
+            else CheckOutcome.INCONCLUSIVE
+        )
         used_receipts = set()
         for run in self.runs:
             partition = next(
@@ -942,6 +1078,73 @@ class OOSResultV2:
                 self.selected_candidate == min(scores, key=lambda s: (s[0], s[1]))[2],
                 "OOS_SELECTION_CRITERION_MISMATCH",
             )
+        require(
+            self.contamination is expected_contamination,
+            "OOS_CONTAMINATION_STATUS_MISMATCH",
+        )
+        held_runs = tuple(
+            r
+            for r in self.runs
+            if r.partition_id == protocol.partitions[-1].partition_id
+        )
+        integrity_failure_declared = any(
+            is_integrity_failure_reason(reason) for reason in self.reason_codes
+        )
+        unresolved_integrity_declared = any(
+            reason != "INSUFFICIENT_OOS_TRADE_SAMPLE"
+            and not is_integrity_failure_reason(reason)
+            and not is_contamination_failure_reason(reason)
+            for reason in self.reason_codes
+        )
+        expected_integrity = derive_integrity_status(
+            failed=integrity_failure_declared,
+            unresolved=unresolved_integrity_declared,
+        )
+        require(
+            self.integrity is expected_integrity,
+            "OOS_INTEGRITY_STATUS_MISMATCH",
+        )
+        expected_outcome = (
+            OOSOutcome.FAILED
+            if CheckOutcome.FAILED in (expected_contamination, expected_integrity)
+            else OOSOutcome.INCONCLUSIVE
+            if CheckOutcome.INCONCLUSIVE
+            in (
+                expected_contamination,
+                expected_integrity,
+                self.sample_sufficiency,
+            )
+            else OOSOutcome.OBSERVED
+        )
+        require(self.outcome is expected_outcome, "OOS_OUTCOME_STATUS_MISMATCH")
+        require(
+            events[-1].purpose
+            == result_receipt_purpose(
+                self.outcome,
+                self.contamination,
+                self.integrity,
+                self.sample_sufficiency,
+                self.reason_codes,
+            ),
+            "OOS_RESULT_RECEIPT_UNRESOLVED",
+        )
+        expected_terminal_evidence = (self.request_reference,) + (
+            (
+                ValidationArtifactReferenceV2(
+                    "C-027",
+                    held_runs[0].backtest.result_id,
+                    "3",
+                    held_runs[0].backtest.content_sha256,
+                ),
+                held_runs[0].metrics_report,
+            )
+            if held_runs
+            else ()
+        )
+        require(
+            events[-1].evidence == expected_terminal_evidence,
+            "OOS_REQUEST_RECEIPT_MISMATCH",
+        )
 
     def identity_payload(self) -> dict[str, object]:
         return payload(self, {"result_id", "content_sha256"})

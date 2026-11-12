@@ -949,6 +949,22 @@ def _assert_selection_contract_rejections(result):
 
     reject({"runs": (*result.runs, result.runs[0])}, "DUPLICATE_OOS_RUN")
     reject({"runs": result.runs[1:]}, "SELECTION_MATRIX")
+    reject(
+        {
+            "integrity": result.integrity.__class__.FAILED,
+            "outcome": OOSOutcome.FAILED,
+            "reason_codes": ("OOS_SCOPE_OR_UNIT_MISMATCH",),
+        },
+        "RESULT_RECEIPT|INTEGRITY_STATUS",
+    )
+    if result.sample_sufficiency.value == "PASSED":
+        reject(
+            {
+                "outcome": OOSOutcome.INCONCLUSIVE,
+                "reason_codes": ("ARBITRARY_DOWNGRADE",),
+            },
+            "INTEGRITY_STATUS",
+        )
     select = next(e for e in result.journal.events if e.kind.value == "SELECT")
     altered = OOSJournalEvent.build(
         **dict(payload(select, {"content_sha256"}), purpose="FORGED_PURPOSE")
@@ -998,7 +1014,7 @@ def _assert_selection_contract_rejections(result):
             "outcome": OOSOutcome.INCONCLUSIVE,
             "reason_codes": ("INSUFFICIENT_OOS_TRADE_SAMPLE",),
         },
-        "SELECTION_CRITERION",
+        "CONTAMINATION_REASON",
     )
 
 
@@ -1543,7 +1559,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         PartitionPurpose.TRAIN,
                         policy.period_start - 20 * STEP,
                         policy.period_start - 10 * STEP,
-                        policy.period_start,
+                        policy.period_start - 10 * STEP,
                         True,
                     ),
                     DataPartition(
@@ -1559,7 +1575,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         PartitionPurpose.TEST,
                         policy.period_start,
                         policy.period_end,
-                        request.result_as_of,
+                        policy.period_end,
                         False,
                     ),
                 )
