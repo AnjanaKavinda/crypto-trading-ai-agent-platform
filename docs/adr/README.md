@@ -32,6 +32,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0021 | [PERSONAL_SPOT_RESEARCH analysis producer path](ADR-0021-proposed-personal-spot-analysis-producer-path.md) | Accepted | 2026-11-06 | Platform Architect / AnjanaKavinda | OD-0027 | No contract version changes; additive C-012 lineage allowlist and producer reservation table | — | PR #464 |
 
 | ADR-0022 | [Spot OOS protocol and result boundary](ADR-0022-spot-oos-protocol-and-result-boundary.md) | Accepted | 2026-11-11 | AnjanaKavinda (explicit owner approval) | — | Additive C-071 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
+| ADR-0023 | [Spot walk-forward observation boundary](ADR-0023-spot-walk-forward-observation-boundary.md) | Accepted | 2026-11-13 | Platform Architect / AnjanaKavinda (owner-assigned #96 scope) | — | Additive C-029 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
 
 ## Creating an ADR
 
