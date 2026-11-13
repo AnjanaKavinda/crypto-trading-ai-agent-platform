@@ -131,6 +131,17 @@ from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayScope,
     SpotReplayStrategyPin,
 )
+from trading_platform_api.validation.spot_walk_forward import (
+    SpotWalkForwardCandidateRequests,
+    SpotWalkForwardFoldRequests,
+    resolve_spot_walk_forward_result,
+    run_spot_walk_forward,
+)
+from trading_platform_api.validation.walk_forward_contracts_v2 import (
+    WalkForwardMode,
+    WalkForwardPlanSpecV2,
+    generate_walk_forward_folds,
+)
 
 D = Decimal
 STEP = timedelta(minutes=1)
@@ -1322,7 +1333,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     ).hexdigest(),
                 )
 
-                execution_cutoff = context.as_of + timedelta(minutes=10)
+                execution_cutoff = context.as_of + timedelta(minutes=20)
                 execution_dataset, execution_manifest, execution_records, _ = (
                     _market_records(
                         binding.observations,
@@ -1331,7 +1342,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         dataset_id=f"execution-{uuid4()}",
                         venue=scope.venue_id,
                         instrument_id=scope.instrument_id,
-                        extra_bars=10,
+                        extra_bars=20,
                         extra_start=context.as_of - STEP,
                     )
                 )
@@ -1793,6 +1804,112 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert (
                     resolve_spot_oos_result(oos_bundle, journal=recorder) == oos_result
                 )
+
+                walk_journal = OOSResearchJournal(
+                    journal_id=uuid4(),
+                    authority=recorder.snapshot.authority,
+                    clock=lambda: recorded_at,
+                    declared_complete=True,
+                )
+                walk_scope = OOSWindow(
+                    policy.venue,
+                    policy.instrument_id,
+                    policy.timeframe,
+                    policy.period_start,
+                    policy.period_end,
+                )
+                walk_spec = WalkForwardPlanSpecV2(
+                    scope=walk_scope,
+                    mode=WalkForwardMode.ROLLING,
+                    training_bars=2,
+                    validation_bars=2,
+                    heldout_bars=8,
+                    step_bars=8,
+                    embargo_bars=0,
+                    warmup_bars=64,
+                    minimum_folds=2,
+                    minimum_trades=1,
+                    minimum_returns=oos_metrics_policy.min_return_sample,
+                    maximum_folds=2,
+                    maximum_candidates=1,
+                    maximum_events=8,
+                    candidates=(candidate_from_request(request),),
+                    selection_mode=OOSSelectionMode.FIXED,
+                    metrics_policy=oos_metrics_policy,
+                    environment=policy.environment,
+                    journal_id=walk_journal.snapshot.journal_id,
+                    authority=walk_journal.snapshot.authority,
+                    frozen_at=recorded_at,
+                )
+                walk_folds = generate_walk_forward_folds(walk_spec)
+                walk_requests = []
+                original_decision = replay_inputs.decisions[0]
+                for fold in walk_folds:
+                    walk_policy = replace(
+                        policy,
+                        period_start=fold.heldout.start,
+                        period_end=fold.heldout.end,
+                    )
+                    walk_scope_input = replace(
+                        replay_inputs.scope,
+                        decision_period_start=fold.heldout.start,
+                        decision_period_end=fold.heldout.end,
+                    )
+                    walk_decision = replace(
+                        original_decision,
+                        decision_time=fold.heldout.start + timedelta(seconds=1),
+                    )
+                    walk_input = replace(
+                        replay_inputs,
+                        scope=walk_scope_input,
+                        decisions=(walk_decision,),
+                    )
+                    walk_request = replace(
+                        request,
+                        replay_inputs=walk_input,
+                        execution_policy=walk_policy,
+                        result_as_of=fold.heldout.end,
+                    )
+                    walk_requests.append(
+                        SpotWalkForwardFoldRequests(
+                            (
+                                SpotWalkForwardCandidateRequests(
+                                    None, None, walk_request
+                                ),
+                            )
+                        )
+                    )
+                walk_bundle = await run_spot_walk_forward(
+                    journal=walk_journal,
+                    spec=walk_spec,
+                    requests=tuple(walk_requests),
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                walk_result = resolve_spot_walk_forward_result(
+                    walk_bundle, journal=walk_journal
+                )
+                assert len(walk_result.observations) == 2
+                assert all(
+                    item.oos_result is not None
+                    for item in walk_result.observations
+                )
+                if synthetic_ready:
+                    assert all(
+                        item.oos_result.sample_size > 0
+                        for item in walk_result.observations
+                    )
+                else:
+                    assert all(
+                        item.oos_result.sample_size == 0
+                        for item in walk_result.observations
+                    )
+                    assert all(
+                        "INSUFFICIENT_OOS_TRADE_SAMPLE"
+                        in item.oos_result.reason_codes
+                        for item in walk_result.observations
+                    )
 
                 no_setup_condition = replace(
                     condition, condition_id=uuid4(), expected_values=("never",)

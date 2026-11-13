@@ -6,7 +6,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, cast, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 from trading_platform_api.agents.contracts import (
@@ -110,6 +110,15 @@ MODELS = {
 }
 
 
+def _walk_forward_result_type() -> type:
+    from trading_platform_api.validation.walk_forward_contracts_v2 import (
+        WalkForwardResultV2,
+    )
+
+    MODELS["C-029"] = WalkForwardResultV2
+    return WalkForwardResultV2
+
+
 class LineageError(ValueError):
     """Missing, conflicting, unsupported or corrupt durable evidence."""
 
@@ -121,7 +130,7 @@ class LineageKey:
     version: str = "1"
 
     def __post_init__(self) -> None:
-        if self.contract_id not in MODELS:
+        if self.contract_id not in MODELS and self.contract_id != "C-029":
             raise LineageError("Unsupported lineage contract.")
         for value in (self.record_id, self.version):
             if (
@@ -196,6 +205,13 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-071", str(record.result_id), record.schema_version)
     if type(record) is OOSResultV2:
         return LineageKey("C-071", str(record.result_id), record.schema_version)
+    if type(record) is _walk_forward_result_type():
+        walk_forward_result = cast(Any, record)
+        return LineageKey(
+            "C-029",
+            str(walk_forward_result.result_id),
+            walk_forward_result.schema_version,
+        )
     if type(record) is BacktestResultV3:
         return LineageKey("C-027", str(record.result_id), record.schema_version)
     if type(record) is AnalyticalUncertainty:
@@ -307,6 +323,10 @@ def _decode(kind: Any, value: Any) -> Any:
         if type(value) is not list:
             raise LineageError("Expected immutable sequence payload.")
         return tuple(_decode(args[0], item) for item in value)
+    if origin is tuple:
+        if type(value) is not list or len(value) != len(args):
+            raise LineageError("Expected fixed immutable sequence payload.")
+        return tuple(_decode(kind, item) for kind, item in zip(args, value, strict=True))
     if kind in (str, int, bool):
         if type(value) is not kind:
             raise LineageError("Invalid scalar type.")
@@ -388,6 +408,10 @@ def decode(document: str) -> object:
             }.get(schema_version)
             if model is None:
                 raise LineageError("Unsupported C-003 schema version.")
+        elif contract_id == "C-029":
+            model = {"2": _walk_forward_result_type()}.get(schema_version)
+            if model is None:
+                raise LineageError("Unsupported C-029 schema version.")
         else:
             model = MODELS[contract_id]
             if contract_id == "C-071":
@@ -425,6 +449,7 @@ def decode(document: str) -> object:
                 "C-026": "2",
                 "C-027": schema_version,
                 "C-071": schema_version,
+                "C-029": "2",
                 "C-028": "2",
                 "C-069": "1",
                 "C-070": "2",
