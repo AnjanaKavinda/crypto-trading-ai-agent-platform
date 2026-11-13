@@ -176,7 +176,17 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 def references(record: object) -> tuple[Reference, ...]:
     if type(record) in (OOSResult, OOSResultV2):
         raise LineageError(
-            "C-071 retention is not authorized by the OOS runtime boundary."
+            "C-071/C-029 retention is not authorized by the validation "
+            "runtime boundary."
+        )
+    if (
+        type(record).__module__
+        == "trading_platform_api.validation.walk_forward_contracts_v2"
+        and type(record).__name__ == "WalkForwardResultV2"
+    ):
+        raise LineageError(
+            "C-071/C-029 retention is not authorized by the validation "
+            "runtime boundary."
         )
     if type(record) is BacktestResultV3:
         raise LineageError(

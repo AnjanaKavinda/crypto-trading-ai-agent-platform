@@ -49,7 +49,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-026 | NoTradeDecision | Signal | UX, Risk, Safety, Learning | Schema 1 reason vocabulary is frozen; schema 2 adds only typed `INVALID_PROVENANCE` while preserving first-class abstention semantics. |
 | C-027 | BacktestResult | Quant Validation | Validation, Research | v1 retained; v2 cost-assumption value objects express APPLICABLE / NOT_APPLICABLE / UNKNOWN explicitly; ADR-0019 v3 binds exact dataset/manifest, typed costs and simulation provenance. |
 | C-028 | ValidationResult | Quant Validation | Risk, Approval | v1 retained; v2 binds qualification rule configuration, observed results, statistical-support gates, and validation outcome. |
-| C-029 | WalkForwardResult | Quant Validation | Validation, Learning | Walk-forward folds/results. |
+| C-029 | WalkForwardResult | Quant Validation | Validation, Learning | V1 remains unchanged. ADR-0023 adds observation-only Spot schema 2 binding planned folds, exact C-071v2/C-027v3/#94 evidence, journal receipts, explicit unavailable states, and descriptive aggregates; no qualification or retention authority. |
 | C-030 | RobustnessResult | Quant Validation | Risk, Governance | Sensitivity/Monte Carlo/regime robustness summary. |
 | C-031 | CalibrationResult | Quant/Model Evaluation | Meta Analysis, Learning | Calibration separate from AI confidence. |
 | C-032 | AccountSnapshot | Risk | Risk, Approval, Execution | Point-in-time account state. |

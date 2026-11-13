@@ -554,3 +554,15 @@ and API routes remain assigned to later issues.
 V1 payload/UUID dataset/identity/qualification readers stay frozen. Observation-only v2 binds native C-092 IDs/versions, C-027v3 runs, dataset/manifest, #94 reports and protocol/journal; zero/unavailable/inconclusive/contaminated samples remain explicit. Closed codec 1/2, no conversion; UUIDv5 excludes own ID/digest, method `spot-oos-observation-v1`. V2 qualification and C-071 retention rejected; no migration/DDL.
 
 Internal SPOT_OOS_REQUEST@1 binds request/archive/data/execution/parameter/cost/timestamps, without retention authority. Require canonical artifacts/reports and live issuance/recomputation. As-of equals held-out request/replay; expiry cannot exceed request/any replay. [ADR](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md).
+
+## ADR-0023 — C-029
+
+C-029v1 payloads, identities, and consumers remain unchanged. Observation-only
+schema 2 binds an immutable Spot walk-forward protocol and all planned folds to
+their exact C-071v2 results, C-027v3/#94 reports, native dataset/manifest pins,
+and shared journal receipts. Explicit unavailable and terminal states are
+preserved; canonical construction and decoding enforce aggregate and outcome
+closure. UUIDv5/SHA-256 identities exclude generated result ID and own digest.
+Unknown versions fail closed. V2 qualification and C-029 retention are denied;
+codec support is not storage authorization. No migration or DDL.
+[ADR](../adr/ADR-0023-spot-walk-forward-observation-boundary.md).
