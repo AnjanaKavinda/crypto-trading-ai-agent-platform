@@ -209,8 +209,7 @@ class WalkForwardFoldPlanV2:
         )
         _require(
             all(
-                item.point_in_time_cutoff == item.end
-                and not item.used_for_optimization
+                item.point_in_time_cutoff == item.end and not item.used_for_optimization
                 for item in (self.selection_validation, self.heldout)
             )
             and self.training.point_in_time_cutoff == self.training.end
@@ -333,8 +332,7 @@ class WalkForwardPlanSpecV2:
         )
         _require(self.step_bars >= self.heldout_bars, "HELDOUT_WINDOWS_OVERLAP")
         _require(
-            type(self.minimum_folds) is int
-            and 2 <= self.minimum_folds <= MAX_FOLDS,
+            type(self.minimum_folds) is int and 2 <= self.minimum_folds <= MAX_FOLDS,
             "INVALID_MINIMUM_FOLDS",
         )
         _require(
@@ -355,8 +353,7 @@ class WalkForwardPlanSpecV2:
             "INVALID_MAXIMUM_FOLDS",
         )
         _require(
-            type(self.maximum_events) is int
-            and 1 <= self.maximum_events <= MAX_EVENTS,
+            type(self.maximum_events) is int and 1 <= self.maximum_events <= MAX_EVENTS,
             "INVALID_EVENT_BUDGET",
         )
         _require(
@@ -433,8 +430,7 @@ class WalkForwardPlanSpecV2:
                     type(row) is tuple
                     and len(row) == expected_per_fold
                     and all(
-                        type(reference) is WalkForwardRequestPinV2
-                        for reference in row
+                        type(reference) is WalkForwardRequestPinV2 for reference in row
                     )
                     and len({reference.request.artifact_id for reference in row})
                     == len(row)
@@ -815,8 +811,7 @@ class WalkForwardConsistencyV2:
                     self.available_return_folds
                 )
             _require(
-                type(self.ratio) is Decimal
-                and self.ratio == expected_ratio,
+                type(self.ratio) is Decimal and self.ratio == expected_ratio,
                 "WALK_FORWARD_CONSISTENCY_RATIO_MISMATCH",
             )
         else:
@@ -1021,8 +1016,7 @@ class WalkForwardFoldObservationV2:
                 _require(
                     not self.trades
                     and all(
-                        item.state is not MetricState.AVAILABLE
-                        for item in self.metrics
+                        item.state is not MetricState.AVAILABLE for item in self.metrics
                     ),
                     "FOLD_REPORT_WITHOUT_HELDOUT_RUN",
                 )
@@ -1170,11 +1164,7 @@ def _consistency(
     )
     positive = sum(item.value.value > 0 for item in available if item.value is not None)
     with localcontext(_ARITHMETIC):
-        ratio = (
-            Decimal(positive) / Decimal(len(available))
-            if available
-            else None
-        )
+        ratio = Decimal(positive) / Decimal(len(available)) if available else None
     return WalkForwardConsistencyV2(
         positive,
         len(available),
@@ -1263,8 +1253,7 @@ class WalkForwardResultV2:
         _require(
             all(
                 observation.oos_protocol.partitions == expected
-                and observation.oos_protocol.candidates
-                == self.protocol.spec.candidates
+                and observation.oos_protocol.candidates == self.protocol.spec.candidates
                 and observation.oos_protocol.selection_mode
                 is self.protocol.spec.selection_mode
                 and observation.oos_protocol.metrics_policy_sha256
@@ -1311,8 +1300,7 @@ class WalkForwardResultV2:
                     event
                     for event in self.journal.events
                     if event.kind is OOSEventKind.SELECT
-                    and event.protocol_sha256
-                    == observation.oos_protocol.content_sha256
+                    and event.protocol_sha256 == observation.oos_protocol.content_sha256
                 )
                 _require(
                     observation.selected_candidate_id
@@ -1347,9 +1335,7 @@ class WalkForwardResultV2:
         if self.outcome is WalkForwardOutcome.INCONCLUSIVE:
             expected_reasons.add("WALK_FORWARD_COVERAGE_INCOMPLETE")
         if self.outcome is WalkForwardOutcome.FAILED:
-            expected_reasons.add(
-                "WALK_FORWARD_INTEGRITY_OR_CONTAMINATION_FAILURE"
-            )
+            expected_reasons.add("WALK_FORWARD_INTEGRITY_OR_CONTAMINATION_FAILURE")
         _require(
             self.reason_codes == tuple(sorted(expected_reasons)),
             "WALK_FORWARD_REASON_COVERAGE_MISMATCH",
@@ -1376,8 +1362,7 @@ class WalkForwardResultV2:
                 _require(
                     observation.state is FoldTerminalState.CANCELLED
                     and not any(
-                        event.protocol_sha256
-                        == observation.oos_protocol.content_sha256
+                        event.protocol_sha256 == observation.oos_protocol.content_sha256
                         and event.kind is OOSEventKind.RESULT
                         for event in self.journal.events
                     ),
@@ -1442,9 +1427,7 @@ class WalkForwardResultV2:
         for name in ("as_of", "created_at", "expires_at"):
             object.__setattr__(self, name, _utc(getattr(self, name)))
         request_pins = tuple(
-            pin
-            for row in self.protocol.spec.request_bindings_by_fold
-            for pin in row
+            pin for row in self.protocol.spec.request_bindings_by_fold for pin in row
         )
         heldout_as_of = max(
             pin.result_as_of
@@ -1470,14 +1453,8 @@ class WalkForwardResultV2:
             self.as_of == heldout_as_of
             and self.created_at >= max(pin.created_at for pin in request_pins)
             and self.expires_at <= min(pin.expires_at for pin in request_pins)
-            and (
-                not result_created
-                or self.created_at >= max(result_created)
-            )
-            and (
-                not result_expiries
-                or self.expires_at <= min(result_expiries)
-            ),
+            and (not result_created or self.created_at >= max(result_created))
+            and (not result_expiries or self.expires_at <= min(result_expiries)),
             "WALK_FORWARD_RESULT_TIME_BOUNDARY_MISMATCH",
         )
         _digest(self.content_sha256)

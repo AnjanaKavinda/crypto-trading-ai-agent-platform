@@ -1892,8 +1892,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 )
                 assert len(walk_result.observations) == 2
                 assert all(
-                    item.oos_result is not None
-                    for item in walk_result.observations
+                    item.oos_result is not None for item in walk_result.observations
                 )
                 if synthetic_ready:
                     assert all(
@@ -1906,8 +1905,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                         for item in walk_result.observations
                     )
                     assert all(
-                        "INSUFFICIENT_OOS_TRADE_SAMPLE"
-                        in item.oos_result.reason_codes
+                        "INSUFFICIENT_OOS_TRADE_SAMPLE" in item.oos_result.reason_codes
                         for item in walk_result.observations
                     )
 

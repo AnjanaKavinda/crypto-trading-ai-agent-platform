@@ -193,9 +193,7 @@ def _check_request(
             not partition.start <= decision.decision_time < partition.end
             or decision.lookback_start
             < partition.start
-            - spec.warmup_bars * timedelta(
-                seconds=spec.metrics_policy.interval_seconds
-            )
+            - spec.warmup_bars * timedelta(seconds=spec.metrics_policy.interval_seconds)
             for decision in request.replay_inputs.decisions
         )
     ):
@@ -229,9 +227,7 @@ def _fold_request_pins(
             else:
                 if item.training is None or item.selection_validation is None:
                     raise ValueError("WALK_FORWARD_DEVELOPMENT_REQUEST_REQUIRED")
-                _check_request(
-                    item.training, candidate, fold.training, spec, now=now
-                )
+                _check_request(item.training, candidate, fold.training, spec, now=now)
                 _check_request(
                     item.selection_validation,
                     candidate,
@@ -356,9 +352,7 @@ def _metrics_from_bundle(
         )
         return metrics, report.trades, result.reason_codes
     reason = (
-        result.reason_codes[0]
-        if result.reason_codes
-        else "OOS_METRICS_UNAVAILABLE"
+        result.reason_codes[0] if result.reason_codes else "OOS_METRICS_UNAVAILABLE"
     )
     return (
         tuple(
@@ -487,9 +481,7 @@ def _fold_observation(
         if event.kind is OOSEventKind.SELECT
         and event.protocol_sha256 == protocol.content_sha256
     )
-    selected_candidate_id = (
-        selections[0].candidate_id if len(selections) == 1 else None
-    )
+    selected_candidate_id = selections[0].candidate_id if len(selections) == 1 else None
     metrics = tuple(
         unavailable_metric(name, _unit(name, spec), reason)
         for name in (
@@ -668,8 +660,7 @@ async def _run_spot_walk_forward_locked(
                 == (fold.training, fold.selection_validation, fold.heldout)
                 and value.candidates == spec.candidates
                 and value.selection_mode is spec.selection_mode
-                and value.metrics_policy_sha256
-                == canonical_sha256(spec.metrics_policy)
+                and value.metrics_policy_sha256 == canonical_sha256(spec.metrics_policy)
                 and value.warmup_bars == spec.warmup_bars
                 and value.embargo_seconds
                 == spec.embargo_bars * spec.metrics_policy.interval_seconds
@@ -747,9 +738,7 @@ async def _run_spot_walk_forward_locked(
             and failure is None
         ):
             try:
-                selected = _select_candidate(
-                    journal, oos_protocol, candidate_reports
-                )
+                selected = _select_candidate(journal, oos_protocol, candidate_reports)
             except asyncio.CancelledError:
                 cancelled = True
             except Exception:
@@ -769,9 +758,7 @@ async def _run_spot_walk_forward_locked(
                 observation = _fold_observation(
                     fold=fold,
                     protocol=oos_protocol,
-                    request_bindings=tuple(
-                        pin.request for pin in request_pins[index]
-                    ),
+                    request_bindings=tuple(pin.request for pin in request_pins[index]),
                     journal=journal,
                     spec=bound_spec,
                     cancelled=True,
@@ -792,9 +779,7 @@ async def _run_spot_walk_forward_locked(
                 observation = _fold_observation(
                     fold=fold,
                     protocol=oos_protocol,
-                    request_bindings=tuple(
-                        pin.request for pin in request_pins[index]
-                    ),
+                    request_bindings=tuple(pin.request for pin in request_pins[index]),
                     journal=journal,
                     spec=bound_spec,
                     oos_result=oos_result,

@@ -75,9 +75,7 @@ def _plan(
     mode: WalkForwardMode = WalkForwardMode.ROLLING,
 ) -> WalkForwardPlanSpecV2:
     start = datetime(2026, 1, 1, tzinfo=UTC)
-    scope = OOSWindow(
-        "synthetic-venue", "BTC-USDT-SPOT", "1m", start, start + 5 * STEP
-    )
+    scope = OOSWindow("synthetic-venue", "BTC-USDT-SPOT", "1m", start, start + 5 * STEP)
     strategy = _reference("C-021", "2")
     oos_candidate = OOSCandidateV2(
         strategy,
@@ -205,9 +203,7 @@ def _cancelled_result(
             )
             events.append(event)
             previous = event.content_sha256
-    journal = OOSJournalSnapshot(
-        spec.journal_id, spec.authority, True, tuple(events)
-    )
+    journal = OOSJournalSnapshot(spec.journal_id, spec.authority, True, tuple(events))
     observations = tuple(
         WalkForwardFoldObservationV2(
             fold.fold_id,
@@ -269,7 +265,8 @@ def test_rolling_and_anchored_folds_are_deterministic_and_grid_aligned():
     assert anchored[0].training.start == anchored[1].training.start
     assert anchored[0].training.end < anchored[1].training.end
     assert all(
-        fold.training.end <= fold.selection_validation.start
+        fold.training.end
+        <= fold.selection_validation.start
         <= fold.selection_validation.end
         <= fold.heldout.start
         < fold.heldout.end

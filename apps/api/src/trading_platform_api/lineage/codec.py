@@ -326,7 +326,9 @@ def _decode(kind: Any, value: Any) -> Any:
     if origin is tuple:
         if type(value) is not list or len(value) != len(args):
             raise LineageError("Expected fixed immutable sequence payload.")
-        return tuple(_decode(kind, item) for kind, item in zip(args, value, strict=True))
+        return tuple(
+            _decode(kind, item) for kind, item in zip(args, value, strict=True)
+        )
     if kind in (str, int, bool):
         if type(value) is not kind:
             raise LineageError("Invalid scalar type.")
