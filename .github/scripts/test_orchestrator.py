@@ -2273,3 +2273,55 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
             with self.assertRaises(GovernanceError):
                 orchestrate_issue.confirmation_workflow_state({**issue, "state": "closed"})
 
+
+
+class WorkflowReportingTests(unittest.TestCase):
+    def run_reporting_step(self, workflow_name, step_name, governance_rc=0):
+        workflow = (Path(__file__).parents[1] / "workflows" / workflow_name).read_text()
+        step = workflow.split("- name: " + step_name, 1)[1].split("\n      - name:", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "reviewer-result.json").write_text('{}')
+            commands = {
+                "gh": 'printf "%s\\n" "$*" >> "$STATUS_LOG"; echo "{}"\n',
+                "jq": 'case "$*" in *".head.sha"*) echo exact-head;; *".disposition"*) echo changes-requested;; *) echo "[{}]";; esac\n',
+                "python": 'case "$1" in *run-pr-governance.py) exit "$GOVERNANCE_RC";; *transition-pr.py) exit 17;; *) exit 99;; esac\n',
+            }
+            for name, content in commands.items():
+                path = root / name
+                path.write_text("#!/bin/sh\n" + content)
+                path.chmod(0o755)
+            script = script.replace("/tmp/", directory + "/").replace("${{ github.repository }}", "owner/repo")
+            environment = dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH'],
+                STATUS_LOG=str(root / 'status.log'), GOVERNANCE_RC=str(governance_rc),
+                GITHUB_STEP_SUMMARY=str(root / 'summary.md'), OWNER_DIRECT='true', REQUIRED_TIER='R3')
+            result = subprocess.run(['bash', '-e', '-c', script], env=environment,
+                                    capture_output=True, text=True, timeout=10)
+            statuses = (root / 'status.log').read_text() if (root / 'status.log').exists() else ''
+            summary = (root / 'summary.md').read_text() if (root / 'summary.md').exists() else ''
+            return result, statuses, summary
+
+    def test_approved_review_survives_bookkeeping_failure(self):
+        result, statuses, summary = self.run_reporting_step(
+            'governed-independent-review.yml', 'Consume signed provenance and publish governance gate')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('state=success', statuses)
+        self.assertNotIn('state=failure', statuses)
+        self.assertIn('::warning::', result.stdout)
+        self.assertIn('manual state reconciliation', summary)
+
+    def test_failed_review_remains_failed(self):
+        result, statuses, _ = self.run_reporting_step(
+            'governed-independent-review.yml', 'Consume signed provenance and publish governance gate', 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('state=failure', statuses)
+        self.assertNotIn('state=success', statuses)
+
+    def test_post_close_bookkeeping_failure_is_diagnostic(self):
+        result, statuses, summary = self.run_reporting_step(
+            'copilot-pr-lifecycle.yml', 'Transition closed governed PR')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(statuses, '')
+        self.assertIn('::warning::', result.stdout)
+        self.assertIn('manual state reconciliation', summary)
