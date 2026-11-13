@@ -547,3 +547,10 @@ record and preserves them without decoding the signal payload. Existing
 C-023/C-024v2/C-025v2/C-026v2/C-028v2 meanings are unchanged. Lifecycle events,
 expiry processing, invalidation evaluation, supersession, WATCH, persistence,
 and API routes remain assigned to later issues.
+
+
+## ADR-0022 — C-071
+
+V1 payload/UUID dataset/identity/qualification readers stay frozen. Observation-only v2 binds native C-092 IDs/versions, C-027v3 runs, dataset/manifest, #94 reports and protocol/journal; zero/unavailable/inconclusive/contaminated samples remain explicit. Closed codec 1/2, no conversion; UUIDv5 excludes own ID/digest, method `spot-oos-observation-v1`. V2 qualification and C-071 retention rejected; no migration/DDL.
+
+Internal SPOT_OOS_REQUEST@1 binds request/archive/data/execution/parameter/cost/timestamps, without retention authority. Require canonical artifacts/reports and live issuance/recomputation. As-of equals held-out request/replay; expiry cannot exceed request/any replay. [ADR](../adr/ADR-0022-spot-oos-protocol-and-result-boundary.md).
