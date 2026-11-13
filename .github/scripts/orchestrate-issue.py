@@ -435,6 +435,16 @@ def main() -> int:
         confirmation_state = confirmation_workflow_state(issue) if confirm_existing else None
         if record.get("_completed"):
             return 0
+        completion = {
+            **record,
+            "outcome": "assigned",
+            "reason": "native-copilot-assignment-confirmed",
+            "confirmation_only": confirm_existing,
+            "new_state": confirmation_state if confirm_existing else "workflow:agent-running",
+            **({"prior_state": confirmation_state} if confirm_existing else {}),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+        }
         append_governance_event(
             AppendOnlyAudit(), "assignment",
             {"issue_id": int(issue_id), "correlation_id": record["dispatch_key"],
@@ -448,13 +458,13 @@ def main() -> int:
              "outcome": "assigned",
              **({"confirmation_only": True, "workflow_state_before": confirmation_state,
                  "workflow_state_after": confirmation_state} if confirm_existing else {}),
-             "timestamp": datetime.now(timezone.utc).isoformat(),
-             "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+             "timestamp": completion["timestamp"],
+             "commit_sha": completion["commit_sha"],
              "implementer_session_id": record["implementer_session_id"]},
             os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue_id}.jsonl"))
         gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
-                  f"{json.dumps(record, sort_keys=True)}\n"
+                  f"{json.dumps(completion, sort_keys=True)}\n"
                   f"dispatch_key:{record['dispatch_key']}")
         if confirm_existing:
             # Recording a historical native assignment does not authorize a
