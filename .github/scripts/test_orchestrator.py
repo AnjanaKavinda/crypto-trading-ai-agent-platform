@@ -2302,6 +2302,12 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
                 self.assertTrue(comments[-1]["body"].startswith(
                     f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "))
                 self.assertIn(key, comments[-1]["body"])
+                completion = json.loads(comments[-1]["body"].splitlines()[1].split(" ", 1)[1])
+                self.assertEqual(completion["outcome"], "assigned")
+                self.assertEqual(completion["reason"], "native-copilot-assignment-confirmed")
+                self.assertTrue(completion["confirmation_only"])
+                self.assertEqual(completion["prior_state"], "workflow:review")
+                self.assertEqual(completion["new_state"], "workflow:review")
                 count = len(writes)
                 self.assertEqual(orchestrate_issue.main(), 0)
                 self.assertEqual(len(writes), count)
@@ -2321,6 +2327,56 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
             self.assertIn('"workflow_state_after": "workflow:review"', audit)
         self.assertEqual(labels, ["workflow:review"])
         self.assertTrue(all(path.endswith("/comments") for path, _ in writes))
+
+    def test_native_assignment_emits_completed_status_without_changing_ready_record(self):
+        ready = {**self.ready(), "prior_state": "workflow:ready",
+                 "new_state": "workflow:human-decision-required"}
+        packet = {"issue_id": 93, "base_branch": "dev", "base_sha": "approved-base",
+                  "scope_profile": "PERSONAL_SPOT_RESEARCH", "architecture_state": "FROZEN",
+                  "agent_role": "Trading Intelligence Engineer", "satisfied_dependencies": [],
+                  "boundaries": ["bounded work"], "stop_conditions": ["scope expansion"]}
+        comments = [{"id": 1, "user": {"login": "AnjanaKavinda"},
+                     "body": "EXECUTION_PACKET " + json.dumps(packet)},
+                    self.comment(ready, ready["dispatch_key"])]
+        original_ready_body = comments[1]["body"]
+        labels = ["workflow:human-decision-required"]
+        issue = {"number": 93, "state": "open",
+                 "labels": [{"name": labels[0]}]}
+
+        def fake_get(path):
+            return comments if path.endswith("/comments") else issue
+
+        def fake_write(path, *args):
+            if path.endswith("/comments"):
+                body = next(value[5:] for value in args if value.startswith("body="))
+                comments.append({"user": {"login": "github-actions[bot]"}, "body": body})
+            else:
+                issue["labels"] = [{"name": "workflow:agent-running"}]
+
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps({
+                "action": "assigned", "issue": {"number": 93},
+                "assignee": {"login": "Copilot", "type": "Bot", "id": 198982749}}))
+            env = {"GITHUB_REPOSITORY": "owner/repo", "GITHUB_EVENT_PATH": str(event_path),
+                   "GITHUB_ACTOR": "AnjanaKavinda", "GITHUB_SHA": "current-workflow-head",
+                   "GOVERNED_AUTOMATION_ENABLED": "true", "GOVERNED_DISPATCH_ACTORS": "AnjanaKavinda",
+                   "GOVERNED_IMPLEMENTER_SESSION": "configured",
+                   "GOVERNED_AUDIT_PATH": str(Path(directory) / "audit.jsonl")}
+            with patch.dict(os.environ, env), patch.object(orchestrate_issue, "gh", side_effect=fake_get), \
+                    patch.object(orchestrate_issue, "gh_mutate", side_effect=fake_write), \
+                    patch.object(orchestrate_issue, "gh_delete"):
+                self.assertEqual(orchestrate_issue.main(), 0)
+        completion = json.loads(comments[-1]["body"].splitlines()[1].split(" ", 1)[1])
+        self.assertEqual(completion["outcome"], "assigned")
+        self.assertEqual(completion["reason"], "native-copilot-assignment-confirmed")
+        self.assertEqual(completion["new_state"], "workflow:agent-running")
+        self.assertFalse(completion["confirmation_only"])
+        self.assertEqual(completion["base_sha"], packet["base_sha"])
+        self.assertEqual(completion["commit_sha"], "current-workflow-head")
+        self.assertEqual(completion["dispatch_key"], ready["dispatch_key"])
+        self.assertEqual(comments[1]["body"], original_ready_body)
+        self.assertEqual(issue["labels"], [{"name": "workflow:agent-running"}])
 
     def test_confirmation_state_requires_open_issue_with_one_active_state(self):
         for state in ("workflow:ready", "workflow:agent-running", "workflow:review",

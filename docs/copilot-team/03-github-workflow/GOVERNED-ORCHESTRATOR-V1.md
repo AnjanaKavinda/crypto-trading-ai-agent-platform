@@ -62,6 +62,18 @@ It does not select a custom profile, assign/reassign Copilot, start a new
 implementation, refresh scope, waive review, or merge. The command is ignored
 on PRs and when posted by anyone other than the configured human owner.
 
+New `ASSIGNMENT_COMPLETED` comments report `outcome: assigned` and
+`reason: native-copilot-assignment-confirmed`, not the ready handoff's waiting
+status. They preserve the dispatch/base/prompt bindings and record the actual
+confirmation timestamp and workflow commit. `confirmation_only: true` reports
+the unchanged prior/new state; native assignment reports the agent-running
+transition. Historical comments are not rewritten.
+
+If `dev` advances before implementation starts, finish merging controller fixes
+first, then refresh the owner Execution Packet and generate a new `DISPATCH_READY`
+handoff against that final base. Confirmation of an older assignment does not
+refresh its base or authorize a different dispatch.
+
 Repository protection/ruleset verification is currently unavailable under the
 present GitHub repository/account capability. The incomplete
 `setup-branch-rulesets.ps1` is not evidence of active protection. Until a
