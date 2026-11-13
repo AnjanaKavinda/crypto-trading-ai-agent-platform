@@ -217,14 +217,35 @@ def completed_assignment_keys(comments: list[dict]) -> set[str]:
     """Return only dispatches with persisted assignment completion evidence."""
     completed: set[str] = set()
     for comment in comments:
-        body = comment.get("body", "")
         actor = (comment.get("user") or {}).get("login")
-        if (actor not in TRUSTED_COMPLETION_ACTORS or MARKER not in body
-                or "ASSIGNMENT_COMPLETED" not in body):
+        lines = (comment.get("body") or "").splitlines()
+        prefix = "ASSIGNMENT_COMPLETED "
+        if (actor not in TRUSTED_COMPLETION_ACTORS or len(lines) < 2
+                or lines[0] != MARKER or not lines[1].startswith(prefix)):
             continue
-        marker = "dispatch_key:"
-        if marker in body:
-            completed.add(body.split(marker, 1)[1].split()[0])
+        payload = lines[1][len(prefix):]
+        legacy = re.fullmatch(r"dispatch_key:([^\s]+)", payload)
+        if legacy and len(lines) == 2:
+            completed.add(legacy[1])
+            continue
+        try:
+            record = json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise GovernanceError("assignment completion JSON is invalid") from error
+        if not isinstance(record, dict):
+            raise GovernanceError("assignment completion must be a JSON object")
+        footers = [
+            line[len("dispatch_key:"):]
+            for line in lines[2:] if line.startswith("dispatch_key:")
+        ]
+        if (len(footers) != 1 or re.fullmatch(r"[^\s]+", footers[0]) is None):
+            raise GovernanceError("assignment completion footer is missing or ambiguous")
+        key = footers[0]
+        # Early completion records bind the key through correlation_id only.
+        if (record.get("dispatch_key", record.get("correlation_id")) != key
+                or record.get("correlation_id", key) != key):
+            raise GovernanceError("assignment completion key does not match its footer")
+        completed.add(key)
     return completed
 
 

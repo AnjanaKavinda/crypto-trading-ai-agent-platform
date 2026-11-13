@@ -2128,6 +2128,59 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
         self.assertEqual(result, ready)
         self.assertEqual(result["review_tier"], "R3")
 
+    def test_ready_prompt_cannot_complete_a_refreshed_dispatch(self):
+        old = self.ready()
+        prompt = "Read the latest DISPATCH_READY and ASSIGNMENT_COMPLETED records."
+        latest = orchestrate_issue.build_dispatch_ready(
+            {**self.payload(), "dispatch_key": "b" * 64, "correlation_id": "b" * 64,
+             "prompt_hash": sha256(prompt.encode()).hexdigest()},
+            issue_id=93, base_branch="dev", agent="Trading Intelligence Engineer",
+            prompt=prompt)
+        comments = [
+            self.comment(old, old["dispatch_key"]),
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+                     f"{json.dumps(old)}\ndispatch_key:{old['dispatch_key']}"},
+            self.comment(latest, latest["dispatch_key"]),
+        ]
+        self.assertEqual(
+            orchestrate_issue.completed_assignment_keys(comments),
+            {old["dispatch_key"]})
+        self.assertNotIn("_completed", self.validate(comments))
+        self.assertTrue(can_dispatch(
+            latest["dispatch_key"],
+            orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_completion_binds_its_footer_not_keys_in_its_prompt(self):
+        ready = {**self.ready(), "prompt": "Use dispatch_key:quoted-key"}
+        key = ready["dispatch_key"]
+        for record in (ready, {name: value for name, value in ready.items()
+                              if name != "dispatch_key"}):
+            with self.subTest(legacy="dispatch_key" not in record):
+                comment = {"user": {"login": "github-actions[bot]"},
+                           "body": f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+                                   f"{json.dumps(record)}\ndispatch_key:{key}"}
+                self.assertEqual(
+                    orchestrate_issue.completed_assignment_keys([comment]), {key})
+
+    def test_malformed_completion_evidence_fails_closed(self):
+        ready = self.ready()
+        key = ready["dispatch_key"]
+        prefix = f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+        bodies = [
+            prefix + f"not-json\ndispatch_key:{key}",
+            prefix + f"[]\ndispatch_key:{key}",
+            prefix + json.dumps(ready),
+            prefix + json.dumps(ready) + f"\ndispatch_key:{key}\ndispatch_key:{key}",
+            prefix + json.dumps(ready) + "\ndispatch_key:wrong-key",
+            prefix + json.dumps({**ready, "correlation_id": "wrong-key"})
+            + f"\ndispatch_key:{key}",
+        ]
+        for body in bodies:
+            with self.subTest(body=body), self.assertRaises(GovernanceError):
+                orchestrate_issue.completed_assignment_keys(
+                    [{"user": {"login": "github-actions[bot]"}, "body": body}])
+
     def test_producer_refuses_missing_or_inconsistent_key_or_prompt(self):
         for field, value in (("dispatch_key", None), ("base_sha", None), ("correlation_id", "wrong"),
                              ("prompt_hash", "wrong")):
@@ -2193,6 +2246,8 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
 
     def test_confirmation_entrypoint_repairs_legacy_assignment_without_relaunch(self):
         ready = self.ready()
+        ready["prompt"] = "Read the DISPATCH_READY and ASSIGNMENT_COMPLETED records."
+        ready["prompt_hash"] = sha256(ready["prompt"].encode()).hexdigest()
         key = ready.pop("dispatch_key")
         ready.pop("base_sha")
         ready["commit_sha"] = "approved-base"
@@ -2243,7 +2298,9 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
                     self.assertFalse((Path(directory) / "audit.jsonl").exists())
                 labels[:] = ["workflow:review"]
                 self.assertEqual(orchestrate_issue.main(), 0)
-                self.assertIn("ASSIGNMENT_COMPLETED", comments[-1]["body"])
+                self.assertEqual(len(writes), 1)
+                self.assertTrue(comments[-1]["body"].startswith(
+                    f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "))
                 self.assertIn(key, comments[-1]["body"])
                 count = len(writes)
                 self.assertEqual(orchestrate_issue.main(), 0)
