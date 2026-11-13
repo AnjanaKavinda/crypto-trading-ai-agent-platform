@@ -2128,6 +2128,59 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
         self.assertEqual(result, ready)
         self.assertEqual(result["review_tier"], "R3")
 
+    def test_ready_prompt_cannot_complete_a_refreshed_dispatch(self):
+        old = self.ready()
+        prompt = "Read the latest DISPATCH_READY and ASSIGNMENT_COMPLETED records."
+        latest = orchestrate_issue.build_dispatch_ready(
+            {**self.payload(), "dispatch_key": "b" * 64, "correlation_id": "b" * 64,
+             "prompt_hash": sha256(prompt.encode()).hexdigest()},
+            issue_id=93, base_branch="dev", agent="Trading Intelligence Engineer",
+            prompt=prompt)
+        comments = [
+            self.comment(old, old["dispatch_key"]),
+            {"user": {"login": "github-actions[bot]"},
+             "body": f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+                     f"{json.dumps(old)}\ndispatch_key:{old['dispatch_key']}"},
+            self.comment(latest, latest["dispatch_key"]),
+        ]
+        self.assertEqual(
+            orchestrate_issue.completed_assignment_keys(comments),
+            {old["dispatch_key"]})
+        self.assertNotIn("_completed", self.validate(comments))
+        self.assertTrue(can_dispatch(
+            latest["dispatch_key"],
+            orchestrate_issue.completed_assignment_keys(comments)))
+
+    def test_completion_binds_its_footer_not_keys_in_its_prompt(self):
+        ready = {**self.ready(), "prompt": "Use dispatch_key:quoted-key"}
+        key = ready["dispatch_key"]
+        for record in (ready, {name: value for name, value in ready.items()
+                              if name != "dispatch_key"}):
+            with self.subTest(legacy="dispatch_key" not in record):
+                comment = {"user": {"login": "github-actions[bot]"},
+                           "body": f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+                                   f"{json.dumps(record)}\ndispatch_key:{key}"}
+                self.assertEqual(
+                    orchestrate_issue.completed_assignment_keys([comment]), {key})
+
+    def test_malformed_completion_evidence_fails_closed(self):
+        ready = self.ready()
+        key = ready["dispatch_key"]
+        prefix = f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "
+        bodies = [
+            prefix + f"not-json\ndispatch_key:{key}",
+            prefix + f"[]\ndispatch_key:{key}",
+            prefix + json.dumps(ready),
+            prefix + json.dumps(ready) + f"\ndispatch_key:{key}\ndispatch_key:{key}",
+            prefix + json.dumps(ready) + "\ndispatch_key:wrong-key",
+            prefix + json.dumps({**ready, "correlation_id": "wrong-key"})
+            + f"\ndispatch_key:{key}",
+        ]
+        for body in bodies:
+            with self.subTest(body=body), self.assertRaises(GovernanceError):
+                orchestrate_issue.completed_assignment_keys(
+                    [{"user": {"login": "github-actions[bot]"}, "body": body}])
+
     def test_producer_refuses_missing_or_inconsistent_key_or_prompt(self):
         for field, value in (("dispatch_key", None), ("base_sha", None), ("correlation_id", "wrong"),
                              ("prompt_hash", "wrong")):
@@ -2193,6 +2246,8 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
 
     def test_confirmation_entrypoint_repairs_legacy_assignment_without_relaunch(self):
         ready = self.ready()
+        ready["prompt"] = "Read the DISPATCH_READY and ASSIGNMENT_COMPLETED records."
+        ready["prompt_hash"] = sha256(ready["prompt"].encode()).hexdigest()
         key = ready.pop("dispatch_key")
         ready.pop("base_sha")
         ready["commit_sha"] = "approved-base"
@@ -2243,8 +2298,16 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
                     self.assertFalse((Path(directory) / "audit.jsonl").exists())
                 labels[:] = ["workflow:review"]
                 self.assertEqual(orchestrate_issue.main(), 0)
-                self.assertIn("ASSIGNMENT_COMPLETED", comments[-1]["body"])
+                self.assertEqual(len(writes), 1)
+                self.assertTrue(comments[-1]["body"].startswith(
+                    f"{orchestrate_issue.MARKER}\nASSIGNMENT_COMPLETED "))
                 self.assertIn(key, comments[-1]["body"])
+                completion = json.loads(comments[-1]["body"].splitlines()[1].split(" ", 1)[1])
+                self.assertEqual(completion["outcome"], "assigned")
+                self.assertEqual(completion["reason"], "native-copilot-assignment-confirmed")
+                self.assertTrue(completion["confirmation_only"])
+                self.assertEqual(completion["prior_state"], "workflow:review")
+                self.assertEqual(completion["new_state"], "workflow:review")
                 count = len(writes)
                 self.assertEqual(orchestrate_issue.main(), 0)
                 self.assertEqual(len(writes), count)
@@ -2265,6 +2328,56 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
         self.assertEqual(labels, ["workflow:review"])
         self.assertTrue(all(path.endswith("/comments") for path, _ in writes))
 
+    def test_native_assignment_emits_completed_status_without_changing_ready_record(self):
+        ready = {**self.ready(), "prior_state": "workflow:ready",
+                 "new_state": "workflow:human-decision-required"}
+        packet = {"issue_id": 93, "base_branch": "dev", "base_sha": "approved-base",
+                  "scope_profile": "PERSONAL_SPOT_RESEARCH", "architecture_state": "FROZEN",
+                  "agent_role": "Trading Intelligence Engineer", "satisfied_dependencies": [],
+                  "boundaries": ["bounded work"], "stop_conditions": ["scope expansion"]}
+        comments = [{"id": 1, "user": {"login": "AnjanaKavinda"},
+                     "body": "EXECUTION_PACKET " + json.dumps(packet)},
+                    self.comment(ready, ready["dispatch_key"])]
+        original_ready_body = comments[1]["body"]
+        labels = ["workflow:human-decision-required"]
+        issue = {"number": 93, "state": "open",
+                 "labels": [{"name": labels[0]}]}
+
+        def fake_get(path):
+            return comments if path.endswith("/comments") else issue
+
+        def fake_write(path, *args):
+            if path.endswith("/comments"):
+                body = next(value[5:] for value in args if value.startswith("body="))
+                comments.append({"user": {"login": "github-actions[bot]"}, "body": body})
+            else:
+                issue["labels"] = [{"name": "workflow:agent-running"}]
+
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps({
+                "action": "assigned", "issue": {"number": 93},
+                "assignee": {"login": "Copilot", "type": "Bot", "id": 198982749}}))
+            env = {"GITHUB_REPOSITORY": "owner/repo", "GITHUB_EVENT_PATH": str(event_path),
+                   "GITHUB_ACTOR": "AnjanaKavinda", "GITHUB_SHA": "current-workflow-head",
+                   "GOVERNED_AUTOMATION_ENABLED": "true", "GOVERNED_DISPATCH_ACTORS": "AnjanaKavinda",
+                   "GOVERNED_IMPLEMENTER_SESSION": "configured",
+                   "GOVERNED_AUDIT_PATH": str(Path(directory) / "audit.jsonl")}
+            with patch.dict(os.environ, env), patch.object(orchestrate_issue, "gh", side_effect=fake_get), \
+                    patch.object(orchestrate_issue, "gh_mutate", side_effect=fake_write), \
+                    patch.object(orchestrate_issue, "gh_delete"):
+                self.assertEqual(orchestrate_issue.main(), 0)
+        completion = json.loads(comments[-1]["body"].splitlines()[1].split(" ", 1)[1])
+        self.assertEqual(completion["outcome"], "assigned")
+        self.assertEqual(completion["reason"], "native-copilot-assignment-confirmed")
+        self.assertEqual(completion["new_state"], "workflow:agent-running")
+        self.assertFalse(completion["confirmation_only"])
+        self.assertEqual(completion["base_sha"], packet["base_sha"])
+        self.assertEqual(completion["commit_sha"], "current-workflow-head")
+        self.assertEqual(completion["dispatch_key"], ready["dispatch_key"])
+        self.assertEqual(comments[1]["body"], original_ready_body)
+        self.assertEqual(issue["labels"], [{"name": "workflow:agent-running"}])
+
     def test_confirmation_state_requires_open_issue_with_one_active_state(self):
         for state in ("workflow:ready", "workflow:agent-running", "workflow:review",
                       "workflow:changes-requested"):
@@ -2273,3 +2386,55 @@ class GeneratedDispatchKeyRegressionTests(unittest.TestCase):
             with self.assertRaises(GovernanceError):
                 orchestrate_issue.confirmation_workflow_state({**issue, "state": "closed"})
 
+
+
+class WorkflowReportingTests(unittest.TestCase):
+    def run_reporting_step(self, workflow_name, step_name, governance_rc=0):
+        workflow = (Path(__file__).parents[1] / "workflows" / workflow_name).read_text()
+        step = workflow.split("- name: " + step_name, 1)[1].split("\n      - name:", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "reviewer-result.json").write_text('{}')
+            commands = {
+                "gh": 'printf "%s\\n" "$*" >> "$STATUS_LOG"; echo "{}"\n',
+                "jq": 'case "$*" in *".head.sha"*) echo exact-head;; *".disposition"*) echo changes-requested;; *) echo "[{}]";; esac\n',
+                "python": 'case "$1" in *run-pr-governance.py) exit "$GOVERNANCE_RC";; *transition-pr.py) exit 17;; *) exit 99;; esac\n',
+            }
+            for name, content in commands.items():
+                path = root / name
+                path.write_text("#!/bin/sh\n" + content)
+                path.chmod(0o755)
+            script = script.replace("/tmp/", directory + "/").replace("${{ github.repository }}", "owner/repo")
+            environment = dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH'],
+                STATUS_LOG=str(root / 'status.log'), GOVERNANCE_RC=str(governance_rc),
+                GITHUB_STEP_SUMMARY=str(root / 'summary.md'), OWNER_DIRECT='true', REQUIRED_TIER='R3')
+            result = subprocess.run(['bash', '-e', '-c', script], env=environment,
+                                    capture_output=True, text=True, timeout=10)
+            statuses = (root / 'status.log').read_text() if (root / 'status.log').exists() else ''
+            summary = (root / 'summary.md').read_text() if (root / 'summary.md').exists() else ''
+            return result, statuses, summary
+
+    def test_approved_review_survives_bookkeeping_failure(self):
+        result, statuses, summary = self.run_reporting_step(
+            'governed-independent-review.yml', 'Consume signed provenance and publish governance gate')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('state=success', statuses)
+        self.assertNotIn('state=failure', statuses)
+        self.assertIn('::warning::', result.stdout)
+        self.assertIn('manual state reconciliation', summary)
+
+    def test_failed_review_remains_failed(self):
+        result, statuses, _ = self.run_reporting_step(
+            'governed-independent-review.yml', 'Consume signed provenance and publish governance gate', 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('state=failure', statuses)
+        self.assertNotIn('state=success', statuses)
+
+    def test_post_close_bookkeeping_failure_is_diagnostic(self):
+        result, statuses, summary = self.run_reporting_step(
+            'copilot-pr-lifecycle.yml', 'Transition closed governed PR')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(statuses, '')
+        self.assertIn('::warning::', result.stdout)
+        self.assertIn('manual state reconciliation', summary)

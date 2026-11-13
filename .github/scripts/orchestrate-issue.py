@@ -217,14 +217,35 @@ def completed_assignment_keys(comments: list[dict]) -> set[str]:
     """Return only dispatches with persisted assignment completion evidence."""
     completed: set[str] = set()
     for comment in comments:
-        body = comment.get("body", "")
         actor = (comment.get("user") or {}).get("login")
-        if (actor not in TRUSTED_COMPLETION_ACTORS or MARKER not in body
-                or "ASSIGNMENT_COMPLETED" not in body):
+        lines = (comment.get("body") or "").splitlines()
+        prefix = "ASSIGNMENT_COMPLETED "
+        if (actor not in TRUSTED_COMPLETION_ACTORS or len(lines) < 2
+                or lines[0] != MARKER or not lines[1].startswith(prefix)):
             continue
-        marker = "dispatch_key:"
-        if marker in body:
-            completed.add(body.split(marker, 1)[1].split()[0])
+        payload = lines[1][len(prefix):]
+        legacy = re.fullmatch(r"dispatch_key:([^\s]+)", payload)
+        if legacy and len(lines) == 2:
+            completed.add(legacy[1])
+            continue
+        try:
+            record = json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise GovernanceError("assignment completion JSON is invalid") from error
+        if not isinstance(record, dict):
+            raise GovernanceError("assignment completion must be a JSON object")
+        footers = [
+            line[len("dispatch_key:"):]
+            for line in lines[2:] if line.startswith("dispatch_key:")
+        ]
+        if (len(footers) != 1 or re.fullmatch(r"[^\s]+", footers[0]) is None):
+            raise GovernanceError("assignment completion footer is missing or ambiguous")
+        key = footers[0]
+        # Early completion records bind the key through correlation_id only.
+        if (record.get("dispatch_key", record.get("correlation_id")) != key
+                or record.get("correlation_id", key) != key):
+            raise GovernanceError("assignment completion key does not match its footer")
+        completed.add(key)
     return completed
 
 
@@ -414,6 +435,16 @@ def main() -> int:
         confirmation_state = confirmation_workflow_state(issue) if confirm_existing else None
         if record.get("_completed"):
             return 0
+        completion = {
+            **record,
+            "outcome": "assigned",
+            "reason": "native-copilot-assignment-confirmed",
+            "confirmation_only": confirm_existing,
+            "new_state": confirmation_state if confirm_existing else "workflow:agent-running",
+            **({"prior_state": confirmation_state} if confirm_existing else {}),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+        }
         append_governance_event(
             AppendOnlyAudit(), "assignment",
             {"issue_id": int(issue_id), "correlation_id": record["dispatch_key"],
@@ -427,13 +458,13 @@ def main() -> int:
              "outcome": "assigned",
              **({"confirmation_only": True, "workflow_state_before": confirmation_state,
                  "workflow_state_after": confirmation_state} if confirm_existing else {}),
-             "timestamp": datetime.now(timezone.utc).isoformat(),
-             "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+             "timestamp": completion["timestamp"],
+             "commit_sha": completion["commit_sha"],
              "implementer_session_id": record["implementer_session_id"]},
             os.environ.get("GOVERNED_AUDIT_PATH", f"/tmp/governed-audit-{issue_id}.jsonl"))
         gh_mutate(f"{root}/issues/{issue_id}/comments", "-f",
                   f"body={MARKER}\nASSIGNMENT_COMPLETED "
-                  f"{json.dumps(record, sort_keys=True)}\n"
+                  f"{json.dumps(completion, sort_keys=True)}\n"
                   f"dispatch_key:{record['dispatch_key']}")
         if confirm_existing:
             # Recording a historical native assignment does not authorize a

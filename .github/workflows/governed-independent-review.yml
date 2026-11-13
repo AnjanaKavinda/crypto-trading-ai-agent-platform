@@ -563,8 +563,11 @@ jobs:
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
               -f state=success -f context=governance-gate \
               -f description='Signed independent review approved'
-            TARGET_STATE=workflow:ready-to-merge \
-              python .github/scripts/transition-pr.py
+            if ! TARGET_STATE=workflow:ready-to-merge \
+              python .github/scripts/transition-pr.py; then
+              echo '::warning::Signed review approved; lifecycle bookkeeping failed. See workflow logs.'
+              echo 'Signed review approved. Lifecycle bookkeeping failed; manual state reconciliation is needed. Human owner merge remains mandatory.' >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             gh api --method POST "repos/${{ github.repository }}/statuses/$head_sha" \
               -f state=failure -f context=governance-gate \

@@ -34,6 +34,14 @@ both controller versions are V2, and normal assignment/prompt checks pass.
 Owner-authored copies, explicit null keys, conflicting/duplicate footers and
 tampered prompts are rejected. Historical comments are never rewritten.
 
+Completion evidence must be a trusted bot comment beginning with the controller
+marker followed by an `ASSIGNMENT_COMPLETED` record. Mentions or quoted examples
+inside `DISPATCH_READY` prompts do not count as completion. JSON completions
+require one standalone dispatch-key footer matching the record's key and
+correlation ID; historical correlation-only records and compact key-only
+completions remain supported. Malformed or conflicting completion evidence
+blocks processing rather than suppressing a legitimate assignment.
+
 New records separately pin `base_sha` from the checked owner Execution Packet;
 `commit_sha` remains workflow provenance and may refer to a different default
 branch. Recovery compares the dispatched base, not the workflow SHA. Legacy
@@ -53,6 +61,18 @@ its audit; it does not advance the state machine or authorize a relaunch.
 It does not select a custom profile, assign/reassign Copilot, start a new
 implementation, refresh scope, waive review, or merge. The command is ignored
 on PRs and when posted by anyone other than the configured human owner.
+
+New `ASSIGNMENT_COMPLETED` comments report `outcome: assigned` and
+`reason: native-copilot-assignment-confirmed`, not the ready handoff's waiting
+status. They preserve the dispatch/base/prompt bindings and record the actual
+confirmation timestamp and workflow commit. `confirmation_only: true` reports
+the unchanged prior/new state; native assignment reports the agent-running
+transition. Historical comments are not rewritten.
+
+If `dev` advances before implementation starts, finish merging controller fixes
+first, then refresh the owner Execution Packet and generate a new `DISPATCH_READY`
+handoff against that final base. Confirmation of an older assignment does not
+refresh its base or authorize a different dispatch.
 
 Repository protection/ruleset verification is currently unavailable under the
 present GitHub repository/account capability. The incomplete
