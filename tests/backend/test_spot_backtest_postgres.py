@@ -79,7 +79,11 @@ from trading_platform_api.strategy.registry import (
 )
 from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegistryStore
 from trading_platform_api.strategy_api import _compose_persisted_spot_debate
-from trading_platform_api.validation.contracts import DataPartition, PartitionPurpose
+from trading_platform_api.validation.contracts import (
+    CheckOutcome,
+    DataPartition,
+    PartitionPurpose,
+)
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
 from trading_platform_api.validation.cost_models import (
     CostSourceKind,
@@ -138,7 +142,9 @@ from trading_platform_api.validation.spot_walk_forward import (
     run_spot_walk_forward,
 )
 from trading_platform_api.validation.walk_forward_contracts_v2 import (
+    FoldTerminalState,
     WalkForwardMode,
+    WalkForwardOutcome,
     WalkForwardPlanSpecV2,
     generate_walk_forward_folds,
 )
@@ -1894,21 +1900,15 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert all(
                     item.oos_result is not None for item in walk_result.observations
                 )
-                if synthetic_ready:
-                    assert all(
-                        item.oos_result.sample_size > 0
-                        for item in walk_result.observations
-                    )
-                else:
-                    assert all(
-                        item.oos_result.sample_size == 0
-                        for item in walk_result.observations
-                    )
-                    assert all(
-                        "INSUFFICIENT_OOS_TRADE_SAMPLE" in item.oos_result.reason_codes
-                        for item in walk_result.observations
-                    )
-
+                assert walk_result.outcome is WalkForwardOutcome.INCONCLUSIVE
+                for observation in walk_result.observations:
+                    result = observation.oos_result
+                    assert result is not None
+                    assert result.sample_size == 0
+                    assert result.outcome is OOSOutcome.INCONCLUSIVE
+                    assert result.sample_sufficiency is CheckOutcome.INCONCLUSIVE
+                    assert observation.state is FoldTerminalState.INCONCLUSIVE
+                    assert "INSUFFICIENT_OOS_TRADE_SAMPLE" in result.reason_codes
                 no_setup_condition = replace(
                     condition, condition_id=uuid4(), expected_values=("never",)
                 )
