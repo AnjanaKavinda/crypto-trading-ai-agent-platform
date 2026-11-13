@@ -290,7 +290,24 @@ def test_decimal_aggregates_preserve_missing_coverage_and_consistency():
     for fold_id, amount in zip(ids, values, strict=True):
         metrics = []
         for name, unit in UNITS.items():
-            if name == "net_realized_profit" and amount is not None:
+            if name == "total_trades":
+                metrics.append(
+                    WalkForwardMetricV2(
+                        name,
+                        MetricState.AVAILABLE,
+                        None,
+                        MetricValue(
+                            name,
+                            D(3) if amount is not None else D(0),
+                            unit,
+                            METRICS_METHOD,
+                        ),
+                        unit,
+                        3 if amount is not None else 0,
+                        (),
+                    )
+                )
+            elif name == "net_realized_profit" and amount is not None:
                 metrics.append(
                     WalkForwardMetricV2(
                         name,
@@ -335,6 +352,13 @@ def test_decimal_aggregates_preserve_missing_coverage_and_consistency():
     assert net.maximum_fold_id == ids[2]
     assert net.best_fold_id == ids[2]
     assert net.worst_fold_id == ids[1]
+    assert trades.available_count == 4
+    assert (trades.mean, trades.median, trades.minimum, trades.maximum) == (
+        D("2.25"),
+        D(3),
+        D(0),
+        D(3),
+    )
     assert trades.direction is MetricDirection.DESCRIPTIVE
     assert trades.best_fold_id is trades.worst_fold_id is None
     assert isinstance(consistency, WalkForwardConsistencyV2)

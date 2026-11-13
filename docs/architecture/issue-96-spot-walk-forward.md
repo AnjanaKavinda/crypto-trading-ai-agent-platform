@@ -26,8 +26,10 @@ result = resolve_spot_walk_forward_result(bundle, journal=walk_journal)
 ```
 
 The runnable end-to-end example builds those values from the accepted archived
-Spot fixture and exercises both a synthetic positive-analysis case and the
-production-RSI zero-trade case:
+Spot fixture and exercises both a synthetic positive two-fold walk-forward case
+and the production-RSI zero-trade case. Each scored fold uses its own archived
+analysis and execution dataset cutoff; a separate stale/mismatched-evidence case
+verifies that no trades are fabricated:
 
 ```sh
 LINEAGE_TEST_DATABASE_URL=postgresql+asyncpg://localhost/lineage_test \

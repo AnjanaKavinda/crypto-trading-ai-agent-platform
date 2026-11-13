@@ -1113,8 +1113,8 @@ def _aggregate(
                     UUID(min_id),
                     maximum,
                     UUID(max_id),
-                    UUID(best_id),
-                    UUID(worst_id),
+                    UUID(best_id) if best_id is not None else None,
+                    UUID(worst_id) if worst_id is not None else None,
                 )
             )
         else:

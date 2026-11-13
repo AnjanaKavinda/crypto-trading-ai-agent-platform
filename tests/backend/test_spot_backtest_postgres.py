@@ -800,7 +800,7 @@ async def _development_oos(
     )
     _assert_oos_contract_rejections(resolved)
     _assert_selection_contract_rejections(resolved)
-    return result
+    return result, (requests[1, D("1")], requests[2, D("1")])
 
 
 def _assert_oos_contract_rejections(result):
@@ -1549,7 +1549,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 # experiment, not the absence of off-system owner research.
                 recorded_at = request.created_at + timedelta(hours=2)
                 oos_metrics_policy = replace(metrics_policy, min_trade_sample=1)
-                development = await _development_oos(
+                development, archived_fold_requests = await _development_oos(
                     request,
                     oos_metrics_policy,
                     binding,
@@ -1909,6 +1909,72 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     assert result.sample_sufficiency is CheckOutcome.INCONCLUSIVE
                     assert observation.state is FoldTerminalState.INCONCLUSIVE
                     assert "INSUFFICIENT_OOS_TRADE_SAMPLE" in result.reason_codes
+
+                archived_walk_journal = OOSResearchJournal(
+                    journal_id=uuid4(),
+                    authority=recorder.snapshot.authority,
+                    clock=lambda: recorded_at,
+                    declared_complete=True,
+                )
+                archived_walk_spec = replace(
+                    walk_spec,
+                    scope=replace(walk_scope, end=policy.period_start + 15 * STEP),
+                    training_bars=3,
+                    heldout_bars=5,
+                    step_bars=5,
+                    journal_id=archived_walk_journal.snapshot.journal_id,
+                )
+                archived_walk_bundle = await run_spot_walk_forward(
+                    journal=archived_walk_journal,
+                    spec=archived_walk_spec,
+                    requests=tuple(
+                        SpotWalkForwardFoldRequests(
+                            (SpotWalkForwardCandidateRequests(None, None, item),)
+                        )
+                        for item in archived_fold_requests
+                    ),
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                archived_walk_result = resolve_spot_walk_forward_result(
+                    archived_walk_bundle, journal=archived_walk_journal
+                )
+                assert archived_walk_result.outcome is (
+                    WalkForwardOutcome.OBSERVED
+                    if synthetic_ready
+                    else WalkForwardOutcome.INCONCLUSIVE
+                ), archived_walk_result.reason_codes
+                assert len(archived_walk_result.observations) == 2
+                for observation, fold_request in zip(
+                    archived_walk_result.observations,
+                    archived_fold_requests,
+                    strict=True,
+                ):
+                    result = observation.oos_result
+                    assert result is not None
+                    assert result.sample_size == int(synthetic_ready)
+                    assert observation.state is (
+                        FoldTerminalState.OBSERVED
+                        if synthetic_ready
+                        else FoldTerminalState.INCONCLUSIVE
+                    )
+                    assert result.runs[0].backtest.dataset_sha256 == (
+                        fold_request.execution_dataset_sha256
+                    )
+                    assert result.runs[0].backtest.manifest_sha256 == (
+                        fold_request.execution_manifest_sha256
+                    )
+                if synthetic_ready:
+                    trade_counts = next(
+                        item
+                        for item in archived_walk_result.aggregates
+                        if item.name == "total_trades"
+                    )
+                    assert trade_counts.available_count == 2
+                    assert trade_counts.mean == trade_counts.median == D("1")
+                    assert trade_counts.population_standard_deviation == D("0")
+                    assert trade_counts.minimum == trade_counts.maximum == D("1")
                 no_setup_condition = replace(
                     condition, condition_id=uuid4(), expected_values=("never",)
                 )
