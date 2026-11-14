@@ -589,3 +589,14 @@ optimal parameter is selected. Unknown versions fail closed. V2 is not accepted
 by C-030/qualification consumers and cannot be retained by the lineage store;
 codec support is not storage authority. No migration or DDL.
 [ADR](../adr/ADR-0025-spot-sensitivity-observation-boundary.md).
+
+## ADR-0026 — C-074
+
+C-074v1 and its consumers remain unchanged. Observation-only Spot schema 2
+binds a frozen ordered request/policy plan to each exact C-027v3 replay, C-094
+report, and archived decision-time C-005/C-006v5/C-007v4/C-008 evidence closure.
+Required contexts remain explicit, with all additional observed contexts
+retained in first-occurrence order. Metrics preserve independent availability,
+units, samples, warnings, and reasons; no aggregation pools samples or returns.
+Unknown versions fail closed, and no C-030/C-028 qualification or lineage
+retention authority is added. [ADR](../adr/ADR-0026-spot-regime-validation-observation-boundary.md).
