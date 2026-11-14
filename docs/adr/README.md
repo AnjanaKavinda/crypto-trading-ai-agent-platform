@@ -34,6 +34,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0022 | [Spot OOS protocol and result boundary](ADR-0022-spot-oos-protocol-and-result-boundary.md) | Accepted | 2026-11-11 | AnjanaKavinda (explicit owner approval) | — | Additive C-071 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
 | ADR-0023 | [Spot walk-forward observation boundary](ADR-0023-spot-walk-forward-observation-boundary.md) | Accepted | 2026-11-13 | Platform Architect / AnjanaKavinda (owner-assigned #96 scope) | — | Additive C-029 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
 | ADR-0024 | [Spot Monte Carlo observation boundary](ADR-0024-spot-monte-carlo-observation-boundary.md) | Accepted | 2026-11-14 | Platform Architect / AnjanaKavinda (owner-assigned #97 scope) | — | Additive C-072 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
+| ADR-0025 | [Spot sensitivity observation boundary](ADR-0025-spot-sensitivity-observation-boundary.md) | Accepted | 2026-11-14 | AnjanaKavinda (owner-assigned #98 scope) | — | Additive C-073 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
 
 ## Creating an ADR
 

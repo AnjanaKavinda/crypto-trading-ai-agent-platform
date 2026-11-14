@@ -102,6 +102,10 @@ from trading_platform_api.validation.oos_contracts_v2 import (
     _wire,
     payload,
 )
+from trading_platform_api.validation.sensitivity_contracts_v2 import (
+    SensitivityOutcomeV2,
+    SensitivityScenarioKindV2,
+)
 from trading_platform_api.validation.spot_backtest import (
     SpotBacktestArchivePin,
     SpotBacktestOutcome,
@@ -138,6 +142,10 @@ from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayLimits,
     SpotReplayScope,
     SpotReplayStrategyPin,
+)
+from trading_platform_api.validation.spot_sensitivity import (
+    SpotSensitivityInputError,
+    run_spot_sensitivity,
 )
 from trading_platform_api.validation.spot_walk_forward import (
     SpotWalkForwardCandidateRequests,
@@ -1491,6 +1499,94 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert marked.equity
                 assert marked.get("cumulative_return").state is MetricState.AVAILABLE
                 assert marked.equity[-1].inventory == 0
+                sensitivity_policy = replace(metrics_policy, min_trade_sample=1)
+                sensitivity_report = calculate_spot_performance_metrics(
+                    bundle,
+                    sensitivity_policy,
+                    price_path=bundle.execution_dataset,
+                )
+                sensitivity_as_of = max(
+                    request.result_as_of,
+                    sensitivity_report.policy.report_timestamp,
+                )
+                sensitivity_kwargs = dict(
+                    request=request,
+                    observed_bundle=bundle,
+                    observed_report=sensitivity_report,
+                    parameter_name="quantity",
+                    parameter_grid=(D("0.8"), D("1"), D("1.2")),
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=sensitivity_as_of,
+                    created_at=sensitivity_as_of,
+                )
+                with pytest.raises(SpotSensitivityInputError):
+                    await run_spot_sensitivity(
+                        **dict(
+                            sensitivity_kwargs,
+                            parameter_grid=(D("0.95"), D("1"), D("1.05")),
+                        )
+                    )
+                sensitivity = await run_spot_sensitivity(**sensitivity_kwargs)
+                assert sensitivity.outcome is (
+                    SensitivityOutcomeV2.OBSERVED
+                    if synthetic_ready
+                    else SensitivityOutcomeV2.INCONCLUSIVE
+                ), sensitivity.reasons
+                assert sensitivity.parameter_unit == policy.quantity_unit
+                assert len(sensitivity.scenarios) == 7
+                assert (
+                    tuple(item.parameter_value for item in sensitivity.scenarios[:3])
+                    == sensitivity.parameter_grid
+                )
+                assert tuple(
+                    item.cost_multiplier for item in sensitivity.scenarios[3:]
+                ) == (D("1.25"), D("1.5"), D("2"), D("3"))
+                assert all(
+                    item.kind is SensitivityScenarioKindV2.PARAMETER
+                    and item.cost_assumptions.content_sha256
+                    == bundle.result.cost_assumptions.content_sha256
+                    for item in sensitivity.scenarios[:3]
+                )
+                assert (
+                    len(
+                        {
+                            item.cost_assumptions.content_sha256
+                            for item in sensitivity.scenarios[3:]
+                        }
+                    )
+                    == 4
+                )
+                assert all(
+                    item.metrics_report_id is not None
+                    and item.metrics_report_sha256 is not None
+                    for item in sensitivity.scenarios
+                )
+                if synthetic_ready:
+                    repeated_sensitivity = await run_spot_sensitivity(
+                        **sensitivity_kwargs
+                    )
+                    assert repeated_sensitivity.result_id == sensitivity.result_id
+                    assert repeated_sensitivity.scenarios == sensitivity.scenarios
+                altered_request = replace(
+                    request,
+                    archive_pins=(
+                        replace(request.archive_pins[0], context_sha256="f" * 64),
+                    ),
+                )
+                altered_sensitivity = await run_spot_sensitivity(
+                    **dict(sensitivity_kwargs, request=altered_request)
+                )
+                assert altered_sensitivity.outcome is SensitivityOutcomeV2.FAILED
+                expired_sensitivity = await run_spot_sensitivity(
+                    **dict(
+                        sensitivity_kwargs,
+                        as_of=bundle.result.expires_at,
+                        created_at=bundle.result.expires_at,
+                    )
+                )
+                assert expired_sensitivity.outcome is SensitivityOutcomeV2.FAILED
                 monte_carlo_as_of = max(
                     request.result_as_of, marked.policy.report_timestamp
                 )
