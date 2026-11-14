@@ -21,17 +21,17 @@ from trading_platform_api.lineage.store import references
 from trading_platform_api.validation.contracts import ValidationContractError
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
 from trading_platform_api.validation.regime_contracts_v2 import (
+    WARNINGS,
     DecisionAttributionRuleV2,
     RegimeContextCoverageV2,
     RegimeContextKeyV2,
     RegimeCoverageStateV2,
     RegimeMetricObservationV2,
-    RegimeMetricStateV2,
     RegimeMetricsPolicyV2,
+    RegimeMetricStateV2,
     RegimeObservationStateV2,
     SpotRegimeObservationV2,
     SpotRegimeValidationResultV2,
-    WARNINGS,
 )
 from trading_platform_api.validation.spot_metrics import METHOD as METRICS_METHOD
 from trading_platform_api.validation.spot_metrics import MetricsPolicy

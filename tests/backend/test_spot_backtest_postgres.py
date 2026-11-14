@@ -102,6 +102,10 @@ from trading_platform_api.validation.oos_contracts_v2 import (
     _wire,
     payload,
 )
+from trading_platform_api.validation.regime_contracts_v2 import (
+    RegimeContextKeyV2,
+    RegimeObservationStateV2,
+)
 from trading_platform_api.validation.sensitivity_contracts_v2 import (
     SensitivityOutcomeV2,
     SensitivityScenarioKindV2,
@@ -127,10 +131,6 @@ from trading_platform_api.validation.spot_metrics import (
     calculate_spot_performance_metrics,
 )
 from trading_platform_api.validation.spot_monte_carlo import run_spot_monte_carlo
-from trading_platform_api.validation.regime_contracts_v2 import (
-    RegimeContextKeyV2,
-    RegimeObservationStateV2,
-)
 from trading_platform_api.validation.spot_oos import (
     OOSResearchJournal,
     candidate_from_request,
@@ -139,6 +139,11 @@ from trading_platform_api.validation.spot_oos import (
     run_spot_oos,
     run_spot_oos_partition,
     select_spot_oos_candidate,
+)
+from trading_platform_api.validation.spot_regime_validation import (
+    SpotRegimeRunInput,
+    SpotRegimeValidationPlan,
+    run_spot_regime_validation,
 )
 from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayDecisionRequest,
@@ -150,11 +155,6 @@ from trading_platform_api.validation.spot_replay_inputs import (
 from trading_platform_api.validation.spot_sensitivity import (
     SpotSensitivityInputError,
     run_spot_sensitivity,
-)
-from trading_platform_api.validation.spot_regime_validation import (
-    SpotRegimeRunInput,
-    SpotRegimeValidationPlan,
-    run_spot_regime_validation,
 )
 from trading_platform_api.validation.spot_walk_forward import (
     SpotWalkForwardCandidateRequests,
