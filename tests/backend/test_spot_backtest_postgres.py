@@ -1502,7 +1502,9 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     as_of=monte_carlo_as_of,
                     created_at=monte_carlo_as_of,
                 )
-                assert monte_carlo.outcome is MonteCarloOutcomeV2.INCONCLUSIVE
+                assert monte_carlo.outcome is MonteCarloOutcomeV2.INCONCLUSIVE, (
+                    monte_carlo.reasons
+                )
                 assert monte_carlo.metrics == ()
                 assert "INSUFFICIENT_OBSERVED_RETURN_OR_TRADE_SAMPLE" in (
                     monte_carlo.reasons

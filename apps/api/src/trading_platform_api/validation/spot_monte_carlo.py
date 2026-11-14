@@ -12,6 +12,7 @@ from decimal import (
 )
 from uuid import NAMESPACE_URL, uuid5
 
+from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.validation.contracts import CheckOutcome
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
@@ -337,8 +338,9 @@ def run_spot_monte_carlo(
         or result.market_type != "SPOT"
         or result.data_integrity is not CheckOutcome.PASSED
         or result.point_in_time_correct is not CheckOutcome.PASSED
-        or result.operating_mode.value != "BACKTEST"
-        or result.environment.value not in {"DEV", "TEST"}
+        or result.operating_mode is not OperatingMode.BACKTEST
+        or result.environment
+        not in (DeploymentEnvironment.DEV, DeploymentEnvironment.TEST)
         or result.trace.content_sha256 != trace.content_sha256
     ):
         return _result_values(
