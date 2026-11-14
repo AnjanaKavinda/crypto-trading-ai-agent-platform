@@ -94,8 +94,8 @@ def _time(value: datetime) -> datetime:
 
 def _seconds(value: timedelta) -> Decimal:
     microseconds = (
-        (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
-    )
+        value.days * 86_400 + value.seconds
+    ) * 1_000_000 + value.microseconds
     return Decimal(microseconds) / Decimal(1_000_000)
 
 
@@ -177,9 +177,7 @@ def _stressed_request(
         liquidity_role=LiquidityRole.TAKER,
     )
     adapter = SpotExecutionCostAdapter(stressed_profile, assumptions)
-    return replace(
-        request, cost_assumptions=assumptions, cost_adapter=adapter
-    )
+    return replace(request, cost_assumptions=assumptions, cost_adapter=adapter)
 
 
 def _metric_value(
@@ -306,9 +304,7 @@ def _scenario_reference(
     if type(bundle.result) is not BacktestResultV3 or bundle.trace is None:
         return None, None
     return (
-        _reference(
-            "C-027", bundle.result.result_id, "3", bundle.result.content_sha256
-        ),
+        _reference("C-027", bundle.result.result_id, "3", bundle.result.content_sha256),
         bundle.result.trace,
     )
 
@@ -435,8 +431,14 @@ def _evaluate_scenario(
     provenance_reason = _validate_scenario_replay(bundle, request, source)
     if provenance_reason is not None:
         return _failed_scenario(
-            key, kind, value, multiplier, request.cost_assumptions, provenance_reason,
-            bundle=bundle, report=report,
+            key,
+            kind,
+            value,
+            multiplier,
+            request.cost_assumptions,
+            provenance_reason,
+            bundle=bundle,
+            report=report,
         )
     result = bundle.result
     trace = bundle.trace
@@ -578,7 +580,11 @@ def _crossings(
         )
         ordered = (
             baseline,
-            *(item for item in scenarios if item.kind is SensitivityScenarioKindV2.COST),
+            *(
+                item
+                for item in scenarios
+                if item.kind is SensitivityScenarioKindV2.COST
+            ),
         )
     else:
         ordered = tuple(item for item in scenarios if item.kind is kind)
@@ -588,9 +594,7 @@ def _crossings(
             continue
         first = left.metrics.cumulative_return
         second = right.metrics.cumulative_return
-        if first != second and (
-            (first <= 0 <= second) or (second <= 0 <= first)
-        ):
+        if first != second and ((first <= 0 <= second) or (second <= 0 <= first)):
             result.append(SensitivityZeroCrossingV2(kind, left.key, right.key))
     return tuple(result)
 
@@ -599,9 +603,7 @@ def _finalize_local_peaks(
     scenarios: tuple[SensitivityScenarioV2, ...],
 ) -> tuple[SensitivityScenarioV2, ...]:
     parameter_scenarios = tuple(
-        item
-        for item in scenarios
-        if item.kind is SensitivityScenarioKindV2.PARAMETER
+        item for item in scenarios if item.kind is SensitivityScenarioKindV2.PARAMETER
     )
     peaks = {
         current.key
@@ -647,12 +649,9 @@ def _result(
         else _seconds(getattr(request.parameters, parameter_name))
     )
     scenarios = _finalize_local_peaks(scenarios)
-    crossings = (
-        _crossings(
-            scenarios, SensitivityScenarioKindV2.PARAMETER, baseline
-        )
-        + _crossings(scenarios, SensitivityScenarioKindV2.COST, baseline)
-    )
+    crossings = _crossings(
+        scenarios, SensitivityScenarioKindV2.PARAMETER, baseline
+    ) + _crossings(scenarios, SensitivityScenarioKindV2.COST, baseline)
     result_values = {
         "outcome": outcome,
         "parameter_name": parameter_name,
@@ -766,8 +765,7 @@ async def run_spot_sensitivity(
                 else request
             )
             is_baseline = (
-                kind is SensitivityScenarioKindV2.PARAMETER
-                and value == baseline_value
+                kind is SensitivityScenarioKindV2.PARAMETER and value == baseline_value
             )
             failed_scenarios.append(
                 _failed_scenario(
@@ -780,9 +778,7 @@ async def run_spot_sensitivity(
                     bundle=observed_bundle if is_baseline else None,
                     report=observed_report if is_baseline else None,
                     cost_reference=(
-                        observed_bundle.result.cost_assumptions
-                        if is_baseline
-                        else None
+                        observed_bundle.result.cost_assumptions if is_baseline else None
                     ),
                 )
             )
@@ -809,9 +805,7 @@ async def run_spot_sensitivity(
             SpotBacktestRunRequest,
         ],
     ] = {}
-    baseline_key = _scenario_key(
-        SensitivityScenarioKindV2.PARAMETER, baseline_value
-    )
+    baseline_key = _scenario_key(SensitivityScenarioKindV2.PARAMETER, baseline_value)
     reports[baseline_key] = (observed_bundle, observed_report, request)
     for value in grid:
         if value == baseline_value:
@@ -916,17 +910,14 @@ async def run_spot_sensitivity(
     scenario_tuple = tuple(scenarios)
     if any(item.outcome is SensitivityOutcomeV2.FAILED for item in scenario_tuple):
         outcome = SensitivityOutcomeV2.FAILED
-    elif (
-        baseline_metrics is None
-        or any(item.outcome is SensitivityOutcomeV2.INCONCLUSIVE for item in scenario_tuple)
+    elif baseline_metrics is None or any(
+        item.outcome is SensitivityOutcomeV2.INCONCLUSIVE for item in scenario_tuple
     ):
         outcome = SensitivityOutcomeV2.INCONCLUSIVE
     else:
         outcome = SensitivityOutcomeV2.OBSERVED
     reasons = tuple(
-        f"{item.key}:{reason}"
-        for item in scenario_tuple
-        for reason in item.reasons
+        f"{item.key}:{reason}" for item in scenario_tuple for reason in item.reasons
     )
     if baseline_reason is not None and baseline_reason not in reasons:
         reasons = (*reasons, f"{baseline_key}:{baseline_reason}")

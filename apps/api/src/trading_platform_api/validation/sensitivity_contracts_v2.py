@@ -84,11 +84,7 @@ def _time(name: str, value: object) -> datetime:
 
 
 def _decimal(name: str, value: object, *, positive: bool = False) -> None:
-    if (
-        type(value) is not Decimal
-        or not value.is_finite()
-        or (positive and value <= 0)
-    ):
+    if type(value) is not Decimal or not value.is_finite() or (positive and value <= 0):
         raise ValidationContractError(f"{name} must be a finite Decimal.")
 
 
@@ -174,9 +170,7 @@ class SensitivityMetricsV2:
 
     def __post_init__(self) -> None:
         _decimal("cumulative_return", self.cumulative_return)
-        _decimal(
-            "maximum_fractional_drawdown", self.maximum_fractional_drawdown
-        )
+        _decimal("maximum_fractional_drawdown", self.maximum_fractional_drawdown)
         if (
             self.maximum_fractional_drawdown < 0
             or self.maximum_fractional_drawdown > 1
@@ -233,7 +227,10 @@ class SensitivityScenarioV2:
         if (self.backtest is None) != (self.trace is None):
             raise ValidationContractError("Backtest and trace references must pair.")
         _reference("cost_assumptions", self.cost_assumptions, "C-027", "2")
-        if self.metrics_report_id is not None and type(self.metrics_report_id) is not UUID:
+        if (
+            self.metrics_report_id is not None
+            and type(self.metrics_report_id) is not UUID
+        ):
             raise ValidationContractError("Metrics report identity must be a UUID.")
         for name in ("metrics_report_sha256", "metrics_input_sha256"):
             value = getattr(self, name)
@@ -310,7 +307,9 @@ class SensitivityScenarioV2:
                 or self.drawdown_delta is None
                 or self.reasons
             ):
-                raise ValidationContractError("Observed scenario closure is incomplete.")
+                raise ValidationContractError(
+                    "Observed scenario closure is incomplete."
+                )
         elif not self.reasons:
             raise ValidationContractError("Non-observed scenarios require reasons.")
         elif self.outcome is SensitivityOutcomeV2.FAILED and (
@@ -339,7 +338,9 @@ class SensitivityScenarioV2:
                 )
             )
         ):
-            raise ValidationContractError("Inconclusive scenario flags are inconsistent.")
+            raise ValidationContractError(
+                "Inconclusive scenario flags are inconsistent."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,7 +409,10 @@ class SensitivityResultV2:
     identity_method: str = field(default=IDENTITY_METHOD, init=False)
 
     def __post_init__(self) -> None:
-        if type(self.result_id) is not UUID or type(self.source_metrics_report_id) is not UUID:
+        if (
+            type(self.result_id) is not UUID
+            or type(self.source_metrics_report_id) is not UUID
+        ):
             raise ValidationContractError("Sensitivity identities must be UUIDs.")
         if type(self.outcome) is not SensitivityOutcomeV2:
             raise ValidationContractError("Sensitivity terminal state is unsupported.")
@@ -422,18 +426,23 @@ class SensitivityResultV2:
             or not 3 <= len(self.parameter_grid) <= GRID_LIMIT
             or any(type(value) is not Decimal for value in self.parameter_grid)
             or any(not value.is_finite() or value <= 0 for value in self.parameter_grid)
-            or any(left >= right for left, right in zip(self.parameter_grid, self.parameter_grid[1:]))
+            or any(
+                left >= right
+                for left, right in zip(self.parameter_grid, self.parameter_grid[1:])
+            )
             or self.baseline_value not in self.parameter_grid
             or not any(value < self.baseline_value for value in self.parameter_grid)
             or not any(value > self.baseline_value for value in self.parameter_grid)
         ):
-            raise ValidationContractError("Sensitivity grid must be ordered around baseline.")
-        if (
-            (self.parameter_name == "quantity" and self.parameter_unit != self.quantity_unit)
-            or (
-                self.parameter_name != "quantity"
-                and self.parameter_unit != PARAMETERS[self.parameter_name]
+            raise ValidationContractError(
+                "Sensitivity grid must be ordered around baseline."
             )
+        if (
+            self.parameter_name == "quantity"
+            and self.parameter_unit != self.quantity_unit
+        ) or (
+            self.parameter_name != "quantity"
+            and self.parameter_unit != PARAMETERS[self.parameter_name]
         ):
             raise ValidationContractError("Sensitivity parameter unit does not match.")
         if self.parameter_unit == "seconds" and any(
@@ -456,8 +465,17 @@ class SensitivityResultV2:
         _reference("source_backtest", self.source_backtest, "C-027", "3")
         _reference("source_trace", self.source_trace, "SIMULATION_TRACE")
         _reference("strategy_version", self.strategy_version, "C-021", "2")
-        _reference("source_cost_assumptions", self.source_cost_assumptions, "C-027", "2")
-        for name in ("dataset_id", "dataset_version", "venue", "instrument_id", "timeframe", "metrics_method"):
+        _reference(
+            "source_cost_assumptions", self.source_cost_assumptions, "C-027", "2"
+        )
+        for name in (
+            "dataset_id",
+            "dataset_version",
+            "venue",
+            "instrument_id",
+            "timeframe",
+            "metrics_method",
+        ):
             _text(name, getattr(self, name))
         if type(self.metrics_policy) is not SensitivityMetricsPolicyV2:
             raise ValidationContractError("Exact Spot metrics policy is required.")
@@ -466,21 +484,28 @@ class SensitivityResultV2:
             or canonical_sha256(self.metrics_policy) != self.metrics_policy_sha256
         ):
             raise ValidationContractError("Spot metrics policy digest mismatch.")
-        object.__setattr__(self, "period_start", _time("period_start", self.period_start))
-        object.__setattr__(self, "period_end", _time("period_end", self.period_end))
-        object.__setattr__(self, "source_as_of", _time("source_as_of", self.source_as_of))
         object.__setattr__(
-            self, "source_created_at", _time("source_created_at", self.source_created_at)
+            self, "period_start", _time("period_start", self.period_start)
+        )
+        object.__setattr__(self, "period_end", _time("period_end", self.period_end))
+        object.__setattr__(
+            self, "source_as_of", _time("source_as_of", self.source_as_of)
         )
         object.__setattr__(
-            self, "source_expires_at", _time("source_expires_at", self.source_expires_at)
+            self,
+            "source_created_at",
+            _time("source_created_at", self.source_created_at),
+        )
+        object.__setattr__(
+            self,
+            "source_expires_at",
+            _time("source_expires_at", self.source_expires_at),
         )
         object.__setattr__(self, "as_of", _time("as_of", self.as_of))
         object.__setattr__(self, "created_at", _time("created_at", self.created_at))
         if not (
             self.period_start < self.period_end
-            and self.source_as_of <= self.source_created_at
-            < self.source_expires_at
+            and self.source_as_of <= self.source_created_at < self.source_expires_at
             and self.as_of <= self.created_at
         ):
             raise ValidationContractError("Sensitivity chronology is inconsistent.")
@@ -490,7 +515,9 @@ class SensitivityResultV2:
             <= self.as_of
             < self.source_expires_at
         ):
-            raise ValidationContractError("Observed evidence is stale or non-point-in-time.")
+            raise ValidationContractError(
+                "Observed evidence is stale or non-point-in-time."
+            )
         if (
             type(self.scenarios) is not tuple
             or not 3 <= len(self.scenarios) <= SCENARIO_LIMIT
@@ -504,14 +531,18 @@ class SensitivityResultV2:
             if item.kind is SensitivityScenarioKindV2.PARAMETER
         )
         cost_scenarios = tuple(
-            item for item in self.scenarios if item.kind is SensitivityScenarioKindV2.COST
+            item
+            for item in self.scenarios
+            if item.kind is SensitivityScenarioKindV2.COST
         )
         if (
             tuple(item.parameter_value for item in parameter_scenarios)
             != self.parameter_grid
             or tuple(item.cost_multiplier for item in cost_scenarios)
             != COST_MULTIPLIERS[1:]
-            or any(item.parameter_value != self.baseline_value for item in cost_scenarios)
+            or any(
+                item.parameter_value != self.baseline_value for item in cost_scenarios
+            )
         ):
             raise ValidationContractError("Sensitivity scenario plan is incomplete.")
         baseline_scenarios = tuple(
@@ -567,14 +598,18 @@ class SensitivityResultV2:
                     or scenario.return_degraded != (expected_return_delta < 0)
                     or scenario.drawdown_degraded != (expected_drawdown_delta > 0)
                 ):
-                    raise ValidationContractError("Sensitivity deltas are inconsistent.")
+                    raise ValidationContractError(
+                        "Sensitivity deltas are inconsistent."
+                    )
             elif (
                 scenario.return_delta is not None
                 or scenario.drawdown_delta is not None
                 or scenario.return_degraded
                 or scenario.drawdown_degraded
             ):
-                raise ValidationContractError("Sensitivity deltas require baseline metrics.")
+                raise ValidationContractError(
+                    "Sensitivity deltas require baseline metrics."
+                )
         expected_peaks: set[str] = set()
         for left, current, right in zip(
             parameter_scenarios,
@@ -592,7 +627,10 @@ class SensitivityResultV2:
                 expected_peaks.add(current.key)
         if any(
             scenario.local_peak
-            != (scenario.kind is SensitivityScenarioKindV2.PARAMETER and scenario.key in expected_peaks)
+            != (
+                scenario.kind is SensitivityScenarioKindV2.PARAMETER
+                and scenario.key in expected_peaks
+            )
             for scenario in self.scenarios
         ):
             raise ValidationContractError("Local-peak flags are inconsistent.")
@@ -632,11 +670,16 @@ class SensitivityResultV2:
             if (
                 self.reasons
                 or self.warnings != WARNINGS
-                or any(item.outcome is not SensitivityOutcomeV2.OBSERVED for item in self.scenarios)
+                or any(
+                    item.outcome is not SensitivityOutcomeV2.OBSERVED
+                    for item in self.scenarios
+                )
             ):
                 raise ValidationContractError("Observed sensitivity must be complete.")
         elif not self.reasons or self.warnings:
-            raise ValidationContractError("Non-observed sensitivity requires reasons only.")
+            raise ValidationContractError(
+                "Non-observed sensitivity requires reasons only."
+            )
         expected = canonical_sha256(self.identity_payload())
         if self.content_sha256 != expected or self.result_id != uuid5(
             SENSITIVITY_NAMESPACE_V2, expected

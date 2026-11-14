@@ -1536,13 +1536,12 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 ), sensitivity.reasons
                 assert sensitivity.parameter_unit == policy.quantity_unit
                 assert len(sensitivity.scenarios) == 7
+                assert (
+                    tuple(item.parameter_value for item in sensitivity.scenarios[:3])
+                    == sensitivity.parameter_grid
+                )
                 assert tuple(
-                    item.parameter_value
-                    for item in sensitivity.scenarios[:3]
-                ) == sensitivity.parameter_grid
-                assert tuple(
-                    item.cost_multiplier
-                    for item in sensitivity.scenarios[3:]
+                    item.cost_multiplier for item in sensitivity.scenarios[3:]
                 ) == (D("1.25"), D("1.5"), D("2"), D("3"))
                 assert all(
                     item.kind is SensitivityScenarioKindV2.PARAMETER
@@ -1550,12 +1549,15 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     == bundle.result.cost_assumptions.content_sha256
                     for item in sensitivity.scenarios[:3]
                 )
-                assert len(
-                    {
-                        item.cost_assumptions.content_sha256
-                        for item in sensitivity.scenarios[3:]
-                    }
-                ) == 4
+                assert (
+                    len(
+                        {
+                            item.cost_assumptions.content_sha256
+                            for item in sensitivity.scenarios[3:]
+                        }
+                    )
+                    == 4
+                )
                 assert all(
                     item.metrics_report_id is not None
                     and item.metrics_report_sha256 is not None

@@ -152,15 +152,14 @@ def _result_values(
     )
     cost_series = (
         ("parameter:2", baseline_return),
-        *((f"cost:{multiplier}", cost_return_values[multiplier]) for multiplier in COST_MULTIPLIERS[1:]),
+        *(
+            (f"cost:{multiplier}", cost_return_values[multiplier])
+            for multiplier in COST_MULTIPLIERS[1:]
+        ),
     )
     zero_crossings = tuple(
-        SensitivityZeroCrossingV2(
-            SensitivityScenarioKindV2.COST, left_key, right_key
-        )
-        for (left_key, first), (right_key, second) in zip(
-            cost_series, cost_series[1:]
-        )
+        SensitivityZeroCrossingV2(SensitivityScenarioKindV2.COST, left_key, right_key)
+        for (left_key, first), (right_key, second) in zip(cost_series, cost_series[1:])
         if first != second and ((first <= 0 <= second) or (second <= 0 <= first))
     )
     return {
@@ -256,12 +255,8 @@ def test_c073v2_identity_records_every_point_and_rejects_retention():
         D("3"),
     )
     assert result.zero_crossings == (
-        SensitivityZeroCrossingV2(
-            SensitivityScenarioKindV2.COST, "cost:1.5", "cost:2"
-        ),
-        SensitivityZeroCrossingV2(
-            SensitivityScenarioKindV2.COST, "cost:2", "cost:3"
-        ),
+        SensitivityZeroCrossingV2(SensitivityScenarioKindV2.COST, "cost:1.5", "cost:2"),
+        SensitivityZeroCrossingV2(SensitivityScenarioKindV2.COST, "cost:2", "cost:3"),
     )
     document = encode(result)
     assert decode(document) == result
@@ -311,7 +306,10 @@ def test_c073v2_cannot_be_substituted_for_v1_c030_sensitivity():
     ("field", "value"),
     (
         ("backtest", _reference("C-027", "3", "other-backtest")),
-        ("trace", _reference("SIMULATION_TRACE", "spot-strategy-backtest-v1", "other-trace")),
+        (
+            "trace",
+            _reference("SIMULATION_TRACE", "spot-strategy-backtest-v1", "other-trace"),
+        ),
         ("metrics_report_id", uuid5(NAMESPACE_URL, "other-report")),
         ("metrics_report_sha256", "f" * 64),
         ("cost_assumptions", _reference("C-027", "2", "other-cost")),
@@ -334,7 +332,12 @@ def test_c073v2_baseline_must_match_source_evidence(field: str, value: object):
     ("cost_returns", "expected"),
     (
         (
-            {D("1.25"): D("0"), D("1.5"): D("0.01"), D("2"): D("0.02"), D("3"): D("0.03")},
+            {
+                D("1.25"): D("0"),
+                D("1.5"): D("0.01"),
+                D("2"): D("0.02"),
+                D("3"): D("0.03"),
+            },
             (
                 SensitivityZeroCrossingV2(
                     SensitivityScenarioKindV2.COST, "parameter:2", "cost:1.25"
@@ -345,7 +348,12 @@ def test_c073v2_baseline_must_match_source_evidence(field: str, value: object):
             ),
         ),
         (
-            {D("1.25"): D("-0.03"), D("1.5"): D("-0.02"), D("2"): D("-0.01"), D("3"): D("0")},
+            {
+                D("1.25"): D("-0.03"),
+                D("1.5"): D("-0.02"),
+                D("2"): D("-0.01"),
+                D("3"): D("0"),
+            },
             (
                 SensitivityZeroCrossingV2(
                     SensitivityScenarioKindV2.COST, "parameter:2", "cost:1.25"
@@ -366,6 +374,6 @@ def test_zero_crossings_include_both_zero_boundary_directions(
     )
 
     assert result.zero_crossings == expected
-    assert _crossings(
-        result.scenarios, SensitivityScenarioKindV2.COST, D("2")
-    ) == expected
+    assert (
+        _crossings(result.scenarios, SensitivityScenarioKindV2.COST, D("2")) == expected
+    )
