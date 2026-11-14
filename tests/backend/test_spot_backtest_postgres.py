@@ -1514,7 +1514,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     observed_bundle=bundle,
                     observed_report=sensitivity_report,
                     parameter_name="quantity",
-                    parameter_grid=(D("0.8"), D("1"), D("1.2")),
+                    parameter_grid=(D("0.8"), D("1.00"), D("1.2")),
                     session=session,
                     strategy_registry=registry,
                     lineage_store=lineage,
@@ -1536,6 +1536,12 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 ), sensitivity.reasons
                 assert sensitivity.parameter_unit == policy.quantity_unit
                 assert len(sensitivity.scenarios) == 7
+                assert sensitivity.scenarios[1].key == "parameter:1.00"
+                assert sensitivity.scenarios[1].backtest == sensitivity.source_backtest
+                assert (
+                    sensitivity.scenarios[1].metrics_report_id
+                    == sensitivity.source_metrics_report_id
+                )
                 assert (
                     tuple(item.parameter_value for item in sensitivity.scenarios[:3])
                     == sensitivity.parameter_grid

@@ -823,7 +823,10 @@ async def run_spot_sensitivity(
             SpotBacktestRunRequest,
         ],
     ] = {}
-    baseline_key = _scenario_key(SensitivityScenarioKindV2.PARAMETER, baseline_value)
+    baseline_grid_value = next(value for value in grid if value == baseline_value)
+    baseline_key = _scenario_key(
+        SensitivityScenarioKindV2.PARAMETER, baseline_grid_value
+    )
     reports[baseline_key] = (observed_bundle, observed_report, request)
     for value in grid:
         if value == baseline_value:

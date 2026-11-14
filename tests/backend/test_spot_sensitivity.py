@@ -1,12 +1,15 @@
 """Synthetic contract evidence for the C-073v2 Spot sensitivity boundary."""
 
+import asyncio
 import json
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
+import trading_platform_api.validation.spot_sensitivity as sensitivity_runner
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.codec import LineageError, decode, encode, key_for
 from trading_platform_api.lineage.store import references
@@ -228,6 +231,86 @@ drawdown_by_cost = {
     D("2"): D("0.08"),
     D("3"): D("0.09"),
 }
+
+
+@pytest.mark.parametrize(
+    ("parameter_name", "quantity", "grid"),
+    (
+        ("quantity", D("1"), (D("0.8"), D("1.00"), D("1.2"))),
+        ("quantity", D("1.00"), (D("0.8"), D("1"), D("1.2"))),
+        ("holding_interval", D("1"), (D("30"), D("60.00"), D("90"))),
+    ),
+)
+def test_runner_uses_grid_representation_for_baseline(
+    monkeypatch, parameter_name, quantity, grid
+):
+    request = SimpleNamespace(
+        parameters=SimpleNamespace(
+            quantity=quantity, holding_interval=timedelta(seconds=60)
+        ),
+        execution_policy=SimpleNamespace(quantity_step=D("0.1")),
+        cost_assumptions=object(),
+    )
+    source = SimpleNamespace(result=SimpleNamespace(), trace=SimpleNamespace())
+    report = SimpleNamespace(policy=object(), equity=())
+    replay = SimpleNamespace(outcome=sensitivity_runner.SpotBacktestOutcome.OBSERVED)
+    replay_report = object()
+
+    for name in (
+        "SpotBacktestRunRequest",
+        "SpotBacktestBundle",
+        "SpotPerformanceReport",
+        "BacktestResultV3",
+        "SpotBacktestTrace",
+    ):
+        monkeypatch.setattr(sensitivity_runner, name, SimpleNamespace)
+    monkeypatch.setattr(sensitivity_runner, "_source_failure", lambda *a, **k: None)
+    monkeypatch.setattr(
+        sensitivity_runner, "_observed_metrics", lambda report: (object(), None)
+    )
+    monkeypatch.setattr(sensitivity_runner, "_with_parameter", lambda *a: request)
+    monkeypatch.setattr(sensitivity_runner, "_stressed_request", lambda *a: request)
+
+    async def run_replay(**kwargs):
+        return replay
+
+    monkeypatch.setattr(sensitivity_runner, "run_spot_backtest", run_replay)
+    monkeypatch.setattr(
+        sensitivity_runner,
+        "calculate_spot_performance_metrics",
+        lambda *a, **k: replay_report,
+    )
+    monkeypatch.setattr(
+        sensitivity_runner,
+        "_evaluate_scenario",
+        lambda **kw: SimpleNamespace(
+            key=kw["key"],
+            outcome=SensitivityOutcomeV2.OBSERVED,
+            reasons=(),
+            bundle=kw["bundle"],
+            report=kw["report"],
+        ),
+    )
+    monkeypatch.setattr(sensitivity_runner, "_result", lambda **kw: kw["scenarios"])
+
+    scenarios = asyncio.run(
+        sensitivity_runner.run_spot_sensitivity(
+            request=request,
+            observed_bundle=source,
+            observed_report=report,
+            parameter_name=parameter_name,
+            parameter_grid=grid,
+            session=None,
+            strategy_registry=None,
+            lineage_store=None,
+            as_of=NOW,
+            created_at=NOW,
+        )
+    )
+    assert len(scenarios) == 7
+    assert scenarios[1].key == f"parameter:{grid[1]}"
+    assert scenarios[1].bundle is source
+    assert scenarios[1].report is report
 
 
 def test_c073v2_identity_records_every_point_and_rejects_retention():
