@@ -35,3 +35,14 @@ timeframe, block length, path horizon, seed, PRNG/index mapping, iteration count
 and nearest-rank quantiles. It has only OBSERVED/INCONCLUSIVE/FAILED outcomes;
 no qualification, risk, learning, execution, or retention edge is authorized.
 [ADR](../adr/ADR-0024-spot-monte-carlo-observation-boundary.md).
+
+## ADR-0025 — Spot sensitivity
+
+C-073v2 binds each parameter-grid or separate cost-stress scenario to its exact
+C-027v3 Spot replay and recomputed C-094 report, shared dataset/manifest/time
+window, strategy version, frozen policy, metric policy, assumptions, and
+timestamps. The result preserves all tested points and descriptive deltas,
+degradation, local peaks, and zero crossings. V1 remains unchanged. No
+qualification, strategy-status, learning, risk, approval, execution, or durable
+retention edge is authorized.
+[ADR](../adr/ADR-0025-spot-sensitivity-observation-boundary.md).

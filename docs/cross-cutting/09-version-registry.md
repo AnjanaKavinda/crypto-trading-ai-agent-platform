@@ -577,3 +577,15 @@ Unknown versions fail closed. Schema 2 is not accepted by C-030/qualification
 consumers and cannot be retained by the lineage store; codec support is not
 storage authority. No migration or DDL.
 [ADR](../adr/ADR-0024-spot-monte-carlo-observation-boundary.md).
+
+## ADR-0025 — C-073
+
+C-073v1 payloads, identities, and consumers remain unchanged. Observation-only
+Spot schema 2 binds a frozen one-parameter grid and separate fee/spread/slippage
+stress scenarios to exact C-027v3 replays and recomputed C-094 reports, shared
+data/time/strategy scope, metric policy, assumptions, and timestamps. All tested
+points and descriptive Decimal deltas/flags are retained in the result; no
+optimal parameter is selected. Unknown versions fail closed. V2 is not accepted
+by C-030/qualification consumers and cannot be retained by the lineage store;
+codec support is not storage authority. No migration or DDL.
+[ADR](../adr/ADR-0025-spot-sensitivity-observation-boundary.md).
