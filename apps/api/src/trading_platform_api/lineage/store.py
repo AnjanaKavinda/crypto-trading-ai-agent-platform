@@ -94,6 +94,9 @@ from trading_platform_api.validation.contracts_v2 import (
     ValidationArtifactReferenceV2,
 )
 from trading_platform_api.validation.contracts_v3 import BacktestResultV3
+from trading_platform_api.validation.monte_carlo_contracts_v2 import (
+    MonteCarloResultV2,
+)
 from trading_platform_api.validation.oos_contracts_v2 import OOSResultV2
 
 
@@ -174,6 +177,10 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) is MonteCarloResultV2:
+        raise LineageError(
+            "C-072v2 retention is not authorized by the observation boundary."
+        )
     if type(record) in (OOSResult, OOSResultV2):
         raise LineageError(
             "C-071/C-029 retention is not authorized by the validation "

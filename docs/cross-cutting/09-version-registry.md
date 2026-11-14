@@ -566,3 +566,14 @@ closure. UUIDv5/SHA-256 identities exclude generated result ID and own digest.
 Unknown versions fail closed. V2 qualification and C-029 retention are denied;
 codec support is not storage authorization. No migration or DDL.
 [ADR](../adr/ADR-0023-spot-walk-forward-observation-boundary.md).
+
+## ADR-0024 — C-072
+
+C-072v1 payloads, identities, and consumers remain unchanged. Observation-only
+Spot schema 2 binds exact C-027v3/#94 evidence, the source return-series digest,
+timeframe, block length/horizon, signed seed, versioned PRNG/index mapping,
+fixed 10,000-path budget, Decimal statistics, and nearest-rank quantiles.
+Unknown versions fail closed. Schema 2 is not accepted by C-030/qualification
+consumers and cannot be retained by the lineage store; codec support is not
+storage authority. No migration or DDL.
+[ADR](../adr/ADR-0024-spot-monte-carlo-observation-boundary.md).

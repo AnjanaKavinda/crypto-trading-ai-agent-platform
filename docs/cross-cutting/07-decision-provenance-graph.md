@@ -25,3 +25,13 @@ insufficient frozen coverage is INCONCLUSIVE. Descriptive aggregates preserve
 units, method, fold coverage, and UUID tie-breaks. No qualification, profitability,
 independence, pooled metric, execution, or retention edge.
 [ADR](../adr/ADR-0023-spot-walk-forward-observation-boundary.md).
+
+## ADR-0024 — Spot Monte Carlo
+
+C-072v2 binds one exact observed C-027v3 Spot result, its trace/strategy/
+dataset/manifest/cost pins, the exact #94 report/method/policy/input digests,
+and the ordered source-return digest. The frozen block-bootstrap policy binds
+timeframe, block length, path horizon, seed, PRNG/index mapping, iteration count,
+and nearest-rank quantiles. It has only OBSERVED/INCONCLUSIVE/FAILED outcomes;
+no qualification, risk, learning, execution, or retention edge is authorized.
+[ADR](../adr/ADR-0024-spot-monte-carlo-observation-boundary.md).
