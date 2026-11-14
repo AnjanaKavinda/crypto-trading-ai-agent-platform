@@ -102,6 +102,10 @@ from trading_platform_api.validation.oos_contracts_v2 import (
     _wire,
     payload,
 )
+from trading_platform_api.validation.regime_contracts_v2 import (
+    RegimeContextKeyV2,
+    RegimeObservationStateV2,
+)
 from trading_platform_api.validation.sensitivity_contracts_v2 import (
     SensitivityOutcomeV2,
     SensitivityScenarioKindV2,
@@ -135,6 +139,11 @@ from trading_platform_api.validation.spot_oos import (
     run_spot_oos,
     run_spot_oos_partition,
     select_spot_oos_candidate,
+)
+from trading_platform_api.validation.spot_regime_validation import (
+    SpotRegimeRunInput,
+    SpotRegimeValidationPlan,
+    run_spot_regime_validation,
 )
 from trading_platform_api.validation.spot_replay_inputs import (
     SpotReplayDecisionRequest,
@@ -1499,6 +1508,47 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert marked.equity
                 assert marked.get("cumulative_return").state is MetricState.AVAILABLE
                 assert marked.equity[-1].inventory == 0
+                regime = bundle.trace.decisions[
+                    0
+                ].archived_analysis.debate.market_context.regime
+                dimensions = {item.name: item.state for item in regime.dimensions}
+                regime_key = RegimeContextKeyV2(
+                    scope.venue_id,
+                    scope.asset,
+                    scope.instrument_id,
+                    scope.timeframe,
+                    bundle.trace.decisions[0]
+                    .archived_analysis.manifest.bindings[0]
+                    .regime_profile.version,
+                    dimensions["trend"],
+                    dimensions["realized-volatility"],
+                    dimensions["transition"],
+                )
+
+                async def reuse_archived_bundle(**kwargs):
+                    return bundle
+
+                monkeypatch.setattr(
+                    "trading_platform_api.validation.spot_regime_validation.run_spot_backtest",
+                    reuse_archived_bundle,
+                )
+                regime_result = await run_spot_regime_validation(
+                    plan=SpotRegimeValidationPlan(
+                        (SpotRegimeRunInput(request, metrics_policy),),
+                        version,
+                        (regime_key,),
+                        request.created_at,
+                        request.created_at,
+                    ),
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                )
+                assert regime_result.observations[0].context_key == regime_key
+                assert regime_result.observations[0].decision_id == (
+                    bundle.trace.decisions[0].decision_id
+                )
+                assert regime_result.outcome is RegimeObservationStateV2.INCONCLUSIVE
                 sensitivity_policy = replace(metrics_policy, min_trade_sample=1)
                 sensitivity_report = calculate_spot_performance_metrics(
                     bundle,

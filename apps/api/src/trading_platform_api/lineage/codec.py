@@ -76,6 +76,9 @@ from trading_platform_api.validation.monte_carlo_contracts_v2 import (
     MonteCarloResultV2,
 )
 from trading_platform_api.validation.oos_contracts_v2 import OOSResultV2
+from trading_platform_api.validation.regime_contracts_v2 import (
+    SpotRegimeValidationResultV2,
+)
 from trading_platform_api.validation.sensitivity_contracts_v2 import (
     SensitivityResultV2,
 )
@@ -108,6 +111,7 @@ MODELS = {
     "C-027": CostAssumptionSetV2,
     "C-072": MonteCarloResultV2,
     "C-073": SensitivityResultV2,
+    "C-074": SpotRegimeValidationResultV2,
     "C-071": OOSResultV2,
     "C-028": QualificationValidationResultV2,
     "C-069": AnalyticalUncertainty,
@@ -226,6 +230,8 @@ def key_for(record: object) -> LineageKey:
         return LineageKey("C-072", str(record.result_id), record.schema_version)
     if type(record) is SensitivityResultV2:
         return LineageKey("C-073", str(record.result_id), record.schema_version)
+    if type(record) is SpotRegimeValidationResultV2:
+        return LineageKey("C-074", str(record.result_id), record.schema_version)
     if type(record) is AnalyticalUncertainty:
         return LineageKey("C-069", str(record.uncertainty_id), record.schema_version)
     if type(record) is AgentResult:
@@ -446,6 +452,10 @@ def decode(document: str) -> object:
                 model = {"2": SensitivityResultV2}.get(schema_version)
                 if model is None:
                     raise LineageError("Unsupported C-073 schema version.")
+            if contract_id == "C-074":
+                model = {"2": SpotRegimeValidationResultV2}.get(schema_version)
+                if model is None:
+                    raise LineageError("Unsupported C-074 schema version.")
             if contract_id == "C-021":
                 model = {"1": StrategyVersion, "2": StrategyVersionV2}.get(
                     schema_version
@@ -472,6 +482,7 @@ def decode(document: str) -> object:
                 "C-027": schema_version,
                 "C-072": "2",
                 "C-073": "2",
+                "C-074": "2",
                 "C-071": schema_version,
                 "C-029": "2",
                 "C-028": "2",
