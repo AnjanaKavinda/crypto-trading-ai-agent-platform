@@ -18,7 +18,7 @@
 Issue #99 requires reproducible, observation-only Spot performance and coverage
 by asset, instrument, venue, timeframe, and the decision-time regime. C-074v1
 remains unchanged; its single-result input and free-text regime slices cannot
-bind each archived C-027v3 replay, C-094 metrics report, and C-005 evidence
+bind each archived C-027v3 replay, `SpotPerformanceReport`, and C-005 evidence
 closure needed by this profile.
 
 ## Alternatives
@@ -26,8 +26,9 @@ closure needed by this profile.
 ### Option A — Add observation-only C-074 schema 2
 
 Bind a frozen set of archived Spot replay requests and metric policies to
-decision-time regime attributions, per-run C-094 observations, and explicit
-required/observed coverage while leaving existing C-074v1 consumers unchanged.
+decision-time regime attributions, per-run `SpotPerformanceReport`
+observations, and explicit required/observed coverage while leaving existing
+C-074v1 consumers unchanged.
 
 ### Option B — Extend C-074v1 or integrate with qualification
 
@@ -37,11 +38,12 @@ or deployment meaning that it does not possess.
 ## Decision
 
 Use an additive immutable C-074 schema 2. The producer reuses the trusted
-archive-bound Spot backtest and the existing C-094 metrics implementation. It
-attributes each run to the decision producing its sole entry order, or to the
-first pinned decision when no entry order exists. Attribution is resolved only
-from the verified archived C-006v5/C-007v4/C-005 closure and evidence valid at
-that decision's information cutoff and time.
+archive-bound Spot backtest and the existing `SpotPerformanceReport` metrics
+implementation. It attributes each run to the decision producing its sole
+entry order, or to the first pinned decision when no entry order exists.
+Attribution is resolved only from the verified archived
+C-006v5/C-007v4/C-005 closure and evidence valid at that decision's information
+cutoff and time.
 
 The existing Spot taxonomy is preserved exactly: trend `bullish`, `bearish`, or
 `mixed`; realized volatility `high`, `typical`, or `low`; and transition
@@ -49,7 +51,7 @@ The existing Spot taxonomy is preserved exactly: trend `bullish`, `bearish`, or
 confirmed, and analytical confidence is not a probability.
 
 Each planned run and every required or observed context is emitted in stable
-input/first-occurrence order. Metrics retain their C-094 availability, unit,
+input/first-occurrence order. Metrics retain their report availability, unit,
 sample, warning, and reason states. Missing contexts, zero trades, or
 insufficient metrics remain inconclusive; invalid evidence fails closed.
 
@@ -57,7 +59,8 @@ insufficient metrics remain inconclusive; invalid evidence fails closed.
 
 This preserves deterministic replay and calculation ownership while making
 asset/timeframe/regime coverage visible without pooling returns or samples.
-Analysis output binds exact request, C-027v3 result/trace, C-094 report/policy,
+Analysis output binds exact request, C-027v3 result/trace,
+`SpotPerformanceReport`/`MetricsPolicy`,
 strategy, cost, data/manifest, and archived C-005 evidence identities. Frozen
 inputs prevent selection or optimization during analysis. Canonical C-074v2
 identity is derived from content, and unknown schema versions fail closed.
@@ -77,7 +80,7 @@ full-platform statistical qualification remain deferred.
 |---|---|
 | Playbook requirements | Chat 7 sections 30–32: regime, asset, and timeframe separation without hiding weak contexts behind aggregate averages. |
 | Cross-cutting artifacts | C-074v2 is additive; C-074v1 remains unchanged. |
-| Contracts / events | Exact C-027v3 replay and C-094 metrics closure; archived C-005/C-006v5/C-007v4 attribution. |
+| Contracts / events | Exact C-027v3 replay and `SpotPerformanceReport`/`MetricsPolicy` evidence closure; archived C-005/C-006v5/C-007v4 attribution. |
 | Requirements traceability | Issue #99 and `docs/architecture/issue-99-spot-regime-validation.md`. |
 | Versioning / migration | Closed C-074 schema-2 codec dispatch; unknown versions rejected; no migration or DDL. |
 

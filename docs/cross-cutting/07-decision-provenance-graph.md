@@ -39,10 +39,11 @@ no qualification, risk, learning, execution, or retention edge is authorized.
 ## ADR-0025 — Spot sensitivity
 
 C-073v2 binds each parameter-grid or separate cost-stress scenario to its exact
-C-027v3 Spot replay and recomputed C-094 report, shared dataset/manifest/time
-window, strategy version, frozen policy, metric policy, assumptions, and
-timestamps. The result preserves all tested points and descriptive deltas,
-degradation, local peaks, and zero crossings. V1 remains unchanged. No
+C-027v3 Spot replay and recomputed `SpotPerformanceReport`, shared
+dataset/manifest/time window, strategy version, frozen policy,
+`MetricsPolicy`, assumptions, and timestamps. The result preserves all tested
+points and descriptive deltas, degradation, local peaks, and zero crossings.
+V1 remains unchanged. No
 qualification, strategy-status, learning, risk, approval, execution, or durable
 retention edge is authorized.
 [ADR](../adr/ADR-0025-spot-sensitivity-observation-boundary.md).
@@ -50,7 +51,8 @@ retention edge is authorized.
 ## ADR-0026 — Spot regime validation
 
 C-074v2 binds each frozen request to its exact C-027v3 Spot result/trace and
-recomputed C-094 report/policy, plus strategy, cost, dataset/manifest, periods,
+recomputed `SpotPerformanceReport`/`MetricsPolicy`, plus strategy, cost,
+dataset/manifest, periods,
 and timestamps. Attribution binds the selected replay decision to its archived
 C-006v5/C-007v4/C-005 state and C-008 evidence, valid at the decision-time
 cutoff. Required and observed contexts reference run indexes in deterministic
