@@ -90,6 +90,9 @@ from trading_platform_api.validation.cost_models import (
     SpotExecutionCostProfile,
     build_spot_cost_assumption_set,
 )
+from trading_platform_api.validation.monte_carlo_contracts_v2 import (
+    MonteCarloOutcomeV2,
+)
 from trading_platform_api.validation.oos_contracts_v2 import (
     NAMESPACE,
     OOSJournalEvent,
@@ -119,6 +122,7 @@ from trading_platform_api.validation.spot_metrics import (
     MetricState,
     calculate_spot_performance_metrics,
 )
+from trading_platform_api.validation.spot_monte_carlo import run_spot_monte_carlo
 from trading_platform_api.validation.spot_oos import (
     OOSResearchJournal,
     candidate_from_request,
@@ -1487,6 +1491,46 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert marked.equity
                 assert marked.get("cumulative_return").state is MetricState.AVAILABLE
                 assert marked.equity[-1].inventory == 0
+                monte_carlo_as_of = max(
+                    request.result_as_of, marked.policy.report_timestamp
+                )
+                monte_carlo = run_spot_monte_carlo(
+                    bundle,
+                    marked,
+                    block_length=2,
+                    seed=-7,
+                    as_of=monte_carlo_as_of,
+                    created_at=monte_carlo_as_of,
+                )
+                assert monte_carlo.outcome is MonteCarloOutcomeV2.INCONCLUSIVE
+                assert monte_carlo.metrics == ()
+                assert "INSUFFICIENT_OBSERVED_RETURN_OR_TRADE_SAMPLE" in (
+                    monte_carlo.reasons
+                )
+                tampered_metrics = run_spot_monte_carlo(
+                    bundle,
+                    replace(marked, content_sha256="0" * 64),
+                    block_length=2,
+                    seed=-7,
+                    as_of=monte_carlo_as_of,
+                    created_at=monte_carlo_as_of,
+                )
+                assert tampered_metrics.outcome is MonteCarloOutcomeV2.FAILED
+                assert tampered_metrics.reasons == (
+                    "METRICS_REPORT_PROVENANCE_MISMATCH",
+                )
+                stale_monte_carlo = run_spot_monte_carlo(
+                    bundle,
+                    marked,
+                    block_length=2,
+                    seed=-7,
+                    as_of=bundle.result.expires_at,
+                    created_at=bundle.result.expires_at,
+                )
+                assert stale_monte_carlo.outcome is MonteCarloOutcomeV2.FAILED
+                assert stale_monte_carlo.reasons == (
+                    "STALE_EXPIRED_OR_NON_POINT_IN_TIME_INPUT",
+                )
                 assert (
                     marked.get("benchmark_relative_return").reason
                     == "BENCHMARK_NOT_PROVIDED"
