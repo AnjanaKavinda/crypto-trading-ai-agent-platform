@@ -40,6 +40,7 @@ from trading_platform_api.validation.spot_backtest import (
     SpotBacktestOutcome,
     SpotBacktestRunRequest,
     SpotBacktestTrace,
+    _trace_payload,
     resolve_spot_backtest_result,
     run_spot_backtest,
 )
@@ -53,6 +54,7 @@ from trading_platform_api.validation.spot_metrics import (
     SpotPerformanceReport,
     calculate_spot_performance_metrics,
 )
+from trading_platform_api.validation.spot_oos import _request_digest
 from trading_platform_api.validation.spot_replay_inputs import StrategyVersionResolver
 
 _ARITHMETIC = Context(prec=50, rounding=ROUND_HALF_EVEN)
@@ -71,6 +73,22 @@ def _report_digest(report: SpotPerformanceReport) -> str:
             item.name: getattr(report, item.name)
             for item in fields(report)
             if item.name not in {"report_id", "content_sha256"}
+        }
+    )
+
+
+def _bundle_digest(bundle: SpotBacktestBundle) -> str:
+    # Mirrors SpotBacktestBundle.content_sha256, which cannot hash timedelta parameters.
+    return canonical_sha256(
+        {
+            "method": "spot-strategy-backtest-v1",
+            "outcome": bundle.outcome,
+            "reason_codes": bundle.reason_codes,
+            "input_journal": bundle.input_journal,
+            "execution_dataset": bundle.execution_dataset,
+            "trace": None if bundle.trace is None else _trace_payload(bundle.trace),
+            "result": bundle.result,
+            "artifacts": bundle.artifacts,
         }
     )
 
@@ -664,8 +682,8 @@ def _result(
         "baseline_value": baseline,
         "parameter_grid": parameter_grid,
         "cost_multipliers": COST_MULTIPLIERS,
-        "input_request_sha256": canonical_sha256(request),
-        "source_bundle_sha256": source_bundle.content_sha256,
+        "input_request_sha256": _request_digest(request),
+        "source_bundle_sha256": _bundle_digest(source_bundle),
         "source_backtest": _reference(
             "C-027", result.result_id, "3", result.content_sha256
         ),
@@ -916,11 +934,12 @@ async def run_spot_sensitivity(
         outcome = SensitivityOutcomeV2.INCONCLUSIVE
     else:
         outcome = SensitivityOutcomeV2.OBSERVED
-    reasons = tuple(
+    reason_items = [
         f"{item.key}:{reason}" for item in scenario_tuple for reason in item.reasons
-    )
-    if baseline_reason is not None and baseline_reason not in reasons:
-        reasons = (*reasons, f"{baseline_key}:{baseline_reason}")
+    ]
+    if baseline_reason is not None:
+        reason_items.append(f"{baseline_key}:{baseline_reason}")
+    reasons = tuple(dict.fromkeys(reason_items))
     return _result(
         request=request,
         source_bundle=observed_bundle,
