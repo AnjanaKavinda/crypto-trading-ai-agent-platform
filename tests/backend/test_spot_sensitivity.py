@@ -1,6 +1,7 @@
 """Synthetic contract evidence for the C-073v2 Spot sensitivity boundary."""
 
 import json
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
@@ -9,7 +10,11 @@ import pytest
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.codec import LineageError, decode, encode, key_for
 from trading_platform_api.lineage.store import references
+from trading_platform_api.validation.contracts import ValidationContractError
 from trading_platform_api.validation.contracts_v2 import (
+    QualificationGateResultV2,
+    QualificationGateV2,
+    QualificationValidationResultV2,
     ValidationArtifactReferenceV2,
 )
 from trading_platform_api.validation.sensitivity_contracts_v2 import (
@@ -121,6 +126,26 @@ def _result_values() -> dict[str, object]:
         1,
         NOW,
     )
+    source_backtest = _reference("C-027", "3", "source-backtest")
+    source_trace = _reference(
+        "SIMULATION_TRACE", "spot-strategy-backtest-v1", "source-trace"
+    )
+    source_report_id = uuid5(NAMESPACE_URL, "source-report")
+    source_report_sha256 = "c" * 64
+    source_cost_assumptions = _reference("C-027", "2", "source-cost")
+    scenarios = tuple(
+        replace(
+            item,
+            backtest=source_backtest,
+            trace=source_trace,
+            cost_assumptions=source_cost_assumptions,
+            metrics_report_id=source_report_id,
+            metrics_report_sha256=source_report_sha256,
+        )
+        if item.key == "parameter:2"
+        else item
+        for item in scenarios
+    )
     return {
         "outcome": SensitivityOutcomeV2.OBSERVED,
         "parameter_name": "holding_interval",
@@ -131,14 +156,12 @@ def _result_values() -> dict[str, object]:
         "cost_multipliers": COST_MULTIPLIERS,
         "input_request_sha256": HASH,
         "source_bundle_sha256": "b" * 64,
-        "source_backtest": _reference("C-027", "3", "source-backtest"),
-        "source_trace": _reference(
-            "SIMULATION_TRACE", "spot-strategy-backtest-v1", "source-trace"
-        ),
-        "source_metrics_report_id": uuid5(NAMESPACE_URL, "source-report"),
-        "source_metrics_report_sha256": "c" * 64,
+        "source_backtest": source_backtest,
+        "source_trace": source_trace,
+        "source_metrics_report_id": source_report_id,
+        "source_metrics_report_sha256": source_report_sha256,
         "strategy_version": _reference("C-021", "2", "strategy"),
-        "source_cost_assumptions": _reference("C-027", "2", "source-cost"),
+        "source_cost_assumptions": source_cost_assumptions,
         "source_as_of": NOW,
         "source_created_at": NOW,
         "source_expires_at": NOW + timedelta(days=1),
@@ -244,3 +267,48 @@ def test_c073v2_cannot_be_substituted_for_v1_c030_sensitivity():
     result = SensitivityResultV2.build(**_result_values())
     with pytest.raises(ValueError):
         robustness(sensitivity=result)
+
+    from test_wave3_contract_foundation import artifact_ref, package, validation
+
+    qualification = validation(package())
+    values = {
+        item.name: getattr(qualification, item.name)
+        for item in fields(qualification)
+        if item.init and item.name != "content_sha256"
+    }
+    values["gates"] = tuple(
+        QualificationGateResultV2(
+            gate.gate,
+            gate.outcome,
+            artifact_ref("C-073"),
+            gate.valid_until,
+        )
+        if gate.gate is QualificationGateV2.ROBUSTNESS
+        else gate
+        for gate in qualification.gates
+    )
+    with pytest.raises(ValidationContractError, match="ROBUSTNESS must reference"):
+        QualificationValidationResultV2.build(**values)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("backtest", _reference("C-027", "3", "other-backtest")),
+        ("trace", _reference("SIMULATION_TRACE", "spot-strategy-backtest-v1", "other-trace")),
+        ("metrics_report_id", uuid5(NAMESPACE_URL, "other-report")),
+        ("metrics_report_sha256", "f" * 64),
+        ("cost_assumptions", _reference("C-027", "2", "other-cost")),
+    ),
+)
+def test_c073v2_baseline_must_match_source_evidence(field: str, value: object):
+    values = _result_values()
+    scenarios = values["scenarios"]
+    assert isinstance(scenarios, tuple)
+    values["scenarios"] = tuple(
+        replace(item, **{field: value}) if item.key == "parameter:2" else item
+        for item in scenarios
+    )
+
+    with pytest.raises(ValueError, match="Baseline scenario must match"):
+        SensitivityResultV2.build(**values)

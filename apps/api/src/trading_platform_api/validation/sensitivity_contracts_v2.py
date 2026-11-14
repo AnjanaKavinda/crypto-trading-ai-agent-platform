@@ -521,7 +521,19 @@ class SensitivityResultV2:
         )
         if len(baseline_scenarios) != 1:
             raise ValidationContractError("Exactly one baseline scenario is required.")
-        baseline_metrics = baseline_scenarios[0].metrics
+        baseline_scenario = baseline_scenarios[0]
+        if (
+            baseline_scenario.backtest != self.source_backtest
+            or baseline_scenario.trace != self.source_trace
+            or baseline_scenario.metrics_report_id != self.source_metrics_report_id
+            or baseline_scenario.metrics_report_sha256
+            != self.source_metrics_report_sha256
+            or baseline_scenario.cost_assumptions != self.source_cost_assumptions
+        ):
+            raise ValidationContractError(
+                "Baseline scenario must match the exact source evidence."
+            )
+        baseline_metrics = baseline_scenario.metrics
         for scenario in self.scenarios:
             if scenario.backtest is not None and (
                 scenario.backtest_as_of != self.source_as_of

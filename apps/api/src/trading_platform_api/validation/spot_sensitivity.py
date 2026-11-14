@@ -332,6 +332,7 @@ def _failed_scenario(
     *,
     bundle: SpotBacktestBundle | None = None,
     report: SpotPerformanceReport | None = None,
+    cost_reference: ValidationArtifactReferenceV2 | None = None,
 ) -> SensitivityScenarioV2:
     backtest = trace = None
     if bundle is not None:
@@ -344,7 +345,7 @@ def _failed_scenario(
         SensitivityOutcomeV2.FAILED,
         backtest,
         trace,
-        _cost_reference(cost_assumptions),
+        cost_reference or _cost_reference(cost_assumptions),
         report.report_id if report is not None else None,
         report.content_sha256 if report is not None else None,
         report.input_sha256 if report is not None else None,
@@ -776,6 +777,11 @@ async def run_spot_sensitivity(
                     source_error,
                     bundle=observed_bundle if is_baseline else None,
                     report=observed_report if is_baseline else None,
+                    cost_reference=(
+                        observed_bundle.result.cost_assumptions
+                        if is_baseline
+                        else None
+                    ),
                 )
             )
         failed = tuple(failed_scenarios)
