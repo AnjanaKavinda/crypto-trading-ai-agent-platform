@@ -3,10 +3,11 @@
 ## Scope and method
 
 The offline producer consumes a frozen ordered plan of archive-bound C-027v3
-Spot backtests and explicit C-094 `MetricsPolicy` values. Each run reuses the
-existing Spot replay and computes C-094 metrics using that run's execution
-dataset as the price path. Every request, strategy version, policy, cost model,
-dataset, manifest, and timestamp remains bound to its exact digest and units.
+Spot backtests and explicit `MetricsPolicy` values. Each run reuses the
+existing Spot replay and computes `SpotPerformanceReport` metrics using that
+run's execution dataset as the price path. Every request, strategy version,
+policy, cost model, dataset, manifest, and timestamp remains bound to its exact
+digest and units.
 
 The decision attribution is the decision producing the run's sole entry order.
 If there is no entry order, the first pinned decision is used and marked
@@ -31,7 +32,7 @@ The profile's analytical confidence is uncalibrated and is not probability.
 Every planned run is emitted in input order with exact request/result/trace and
 metrics-report identities, policy, parameters, execution/cost/data provenance,
 periods, timestamps, decision attribution, regime/evidence references, and
-per-metric C-094 state, value, unit, sample count, warnings, and reason. A metric
+per-metric report state, value, unit, sample count, warnings, and reason. A metric
 that is available remains visible if another metric is unavailable.
 
 Required contexts are emitted in plan order. Every observed non-required context

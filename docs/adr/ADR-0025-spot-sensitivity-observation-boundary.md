@@ -34,8 +34,9 @@ the bounded issue scope.
 ## Decision
 
 Use an additive, immutable C-073 schema 2 for deterministic Spot sensitivity
-observations. The offline producer reuses the C-027v3 Spot replay and C-094
-metrics pipeline. C-073v1 and its consumers remain unchanged.
+observations. The offline producer reuses the C-027v3 Spot replay and the
+`SpotPerformanceReport`/`MetricsPolicy` metrics pipeline. C-073v1 and its
+consumers remain unchanged.
 
 The analysis varies exactly one supported Spot parameter over a frozen,
 increasing 3–5 point grid containing the baseline and values on both sides.
@@ -46,19 +47,19 @@ parameter variations are not combined. The total is at most nine scenarios.
 
 Every scenario reports after-cost cumulative return (ratio), maximum fractional
 drawdown (ratio), and total trades (count), or an explicit inconclusive state
-when the exact C-094 metric policy's sample sufficiency is not met. Decimal
+when the exact `MetricsPolicy` sample sufficiency is not met. Decimal
 arithmetic computes deltas, observed degradation, strict isolated local peaks,
 and tested crossings through zero. These are descriptive observations; they do
 not select or optimize parameters or qualify a strategy.
 
 ## Reasoning
 
-The schema-2 result binds exact archive-pinned C-027v3 replays, recomputed C-094
-reports, the shared market/data/time window, strategy version, unvaried policy,
-parameter grid, cost multipliers, metric policy, timestamps, state, and reasons.
-Its immutable identity derives from canonical content. Invalid, stale,
-non-Spot, altered, or mismatched provenance is FAILED; missing or insufficient
-metrics is INCONCLUSIVE.
+The schema-2 result binds exact archive-pinned C-027v3 replays, recomputed
+`SpotPerformanceReport` reports, the shared market/data/time window, strategy
+version, unvaried policy, parameter grid, cost multipliers, `MetricsPolicy`,
+timestamps, state, and reasons. Its immutable identity derives from canonical
+content. Invalid, stale, non-Spot, altered, or mismatched provenance is FAILED;
+missing or insufficient metrics is INCONCLUSIVE.
 
 ## Consequences
 
@@ -74,7 +75,7 @@ risk, approval, or execution path is added.
 |---|---|
 | Playbook requirements | Deterministic analysis, evidence provenance, and explicit limits on statistical claims. |
 | Cross-cutting artifacts | C-073v2 is registered; C-073v1 remains unchanged. |
-| Contracts / events | Additive C-073 schema 2; exact C-027v3 and C-094 scenario references. |
+| Contracts / events | Additive C-073 schema 2; exact C-027v3 and `SpotPerformanceReport` scenario evidence references. |
 | Requirements traceability | Issue #98 and `docs/architecture/issue-96-spot-sensitivity.md`. |
 | Versioning / migration | Closed schema dispatch; unknown versions fail closed. No migration or DDL. |
 
