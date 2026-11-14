@@ -15,8 +15,8 @@ from trading_platform_api.analysis.spot_market_regime import (
 )
 from trading_platform_api.analysis.versioned_contracts import EvidenceItemV2
 from trading_platform_api.analysis.versioned_contracts_v4 import (
-    AnalysisSnapshotV4,
     AnalysisSnapshotReferenceV4,
+    AnalysisSnapshotV4,
 )
 from trading_platform_api.analysis.versioned_contracts_v5 import MarketContextV5
 from trading_platform_api.contracts.serialization import canonical_sha256
@@ -31,17 +31,19 @@ from trading_platform_api.validation.contracts_v3 import (
     BacktestResultV3,
 )
 from trading_platform_api.validation.regime_contracts_v2 import (
+    WARNINGS as REGIME_WARNINGS,
+)
+from trading_platform_api.validation.regime_contracts_v2 import (
     DecisionAttributionRuleV2,
     RegimeContextCoverageV2,
     RegimeContextKeyV2,
     RegimeCoverageStateV2,
     RegimeMetricObservationV2,
-    RegimeMetricStateV2,
     RegimeMetricsPolicyV2,
+    RegimeMetricStateV2,
     RegimeObservationStateV2,
     SpotRegimeObservationV2,
     SpotRegimeValidationResultV2,
-    WARNINGS as REGIME_WARNINGS,
 )
 from trading_platform_api.validation.spot_backtest import (
     SpotBacktestBundle,
@@ -59,7 +61,6 @@ from trading_platform_api.validation.spot_metrics import (
 from trading_platform_api.validation.spot_metrics import (
     MetricsInputError,
     MetricsPolicy,
-    MetricState,
     SpotPerformanceReport,
     calculate_spot_performance_metrics,
 )
@@ -252,12 +253,13 @@ def _metric_observations(
             and value is not None
             and value.is_finite()
         )
+        metric_reason: str | None
         if state is RegimeMetricStateV2.AVAILABLE and not valid:
             state = RegimeMetricStateV2.UNAVAILABLE
             value = None
-            reason = "METRIC_VALUE_OR_UNIT_INVALID"
+            metric_reason = "METRIC_VALUE_OR_UNIT_INVALID"
         else:
-            reason = metric.reason
+            metric_reason = metric.reason
         sufficient = (
             state is RegimeMetricStateV2.AVAILABLE
             and metric.sample_count >= minimum
@@ -271,7 +273,7 @@ def _metric_observations(
                 unit,
                 metric.sample_count,
                 sufficient,
-                reason,
+                metric_reason,
                 metric.warnings,
             )
         )
@@ -291,7 +293,18 @@ def _failed_observation(
     request = run.request
     result = bundle.result if bundle is not None else None
     trace = bundle.trace if bundle is not None else None
-    resolved = type(result) is BacktestResultV3 and type(trace) is SpotBacktestTrace
+    resolved_result: BacktestResultV3 | None = None
+    resolved_trace: SpotBacktestTrace | None = None
+    if type(result) is BacktestResultV3 and type(trace) is SpotBacktestTrace:
+        resolved_result = result
+        resolved_trace = trace
+    resolved_bundle = (
+        bundle
+        if resolved_result is not None
+        and resolved_trace is not None
+        and bundle is not None
+        else None
+    )
     reasons = tuple(
         dict.fromkeys((reason, *(bundle.reason_codes if bundle is not None else ())))
     )
@@ -324,11 +337,16 @@ def _failed_observation(
         canonical_sha256(request.execution_policy),
         metrics_policy,
         canonical_sha256(metrics_policy),
-        _reference("C-027", result.result_id, "3", result.content_sha256)
-        if resolved
+        _reference(
+            "C-027",
+            resolved_result.result_id,
+            "3",
+            resolved_result.content_sha256,
+        )
+        if resolved_result is not None
         else None,
-        result.trace if resolved else None,
-        _bundle_digest(bundle) if resolved else None,
+        resolved_result.trace if resolved_result is not None else None,
+        _bundle_digest(resolved_bundle) if resolved_bundle is not None else None,
         report.report_id if report is not None else None,
         report.content_sha256 if report is not None else None,
         report.input_sha256 if report is not None else None,
@@ -340,10 +358,10 @@ def _failed_observation(
             request.cost_assumptions.content_sha256,
         ),
         request.cost_adapter.adapter_reference,
-        result.dataset.dataset_id if resolved else None,
-        result.dataset.version if resolved else None,
+        resolved_result.dataset.dataset_id if resolved_result is not None else None,
+        resolved_result.dataset.version if resolved_result is not None else None,
         request.execution_dataset_sha256,
-        result.dataset.lineage_sha256 if resolved else None,
+        resolved_result.dataset.lineage_sha256 if resolved_result is not None else None,
         request.execution_manifest_sha256,
         request.execution_policy.quote_unit,
         request.execution_policy.quantity_unit,
@@ -351,9 +369,9 @@ def _failed_observation(
         request.execution_policy.asset,
         request.execution_policy.instrument_id,
         request.execution_policy.timeframe,
-        result.as_of if resolved else None,
-        result.created_at if resolved else None,
-        result.expires_at if resolved else None,
+        resolved_result.as_of if resolved_result is not None else None,
+        resolved_result.created_at if resolved_result is not None else None,
+        resolved_result.expires_at if resolved_result is not None else None,
         report.policy.report_timestamp if report is not None else None,
         request.execution_policy.period_start,
         request.execution_policy.period_end,
@@ -363,6 +381,7 @@ def _failed_observation(
         None,
         None,
         None,
+        (),
         None,
         _metric_observations(report, run.metrics_policy),
     )
@@ -408,7 +427,6 @@ def _source_failure(
         or bundle.execution_dataset is None
     ):
         return "REPLAY_NOT_OBSERVED"
-    report = None
     try:
         result = resolve_spot_backtest_result(bundle)
     except (ValueError, TypeError, KeyError, AttributeError):
@@ -780,13 +798,16 @@ async def run_spot_regime_validation(
             )
             continue
         result_ids.add(bundle.result.result_id)
+        report: SpotPerformanceReport | None = None
         try:
-            result = resolve_spot_backtest_result(bundle)
+            resolve_spot_backtest_result(bundle)
             report = calculate_spot_performance_metrics(
                 bundle,
                 run.metrics_policy,
                 price_path=bundle.execution_dataset,
             )
+            if report is None:
+                raise MetricsInputError("METRICS_REPORT_UNAVAILABLE")
             source_failure = _source_failure(
                 run.request, run.metrics_policy, bundle, report, as_of=plan.as_of
             )

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from trading_platform_api.analysis.spot_market_regime import (
@@ -387,16 +387,23 @@ class SpotRegimeObservationV2:
             ):
                 if getattr(self, name) is not None:
                     object.__setattr__(self, name, _time(name, getattr(self, name)))
-            if self.state is not RegimeObservationStateV2.FAILED and (
-                any(value is None for value in times)
-                or not (
-                    self.source_as_of <= self.source_created_at < self.source_expires_at
-                    and self.metrics_report_timestamp >= self.source_created_at
-                    and self.metrics_report_timestamp
-                    == self.metrics_policy.report_timestamp
-                )
-            ):
-                raise ValidationContractError("Source/report chronology is invalid.")
+            if self.state is not RegimeObservationStateV2.FAILED:
+                if any(value is None for value in times):
+                    raise ValidationContractError(
+                        "Nonfailed source timestamps are incomplete."
+                    )
+                source_as_of = cast(datetime, self.source_as_of)
+                source_created_at = cast(datetime, self.source_created_at)
+                source_expires_at = cast(datetime, self.source_expires_at)
+                report_timestamp = cast(datetime, self.metrics_report_timestamp)
+                if not (
+                    source_as_of <= source_created_at < source_expires_at
+                    and report_timestamp >= source_created_at
+                    and report_timestamp == self.metrics_policy.report_timestamp
+                ):
+                    raise ValidationContractError(
+                        "Source/report chronology is invalid."
+                    )
         start = _time("period_start", self.period_start)
         end = _time("period_end", self.period_end)
         if start >= end:
@@ -742,7 +749,7 @@ class SpotRegimeValidationResultV2:
 
     @classmethod
     def build(cls, **values: object) -> "SpotRegimeValidationResultV2":
-        payload = {
+        payload: dict[str, Any] = {
             key: value
             for key, value in values.items()
             if key not in {"result_id", "content_sha256"}
