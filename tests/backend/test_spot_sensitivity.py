@@ -14,15 +14,15 @@ from trading_platform_api.validation.contracts_v2 import (
 )
 from trading_platform_api.validation.sensitivity_contracts_v2 import (
     COST_MULTIPLIERS,
-    SensitivityMetricsV2,
+    METRICS_METHOD,
     SensitivityMetricsPolicyV2,
+    SensitivityMetricsV2,
     SensitivityOutcomeV2,
     SensitivityResultV2,
     SensitivityScenarioKindV2,
     SensitivityScenarioV2,
     SensitivityZeroCrossingV2,
 )
-from trading_platform_api.validation.sensitivity_contracts_v2 import METRICS_METHOD
 
 D = Decimal
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -72,6 +72,10 @@ def _scenario(
         drawdown_delta > 0,
         key == "parameter:2",
         (),
+        NOW,
+        NOW,
+        NOW + timedelta(days=1),
+        NOW,
     )
 
 

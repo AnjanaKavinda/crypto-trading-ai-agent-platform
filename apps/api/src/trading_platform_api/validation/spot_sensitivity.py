@@ -27,8 +27,8 @@ from trading_platform_api.validation.sensitivity_contracts_v2 import (
     COST_MULTIPLIERS,
     PARAMETERS,
     WARNINGS,
-    SensitivityMetricsV2,
     SensitivityMetricsPolicyV2,
+    SensitivityMetricsV2,
     SensitivityOutcomeV2,
     SensitivityResultV2,
     SensitivityScenarioKindV2,
@@ -355,6 +355,16 @@ def _failed_scenario(
         False,
         False,
         (reason,),
+        bundle.result.as_of
+        if bundle is not None and type(bundle.result) is BacktestResultV3
+        else None,
+        bundle.result.created_at
+        if bundle is not None and type(bundle.result) is BacktestResultV3
+        else None,
+        bundle.result.expires_at
+        if bundle is not None and type(bundle.result) is BacktestResultV3
+        else None,
+        report.policy.report_timestamp if report is not None else None,
     )
 
 
@@ -491,6 +501,10 @@ def _evaluate_scenario(
             False,
             False,
             (metric_reason or "METRICS_SAMPLE_SUFFICIENCY_NOT_MET",),
+            result.as_of,
+            result.created_at,
+            result.expires_at,
+            report.policy.report_timestamp,
         )
     if baseline_metrics is None:
         return SensitivityScenarioV2(
@@ -512,6 +526,10 @@ def _evaluate_scenario(
             False,
             False,
             ("BASELINE_METRICS_SAMPLE_SUFFICIENCY_NOT_MET",),
+            result.as_of,
+            result.created_at,
+            result.expires_at,
+            report.policy.report_timestamp,
         )
     with localcontext(_ARITHMETIC):
         return_delta = metrics.cumulative_return - baseline_metrics.cumulative_return
@@ -538,6 +556,10 @@ def _evaluate_scenario(
         drawdown_delta > 0,
         False,
         (),
+        result.as_of,
+        result.created_at,
+        result.expires_at,
+        report.policy.report_timestamp,
     )
 
 

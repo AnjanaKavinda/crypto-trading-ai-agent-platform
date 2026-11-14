@@ -206,6 +206,10 @@ class SensitivityScenarioV2:
     drawdown_degraded: bool
     local_peak: bool
     reasons: tuple[str, ...]
+    backtest_as_of: datetime | None = None
+    backtest_created_at: datetime | None = None
+    backtest_expires_at: datetime | None = None
+    metrics_report_timestamp: datetime | None = None
 
     def __post_init__(self) -> None:
         _text("scenario key", self.key)
@@ -226,6 +230,8 @@ class SensitivityScenarioV2:
             _reference("backtest", self.backtest, "C-027", "3")
         if self.trace is not None:
             _reference("trace", self.trace, "SIMULATION_TRACE")
+        if (self.backtest is None) != (self.trace is None):
+            raise ValidationContractError("Backtest and trace references must pair.")
         _reference("cost_assumptions", self.cost_assumptions, "C-027", "2")
         if self.metrics_report_id is not None and type(self.metrics_report_id) is not UUID:
             raise ValidationContractError("Metrics report identity must be a UUID.")
@@ -233,6 +239,42 @@ class SensitivityScenarioV2:
             value = getattr(self, name)
             if value is not None:
                 _digest(name, value)
+        for name in (
+            "backtest_as_of",
+            "backtest_created_at",
+            "backtest_expires_at",
+            "metrics_report_timestamp",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _time(name, value))
+        backtest_times = (
+            self.backtest_as_of,
+            self.backtest_created_at,
+            self.backtest_expires_at,
+        )
+        if self.backtest is None:
+            if any(value is not None for value in backtest_times):
+                raise ValidationContractError("Backtest timestamps require a result.")
+        elif (
+            self.backtest_as_of is None
+            or self.backtest_created_at is None
+            or self.backtest_expires_at is None
+            or not self.backtest_as_of
+            <= self.backtest_created_at
+            < self.backtest_expires_at
+        ):
+            raise ValidationContractError("Scenario backtest chronology is invalid.")
+        report_fields = (
+            self.metrics_report_id,
+            self.metrics_report_sha256,
+            self.metrics_input_sha256,
+            self.metrics_report_timestamp,
+        )
+        if any(value is not None for value in report_fields) and not all(
+            value is not None for value in report_fields
+        ):
+            raise ValidationContractError("Metrics report closure is incomplete.")
         for name in ("return_delta", "drawdown_delta"):
             value = getattr(self, name)
             if value is not None:
@@ -259,6 +301,10 @@ class SensitivityScenarioV2:
                 or self.metrics_report_id is None
                 or self.metrics_report_sha256 is None
                 or self.metrics_input_sha256 is None
+                or self.metrics_report_timestamp is None
+                or self.backtest_as_of is None
+                or self.backtest_created_at is None
+                or self.backtest_expires_at is None
                 or type(self.metrics) is not SensitivityMetricsV2
                 or self.return_delta is None
                 or self.drawdown_delta is None
@@ -477,6 +523,20 @@ class SensitivityResultV2:
             raise ValidationContractError("Exactly one baseline scenario is required.")
         baseline_metrics = baseline_scenarios[0].metrics
         for scenario in self.scenarios:
+            if scenario.backtest is not None and (
+                scenario.backtest_as_of != self.source_as_of
+                or scenario.backtest_created_at != self.source_created_at
+                or scenario.backtest_expires_at != self.source_expires_at
+            ):
+                raise ValidationContractError(
+                    "Scenario replay timestamps differ from the frozen source."
+                )
+            if (
+                scenario.metrics_report_timestamp is not None
+                and scenario.metrics_report_timestamp
+                != self.metrics_policy.report_timestamp
+            ):
+                raise ValidationContractError("Scenario metrics policy time changed.")
             if scenario.outcome is SensitivityOutcomeV2.FAILED:
                 continue
             if scenario.metrics is not None and baseline_metrics is not None:
