@@ -28,6 +28,7 @@ from trading_platform_api.validation.sensitivity_contracts_v2 import (
     SensitivityScenarioV2,
     SensitivityZeroCrossingV2,
 )
+from trading_platform_api.validation.spot_sensitivity import _crossings
 
 D = Decimal
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -84,10 +85,13 @@ def _scenario(
     )
 
 
-def _result_values() -> dict[str, object]:
+def _result_values(
+    cost_return_overrides: dict[Decimal, Decimal] | None = None,
+) -> dict[str, object]:
     baseline_return = D("0.03")
     baseline_drawdown = D("0.05")
     grid = (D("1"), D("2"), D("3"))
+    cost_return_values = returns_by_cost | (cost_return_overrides or {})
     scenarios = tuple(
         _scenario(
             key=f"parameter:{value}",
@@ -106,7 +110,7 @@ def _result_values() -> dict[str, object]:
             kind=SensitivityScenarioKindV2.COST,
             parameter_value=D("2"),
             multiplier=multiplier,
-            cumulative_return=returns_by_cost[multiplier],
+            cumulative_return=cost_return_values[multiplier],
             drawdown=drawdown_by_cost[multiplier],
             baseline_return=baseline_return,
             baseline_drawdown=baseline_drawdown,
@@ -146,6 +150,19 @@ def _result_values() -> dict[str, object]:
         else item
         for item in scenarios
     )
+    cost_series = (
+        ("parameter:2", baseline_return),
+        *((f"cost:{multiplier}", cost_return_values[multiplier]) for multiplier in COST_MULTIPLIERS[1:]),
+    )
+    zero_crossings = tuple(
+        SensitivityZeroCrossingV2(
+            SensitivityScenarioKindV2.COST, left_key, right_key
+        )
+        for (left_key, first), (right_key, second) in zip(
+            cost_series, cost_series[1:]
+        )
+        if first != second and ((first <= 0 <= second) or (second <= 0 <= first))
+    )
     return {
         "outcome": SensitivityOutcomeV2.OBSERVED,
         "parameter_name": "holding_interval",
@@ -179,14 +196,7 @@ def _result_values() -> dict[str, object]:
         "metrics_policy": metrics_policy,
         "metrics_policy_sha256": canonical_sha256(metrics_policy),
         "scenarios": scenarios,
-        "zero_crossings": (
-            SensitivityZeroCrossingV2(
-                SensitivityScenarioKindV2.COST, "cost:1.5", "cost:2"
-            ),
-            SensitivityZeroCrossingV2(
-                SensitivityScenarioKindV2.COST, "cost:2", "cost:3"
-            ),
-        ),
+        "zero_crossings": zero_crossings,
         "assumptions": (
             "ONE_PARAMETER_VARIED_AT_A_TIME",
             "COST_STRESS_VARIED_SEPARATELY_FROM_PARAMETER_GRID",
@@ -318,3 +328,44 @@ def test_c073v2_baseline_must_match_source_evidence(field: str, value: object):
 
     with pytest.raises(ValueError, match="Baseline scenario must match"):
         SensitivityResultV2.build(**values)
+
+
+@pytest.mark.parametrize(
+    ("cost_returns", "expected"),
+    (
+        (
+            {D("1.25"): D("0"), D("1.5"): D("0.01"), D("2"): D("0.02"), D("3"): D("0.03")},
+            (
+                SensitivityZeroCrossingV2(
+                    SensitivityScenarioKindV2.COST, "parameter:2", "cost:1.25"
+                ),
+                SensitivityZeroCrossingV2(
+                    SensitivityScenarioKindV2.COST, "cost:1.25", "cost:1.5"
+                ),
+            ),
+        ),
+        (
+            {D("1.25"): D("-0.03"), D("1.5"): D("-0.02"), D("2"): D("-0.01"), D("3"): D("0")},
+            (
+                SensitivityZeroCrossingV2(
+                    SensitivityScenarioKindV2.COST, "parameter:2", "cost:1.25"
+                ),
+                SensitivityZeroCrossingV2(
+                    SensitivityScenarioKindV2.COST, "cost:2", "cost:3"
+                ),
+            ),
+        ),
+    ),
+)
+def test_zero_crossings_include_both_zero_boundary_directions(
+    cost_returns: dict[Decimal, Decimal],
+    expected: tuple[SensitivityZeroCrossingV2, ...],
+):
+    result = SensitivityResultV2.build(
+        **_result_values(cost_return_overrides=cost_returns)
+    )
+
+    assert result.zero_crossings == expected
+    assert _crossings(
+        result.scenarios, SensitivityScenarioKindV2.COST, D("2")
+    ) == expected
