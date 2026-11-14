@@ -588,7 +588,9 @@ def _crossings(
             continue
         first = left.metrics.cumulative_return
         second = right.metrics.cumulative_return
-        if (first < 0 <= second) or (second < 0 <= first):
+        if first != second and (
+            (first <= 0 <= second) or (second <= 0 <= first)
+        ):
             result.append(SensitivityZeroCrossingV2(kind, left.key, right.key))
     return tuple(result)
 

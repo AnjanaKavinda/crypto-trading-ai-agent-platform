@@ -181,6 +181,9 @@ def _result_values() -> dict[str, object]:
         "scenarios": scenarios,
         "zero_crossings": (
             SensitivityZeroCrossingV2(
+                SensitivityScenarioKindV2.COST, "cost:1.5", "cost:2"
+            ),
+            SensitivityZeroCrossingV2(
                 SensitivityScenarioKindV2.COST, "cost:2", "cost:3"
             ),
         ),
@@ -243,6 +246,9 @@ def test_c073v2_identity_records_every_point_and_rejects_retention():
         D("3"),
     )
     assert result.zero_crossings == (
+        SensitivityZeroCrossingV2(
+            SensitivityScenarioKindV2.COST, "cost:1.5", "cost:2"
+        ),
         SensitivityZeroCrossingV2(
             SensitivityScenarioKindV2.COST, "cost:2", "cost:3"
         ),
