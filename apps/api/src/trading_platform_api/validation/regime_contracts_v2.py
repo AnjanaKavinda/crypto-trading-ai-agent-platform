@@ -375,9 +375,22 @@ class SpotRegimeObservationV2:
                     "Unresolved source has result timestamps."
                 )
         else:
-            if any(type(value) is not datetime for value in times):
+            if any(type(value) is not datetime for value in times[:3]):
                 raise ValidationContractError(
                     "Resolved source timestamps are required."
+                )
+            if (self.metrics_report_id is None) != (
+                self.metrics_report_timestamp is None
+            ):
+                raise ValidationContractError(
+                    "Metrics report identity and timestamp must be paired."
+                )
+            if (
+                self.metrics_report_id is None
+                and self.state is not RegimeObservationStateV2.FAILED
+            ):
+                raise ValidationContractError(
+                    "Nonfailed resolved source requires a metrics report."
                 )
             for name in (
                 "source_as_of",
@@ -468,6 +481,10 @@ class SpotRegimeObservationV2:
         if any(type(item) is not RegimeMetricObservationV2 for item in self.metrics):
             raise ValidationContractError("C-094 metric observation is invalid.")
         for item in self.metrics:
+            if self.metrics_report_id is None and item.value is not None:
+                raise ValidationContractError(
+                    "Metric values require a resolved metrics report."
+                )
             minimum = (
                 self.metrics_policy.min_trade_sample
                 if item.name == "total_trades"
@@ -730,6 +747,7 @@ class SpotRegimeValidationResultV2:
             )
         if any(
             item.state is not RegimeObservationStateV2.FAILED
+            and item.backtest is not None
             and (
                 item.source_created_at is None
                 or item.source_expires_at is None

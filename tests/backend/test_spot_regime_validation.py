@@ -267,6 +267,83 @@ def test_missing_context_and_partial_metrics_remain_inconclusive():
     assert not missing.observations[0].metrics[1].sufficient
 
 
+@pytest.mark.parametrize(
+    ("state", "resolved"),
+    (
+        (RegimeObservationStateV2.INCONCLUSIVE, False),
+        (RegimeObservationStateV2.FAILED, True),
+    ),
+)
+def test_missing_replay_or_metrics_report_preserves_terminal_result(state, resolved):
+    unavailable_metrics = tuple(
+        _metric(name, unit, None, sufficient=False, reason="METRICS_REPORT_UNAVAILABLE")
+        for name, unit in (
+            ("cumulative_return", "ratio"),
+            ("maximum_fractional_drawdown", "ratio"),
+            ("total_trades", "count"),
+        )
+    )
+    observation = _observation(
+        state=state, attributed=False, metrics=unavailable_metrics
+    )
+    missing_report = {
+        "metrics_report_id": None,
+        "metrics_report_sha256": None,
+        "metrics_input_sha256": None,
+        "metrics_report_timestamp": None,
+    }
+    if not resolved:
+        missing_report.update(
+            backtest=None,
+            trace=None,
+            source_bundle_sha256=None,
+            dataset_id=None,
+            dataset_version=None,
+            dataset_lineage_sha256=None,
+            source_as_of=None,
+            source_created_at=None,
+            source_expires_at=None,
+        )
+    observation = replace(observation, **missing_report)
+    result = _result(
+        observations=(observation,),
+        contexts=(
+            RegimeContextCoverageV2(
+                _key(), True, RegimeCoverageStateV2.MISSING, (), ()
+            ),
+        ),
+        outcome=state,
+        reasons=("REPLAY_OR_METRICS_UNAVAILABLE", "REQUIRED_CONTEXT_COVERAGE_MISSING"),
+    )
+    assert result.outcome is state
+    assert result.observations[0].metrics_report_id is None
+    assert decode(encode(result)) == result
+
+
+def test_nonfailed_resolved_replay_cannot_omit_metrics_report():
+    observation = _observation(state=RegimeObservationStateV2.INCONCLUSIVE)
+    with pytest.raises(ValidationContractError, match="requires a metrics report"):
+        replace(
+            observation,
+            metrics_report_id=None,
+            metrics_report_sha256=None,
+            metrics_input_sha256=None,
+            metrics_report_timestamp=None,
+        )
+
+
+def test_failed_replay_cannot_report_values_without_a_metrics_report():
+    observation = _observation(state=RegimeObservationStateV2.FAILED)
+    with pytest.raises(ValidationContractError, match="Metric values require"):
+        replace(
+            observation,
+            metrics_report_id=None,
+            metrics_report_sha256=None,
+            metrics_input_sha256=None,
+            metrics_report_timestamp=None,
+        )
+
+
 def test_contract_rejects_unknown_labels_duplicate_requests_and_unknown_versions():
     with pytest.raises(ValidationContractError, match="Unknown C-005 Spot trend"):
         _key(trend="ranging")
