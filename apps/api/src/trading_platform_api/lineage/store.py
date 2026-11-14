@@ -98,6 +98,9 @@ from trading_platform_api.validation.monte_carlo_contracts_v2 import (
     MonteCarloResultV2,
 )
 from trading_platform_api.validation.oos_contracts_v2 import OOSResultV2
+from trading_platform_api.validation.sensitivity_contracts_v2 import (
+    SensitivityResultV2,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +183,10 @@ def references(record: object) -> tuple[Reference, ...]:
     if type(record) is MonteCarloResultV2:
         raise LineageError(
             "C-072v2 retention is not authorized by the observation boundary."
+        )
+    if type(record) is SensitivityResultV2:
+        raise LineageError(
+            "C-073v2 retention is not authorized by the observation boundary."
         )
     if type(record) in (OOSResult, OOSResultV2):
         raise LineageError(
