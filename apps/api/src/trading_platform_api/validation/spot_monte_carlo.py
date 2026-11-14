@@ -122,11 +122,15 @@ def _block_policy_valid(source_count: int, block_length: int) -> bool:
     )
 
 
-def _source_budget_exceeded(source_count: int) -> bool:
-    return (
-        source_count > _MAX_SOURCE_INTERVALS
-        or source_count * ITERATIONS > _MAX_GENERATED_RETURNS
-    )
+def _source_budget_exceeded(source_count: int, block_length: int) -> bool:
+    if source_count > _MAX_SOURCE_INTERVALS:
+        return True
+    if not _block_policy_valid(source_count, block_length):
+        return False
+    generated_per_path = (
+        (source_count + block_length - 1) // block_length
+    ) * block_length
+    return generated_per_path * ITERATIONS > _MAX_GENERATED_RETURNS
 
 
 def _path_statistics(returns: tuple[Decimal, ...]) -> tuple[Decimal, Decimal, Decimal]:
@@ -372,19 +376,6 @@ def run_spot_monte_carlo(
             as_of=as_of,
             created_at=created_at,
         )
-    if _source_budget_exceeded(len(source_returns)):
-        return _result_values(
-            bundle,
-            result,
-            report,
-            block_length=block_length,
-            seed=seed,
-            returns=source_returns,
-            outcome=MonteCarloOutcomeV2.INCONCLUSIVE,
-            reasons=("SOURCE_INTERVAL_BUDGET_EXCEEDED",),
-            as_of=as_of,
-            created_at=created_at,
-        )
     now = as_of.astimezone(UTC)
     created = created_at.astimezone(UTC)
     if (
@@ -406,6 +397,24 @@ def run_spot_monte_carlo(
             created_at=created_at,
         )
     count = len(source_returns)
+    if _source_budget_exceeded(count, block_length):
+        reason = (
+            "SOURCE_INTERVAL_BUDGET_EXCEEDED"
+            if count > _MAX_SOURCE_INTERVALS
+            else "GENERATED_RETURN_BUDGET_EXCEEDED"
+        )
+        return _result_values(
+            bundle,
+            result,
+            report,
+            block_length=block_length,
+            seed=seed,
+            returns=source_returns,
+            outcome=MonteCarloOutcomeV2.INCONCLUSIVE,
+            reasons=(reason,),
+            as_of=as_of,
+            created_at=created_at,
+        )
     if (
         not source_returns
         or any(value is None for _, value in source_returns)
@@ -455,19 +464,6 @@ def run_spot_monte_carlo(
             returns=source_returns,
             outcome=MonteCarloOutcomeV2.FAILED,
             reasons=("INVALID_OR_INSUFFICIENT_BLOCK_POLICY",),
-            as_of=as_of,
-            created_at=created_at,
-        )
-    if _source_budget_exceeded(count):
-        return _result_values(
-            bundle,
-            result,
-            report,
-            block_length=block_length,
-            seed=seed,
-            returns=source_returns,
-            outcome=MonteCarloOutcomeV2.INCONCLUSIVE,
-            reasons=("GENERATED_RETURN_BUDGET_EXCEEDED",),
             as_of=as_of,
             created_at=created_at,
         )

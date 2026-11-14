@@ -187,8 +187,9 @@ def test_missing_returns_remain_missing_and_limits_fail_closed():
     assert not _block_policy_valid(100, 6)
     assert not _block_policy_valid(100, 10)
     assert _block_policy_valid(100, 5)
-    assert not _source_budget_exceeded(2_000)
-    assert _source_budget_exceeded(2_001)
+    assert not _source_budget_exceeded(2_000, 100)
+    assert _source_budget_exceeded(2_000, 99)
+    assert _source_budget_exceeded(2_001, 0)
 
 
 def test_c072v2_codec_is_closed_and_durable_retention_is_denied():
