@@ -79,6 +79,10 @@ from trading_platform_api.strategy.registry import (
 )
 from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegistryStore
 from trading_platform_api.strategy_api import _compose_persisted_spot_debate
+from trading_platform_api.validation.bias_contracts_v2 import (
+    BiasAuditOutcomeV2,
+    CHECK_TYPES,
+)
 from trading_platform_api.validation.contracts import (
     CheckOutcome,
     DataPartition,
@@ -112,12 +116,14 @@ from trading_platform_api.validation.sensitivity_contracts_v2 import (
 )
 from trading_platform_api.validation.spot_backtest import (
     SpotBacktestArchivePin,
+    SpotBacktestBundle,
     SpotBacktestOutcome,
     SpotBacktestParameters,
     SpotBacktestRunRequest,
     resolve_spot_backtest_result,
     run_spot_backtest,
 )
+from trading_platform_api.validation.spot_bias_audit import run_spot_bias_audit
 from trading_platform_api.validation.spot_cost_adapter import SpotExecutionCostAdapter
 from trading_platform_api.validation.spot_execution import SpotExecutionPolicy
 from trading_platform_api.validation.spot_metrics import (
@@ -1508,6 +1514,105 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert marked.equity
                 assert marked.get("cumulative_return").state is MetricState.AVAILABLE
                 assert marked.equity[-1].inventory == 0
+                bias_as_of = max(request.result_as_of, request.created_at)
+                bias = await run_spot_bias_audit(
+                    request=request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=bias_as_of,
+                    created_at=bias_as_of,
+                )
+                assert bias.outcome is BiasAuditOutcomeV2.INCONCLUSIVE
+                assert tuple(item.check_type for item in bias.checks) == CHECK_TYPES
+                assert all(
+                    item.outcome is CheckOutcome.PASSED
+                    for item in bias.checks[:2]
+                )
+                assert all(
+                    item.outcome is CheckOutcome.INCONCLUSIVE
+                    for item in bias.checks[2:]
+                )
+                assert bias.replay_result is not None
+                assert bias.trace is not None
+                assert bias.request_as_of == request.result_as_of
+                assert bias.request_created_at == request.created_at
+                assert bias.request_expires_at == request.expires_at
+                assert bias.replay_as_of == bundle.result.as_of
+                assert bias.replay_created_at == bundle.result.created_at
+                assert bias.replay_expires_at == bundle.result.expires_at
+                assert bias.dataset_id == bundle.result.dataset.dataset_id
+                assert bias.universe_id == (
+                    bundle.result.reconstruction_manifest.universe_id
+                )
+                assert bias.sources and bias.revisions
+
+                async def unavailable_replay(**kwargs):
+                    return SpotBacktestBundle(
+                        SpotBacktestOutcome.INCONCLUSIVE,
+                        ("ARCHIVE_NOT_AVAILABLE",),
+                        None,
+                        None,
+                        None,
+                        None,
+                        (),
+                    )
+
+                monkeypatch.setattr(
+                    "trading_platform_api.validation.spot_bias_audit.run_spot_backtest",
+                    unavailable_replay,
+                )
+                unavailable_bias = await run_spot_bias_audit(
+                    request=request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=bias_as_of,
+                    created_at=bias_as_of,
+                )
+                assert unavailable_bias.outcome is BiasAuditOutcomeV2.INCONCLUSIVE
+                assert unavailable_bias.request == bias.request
+                assert unavailable_bias.replay_result is None
+                assert unavailable_bias.trace is None
+                assert unavailable_bias.dataset is None
+                assert unavailable_bias.universe is None
+                assert unavailable_bias.revisions == ()
+                assert unavailable_bias.sources == ()
+                assert unavailable_bias.manifest is None
+                assert all(
+                    item.outcome is CheckOutcome.INCONCLUSIVE
+                    for item in unavailable_bias.checks
+                )
+
+                async def replayed_bundle(**kwargs):
+                    return bundle
+
+                def mismatched_resolution(_bundle):
+                    raise ValueError("fixture pin mismatch")
+
+                monkeypatch.setattr(
+                    "trading_platform_api.validation.spot_bias_audit.run_spot_backtest",
+                    replayed_bundle,
+                )
+                monkeypatch.setattr(
+                    "trading_platform_api.validation.spot_bias_audit.resolve_spot_backtest_result",
+                    mismatched_resolution,
+                )
+                mismatched_bias = await run_spot_bias_audit(
+                    request=request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=bias_as_of,
+                    created_at=bias_as_of,
+                )
+                assert mismatched_bias.outcome is BiasAuditOutcomeV2.FAILED
+                assert mismatched_bias.replay_result is None
+                assert mismatched_bias.trace is None
+                assert all(
+                    item.outcome is CheckOutcome.FAILED
+                    for item in mismatched_bias.checks[:2]
+                )
                 regime = bundle.trace.decisions[
                     0
                 ].archived_analysis.debate.market_context.regime

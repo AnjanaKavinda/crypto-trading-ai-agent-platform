@@ -87,6 +87,7 @@ from trading_platform_api.strategy.contracts_v2 import (
     StrategyVersionV2,
     _qualification_digest,
 )
+from trading_platform_api.validation.bias_contracts_v2 import SpotBiasAuditResultV2
 from trading_platform_api.validation.contracts import OOSResult
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
@@ -183,6 +184,10 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) is SpotBiasAuditResultV2:
+        raise LineageError(
+            "C-094v2 retention is not authorized by the observation boundary."
+        )
     if type(record) is MonteCarloResultV2:
         raise LineageError(
             "C-072v2 retention is not authorized by the observation boundary."

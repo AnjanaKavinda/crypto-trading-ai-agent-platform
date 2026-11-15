@@ -606,3 +606,16 @@ retention authority is added. [ADR](../adr/ADR-0026-spot-regime-validation-obser
 `SpotPerformanceReport` and `MetricsPolicy` are implementation-level Spot
 metrics artifacts, not C-094 contracts. C-094 remains the registered
 `BiasCheckReport`.
+
+## ADR-0027 — C-094
+
+C-094v1 payloads, identities, and consumers remain unchanged. Observation-only
+Spot schema 2 binds an exact C-027v3 replay request/result/trace, C-021v2
+strategy, and C-092/C-101/C-102/C-103/C-091 archive closure. The lineage codec
+adds closed schema-2 support; C-094v1 codec behavior remains unchanged and
+unsupported schema versions fail closed. All nine
+bias categories are emitted once, but only point-in-time and look-ahead checks
+may be supported by a trusted replay. The remaining seven are inconclusive with
+explicit reasons. C-094v2 is not accepted by qualification and cannot be
+retained by the lineage store; codec support is not storage authority. No
+migration or DDL. [ADR](../adr/ADR-0027-spot-bias-observation-boundary.md).

@@ -58,3 +58,15 @@ C-006v5/C-007v4/C-005 state and C-008 evidence, valid at the decision-time
 cutoff. Required and observed contexts reference run indexes in deterministic
 order; no pooled metrics, qualification, or retention edge is authorized.
 [ADR](../adr/ADR-0026-spot-regime-validation-observation-boundary.md).
+
+## ADR-0027 — Spot bias audit
+
+C-094v2 binds the deterministic audit to its exact Spot replay request and
+verified C-027v3 result/trace, C-021v2 strategy, C-092 dataset, C-101 universe,
+C-102 revisions, C-103 manifest, and C-091 source pins. All nine bias categories
+are emitted once. Point-in-time/look-ahead findings require trusted replay;
+feature/target leakage, normalization leakage, survivorship, selection, data
+snooping, multiple testing, and universe methodology remain inconclusive with
+explicit reasons. Missing replay binds the request only and invents no replay
+digest. C-094v2 has no qualification or retention edge.
+[ADR](../adr/ADR-0027-spot-bias-observation-boundary.md).

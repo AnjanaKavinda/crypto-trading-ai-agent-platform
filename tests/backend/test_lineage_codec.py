@@ -8,6 +8,7 @@ import pytest
 from test_history_selection import history
 from test_point_in_time import evidence
 from test_spot_analysis_fanout import _finding
+from test_spot_bias_audit import _result as spot_bias_result
 from trading_platform_api.lineage.codec import (
     LineageError,
     LineageKey,
@@ -97,3 +98,13 @@ def test_closed_nested_decoder_restores_typed_spot_fanout_outcome():
     invalid["finding"]["unexpected"] = "rejected"
     with pytest.raises(LineageError):
         decode_value(SpotAnalysisTaskOutcome, invalid)
+
+
+def test_c094v2_codec_is_explicit_and_rejects_unknown_schema() -> None:
+    record = spot_bias_result()
+    document = encode(record)
+    assert decode(document) == record
+    envelope = json.loads(document)
+    envelope["schema_version"] = "3"
+    with pytest.raises(LineageError, match="corrupt"):
+        decode(json.dumps(envelope))
