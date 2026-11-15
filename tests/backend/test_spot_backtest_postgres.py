@@ -1584,6 +1584,33 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     for item in unavailable_bias.checks
                 )
 
+                async def unavailable_pin_replay(**kwargs):
+                    return SpotBacktestBundle(
+                        SpotBacktestOutcome.INCONCLUSIVE,
+                        ("DECISION_SOURCE_PIN_UNAVAILABLE",),
+                        None,
+                        None,
+                        None,
+                        None,
+                        (),
+                    )
+
+                monkeypatch.setattr(
+                    "trading_platform_api.validation.spot_bias_audit.run_spot_backtest",
+                    unavailable_pin_replay,
+                )
+                unavailable_pin_bias = await run_spot_bias_audit(
+                    request=request,
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=bias_as_of,
+                    created_at=bias_as_of,
+                )
+                assert unavailable_pin_bias.outcome is BiasAuditOutcomeV2.INCONCLUSIVE
+                assert unavailable_pin_bias.checks[0].outcome is CheckOutcome.INCONCLUSIVE
+                assert unavailable_pin_bias.checks[1].outcome is CheckOutcome.INCONCLUSIVE
+
                 async def replayed_bundle(**kwargs):
                     return bundle
 

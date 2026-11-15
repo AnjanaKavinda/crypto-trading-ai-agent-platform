@@ -305,7 +305,7 @@ async def run_spot_bias_audit(
         invalid_evidence = type(bundle) is SpotBacktestBundle and any(
             marker in reason
             for reason in bundle.reason_codes
-            for marker in ("PIN", "MISMATCH", "INVALID", "FAILED", "CORRUPT")
+            for marker in ("MISMATCH", "INVALID", "FAILED", "CORRUPT")
         )
         reason = (
             "REPLAY_PIN_OR_PROVENANCE_MISMATCH"
