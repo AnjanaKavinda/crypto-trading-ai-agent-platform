@@ -70,3 +70,15 @@ snooping, multiple testing, and universe methodology remain inconclusive with
 explicit reasons. Missing replay binds the request only and invents no replay
 digest. C-094v2 has no qualification or retention edge.
 [ADR](../adr/ADR-0027-spot-bias-observation-boundary.md).
+
+## ADR-0028 — Spot multiple-testing observation
+
+C-105v1 binds one pre-access frozen plan to the exact supplied
+`OOSResearchJournal`/`OOSProtocolV2` chain and issued C-071v2 result. It preserves
+protocol-bound ACCESS/TRIAL/RESULT event records and their exact C-027v3/#94
+references when present; no missing or aborted attempt is promoted to successful
+evidence. The result reports only `NOT_APPLIED` /
+`UNADJUSTED_DESCRIPTIVE_ONLY`, never ranks or selects on holdout data, and does
+not infer global history completeness. Codec support grants no qualification,
+learning, lineage-retention, risk, approval, or execution edge.
+[ADR](../adr/ADR-0028-spot-multiple-testing-observation-boundary.md).

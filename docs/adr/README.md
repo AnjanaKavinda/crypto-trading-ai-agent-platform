@@ -37,6 +37,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0025 | [Spot sensitivity observation boundary](ADR-0025-spot-sensitivity-observation-boundary.md) | Accepted | 2026-11-14 | AnjanaKavinda (owner-assigned #98 scope) | — | Additive C-073 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
 | ADR-0026 | [Spot regime validation observation boundary](ADR-0026-spot-regime-validation-observation-boundary.md) | Accepted | 2026-11-14 | AnjanaKavinda (owner-assigned #99 scope) | — | Additive C-074 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
 | ADR-0027 | [Spot bias audit observation boundary](ADR-0027-spot-bias-observation-boundary.md) | Accepted | 2026-11-15 | AnjanaKavinda (owner Execution Packet for #100) | — | Additive C-094 schema 2; v1 unchanged; no retained storage or qualification adapter | — | — |
+| ADR-0028 | [Spot multiple-testing observation boundary](ADR-0028-spot-multiple-testing-observation-boundary.md) | Accepted | 2026-11-15 | AnjanaKavinda (owner Execution Packet for #101) | — | Additive C-105 schema 1; observation-only; no qualification or retention | — | — |
 
 ## Creating an ADR
 
