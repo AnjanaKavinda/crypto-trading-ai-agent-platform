@@ -354,6 +354,39 @@ def test_absent_original_code_build_is_inconclusive_without_substitution():
     assert report.freshness is ValidationFreshnessStateV1.INCONCLUSIVE
     assert "ORIGINAL_CODE_BUILD_IDENTITY_UNAVAILABLE" in report.reasons
 
+    both_missing = assess(no_build, no_build_result, replace(current, code_build=None))
+    assert "ORIGINAL_CODE_BUILD_IDENTITY_UNAVAILABLE" in both_missing.reasons
+    assert "CURRENT_CODE_BUILD_IDENTITY_UNAVAILABLE" in both_missing.reasons
+
+
+def test_missing_current_code_build_is_reported_as_current_unavailable():
+    pkg, result = sources()
+    report = assess(pkg, result, current_snapshot(pkg, result, code_build=None))
+
+    assert report.freshness is ValidationFreshnessStateV1.INCONCLUSIVE
+    assert "CURRENT_CODE_BUILD_IDENTITY_UNAVAILABLE" in report.reasons
+    assert "ORIGINAL_CODE_BUILD_IDENTITY_UNAVAILABLE" not in report.reasons
+
+
+def test_assessment_cannot_precede_source_validation_as_of():
+    pkg, original = sources()
+    values = {
+        item.name: getattr(original, item.name)
+        for item in fields(original)
+        if item.name not in {"content_sha256", "contract_id", "schema_version"}
+    }
+    source_as_of = NOW + timedelta(minutes=20)
+    values["as_of"] = source_as_of
+    result = QualificationValidationResultV2.build(**values)
+    snapshot = current_snapshot(pkg, result)
+
+    with pytest.raises(FreshnessContractError, match="source validation as_of"):
+        assess(pkg, result, snapshot, source_as_of - timedelta(microseconds=1))
+    assert (
+        assess(pkg, result, snapshot, source_as_of).freshness
+        is ValidationFreshnessStateV1.CURRENT
+    )
+
 
 def test_expiry_is_inclusive_at_declared_package_boundary():
     pkg, result = sources()
@@ -401,7 +434,7 @@ def test_missing_identity_precedes_mismatch_and_expiry_precedes_neither():
 
     assert report.freshness is ValidationFreshnessStateV1.INCONCLUSIVE
     assert "CANDIDATE_IDENTITY_MISMATCH" in report.reasons
-    assert "ORIGINAL_CODE_BUILD_IDENTITY_UNAVAILABLE" in report.reasons
+    assert "CURRENT_CODE_BUILD_IDENTITY_UNAVAILABLE" in report.reasons
 
 
 def test_stale_mismatch_precedes_expiry_when_all_identities_are_comparable():

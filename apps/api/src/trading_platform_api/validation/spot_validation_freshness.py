@@ -222,6 +222,8 @@ def assess_spot_validation_freshness(
         raise FreshnessContractError("current snapshot is later than explicit as_of.")
     if as_of.astimezone(validation.created_at.tzinfo) < validation.created_at:
         raise FreshnessContractError("as_of precedes the source validation creation.")
+    if as_of.astimezone(validation.as_of.tzinfo) < validation.as_of:
+        raise FreshnessContractError("as_of precedes the source validation as_of.")
 
     current_values = {name: getattr(current, name) for name in _CURRENT_REQUIREMENTS}
     comparisons: list[FreshnessIdentityComparisonV1] = []
@@ -240,11 +242,9 @@ def assess_spot_validation_freshness(
             reasons.append(f"{name.upper()}_IDENTITY_MISMATCH")
         elif matches is None:
             unavailable = True
-            if name == "code_build":
-                reasons.append("ORIGINAL_CODE_BUILD_IDENTITY_UNAVAILABLE")
-            elif expected is None:
+            if expected is None:
                 reasons.append(f"ORIGINAL_{name.upper()}_IDENTITY_UNAVAILABLE")
-            else:
+            if observed is None:
                 reasons.append(f"CURRENT_{name.upper()}_IDENTITY_UNAVAILABLE")
 
     expiries = _result_expiries(validation, evidence_package)

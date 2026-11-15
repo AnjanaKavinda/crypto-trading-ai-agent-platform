@@ -6,7 +6,8 @@
 C-024v2 package, an explicit `ValidationFreshnessSnapshotV1`, and a timezone-aware
 `as_of`. It does not consult the wall clock, a registry, a database, or an
 exchange. Source digests and C-028/C-024 candidate, strategy, and package
-bindings are verified before assessing current inputs.
+bindings are verified before assessing current inputs. The assessment `as_of`
+cannot precede the source validation's creation or `as_of` timestamp.
 
 The typed snapshot is an explicit comparison input, not authentication of
 external truth or proof that the caller supplied a complete/global set of
@@ -20,7 +21,8 @@ provides explicit asset, instrument, timeframe, and regime scope values. Each
 reference is compared by contract/type, artifact ID, schema version, and content
 digest to the identity bound into the exact supplied validation/package
 closure; scope values are compared to C-028v2. A missing original or current
-reference or scope value is not inferred or substituted.
+reference or scope value is not inferred or substituted. Reasons identify
+whether the original, current, or both values are unavailable.
 
 ## Status and output meaning
 
