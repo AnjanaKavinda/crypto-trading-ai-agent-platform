@@ -126,6 +126,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-103 | ReconstructionManifest | Data | Research, Validation, Audit | Pins universe, selected revisions, ancestry/source hashes, dataset version and deterministic selection policy. |
 | C-104 | OrderFlowAssessment | Analysis | MarketContext, Strategy, Audit, Learning | Per-metric order-flow availability and evidence are bound to exact modality inputs; assessment cannot authorize trades. |
 | C-105 | MultipleTestingAssessment | Quant Validation | Research, Audit | Schema 1 records only exact supplied C-071v2 protocol/journal attempts with unadjusted descriptive status; no correction, holdout selection, qualification, learning, or retention authority. |
+| C-106 | ValidationFreshnessAssessmentV1 | Quant Validation | Research, Governance, Audit | Schema 1 observes freshness for the exact supplied C-028v2/C-024v2 pair and explicit typed current snapshot; it preserves validation outcome and grants no qualification, approval, activation, readiness, or retention authority. |
 
 Issue #45 additive extension: owner approval on 2026-09-28. C-101–C-103 start
 at schema `1`; C-001–C-100 retain their existing layouts and IDs.
@@ -202,6 +203,20 @@ correction state is `NOT_APPLIED` and the interpretation is
 `UNADJUSTED_DESCRIPTIVE_ONLY`. It neither proves global history completeness nor
 grants qualification, learning, retention, risk, approval, or execution
 authority. See [ADR-0028](../adr/ADR-0028-spot-multiple-testing-observation-boundary.md).
+
+## Issue #102 — C-106 validation freshness observation
+
+C-106 schema 1 is an on-demand, immutable PERSONAL_SPOT_RESEARCH assessment of
+one exact supplied C-028v2 result and its exact C-024v2 evidence package against
+an explicit typed current snapshot and timezone-aware `as_of`. It compares
+artifact identity, schema, and content digest; missing/uncomparable current
+evidence is `INCONCLUSIVE`, explicit changes are `STALE`, and declared expiry is
+`EXPIRED` at the boundary. The original C-028 outcome and gate evidence remain
+unchanged. A missing original code-build identity is inconclusive; no method or
+runtime identity substitutes for it. C-106 never resolves latest/global state,
+calculates rolling decay metrics, changes qualification, or grants production
+eligibility, approval, activation, readiness, or retention. See
+[ADR-0029](../adr/ADR-0029-validation-freshness-assessment-boundary.md).
 
 ## Issue #370 — Additive analysis contract schemas
 
@@ -280,7 +295,7 @@ Every explicit required name is dispositioned as registered canonical contract, 
 | Chat 4 | MarketData, MarketSnapshot, DataQualityReport, DataSourceRecord, DatasetVersion, EventData, FundamentalData, OnChainData, DerivativesData, SentimentData, MacroData, FeatureSet | Registered: C-001, C-002, C-003, C-091, C-092, C-004. Data-type payloads (`EventData`, `FundamentalData`, `OnChainData`, `DerivativesData`, `SentimentData`, `MacroData`) are embedded/value objects. |
 | Chat 5 | MarketContext, AnalysisSnapshot, EvidenceItem, TechnicalAssessment, FundamentalAssessment, SMCAssessment, WyckoffAssessment, FibonacciAssessment, DerivativesAssessment, OnChainAssessment, SentimentAssessment, EventRiskAssessment, MarketRegime, ConfluenceAssessment, ConflictAssessment, AdversarialAssessment, AnalyticalUncertainty | Registered: C-006, C-007, C-008, C-012, C-011, C-013, C-014, C-068, C-015, C-016, C-017, C-018, C-005, C-009, C-010, C-019, C-069. |
 | Chat 6 | Strategy, StrategyVersion, StrategyEligibility, StrategyCondition, SignalCandidate, Signal, SignalEvidencePackage, EvidenceGraph, SignalQualification, QualificationRuleSet, NoTradeDecision, NoTradeReason, SignalLifecycleState | Registered: C-020, C-021, C-022, C-023, C-070, C-024, C-025, C-026. C-021v2 includes `InvalidationRuleSetV2`/`InvalidationTriggerV2`; C-070v2 includes exact `SignalLineageV2`. `StrategyCondition`, `QualificationRuleSet`, `NoTradeReason` are embedded/value objects. `EvidenceGraph` embedded/value object alias under C-024. `SignalLifecycleState` enum/state vocabulary. |
-| Chat 7 | BacktestResult, ValidationResult, OOSResult, WalkForwardResult, RobustnessResult, BiasCheckReport, MultipleTestingObservation, MonteCarloResult, SensitivityResult, RegimeValidationResult, ValidationFreshness, DatasetVersion, StrategyValidationStatus | Registered: C-027, C-028, C-071, C-029, C-030, C-094, C-105, C-072, C-073, C-074, C-092. `ValidationFreshness`, `StrategyValidationStatus` enum/state vocabularies. C-105 `MultipleTestingAssessment` implements the bounded observation-only exception in ADR-0028; it does not implement a correction or grant downstream authority. |
+| Chat 7 | BacktestResult, ValidationResult, OOSResult, WalkForwardResult, RobustnessResult, BiasCheckReport, MultipleTestingObservation, MonteCarloResult, SensitivityResult, RegimeValidationResult, ValidationFreshness, DatasetVersion, StrategyValidationStatus | Registered: C-027, C-028, C-071, C-029, C-030, C-094, C-105, C-072, C-073, C-074, C-092, C-106. `ValidationFreshness`, `StrategyValidationStatus` enum/state vocabularies. C-105 and C-106 implement bounded observation-only exceptions in ADR-0028 and ADR-0029; neither grants downstream authority. |
 | Chat 8 | AccountSnapshot, PortfolioSnapshot, PositionSnapshot, RiskProposal, RiskAssessment, PositionSizingResult, LeverageAssessment, LiquidationAssessment, StopLossAssessment, TakeProfitAssessment, PortfolioImpact, StressTestResult, RiskDecision, RiskRevalidationResult | Registered: C-032, C-033, C-075, C-034, C-035, C-036, C-076, C-077, C-078, C-079, C-080, C-081, C-082, C-083. |
 | Chat 9 | ApprovalRequest, ApprovalDecision, ApprovalBindingHash, ExecutionIntent, OrderRequest, Order, ExchangeOrder, Fill, Position, Trade, ExecutionReport, ReconciliationReport, IdempotencyKey, ExecutionState | Registered: C-037, C-038, C-039, C-084, C-040, C-085, C-041, C-042, C-043, C-095, C-096. `ApprovalBindingHash`, `IdempotencyKey` embedded/value objects. `ExecutionState` enum/state vocabulary. |
 | Chat 10 | SafetyPolicy, SafetyDecision, TradingReadinessState, KillSwitchState, CircuitBreakerState, SecurityEvent, AuditEvent, FailureEvent, RecoveryAction, AgentPermissionPolicy, PromptInjectionAssessment, SafetyIncidentReport | Registered: C-097, C-058, C-059, C-086, C-060, C-087, C-088, C-098, C-089, C-099. `KillSwitchState`, `CircuitBreakerState` enum/state vocabularies. |

@@ -95,6 +95,9 @@ from trading_platform_api.validation.contracts_v2 import (
     ValidationArtifactReferenceV2,
 )
 from trading_platform_api.validation.contracts_v3 import BacktestResultV3
+from trading_platform_api.validation.freshness_contracts_v1 import (
+    ValidationFreshnessAssessmentV1,
+)
 from trading_platform_api.validation.monte_carlo_contracts_v2 import (
     MonteCarloResultV2,
 )
@@ -191,6 +194,10 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) is ValidationFreshnessAssessmentV1:
+        raise LineageError(
+            "C-106v1 retention is not authorized by the observation boundary."
+        )
     if type(record) is SpotMultipleTestingResultV1:
         raise LineageError(
             "C-105v1 retention is not authorized by the observation boundary."

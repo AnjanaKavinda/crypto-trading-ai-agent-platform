@@ -633,3 +633,24 @@ history, or grant qualification, learning, or promotion authority. Closed codec
 support is read/inspection compatibility only; lineage retention is denied. No
 migration, DDL, or general registry lifecycle is introduced.
 [ADR](../adr/ADR-0028-spot-multiple-testing-observation-boundary.md).
+
+## ADR-0029 — C-106
+
+C-106 schema 1 is an observation-only, deterministic assessment over the exact
+supplied C-028v2 result, C-024v2 package, typed current snapshot, and explicit
+timezone-aware `as_of`. Canonical identity binds the exact source digests,
+current snapshot digest, comparison results, declared expiries, preserved
+validation outcome, status, and reasons. Missing/uncomparable identities take
+precedence over mismatches; mismatches take precedence over declared expiry.
+Expiry is inclusive at the `as_of` boundary.
+
+Only an explicitly typed `CODE_BUILD` reference in the original C-028/C-024
+source closure can provide that identity; absence is inconclusive, and no
+methodology or runtime substitution is allowed. C-106 preserves C-028 outcome
+and gates; `CURRENT_FOR_GOVERNANCE_REVIEW` requires original PASS and C-106
+CURRENT, but grants no qualification, production eligibility, approval,
+activation, readiness, or execution authority. Performance decay is
+`NOT_ASSESSED`; rolling metrics and `StrategyDecayState` remain out of scope.
+Closed codec schema-1 support is for inspection only; lineage retention is
+denied. No migration, DDL, persistence, API, scheduler, or global registry is
+introduced. [ADR](../adr/ADR-0029-validation-freshness-assessment-boundary.md).

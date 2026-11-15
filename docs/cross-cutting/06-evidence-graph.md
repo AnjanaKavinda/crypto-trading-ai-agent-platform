@@ -22,5 +22,16 @@ version introduces no TTL.
 ## Independence
 Confluence is not raw vote counting. Correlated indicators, shared model outputs, shared prompts, or identical data sources must not be counted as independent confirmations.
 
+## C-106 validation freshness observation
+
+C-106 schema 1 is a parallel observation over the exact C-028v2 result,
+C-024v2 package, and explicit typed current snapshot. Its comparisons preserve
+the exact source IDs, schemas, digests, declared expiries, and explicit
+`as_of`; it does not append, rewrite, or extend the qualification evidence chain.
+Missing or uncomparable required current evidence remains `INCONCLUSIVE`, and
+the original C-028 outcome and gate evidence remain authoritative and unchanged.
+The observation cannot supply qualification evidence, statistical validation,
+or downstream approval/execution authority.
+
 ## Statistical separation
 Keep separate fields for AI confidence, evidence strength, evidence score, historical conditional win rate, expectancy, risk score, and calibrated probability.
