@@ -61,9 +61,7 @@ def build_observation_result():
         journal=journal, protocol=protocol, hypothesis_refs=_hypothesis_refs()
     )
     oos = asyncio.run(execute(request, metrics, journal, protocol))
-    return observe_spot_multiple_testing(
-        journal=journal, protocol=protocol, bundle=oos
-    )
+    return observe_spot_multiple_testing(journal=journal, protocol=protocol, bundle=oos)
 
 
 def test_fixed_plan_allows_zero_development_trials_and_is_observation_only():

@@ -49,7 +49,10 @@ class CandidateHypothesisMapping:
     hypothesis_refs: tuple[ContractReference, ...]
 
     def __post_init__(self) -> None:
-        if type(self.candidate_id) is not UUID or type(self.hypothesis_refs) is not tuple:
+        if (
+            type(self.candidate_id) is not UUID
+            or type(self.hypothesis_refs) is not tuple
+        ):
             raise ValueError("Invalid C-105 candidate/hypothesis mapping.")
         if any(
             type(item) is not ContractReference
@@ -255,7 +258,9 @@ class SpotMultipleTestingPlanV1:
             or self.selection_policy is not self.protocol.selection_mode
             or self.metrics_policy_sha256 != self.protocol.metrics_policy_sha256
         ):
-            raise ValueError("C-105 plan does not freeze the exact protocol search space.")
+            raise ValueError(
+                "C-105 plan does not freeze the exact protocol search space."
+            )
         object.__setattr__(self, "frozen_at", _utc(self.frozen_at))
         if (
             self.correction_status != _CORRECTION_STATUS
@@ -279,9 +284,8 @@ class SpotMultipleTestingPlanV1:
         expected_digest = canonical_sha256(
             _payload(self, {"plan_id", "content_sha256"})
         )
-        if (
-            self.content_sha256 != expected_digest
-            or self.plan_id != uuid5(_NAMESPACE, "plan:" + expected_digest)
+        if self.content_sha256 != expected_digest or self.plan_id != uuid5(
+            _NAMESPACE, "plan:" + expected_digest
         ):
             raise ValueError("C-105 plan identity mismatch.")
 
@@ -310,7 +314,8 @@ class SpotMultipleTestingPlanV1:
             for item in protocol.candidates
         )
         hypotheses = candidate_hypothesis_map or tuple(
-            CandidateHypothesisMapping(item.candidate_id, ()) for item in protocol.candidates
+            CandidateHypothesisMapping(item.candidate_id, ())
+            for item in protocol.candidates
         )
         values = dict(
             journal_id=journal_id,
@@ -339,7 +344,8 @@ class SpotMultipleTestingPlanV1:
             method=METHOD,
             method_version=METHOD_VERSION,
             identity_method=IDENTITY_METHOD,
-            contract_id="C-105", schema_version="1",
+            contract_id="C-105",
+            schema_version="1",
         )
         digest = canonical_sha256(values)
         return cls(
@@ -484,8 +490,7 @@ class MultipleTestingAssessment:
             or self.oos_result.protocol != self.plan.protocol
             or type(self.outcome) is not MultipleTestingOutcome
             or type(self.counts) is not MultipleTestingCounts
-            or type(self.best_validation_observation)
-            is not BestValidationObservation
+            or type(self.best_validation_observation) is not BestValidationObservation
             or type(self.observed_events) is not tuple
             or type(self.preserved_terminal_attempts) is not tuple
             or type(self.journal_tail) is not tuple
@@ -521,7 +526,9 @@ class MultipleTestingAssessment:
             != self.plan.journal_prefix_sha256
             or any(e.recorded_at > self.plan.frozen_at for e in prefix)
         ):
-            raise ValueError("C-105 result does not extend its frozen pre-access prefix.")
+            raise ValueError(
+                "C-105 result does not extend its frozen pre-access prefix."
+            )
         freeze = tuple(
             e
             for e in prefix

@@ -92,7 +92,9 @@ def freeze_spot_multiple_testing_plan(
     )
     for event in journal.snapshot.events:
         if event.protocol_sha256 == protocol.content_sha256 and event.kind in (
-            OOSEventKind.ACCESS, OOSEventKind.TRIAL, OOSEventKind.RESULT
+            OOSEventKind.ACCESS,
+            OOSEventKind.TRIAL,
+            OOSEventKind.RESULT,
         ):
             raise ValueError("MULTIPLE_TESTING_PLAN_AFTER_PROTOCOL_ACCESS")
         if event.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL) and any(
@@ -100,7 +102,8 @@ def freeze_spot_multiple_testing_plan(
         ):
             raise ValueError("MULTIPLE_TESTING_PLAN_AFTER_SCOPED_ACCESS")
     freeze_events = tuple(
-        event for event in journal.snapshot.events
+        event
+        for event in journal.snapshot.events
         if event.kind is OOSEventKind.FREEZE
         and event.protocol_sha256 == protocol.content_sha256
         and event.recorded_at == protocol.frozen_at
@@ -112,9 +115,7 @@ def freeze_spot_multiple_testing_plan(
     if events and events[-1].recorded_at > frozen_at:
         raise ValueError("MULTIPLE_TESTING_PLAN_CHRONOLOGY_MISMATCH")
     mapped_hypotheses = {
-        ref
-        for mapping in candidate_hypothesis_map
-        for ref in mapping.hypothesis_refs
+        ref for mapping in candidate_hypothesis_map for ref in mapping.hypothesis_refs
     }
     if not mapped_hypotheses:
         raise ValueError("MULTIPLE_TESTING_HYPOTHESES_REQUIRED")
@@ -139,9 +140,7 @@ def _best_development_observation(plan, result) -> BestValidationObservation:
         return BestValidationObservation(
             None, None, None, "FIXED_PROTOCOL_HAS_NO_OPTIMIZATION_SELECTION"
         )
-    observations: list[
-        tuple[Decimal, str, ValidationArtifactReferenceV2]
-    ] = []
+    observations: list[tuple[Decimal, str, ValidationArtifactReferenceV2]] = []
     for run in result.runs:
         if run.partition_id != plan.validation_partition_id:
             continue
@@ -149,16 +148,20 @@ def _best_development_observation(plan, result) -> BestValidationObservation:
         metric = report.get(plan.metric_name)
         if metric.state is MetricState.AVAILABLE and metric.metric is not None:
             observations.append(
-                (metric.metric.value, str(run.candidate.candidate_id), run.metrics_report)
+                (
+                    metric.metric.value,
+                    str(run.candidate.candidate_id),
+                    run.metrics_report,
+                )
             )
     if not observations:
-        return BestValidationObservation(None, None, None, "NO_VALID_DEVELOPMENT_METRIC")
-    value, _, evidence_ref = sorted(
-        observations, key=lambda item: (-item[0], item[1])
-    )[0]
-    return BestValidationObservation(
-        plan.metric_name, value, evidence_ref, None
-    )
+        return BestValidationObservation(
+            None, None, None, "NO_VALID_DEVELOPMENT_METRIC"
+        )
+    value, _, evidence_ref = sorted(observations, key=lambda item: (-item[0], item[1]))[
+        0
+    ]
+    return BestValidationObservation(plan.metric_name, value, evidence_ref, None)
 
 
 def observe_spot_multiple_testing(
@@ -190,7 +193,8 @@ def observe_spot_multiple_testing(
     events = current_snapshot.events
     journal_tail = events[len(result.journal.events) :]
     selects = tuple(
-        event for event in events
+        event
+        for event in events
         if event.protocol_sha256 == protocol.content_sha256
         and event.kind is OOSEventKind.SELECT
     )
@@ -199,16 +203,14 @@ def observe_spot_multiple_testing(
         _window(protocol, partition) for partition in protocol.partitions[:-1]
     }
     selected_id = (
-        result.selected_candidate.candidate_id
-        if result.selected_candidate
-        else None
+        result.selected_candidate.candidate_id if result.selected_candidate else None
     )
     selection_valid = (
         len(selects) == 1 and selects[0].candidate_id == selected_id
     ) or (
         not selects and selected_id is None and result.outcome.value == "INCONCLUSIVE"
     )
-    post_plan_events = events[plan.journal_prefix_length:]
+    post_plan_events = events[plan.journal_prefix_length :]
     holdout_violation = any(
         event.window.overlaps(holdout)
         and (
@@ -249,8 +251,7 @@ def observe_spot_multiple_testing(
     trials = tuple(
         event
         for event in post_plan_protocol_events
-        if event.kind is OOSEventKind.TRIAL
-        and event.window in development_windows
+        if event.kind is OOSEventKind.TRIAL and event.window in development_windows
     )
     results = tuple(
         event
@@ -296,7 +297,9 @@ def observe_spot_multiple_testing(
         or len(results) != 1
         else MultipleTestingOutcome(result.outcome.value)
     )
-    held_runs = tuple(run for run in result.runs if run.partition_id == plan.held_out_partition_id)
+    held_runs = tuple(
+        run for run in result.runs if run.partition_id == plan.held_out_partition_id
+    )
     unique_hypotheses = {
         ref
         for mapping in plan.candidate_hypothesis_map
