@@ -6,6 +6,7 @@ import pytest
 from test_moving_averages import evidence
 from test_spot_bias_audit import _result as spot_bias_result
 from test_spot_multiple_testing import build_observation_result
+from test_spot_validation_freshness import assess
 from trading_platform_api.lineage.codec import (
     LineageError,
     LineageKey,
@@ -132,3 +133,10 @@ def test_c094v2_codec_does_not_authorize_lineage_retention() -> None:
 def test_c105v1_is_not_retained_by_lineage() -> None:
     with pytest.raises(LineageError, match="C-105v1 retention is not authorized"):
         references(build_observation_result())
+
+
+def test_c106v1_codec_identity_does_not_authorize_lineage_retention() -> None:
+    report = assess()
+    assert decode(encode(report)) == report
+    with pytest.raises(LineageError, match="C-106v1 retention is not authorized"):
+        references(report)

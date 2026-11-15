@@ -48,6 +48,7 @@ from trading_platform_api.validation import (
     CostAssumptionSetV2,
     MultipleTestingAssessment,
     QualificationValidationResultV2,
+    ValidationFreshnessAssessmentV1,
 )
 
 REGISTRY_PATH = Path("docs/cross-cutting/01-domain-contract-registry.md")
@@ -169,10 +170,10 @@ def test_registry_classifies_every_canonical_contract() -> None:
     registry = _registry_rows()
     owners = _canonical_owners()
 
-    assert set(registry) == {f"C-{number:03d}" for number in range(1, 106)}
-    assert len(set(registry.values())) == 105
+    assert set(registry) == {f"C-{number:03d}" for number in range(1, 107)}
+    assert len(set(registry.values())) == 106
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 104
+    assert len(owners) == 105
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
@@ -188,6 +189,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
     assert owners["C-063"].__name__ == "AgentPermissionProfile"
     assert owners["C-064"].__name__ == "AgentToolAccess"
     assert owners["C-066"].__name__ == "AgentEvaluation"
+    assert owners["C-106"] is ValidationFreshnessAssessmentV1
 
 
 def test_every_canonical_owner_has_stable_v1_schema_metadata() -> None:

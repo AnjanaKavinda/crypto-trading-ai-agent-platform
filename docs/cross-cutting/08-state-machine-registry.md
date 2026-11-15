@@ -33,6 +33,17 @@ schemas.
 | Learning / hypothesis / experiment | Learning / Research / Governance | `EXPERIENCE_CAPTURED`, `EVALUATED`, `OBSERVATION_CREATED`, `INSIGHT_CREATED`, `HYPOTHESIS_CREATED`, `EXPERIMENT_PLANNED`, `EXPERIMENT_RUNNING`, `RESULT_RECORDED`, `GOVERNANCE_PENDING`, `REJECTED` | `EXPERIENCE_CAPTURED → EVALUATED → OBSERVATION_CREATED → INSIGHT_CREATED → HYPOTHESIS_CREATED → EXPERIMENT_PLANNED → EXPERIMENT_RUNNING → RESULT_RECORDED → GOVERNANCE_PENDING`; `GOVERNANCE_PENDING → REJECTED` when improvement is denied | experience recorded, evaluation completed, hypothesis created, experiment launched, result published, governance review opened/denied | immutable experience/provenance chain, versioned experiment definition, bounded scope, no production authority, actual vs counterfactual distinction preserved | stale data, missing provenance, or experiment drift invalidates use of the result for promotion and requires a new experiment/version | `REJECTED`; `GOVERNANCE_PENDING` until explicit decision | learning may propose only; it cannot bypass risk, approval, safety, execution, or promotion governance and cannot self-promote artifacts |
 | Strategy / model / prompt candidate promotion | Governance | `RESEARCH`, `VALIDATED`, `APPROVED_FOR_SHADOW`, `APPROVED_FOR_PAPER`, `APPROVED_FOR_PRODUCTION`, `ACTIVE`, `RETIRED`, `REJECTED`, `ROLLED_BACK` | `RESEARCH → VALIDATED → APPROVED_FOR_SHADOW → APPROVED_FOR_PAPER → APPROVED_FOR_PRODUCTION → ACTIVE`; `VALIDATED \| APPROVED_FOR_SHADOW \| APPROVED_FOR_PAPER \| APPROVED_FOR_PRODUCTION \| ACTIVE → REJECTED`; `ACTIVE → RETIRED \| ROLLED_BACK`; post-rollback work re-enters via a new immutable version in `RESEARCH` or `VALIDATED` | validation evidence accepted, governance decision issued, shadow/paper completion, activation decision, retirement decision, rollback decision | immutable version record, dependency/compatibility checks, applicable validation evidence, explicit governance decision, environment/mode eligibility; no direct trade authority | missing evidence, incompatible dependency resolution, failed validation, or superseding governed decision blocks promotion; rollback never rewrites history | `RETIRED`, `REJECTED`, `ROLLED_BACK` | `APPROVED_FOR_PRODUCTION` is production-eligible only; it does not bypass readiness, risk, human approval, or execution state machines |
 
+## C-106 freshness observation
+
+C-106 schema 1 is a report over an exact C-028v2/C-024v2 pair and an explicit
+current snapshot, not an authority-bearing transition in the Validation
+lifecycle above. Its `CURRENT`, `STALE`, `EXPIRED`, and `INCONCLUSIVE` values
+preserve the original C-028 outcome. `CURRENT_FOR_GOVERNANCE_REVIEW` is a
+descriptive projection only and requires original C-028 `PASS`; it does not
+promote validation, qualification, strategy status, readiness, approval, or
+execution state. A missing/unverifiable source identity fails closed as
+`INCONCLUSIVE`.
+
 ## C-059 canonical readiness projection
 
 `TradingReadinessState` external canonical values remain exactly:
