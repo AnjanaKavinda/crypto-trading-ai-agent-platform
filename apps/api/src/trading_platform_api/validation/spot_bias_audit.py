@@ -9,12 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
 from trading_platform_api.validation.bias_contracts_v2 import (
-    BiasArchiveReferenceV2,
-    BiasAuditOutcomeV2,
-    BiasCheckObservationV2,
     CHECK_TYPES,
     METHOD,
     METHOD_VERSION,
+    BiasArchiveReferenceV2,
+    BiasAuditOutcomeV2,
+    BiasCheckObservationV2,
     SpotBiasAuditResultV2,
 )
 from trading_platform_api.validation.contracts import BiasCheckType, CheckOutcome
@@ -57,11 +57,7 @@ class SpotBiasAuditInputError(ValueError):
 
 
 def _time(name: str, value: datetime) -> datetime:
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() is None
-    ):
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
         raise SpotBiasAuditInputError(f"{name.upper()}_MUST_BE_TIMEZONE_AWARE")
     return value.astimezone(UTC)
 
@@ -71,9 +67,7 @@ def _request_reference(
 ) -> ValidationArtifactReferenceV2:
     digest = _request_digest(request)
     identity = uuid5(_REQUEST_NAMESPACE, digest)
-    return ValidationArtifactReferenceV2(
-        "SPOT_BACKTEST_REQUEST", identity, "1", digest
-    )
+    return ValidationArtifactReferenceV2("SPOT_BACKTEST_REQUEST", identity, "1", digest)
 
 
 def _strategy_reference(
@@ -97,9 +91,7 @@ def _reference(
 def _archive_reference(
     contract_id: str, record_id: str, version: str, digest: str
 ) -> BiasArchiveReferenceV2:
-    return BiasArchiveReferenceV2(
-        contract_id, record_id, version, "1", digest
-    )
+    return BiasArchiveReferenceV2(contract_id, record_id, version, "1", digest)
 
 
 def _empty_checks(
@@ -117,9 +109,7 @@ def _empty_checks(
             reason
             if check_type in _REPLAY_CHECK_TYPES
             else _UNSUPPORTED_REASONS[check_type],
-            (request_ref,)
-            if check_type in _REPLAY_CHECK_TYPES
-            else (),
+            (request_ref,) if check_type in _REPLAY_CHECK_TYPES else (),
         )
         for check_type in CHECK_TYPES
     )
@@ -154,15 +144,11 @@ def _source_closure(
             manifest.universe_sha256,
         ),
         tuple(
-            _archive_reference(
-                "C-102", str(pin.evidence_id), "1", pin.content_sha256
-            )
+            _archive_reference("C-102", str(pin.evidence_id), "1", pin.content_sha256)
             for pin in manifest.revision_pins
         ),
         tuple(
-            _archive_reference(
-                "C-091", str(pin.evidence_id), "1", pin.content_sha256
-            )
+            _archive_reference("C-091", str(pin.evidence_id), "1", pin.content_sha256)
             for pin in manifest.source_pins
         ),
         _archive_reference(
@@ -202,9 +188,7 @@ def _build(
 ) -> SpotBiasAuditResultV2:
     expires_at = min(
         request.expires_at,
-        replay_expires_at
-        if replay_expires_at is not None
-        else request.expires_at,
+        replay_expires_at if replay_expires_at is not None else request.expires_at,
     )
     if expires_at <= created_at:
         raise SpotBiasAuditInputError("REPLAY_EXPIRED_BEFORE_AUDIT_CREATION")
@@ -254,11 +238,7 @@ async def run_spot_bias_audit(
         raise SpotBiasAuditInputError("EXACT_SPOT_BACKTEST_REQUEST_REQUIRED")
     now = _time("as_of", as_of)
     created = _time("created_at", created_at)
-    if (
-        created < now
-        or now < request.created_at
-        or now >= request.expires_at
-    ):
+    if created < now or now < request.created_at or now >= request.expires_at:
         raise SpotBiasAuditInputError("INVALID_AUDIT_OR_REQUEST_CHRONOLOGY")
     request_ref = _request_reference(request)
     try:
@@ -321,7 +301,9 @@ async def run_spot_bias_audit(
             ),
             checks=_empty_checks(
                 replay_check_outcome=(
-                    CheckOutcome.FAILED if invalid_evidence else CheckOutcome.INCONCLUSIVE
+                    CheckOutcome.FAILED
+                    if invalid_evidence
+                    else CheckOutcome.INCONCLUSIVE
                 ),
                 reason=reason,
                 request_ref=request_ref,
@@ -348,9 +330,7 @@ async def run_spot_bias_audit(
             as_of=now,
             created_at=created,
         )
-    replay_result = _reference(
-        "C-027", result.result_id, "3", result.content_sha256
-    )
+    replay_result = _reference("C-027", result.result_id, "3", result.content_sha256)
     trace = result.trace
     (
         dataset,
@@ -370,8 +350,7 @@ async def run_spot_bias_audit(
         and trace_value.replay_request == request.replay_inputs
         and result.strategy_version.artifact_id
         == request.parameters.strategy_version_id
-        and result.strategy_version.content_sha256
-        == request.parameters.strategy_sha256
+        and result.strategy_version.content_sha256 == request.parameters.strategy_sha256
         and result.as_of == request.result_as_of
         and result.created_at == request.created_at
         and result.expires_at == request.expires_at
@@ -439,9 +418,7 @@ async def run_spot_bias_audit(
             replay_expires_at=result.expires_at,
         )
     replay_evidence = (request_ref, replay_result, trace)
-    check_outcome = (
-        CheckOutcome.PASSED if point_in_time_valid else CheckOutcome.FAILED
-    )
+    check_outcome = CheckOutcome.PASSED if point_in_time_valid else CheckOutcome.FAILED
     checks = tuple(
         BiasCheckObservationV2(
             check_type,
@@ -449,8 +426,7 @@ async def run_spot_bias_audit(
             if check_type in _REPLAY_CHECK_TYPES
             else CheckOutcome.INCONCLUSIVE,
             "VERIFIED_ARCHIVE_BACKED_POINT_IN_TIME_REPLAY"
-            if check_type in _REPLAY_CHECK_TYPES
-            and point_in_time_valid
+            if check_type in _REPLAY_CHECK_TYPES and point_in_time_valid
             else "POINT_IN_TIME_REPLAY_CHECK_FAILED"
             if check_type in _REPLAY_CHECK_TYPES
             else _UNSUPPORTED_REASONS[check_type],

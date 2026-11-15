@@ -514,7 +514,9 @@ def test_spot_costs_require_explicit_funding_not_applicable_without_zero() -> No
 def test_observation_only_c094v2_cannot_satisfy_qualification_bias_gate() -> None:
     gates = list(_gates())
     index = next(
-        i for i, gate in enumerate(gates) if gate.gate is QualificationGateV2.BIAS_LEAKAGE
+        i
+        for i, gate in enumerate(gates)
+        if gate.gate is QualificationGateV2.BIAS_LEAKAGE
     )
     gates[index] = QualificationGateResultV2(
         QualificationGateV2.BIAS_LEAKAGE,
@@ -522,14 +524,10 @@ def test_observation_only_c094v2_cannot_satisfy_qualification_bias_gate() -> Non
         validation_ref("C-094", version="2"),
         EXPIRY,
     )
-    result = evaluate_qualification_rules(
-        request(authoritative_gates=tuple(gates))
-    )
+    result = evaluate_qualification_rules(request(authoritative_gates=tuple(gates)))
     assert result.outcome is ValidationOutcomeV2.INSUFFICIENT_VALIDATION
     assert result.validation is not None
-    assert (
-        QualificationEvaluationReason.INVALID_EVIDENCE_REFERENCE in result.reasons
-    )
+    assert QualificationEvaluationReason.INVALID_EVIDENCE_REFERENCE in result.reasons
 
 
 def test_unknown_required_cost_applicability_blocks_pass() -> None:

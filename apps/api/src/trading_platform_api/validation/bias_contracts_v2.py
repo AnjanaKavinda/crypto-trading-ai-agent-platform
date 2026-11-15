@@ -47,11 +47,7 @@ class BiasAuditOutcomeV2(StrEnum):
 
 
 def _time(name: str, value: object) -> datetime:
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() is None
-    ):
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
         raise ValidationContractError(f"{name} must be timezone-aware.")
     return value.astimezone(UTC)
 
@@ -215,7 +211,9 @@ class SpotBiasAuditResultV2:
                 type(item) is not BiasArchiveReferenceV2
                 or item.contract_id != expected_contract
             ):
-                raise ValidationContractError(f"{name} requires exact archive identity.")
+                raise ValidationContractError(
+                    f"{name} requires exact archive identity."
+                )
         for name in (
             "dataset_id",
             "dataset_version",
@@ -232,7 +230,9 @@ class SpotBiasAuditResultV2:
         ) != (self.dataset_version is None):
             raise ValidationContractError("C-092 identity fields must close together.")
         if (self.dataset is None) != (self.dataset_lineage_sha256 is None):
-            raise ValidationContractError("C-092 lineage digest must close with dataset.")
+            raise ValidationContractError(
+                "C-092 lineage digest must close with dataset."
+            )
         if self.dataset is not None and (
             self.dataset.record_id != self.dataset_id
             or self.dataset.version != self.dataset_version
@@ -254,28 +254,31 @@ class SpotBiasAuditResultV2:
         if (
             type(self.revisions) is not tuple
             or any(
-                type(item) is not BiasArchiveReferenceV2
-                or item.contract_id != "C-102"
+                type(item) is not BiasArchiveReferenceV2 or item.contract_id != "C-102"
                 for item in self.revisions
             )
             or len(set(self.revisions)) != len(self.revisions)
         ):
-            raise ValidationContractError("C-102 revision closure must be typed and unique.")
+            raise ValidationContractError(
+                "C-102 revision closure must be typed and unique."
+            )
         if (
             type(self.sources) is not tuple
             or any(
-                type(item) is not BiasArchiveReferenceV2
-                or item.contract_id != "C-091"
+                type(item) is not BiasArchiveReferenceV2 or item.contract_id != "C-091"
                 for item in self.sources
             )
             or len(set(self.sources)) != len(self.sources)
         ):
-            raise ValidationContractError("C-091 source closure must be typed and unique.")
+            raise ValidationContractError(
+                "C-091 source closure must be typed and unique."
+            )
         replay_present = self.replay_result is not None
-        if replay_present != (self.trace is not None) or replay_present != (
-            self.dataset is not None
-        ) or replay_present != (self.universe is not None) or replay_present != (
-            self.manifest is not None
+        if (
+            replay_present != (self.trace is not None)
+            or replay_present != (self.dataset is not None)
+            or replay_present != (self.universe is not None)
+            or replay_present != (self.manifest is not None)
         ):
             raise ValidationContractError(
                 "Replay and archive closure must be complete together."
@@ -289,7 +292,9 @@ class SpotBiasAuditResultV2:
             or self.universe_id is not None
             or self.universe_version is not None
         ):
-            raise ValidationContractError("Unavailable replay cannot carry fabricated closure.")
+            raise ValidationContractError(
+                "Unavailable replay cannot carry fabricated closure."
+            )
         if replay_present and (not self.revisions or not self.sources):
             raise ValidationContractError(
                 "Observed replay requires revision and source closure."
@@ -329,23 +334,17 @@ class SpotBiasAuditResultV2:
                 and self.replay_expires_at is not None
             )
             if not (
-                self.replay_as_of
-                <= self.replay_created_at
-                < self.replay_expires_at
+                self.replay_as_of <= self.replay_created_at < self.replay_expires_at
             ):
                 raise ValidationContractError("Replay chronology is invalid.")
-            if (
-                self.outcome is not BiasAuditOutcomeV2.FAILED
-                and (
-                    self.replay_as_of,
-                    self.replay_created_at,
-                    self.replay_expires_at,
-                )
-                != (
-                    self.request_as_of,
-                    self.request_created_at,
-                    self.request_expires_at,
-                )
+            if self.outcome is not BiasAuditOutcomeV2.FAILED and (
+                self.replay_as_of,
+                self.replay_created_at,
+                self.replay_expires_at,
+            ) != (
+                self.request_as_of,
+                self.request_created_at,
+                self.request_expires_at,
             ):
                 raise ValidationContractError("Replay and request timestamps differ.")
         if not self.as_of <= self.created_at < self.expires_at:
@@ -368,7 +367,9 @@ class SpotBiasAuditResultV2:
             or any(type(item) is not str or not item.strip() for item in self.reasons)
             or len(set(self.reasons)) != len(self.reasons)
         ):
-            raise ValidationContractError("C-094v2 reasons must be explicit and unique.")
+            raise ValidationContractError(
+                "C-094v2 reasons must be explicit and unique."
+            )
         supported_types = {BiasCheckType.POINT_IN_TIME, BiasCheckType.LOOK_AHEAD}
         if any(
             item.outcome is not CheckOutcome.INCONCLUSIVE
@@ -391,7 +392,9 @@ class SpotBiasAuditResultV2:
         if self.outcome is BiasAuditOutcomeV2.INCONCLUSIVE and any(
             item.outcome is CheckOutcome.FAILED for item in self.checks
         ):
-            raise ValidationContractError("A failed bias check requires FAILED outcome.")
+            raise ValidationContractError(
+                "A failed bias check requires FAILED outcome."
+            )
         if self.outcome is BiasAuditOutcomeV2.INCONCLUSIVE and not self.reasons:
             raise ValidationContractError("INCONCLUSIVE requires an explicit reason.")
         if self.replay_result is None and any(
@@ -402,10 +405,13 @@ class SpotBiasAuditResultV2:
             raise ValidationContractError(
                 "Replay-dependent checks cannot pass without replay."
             )
-        for item in self.checks:
-            if item.check_type in supported_types and item.outcome is CheckOutcome.PASSED:
+        for check in self.checks:
+            if (
+                check.check_type in supported_types
+                and check.outcome is CheckOutcome.PASSED
+            ):
                 expected = (self.request, self.replay_result, self.trace)
-                if item.evidence_references != expected:
+                if check.evidence_references != expected:
                     raise ValidationContractError(
                         "Passed replay checks require exact request/result/trace evidence."
                     )

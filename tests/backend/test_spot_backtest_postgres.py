@@ -80,8 +80,8 @@ from trading_platform_api.strategy.registry import (
 from trading_platform_api.strategy.registry_store import SqlAlchemyStrategyRegistryStore
 from trading_platform_api.strategy_api import _compose_persisted_spot_debate
 from trading_platform_api.validation.bias_contracts_v2 import (
-    BiasAuditOutcomeV2,
     CHECK_TYPES,
+    BiasAuditOutcomeV2,
 )
 from trading_platform_api.validation.contracts import (
     CheckOutcome,
@@ -1526,8 +1526,7 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 assert bias.outcome is BiasAuditOutcomeV2.INCONCLUSIVE
                 assert tuple(item.check_type for item in bias.checks) == CHECK_TYPES
                 assert all(
-                    item.outcome is CheckOutcome.PASSED
-                    for item in bias.checks[:2]
+                    item.outcome is CheckOutcome.PASSED for item in bias.checks[:2]
                 )
                 assert all(
                     item.outcome is CheckOutcome.INCONCLUSIVE
@@ -1608,8 +1607,12 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     created_at=bias_as_of,
                 )
                 assert unavailable_pin_bias.outcome is BiasAuditOutcomeV2.INCONCLUSIVE
-                assert unavailable_pin_bias.checks[0].outcome is CheckOutcome.INCONCLUSIVE
-                assert unavailable_pin_bias.checks[1].outcome is CheckOutcome.INCONCLUSIVE
+                assert (
+                    unavailable_pin_bias.checks[0].outcome is CheckOutcome.INCONCLUSIVE
+                )
+                assert (
+                    unavailable_pin_bias.checks[1].outcome is CheckOutcome.INCONCLUSIVE
+                )
 
                 async def replayed_bundle(**kwargs):
                     return bundle

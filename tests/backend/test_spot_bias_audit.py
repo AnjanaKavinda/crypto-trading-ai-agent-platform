@@ -36,9 +36,7 @@ def _reference(kind: str, version: str) -> ValidationArtifactReferenceV2:
         if kind == "SPOT_BACKTEST_REQUEST"
         else uuid5(NAMESPACE_URL, f"{kind}:{version}")
     )
-    return ValidationArtifactReferenceV2(
-        kind, identity, version, SHA
-    )
+    return ValidationArtifactReferenceV2(kind, identity, version, SHA)
 
 
 def _result() -> SpotBiasAuditResultV2:
