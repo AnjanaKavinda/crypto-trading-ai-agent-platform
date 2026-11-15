@@ -28,8 +28,14 @@ from trading_platform_api.risk import (
     RiskContext,
     RiskContractError,
     RiskDecision,
+    RiskLimitDefinition,
+    RiskLimitDirection,
+    RiskLimitHierarchy,
+    RiskLimitPolicyConfiguration,
     RiskLimitResult,
+    RiskLimitScope,
     RiskLimitSeverity,
+    RiskPolicyMode,
     RiskProposal,
     RiskRevalidationResult,
     RiskState,
@@ -43,6 +49,7 @@ from trading_platform_api.risk import (
     TakeProfitTarget,
     VersionReference,
 )
+from trading_platform_api.contracts.serialization import canonical_sha256
 
 T = tuple(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=i) for i in range(20))
 HASH_A = "a" * 64
@@ -83,6 +90,76 @@ def limit(
         "ratio",
         outcome,
         "Synthetic deterministic fixture only.",
+    )
+
+
+def policy_limit(
+    *,
+    hierarchy: RiskLimitHierarchy = RiskLimitHierarchy.SYSTEM,
+    metric: str = "daily-loss",
+    direction: RiskLimitDirection = RiskLimitDirection.LESS_THAN_OR_EQUAL,
+    threshold: str = "100",
+    unit: str = "SYNTHETIC-USD",
+    severity: RiskLimitSeverity = RiskLimitSeverity.HARD,
+    mode: RiskPolicyMode = RiskPolicyMode.RESEARCH,
+    account_id: UUID | None = None,
+    portfolio_id: UUID | None = None,
+    strategy_id: str | None = None,
+    venue: str | None = None,
+    instrument_id: str | None = None,
+    trade_id: UUID | None = None,
+    user_request_id: UUID | None = None,
+    limit_id: str = "synthetic-policy-limit",
+    enabled: bool = True,
+) -> RiskLimitDefinition:
+    scope = RiskLimitScope(
+        hierarchy,
+        mode,
+        account_id,
+        portfolio_id,
+        strategy_id,
+        venue,
+        instrument_id,
+        trade_id,
+        user_request_id,
+    )
+    return RiskLimitDefinition(
+        limit_id,
+        hierarchy,
+        metric,
+        direction,
+        Decimal(threshold),
+        unit,
+        severity,
+        scope,
+        enabled,
+    )
+
+
+def risk_policy(
+    limits: tuple[RiskLimitDefinition, ...],
+) -> RiskLimitPolicyConfiguration:
+    policy_component = "synthetic-risk-policy"
+    policy_version = "synthetic-policy-v1"
+    configuration_component = "synthetic-risk-configuration"
+    configuration_version = "synthetic-configuration-v1"
+    preimage = {
+        "policy_version": {
+            "component": policy_component,
+            "version": policy_version,
+        },
+        "configuration_version": {
+            "component": configuration_component,
+            "version": configuration_version,
+        },
+        "limits": limits,
+    }
+    digest = canonical_sha256(preimage)
+    return RiskLimitPolicyConfiguration(
+        VersionReference(policy_component, policy_version, digest),
+        VersionReference(configuration_component, configuration_version, digest),
+        limits,
+        digest,
     )
 
 
@@ -567,6 +644,14 @@ def test_enum_vocabularies_are_exact() -> None:
         "VOLATILITY_ADJUSTED",
         "FRACTIONAL_KELLY",
     }
+    assert {item.value for item in RiskPolicyMode} == {
+        "research",
+        "backtest",
+        "paper",
+        "shadow",
+        "testnet",
+        "live-supervised",
+    }
 
 
 def test_common_types_reject_bad_decimal_text_hash_and_naive_time() -> None:
@@ -859,3 +944,211 @@ def test_contract_module_has_no_runtime_engine_or_integration_surface() -> None:
         "secret_key",
     )
     assert not any(token in source for token in forbidden)
+
+
+def test_policy_limit_rejects_malformed_nonfinite_and_unknown_values() -> None:
+    with pytest.raises(RiskContractError, match="required identity"):
+        RiskLimitScope(RiskLimitHierarchy.ACCOUNT, RiskPolicyMode.RESEARCH)
+    with pytest.raises(RiskContractError, match="required identity"):
+        RiskLimitScope(
+            RiskLimitHierarchy.STRATEGY,
+            RiskPolicyMode.RESEARCH,
+            account_id=uuid4(),
+            strategy_id="synthetic-strategy",
+        )
+    with pytest.raises(RiskContractError, match="RiskLimitHierarchy"):
+        RiskLimitScope("SYSTEM", RiskPolicyMode.RESEARCH)  # type: ignore[arg-type]
+    with pytest.raises(RiskContractError, match="RiskPolicyMode"):
+        RiskLimitScope(
+            RiskLimitHierarchy.SYSTEM, "UNKNOWN"  # type: ignore[arg-type]
+        )
+    with pytest.raises(RiskContractError, match="RiskLimitDirection"):
+        RiskLimitDefinition(
+            "synthetic",
+            RiskLimitHierarchy.SYSTEM,
+            "daily-loss",
+            "LESS_THAN_OR_EQUAL",  # type: ignore[arg-type]
+            Decimal("1"),
+            "SYNTHETIC-USD",
+            RiskLimitSeverity.HARD,
+            RiskLimitScope(RiskLimitHierarchy.SYSTEM, RiskPolicyMode.RESEARCH),
+            True,
+        )
+    for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+        with pytest.raises(RiskContractError, match="finite Decimal"):
+            policy_limit(threshold=str(value))
+
+
+def test_policy_requires_nonempty_typed_unique_limit_definitions() -> None:
+    with pytest.raises(RiskContractError, match="must not be empty"):
+        risk_policy(())
+    first = policy_limit(limit_id="same")
+    second = policy_limit(metric="weekly-loss", limit_id="same")
+    with pytest.raises(RiskContractError, match="must not contain duplicates"):
+        risk_policy((first, second))
+    with pytest.raises(RiskContractError, match="enabled"):
+        policy_limit(enabled=False)
+
+
+def test_policy_digest_and_exact_version_references_bind_content() -> None:
+    hard_limit = policy_limit()
+    value = risk_policy((hard_limit,))
+    assert value.policy_version.content_sha256 == value.content_sha256
+    assert value.configuration_version.content_sha256 == value.content_sha256
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(value, content_sha256="b" * 64)
+    changed = replace(hard_limit, threshold=Decimal("101"))
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(value, limits=(changed,))
+    with pytest.raises(RiskContractError, match="VersionReference digest mismatch"):
+        replace(value, policy_version=version("different-policy"))
+
+
+def test_policy_rejects_same_level_conflicts_and_ambiguous_scopes() -> None:
+    account_id = uuid4()
+    portfolio_id = uuid4()
+    strategy_id = "synthetic-strategy"
+    broad = policy_limit(
+        hierarchy=RiskLimitHierarchy.STRATEGY,
+        account_id=account_id,
+        portfolio_id=portfolio_id,
+        strategy_id=strategy_id,
+        limit_id="strategy-broad",
+    )
+    portfolio_specific = policy_limit(
+        hierarchy=RiskLimitHierarchy.STRATEGY,
+        account_id=account_id,
+        portfolio_id=portfolio_id,
+        strategy_id=strategy_id,
+        venue="synthetic-venue",
+        threshold="90",
+        limit_id="strategy-specific",
+    )
+    with pytest.raises(RiskContractError, match="same-level"):
+        risk_policy((broad, portfolio_specific))
+
+    overlapping_duplicate = replace(broad, limit_id="strategy-conflict")
+    with pytest.raises(RiskContractError, match="same-level"):
+        risk_policy((broad, overlapping_duplicate))
+
+    disjoint = policy_limit(
+        hierarchy=RiskLimitHierarchy.STRATEGY,
+        account_id=account_id,
+        portfolio_id=portfolio_id,
+        strategy_id="another-strategy",
+        limit_id="different-strategy",
+    )
+    assert len(risk_policy((broad, disjoint)).limits) == 2
+    other_account = policy_limit(
+        hierarchy=RiskLimitHierarchy.ACCOUNT,
+        account_id=uuid4(),
+        limit_id="different-account",
+    )
+    assert len(risk_policy((policy_limit(), other_account)).limits) == 2
+
+
+def test_policy_rejects_ambiguous_cross_level_scope_overlap() -> None:
+    account_id = uuid4()
+    portfolio_id = uuid4()
+    parent = policy_limit(
+        hierarchy=RiskLimitHierarchy.PORTFOLIO,
+        account_id=account_id,
+        portfolio_id=portfolio_id,
+        venue="synthetic-venue",
+        threshold="100",
+        limit_id="portfolio-hard-limit",
+    )
+    child = policy_limit(
+        hierarchy=RiskLimitHierarchy.STRATEGY,
+        account_id=account_id,
+        portfolio_id=portfolio_id,
+        strategy_id="synthetic-strategy",
+        threshold="101",
+        limit_id="strategy-ambiguous-limit",
+    )
+    with pytest.raises(RiskContractError, match="ambiguous or incomparable scopes"):
+        risk_policy((parent, child))
+
+
+def test_hard_parent_is_inherited_and_lower_scopes_may_only_tighten() -> None:
+    account_id = uuid4()
+    parent = policy_limit()
+    account_tighter = policy_limit(
+        hierarchy=RiskLimitHierarchy.ACCOUNT,
+        account_id=account_id,
+        threshold="90",
+        limit_id="account-tighter",
+    )
+    account_equal = replace(account_tighter, threshold=Decimal("100"))
+    assert len(risk_policy((parent, account_tighter)).limits) == 2
+    assert len(risk_policy((parent, account_equal)).limits) == 2
+    assert len(risk_policy((parent,)).limits) == 1
+
+    weaker = replace(account_tighter, threshold=Decimal("101"))
+    with pytest.raises(RiskContractError, match="weaken"):
+        risk_policy((parent, weaker))
+    softened = replace(
+        account_tighter,
+        severity=RiskLimitSeverity.SOFT,
+    )
+    with pytest.raises(RiskContractError, match="soften"):
+        risk_policy((parent, softened))
+    non_comparable = replace(
+        account_tighter,
+        unit="SYNTHETIC-PERCENT",
+    )
+    with pytest.raises(RiskContractError, match="non-comparable"):
+        risk_policy((parent, non_comparable))
+    disabled = replace(account_tighter, enabled=False)
+    with pytest.raises(RiskContractError, match="enabled"):
+        risk_policy((parent, disabled))
+
+
+def test_hard_parent_greater_equal_direction_can_only_tighten_upward() -> None:
+    parent = policy_limit(
+        metric="minimum-buffer",
+        direction=RiskLimitDirection.GREATER_THAN_OR_EQUAL,
+        threshold="10",
+        unit="SYNTHETIC-USD",
+    )
+    child = policy_limit(
+        hierarchy=RiskLimitHierarchy.ACCOUNT,
+        account_id=uuid4(),
+        metric="minimum-buffer",
+        direction=RiskLimitDirection.GREATER_THAN_OR_EQUAL,
+        threshold="11",
+        unit="SYNTHETIC-USD",
+        limit_id="account-buffer",
+    )
+    assert len(risk_policy((parent, child)).limits) == 2
+    with pytest.raises(RiskContractError, match="weaken"):
+        risk_policy((parent, replace(child, threshold=Decimal("9"))))
+    with pytest.raises(RiskContractError, match="non-comparable"):
+        risk_policy(
+            (
+                parent,
+                replace(child, direction=RiskLimitDirection.LESS_THAN_OR_EQUAL),
+            )
+        )
+
+
+def test_soft_warning_verdict_semantics_remain_non_enforcing_for_review() -> None:
+    warning_assessment = assessment(
+        outcome=RiskCheckOutcome.WARNING,
+        warnings=("Synthetic soft limit warning.",),
+        limits=(
+            limit(
+                severity=RiskLimitSeverity.SOFT,
+                outcome=RiskCheckOutcome.WARNING,
+            ),
+        ),
+    )
+    value = decision(
+        warning_assessment,
+        uuid4(),
+        verdict=RiskVerdict.PASS_WITH_WARNING,
+        soft_warning_ids=("synthetic-soft-limit",),
+        reason_codes=("SOFT_LIMIT_WARNING",),
+    )
+    assert value.verdict is RiskVerdict.PASS_WITH_WARNING
+    assert value.execution_authorized is False

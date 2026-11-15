@@ -654,3 +654,28 @@ activation, readiness, or execution authority. Performance decay is
 Closed codec schema-1 support is for inspection only; lineage retention is
 denied. No migration, DDL, persistence, API, scheduler, or global registry is
 introduced. [ADR](../adr/ADR-0029-validation-freshness-assessment-boundary.md).
+
+## Issue #103 — embedded risk policy/configuration values
+
+The immutable `RiskLimitPolicyConfiguration` embeds a non-empty, duplicate-free
+tuple of typed risk-limit definitions and exact `VersionReference` values for
+both its policy and configuration. It is not a new canonical contract or
+persisted/version-resolved registry. The content digest uses the existing
+`canonical-json-v1` canonical JSON and SHA-256 machinery. Its preimage contains
+the exact policy/configuration component and version identities and all typed
+limit/scope content, but excludes both referenced `content_sha256` values and
+the policy object's own `content_sha256`; the resulting digest must equal the
+own digest and both reference digests.
+
+The six ordered scope levels are `SYSTEM`, `ACCOUNT`, `PORTFOLIO`, `STRATEGY`,
+`TRADE`, and `USER_REQUEST`, each bound to an explicit operating mode and
+applicable identities. Overlapping same-level definitions conflict. An
+applicable lower-level definition must preserve a `HARD` parent and may only
+retain an equal or tighter comparable bound. No supplied tuple can prove that
+external policy sources or omitted definitions are complete.
+
+This addition defines no default policy or numeric thresholds, policy
+store/resolver/API/DB/migration, consumers, account/portfolio math, or
+approval/execution authority. Existing `PASS_WITH_WARNING` semantics remain;
+this value-object change does not enforce downstream human review or
+acknowledgment for soft breaches.

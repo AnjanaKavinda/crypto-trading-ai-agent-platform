@@ -303,6 +303,23 @@ Every explicit required name is dispositioned as registered canonical contract, 
 | Chat 12 | MethodologyCategory, IndicatorMetadata, FundamentalAssessment, TechnicalIndicatorAssessment, OnChainAssessment, SentimentAssessment, ConfluenceIndependenceAssessment, TraderFacingExplanation, RepositoryMap, ImplementationSlice, CopilotTaskPrompt, DefinitionOfDone, TestTraceabilityMatrix, ContractRegistry, ADR, MigrationPlan, ReleaseGate, EnvironmentConfig, CIValidationReport, agent matrix, handoff matrix, evidence graph, decision provenance, permission matrix, state machines, version registry, audit matrix, failure matrix, test traceability matrix | Registered: C-011, C-012, C-016, C-017. `TechnicalIndicatorAssessment` aliases Technical scope under C-012. `ConfluenceIndependenceAssessment` aliases independence logic across C-009 and C-093. `MethodologyCategory` enum/state vocabulary. `IndicatorMetadata`, `EnvironmentConfig` embedded/value objects. `TraderFacingExplanation` UI/read-model DTO. Remaining names are governance artifacts. |
 | Chat 13 | ExperienceRecord, LearningObservation, LearningInsight, Hypothesis, Experiment, ExperimentResult, CounterfactualAnalysis, AgentPerformance, StrategyPerformance, CalibrationRecord, DriftAssessment, SystemAwarenessSnapshot, KnowledgeArtifact, GovernanceDecision, StrategyChangeProposal, ChampionChallengerRecord | Registered: C-045 (alias `ExperienceRecord`), C-046, C-047, C-048, C-049, C-050, C-090, C-052, C-053, C-031 (alias `CalibrationRecord`), C-055, C-054, C-056, C-057, C-051, C-100. |
 
+## Issue #103 — embedded risk policy/configuration values
+
+`RiskLimitScope`, `RiskLimitDefinition`, and `RiskLimitPolicyConfiguration` are
+immutable embedded/value objects under the existing Chat 8 risk contracts; they
+are not new cross-domain contracts and receive no `C-###` identifier. Their
+scope precedence is `SYSTEM > ACCOUNT > PORTFOLIO > STRATEGY > TRADE >
+USER_REQUEST`. A supplied applicable lower-level definition cannot disable,
+soften, replace with a non-comparable limit, or weaken a `HARD` parent; only an
+equal or tighter comparable `HARD` bound is permitted. Omitted external policy
+definitions cannot be detected, so these objects do not prove policy
+completeness. Existing `PASS_WITH_WARNING` behavior is preserved; these values
+do not enforce downstream human review or acknowledgment for soft breaches.
+
+This is a typed value-object and validation boundary only. It adds no default
+policy or thresholds, policy store/resolver/API/database/migration, risk
+consumer, account/portfolio calculation, approval, or execution authority.
+
 ## Approval scope and change control
 
 - Registry approval establishes cross-domain semantics and ownership; schemas and implementation artifacts are intentionally deferred.
