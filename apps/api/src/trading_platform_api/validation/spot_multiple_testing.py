@@ -18,6 +18,7 @@ from trading_platform_api.validation.multiple_testing_contracts_v1 import (
     MultipleTestingCounts,
     MultipleTestingOutcome,
     SpotMultipleTestingPlanV1,
+    assessment_event_is_valid,
 )
 from trading_platform_api.validation.oos_contracts_v2 import (
     OOSEventKind,
@@ -67,6 +68,8 @@ def freeze_spot_multiple_testing_plan(
         raise ValueError("MULTIPLE_TESTING_HYPOTHESIS_REFERENCE_INVALID")
     if len(set(hypothesis_refs)) != len(hypothesis_refs):
         raise ValueError("MULTIPLE_TESTING_HYPOTHESIS_REFERENCE_DUPLICATE")
+    if candidate_hypothesis_map is None and not hypothesis_refs:
+        raise ValueError("MULTIPLE_TESTING_HYPOTHESES_REQUIRED")
     candidates = protocol.candidates
     if candidate_hypothesis_map is None:
         candidate_hypothesis_map = tuple(
@@ -262,6 +265,26 @@ def observe_spot_multiple_testing(
         )
         for event in journal_tail
     )
+    relevant_events = tuple(
+        event
+        for event in post_plan_events
+        if event.protocol_sha256 == protocol.content_sha256
+        or (
+            event.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL)
+            and event.window.overlaps(holdout)
+        )
+    )
+    seen_event_digests: set[str] = set()
+    evidence_violation = False
+    for event in relevant_events:
+        if not assessment_event_is_valid(
+            event,
+            plan=plan,
+            oos_result=result,
+            seen_event_digests=seen_event_digests,
+        ):
+            evidence_violation = True
+        seen_event_digests.add(event.content_sha256)
     outcome = (
         MultipleTestingOutcome.FAILED
         if result.outcome.value == "FAILED"
@@ -269,6 +292,7 @@ def observe_spot_multiple_testing(
         or holdout_violation
         or trial_scope_violation
         or tail_violation
+        or evidence_violation
         or len(results) != 1
         else MultipleTestingOutcome(result.outcome.value)
     )

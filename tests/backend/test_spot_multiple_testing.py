@@ -6,26 +6,43 @@ from dataclasses import replace
 from uuid import UUID, uuid4
 
 import pytest
-
-from test_spot_oos import case, execute, freeze
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.codec import LineageError, decode, encode, key_for
 from trading_platform_api.lineage.store import references
 from trading_platform_api.risk import ContractReference
-from trading_platform_api.validation.oos_contracts_v2 import (
-    OOSEventKind,
-    OOSSelectionMode,
-    OOSWindow,
-)
+from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
 from trading_platform_api.validation.multiple_testing_contracts_v1 import (
     BestValidationObservation,
     CandidateHypothesisMapping,
     MultipleTestingOutcome,
 )
+from trading_platform_api.validation.oos_contracts_v2 import (
+    OOSEventKind,
+    OOSSelectionMode,
+    OOSWindow,
+)
 from trading_platform_api.validation.spot_multiple_testing import (
     freeze_spot_multiple_testing_plan,
     observe_spot_multiple_testing,
 )
+
+
+def case(*args, **kwargs):
+    from test_spot_oos import case as make_case
+
+    return make_case(*args, **kwargs)
+
+
+def execute(*args, **kwargs):
+    from test_spot_oos import execute as run_oos
+
+    return run_oos(*args, **kwargs)
+
+
+def freeze(*args, **kwargs):
+    from test_spot_oos import freeze as freeze_protocol
+
+    return freeze_protocol(*args, **kwargs)
 
 
 def _hypothesis_refs():
@@ -159,6 +176,40 @@ def test_post_result_holdout_access_is_included_and_fails_assessment():
     assert assessment.outcome is MultipleTestingOutcome.FAILED
     assert any(
         event.purpose == "POST_RESULT_HOLDOUT_INSPECTION"
+        for event in assessment.preserved_terminal_attempts
+    )
+
+
+def test_partial_trial_evidence_is_preserved_as_failed_assessment():
+    request, metrics, journal, partitions, protocol = _protocol_case()
+    freeze_spot_multiple_testing_plan(
+        journal=journal, protocol=protocol, hypothesis_refs=_hypothesis_refs()
+    )
+    oos = asyncio.run(execute(request, metrics, journal, protocol))
+    development = partitions[0]
+    journal._append(
+        OOSEventKind.TRIAL,
+        OOSWindow(
+            protocol.window.venue,
+            protocol.window.instrument_id,
+            protocol.window.timeframe,
+            development.start,
+            development.end,
+        ),
+        protocol=protocol,
+        candidate=protocol.candidates[0],
+        purpose="POST_RESULT_PARTIAL_TRIAL_RECEIPT",
+        evidence=(ValidationArtifactReferenceV2("C-027", uuid4(), "3", "a" * 64),),
+    )
+
+    assessment = observe_spot_multiple_testing(
+        journal=journal, protocol=protocol, bundle=oos
+    )
+
+    assert assessment.outcome is MultipleTestingOutcome.FAILED
+    assert any(
+        event.purpose == "POST_RESULT_PARTIAL_TRIAL_RECEIPT"
+        and len(event.evidence) == 1
         for event in assessment.preserved_terminal_attempts
     )
 

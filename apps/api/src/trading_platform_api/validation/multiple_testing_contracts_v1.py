@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -150,7 +150,10 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _payload(value: object, omitted: set[str]) -> dict[str, object]:
+def _payload(
+    value: SpotMultipleTestingPlanV1 | MultipleTestingAssessment,
+    omitted: set[str],
+) -> dict[str, object]:
     return {
         item.name: getattr(value, item.name)
         for item in fields(value)
@@ -184,8 +187,8 @@ class SpotMultipleTestingPlanV1:
     method: str = METHOD
     method_version: str = METHOD_VERSION
     identity_method: str = IDENTITY_METHOD
-    contract_id: str = "C-105"
-    schema_version: str = "1"
+    contract_id: str = field(default="C-105", init=False)
+    schema_version: str = field(default="1", init=False)
 
     def __post_init__(self) -> None:
         if (
@@ -340,8 +343,113 @@ class SpotMultipleTestingPlanV1:
         )
         digest = canonical_sha256(values)
         return cls(
-            plan_id=uuid5(_NAMESPACE, "plan:" + digest), content_sha256=digest, **values
+            plan_id=uuid5(_NAMESPACE, "plan:" + digest),
+            content_sha256=digest,
+            **{
+                key: value
+                for key, value in values.items()
+                if key not in {"contract_id", "schema_version"}
+            },
         )
+
+
+def assessment_event_is_valid(
+    event: OOSJournalEvent,
+    *,
+    plan: SpotMultipleTestingPlanV1,
+    oos_result: OOSResultV2,
+    seen_event_digests: set[str],
+) -> bool:
+    protocol_candidates = {
+        candidate.candidate_id for candidate in plan.protocol.candidates
+    }
+    if (
+        event.recorded_at < plan.frozen_at
+        or event.content_sha256 in seen_event_digests
+        or (
+            event.protocol_sha256 == plan.protocol.content_sha256
+            and event.candidate_id is not None
+            and event.candidate_id not in protocol_candidates
+        )
+    ):
+        return False
+    evidence_types = tuple(
+        (reference.artifact_type, reference.version) for reference in event.evidence
+    )
+    if (
+        len(evidence_types) != len(set(evidence_types))
+        or not set(evidence_types) <= _EVENT_EVIDENCE_TYPES
+    ):
+        return False
+    allowed_evidence: tuple[set[tuple[str, str]], ...]
+    if event.kind in (OOSEventKind.ACCESS, OOSEventKind.SELECT):
+        allowed_evidence = (set(),)
+    elif event.kind is OOSEventKind.TRIAL:
+        allowed_evidence = (
+            set(),
+            {
+                ("C-027", "3"),
+                ("SPOT_PERFORMANCE_REPORT", "1"),
+                ("SPOT_OOS_REQUEST", "1"),
+            },
+        )
+    elif event.kind is OOSEventKind.RESULT:
+        allowed_evidence = (
+            {("SPOT_OOS_REQUEST", "1")},
+            {
+                ("C-027", "3"),
+                ("SPOT_PERFORMANCE_REPORT", "1"),
+                ("SPOT_OOS_REQUEST", "1"),
+            },
+        )
+    else:
+        allowed_evidence = (set(),)
+    if set(evidence_types) not in allowed_evidence:
+        return False
+    if ("C-027", "3") in evidence_types:
+        matching = []
+        for run in oos_result.runs:
+            partition = next(
+                (
+                    part
+                    for part in plan.protocol.partitions
+                    if part.partition_id == run.partition_id
+                ),
+                None,
+            )
+            if partition is None:
+                continue
+            run_window = OOSWindow(
+                plan.window.venue,
+                plan.window.instrument_id,
+                plan.window.timeframe,
+                partition.start,
+                partition.end,
+            )
+            held = partition.partition_id == plan.held_out_partition_id
+            backtest_ref = ValidationArtifactReferenceV2(
+                "C-027", run.backtest.result_id, "3", run.backtest.content_sha256
+            )
+            expected_refs = (
+                (run.request, backtest_ref, run.metrics_report)
+                if held
+                else (backtest_ref, run.metrics_report, run.request)
+            )
+            expected_kind = OOSEventKind.RESULT if held else OOSEventKind.TRIAL
+            if (
+                event.kind is expected_kind
+                and event.window == run_window
+                and event.candidate_id == run.candidate.candidate_id
+                and event.evidence == expected_refs
+            ):
+                matching.append(run)
+        if len(matching) != 1:
+            return False
+    elif event.kind is OOSEventKind.RESULT and event.evidence != (
+        oos_result.request_reference,
+    ):
+        return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,8 +473,8 @@ class MultipleTestingAssessment:
     method: str = METHOD
     method_version: str = METHOD_VERSION
     identity_method: str = IDENTITY_METHOD
-    contract_id: str = "C-105"
-    schema_version: str = "1"
+    contract_id: str = field(default="C-105", init=False)
+    schema_version: str = field(default="1", init=False)
 
     def __post_init__(self) -> None:
         if (
@@ -454,103 +562,17 @@ class MultipleTestingAssessment:
         )
         if self.observed_events != expected_events:
             raise ValueError("C-105 event snapshot mismatch.")
-        protocol_candidates = {c.candidate_id for c in self.plan.protocol.candidates}
         seen_event_digests: set[str] = set()
+        invalid_event_evidence = False
         for event in self.observed_events:
-            if (
-                event.recorded_at < self.plan.frozen_at
-                or event.content_sha256 in seen_event_digests
-                or (
-                    event.protocol_sha256 == self.plan.protocol.content_sha256
-                    and
-                    event.candidate_id is not None
-                    and event.candidate_id not in protocol_candidates
-                )
+            if not assessment_event_is_valid(
+                event,
+                plan=self.plan,
+                oos_result=self.oos_result,
+                seen_event_digests=seen_event_digests,
             ):
-                raise ValueError("C-105 event chronology or uniqueness failure.")
+                invalid_event_evidence = True
             seen_event_digests.add(event.content_sha256)
-            evidence_types = tuple(
-                (ref.artifact_type, ref.version) for ref in event.evidence
-            )
-            if (
-                len(evidence_types) != len(set(evidence_types))
-                or not set(evidence_types) <= _EVENT_EVIDENCE_TYPES
-            ):
-                raise ValueError("C-105 event evidence is not closed.")
-            if event.kind in (OOSEventKind.ACCESS, OOSEventKind.SELECT):
-                allowed_evidence = (set(),)
-            elif event.kind is OOSEventKind.TRIAL:
-                allowed_evidence = (
-                    set(),
-                    {
-                        ("C-027", "3"),
-                        ("SPOT_PERFORMANCE_REPORT", "1"),
-                        ("SPOT_OOS_REQUEST", "1"),
-                    },
-                )
-            elif event.kind is OOSEventKind.RESULT:
-                allowed_evidence = (
-                    {("SPOT_OOS_REQUEST", "1")},
-                    {
-                        ("C-027", "3"),
-                        ("SPOT_PERFORMANCE_REPORT", "1"),
-                        ("SPOT_OOS_REQUEST", "1"),
-                    },
-                )
-            else:
-                allowed_evidence = (set(),)
-            if set(evidence_types) not in allowed_evidence:
-                raise ValueError("C-105 event evidence is not valid for its C-071 kind.")
-            if ("C-027", "3") in evidence_types:
-                matching = []
-                for run in self.oos_result.runs:
-                    partition = next(
-                        (
-                            part
-                            for part in self.plan.protocol.partitions
-                            if part.partition_id == run.partition_id
-                        ),
-                        None,
-                    )
-                    if partition is None:
-                        continue
-                    run_window = OOSWindow(
-                        self.plan.window.venue,
-                        self.plan.window.instrument_id,
-                        self.plan.window.timeframe,
-                        partition.start,
-                        partition.end,
-                    )
-                    held = partition.partition_id == self.plan.held_out_partition_id
-                    backtest_ref = ValidationArtifactReferenceV2(
-                        "C-027",
-                        run.backtest.result_id,
-                        "3",
-                        run.backtest.content_sha256,
-                    )
-                    expected_refs = (
-                        (run.request, backtest_ref, run.metrics_report)
-                        if held
-                        else (backtest_ref, run.metrics_report, run.request)
-                    )
-                    expected_kind = (
-                        OOSEventKind.RESULT if held else OOSEventKind.TRIAL
-                    )
-                    if (
-                        event.kind is expected_kind
-                        and event.window == run_window
-                        and event.candidate_id == run.candidate.candidate_id
-                        and event.evidence == expected_refs
-                    ):
-                        matching.append(run)
-                if len(matching) != 1:
-                    raise ValueError(
-                        "C-105 replay references do not resolve to exact C-071 runs."
-                    )
-            elif event.kind is OOSEventKind.RESULT and event.evidence != (
-                self.oos_result.request_reference,
-            ):
-                raise ValueError("C-105 incomplete result receipt mismatches its exact request.")
         results = tuple(
             e
             for e in self.observed_events
@@ -573,7 +595,7 @@ class MultipleTestingAssessment:
         )
         expected_outcome = (
             MultipleTestingOutcome.FAILED
-            if tail_failure
+            if tail_failure or invalid_event_evidence
             else MultipleTestingOutcome(self.oos_result.outcome.value)
         )
         if (
@@ -591,9 +613,7 @@ class MultipleTestingAssessment:
         ):
             raise ValueError("C-105 terminal attempt/result closure failure.")
         selected = self.oos_result.selected_candidate
-        if (
-            selected.candidate_id if selected else None
-        ) != self.selected_candidate_id:
+        if (selected.candidate_id if selected else None) != self.selected_candidate_id:
             raise ValueError("C-105 selected candidate mismatch.")
         expected_rejected = tuple(
             c.candidate_id
@@ -661,9 +681,7 @@ class MultipleTestingAssessment:
             for run in self.oos_result.runs:
                 if run.partition_id != self.plan.validation_partition_id:
                     continue
-                report = decode_value(
-                    SpotPerformanceReport, loads(run.report_document)
-                )
+                report = decode_value(SpotPerformanceReport, loads(run.report_document))
                 metric = report.get(self.plan.metric_name)
                 if metric.state is MetricState.AVAILABLE and metric.metric is not None:
                     candidates.append(
@@ -681,23 +699,26 @@ class MultipleTestingAssessment:
                     self.best_validation_observation.metric_name
                     != self.plan.metric_name
                     or self.best_validation_observation.metric_value != expected_value
-                    or self.best_validation_observation.evidence_reference != expected_ref
+                    or self.best_validation_observation.evidence_reference
+                    != expected_ref
                 ):
                     raise ValueError("C-105 best validation observation is not exact.")
             elif self.best_validation_observation != BestValidationObservation(
                 None, None, None, "NO_VALID_DEVELOPMENT_METRIC"
             ):
-                raise ValueError("C-105 best validation observation must be unavailable.")
+                raise ValueError(
+                    "C-105 best validation observation must be unavailable."
+                )
         digest = canonical_sha256(_payload(self, {"result_id", "content_sha256"}))
-        if self.content_sha256 != digest or self.result_id != uuid5(_NAMESPACE, "result:" + digest):
+        if self.content_sha256 != digest or self.result_id != uuid5(
+            _NAMESPACE, "result:" + digest
+        ):
             raise ValueError("C-105 assessment identity mismatch.")
 
     @property
     def attempted_trial_count(self) -> int:
         """Recorded C-071 TRIAL events; not a statistical sample size."""
-        return sum(
-            event.kind is OOSEventKind.TRIAL for event in self.observed_events
-        )
+        return sum(event.kind is OOSEventKind.TRIAL for event in self.observed_events)
 
     @classmethod
     def build(
@@ -744,7 +765,8 @@ class MultipleTestingAssessment:
             preserved_terminal_attempts=tuple(
                 e
                 for e in events
-                if e.kind in (OOSEventKind.ACCESS, OOSEventKind.TRIAL, OOSEventKind.RESULT)
+                if e.kind
+                in (OOSEventKind.ACCESS, OOSEventKind.TRIAL, OOSEventKind.RESULT)
             ),
             journal_tail=journal_tail,
             correction_status=_CORRECTION_STATUS,
@@ -759,7 +781,11 @@ class MultipleTestingAssessment:
         return cls(
             result_id=uuid5(_NAMESPACE, "result:" + digest),
             content_sha256=digest,
-            **values,
+            **{
+                key: value
+                for key, value in values.items()
+                if key not in {"contract_id", "schema_version"}
+            },
         )
 
 
