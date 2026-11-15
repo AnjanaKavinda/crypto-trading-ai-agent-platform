@@ -55,6 +55,7 @@ from trading_platform_api.market_data.history_contracts import (
     ObservationRevision,
 )
 from trading_platform_api.market_data.history_selection import reconstruct_history
+from trading_platform_api.risk import ContractReference
 from trading_platform_api.spot_research_store import (
     SqlAlchemySpotResearchStore,
     spot_producer_request_reservations,
@@ -97,6 +98,9 @@ from trading_platform_api.validation.cost_models import (
 from trading_platform_api.validation.monte_carlo_contracts_v2 import (
     MonteCarloOutcomeV2,
 )
+from trading_platform_api.validation.multiple_testing_contracts_v1 import (
+    MultipleTestingOutcome,
+)
 from trading_platform_api.validation.oos_contracts_v2 import (
     NAMESPACE,
     OOSJournalEvent,
@@ -137,6 +141,10 @@ from trading_platform_api.validation.spot_metrics import (
     calculate_spot_performance_metrics,
 )
 from trading_platform_api.validation.spot_monte_carlo import run_spot_monte_carlo
+from trading_platform_api.validation.spot_multiple_testing import (
+    freeze_spot_multiple_testing_plan,
+    observe_spot_multiple_testing,
+)
 from trading_platform_api.validation.spot_oos import (
     OOSResearchJournal,
     candidate_from_request,
@@ -1991,6 +1999,13 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     environment=policy.environment,
                 )
                 protocol = freeze_spot_oos_protocol(**freeze_kwargs)
+                plan = freeze_spot_multiple_testing_plan(
+                    journal=recorder,
+                    protocol=protocol,
+                    hypothesis_refs=(
+                        ContractReference("C-048", uuid4(), "1", "f" * 64),
+                    ),
+                )
                 oos_kwargs = dict(
                     journal=recorder,
                     protocol=protocol,
@@ -2114,6 +2129,24 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     OOSOutcome.OBSERVED if synthetic_ready else OOSOutcome.INCONCLUSIVE
                 ), oos_bundle.reason_codes
                 oos_result = resolve_spot_oos_result(oos_bundle, journal=recorder)
+                assessment = observe_spot_multiple_testing(
+                    journal=recorder, protocol=protocol, bundle=oos_bundle
+                )
+                assert assessment.outcome is (
+                    MultipleTestingOutcome.OBSERVED
+                    if synthetic_ready
+                    else MultipleTestingOutcome.INCONCLUSIVE
+                )
+                assert assessment.plan == plan
+                assert assessment.oos_result == oos_result
+                assert (
+                    assessment.selected_candidate_id
+                    == protocol.candidates[0].candidate_id
+                )
+                assert assessment.counts.development_trial_count == 0
+                assert assessment.counts.held_out_result_count == 1
+                assert assessment.correction_status == "NOT_APPLIED"
+                assert decode(encode(assessment)) == assessment
                 _assert_oos_contract_rejections(oos_result)
                 assert oos_result.as_of == request.result_as_of == bundle.result.as_of
                 result_values = {

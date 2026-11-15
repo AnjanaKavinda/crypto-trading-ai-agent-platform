@@ -619,3 +619,17 @@ may be supported by a trusted replay. The remaining seven are inconclusive with
 explicit reasons. C-094v2 is not accepted by qualification and cannot be
 retained by the lineage store; codec support is not storage authority. No
 migration or DDL. [ADR](../adr/ADR-0027-spot-bias-observation-boundary.md).
+
+## ADR-0028 — C-105
+
+C-105 schema 1 is an observation-only record built from one exact OOS protocol,
+the supplied process-local journal prefix, and an issued C-071v2 result. It
+preserves subsequent protocol-bound events, including incomplete and aborted
+attempts, and exact C-027v3/#94 references where present. The frozen correction
+status is `NOT_APPLIED`; interpretation is `UNADJUSTED_DESCRIPTIVE_ONLY`.
+FIXED protocols have no required development-trial minimum. C-105 does not apply
+correction, rank/select holdout candidates, infer complete global research
+history, or grant qualification, learning, or promotion authority. Closed codec
+support is read/inspection compatibility only; lineage retention is denied. No
+migration, DDL, or general registry lifecycle is introduced.
+[ADR](../adr/ADR-0028-spot-multiple-testing-observation-boundary.md).

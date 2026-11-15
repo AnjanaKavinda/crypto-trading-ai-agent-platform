@@ -46,6 +46,7 @@ from trading_platform_api.validation import (
     BacktestResultV3,
     CalibrationResult,
     CostAssumptionSetV2,
+    MultipleTestingAssessment,
     QualificationValidationResultV2,
 )
 
@@ -168,10 +169,10 @@ def test_registry_classifies_every_canonical_contract() -> None:
     registry = _registry_rows()
     owners = _canonical_owners()
 
-    assert set(registry) == {f"C-{number:03d}" for number in range(1, 105)}
-    assert len(set(registry.values())) == 104
+    assert set(registry) == {f"C-{number:03d}" for number in range(1, 106)}
+    assert len(set(registry.values())) == 105
     assert set(owners) == set(registry) - set(DEFERRED_CONTRACTS)
-    assert len(owners) == 103
+    assert len(owners) == 104
     assert {
         contract_id: registry[contract_id] for contract_id in DEFERRED_CONTRACTS
     } == DEFERRED_CONTRACTS
@@ -180,6 +181,7 @@ def test_registry_classifies_every_canonical_contract() -> None:
         for contract_id, contract_type in owners.items()
     } == {contract_id: registry[contract_id] for contract_id in owners}
     assert owners["C-093"] is AgentIndependenceReport
+    assert owners["C-105"] is MultipleTestingAssessment
     assert owners["C-067"] is ModelRoutingDecision
     assert owners["C-062"].__name__ == "AgentResult"
     assert owners["C-061"] is AgentDefinition

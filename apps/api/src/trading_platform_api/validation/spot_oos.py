@@ -23,6 +23,10 @@ from trading_platform_api.validation.contracts import (
     DataPartition,
 )
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
+from trading_platform_api.validation.multiple_testing_contracts_v1 import (
+    SpotMultipleTestingPlanV1,
+    SpotMultipleTestingResultV1,
+)
 from trading_platform_api.validation.oos_contracts_v2 import (
     MAX_EVENTS,
     OOSCandidateV2,
@@ -187,6 +191,7 @@ class OOSResearchJournal:
         self._cache: dict[str, SpotOOSBundle] = {}
         self._inflight: set[str] = set()
         self._issued: dict[str, OOSResultV2] = {}
+        self._multiple_testing_plans: dict[str, SpotMultipleTestingPlanV1] = {}
         self._reservations: dict[object, int] = {}
         self._run_lock = asyncio.Lock()
         self._trial_lock = asyncio.Lock()
@@ -320,6 +325,42 @@ def freeze_spot_oos_protocol(
             journal=journal, protocol=protocol, candidate_id=candidates[0].candidate_id
         )
     return protocol
+
+
+def freeze_spot_multiple_testing_plan(
+    *,
+    journal: OOSResearchJournal,
+    protocol: OOSProtocolV2,
+    candidate_hypothesis_map=None,
+    hypothesis_refs=(),
+    metric_name: str = "net_realized_profit",
+) -> SpotMultipleTestingPlanV1:
+    """Compatibility entry point for the separate deterministic C-105 observer."""
+    from trading_platform_api.validation.spot_multiple_testing import (
+        freeze_spot_multiple_testing_plan as freeze,
+    )
+
+    return freeze(
+        journal=journal,
+        protocol=protocol,
+        candidate_hypothesis_map=candidate_hypothesis_map,
+        hypothesis_refs=hypothesis_refs,
+        metric_name=metric_name,
+    )
+
+
+def observe_spot_multiple_testing(
+    *,
+    journal: OOSResearchJournal,
+    protocol: OOSProtocolV2,
+    bundle: SpotOOSBundle,
+) -> SpotMultipleTestingResultV1:
+    """Observe the exact supplied issued C-071v2 result without holdout ranking."""
+    from trading_platform_api.validation.spot_multiple_testing import (
+        observe_spot_multiple_testing as observe,
+    )
+
+    return observe(journal=journal, protocol=protocol, bundle=bundle)
 
 
 def _window(protocol: OOSProtocolV2, partition: DataPartition) -> OOSWindow:

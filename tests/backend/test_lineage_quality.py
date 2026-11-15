@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from test_moving_averages import evidence
 from test_spot_bias_audit import _result as spot_bias_result
+from test_spot_multiple_testing import build_observation_result
 from trading_platform_api.lineage.codec import (
     LineageError,
     LineageKey,
@@ -126,3 +127,8 @@ def test_unknown_quality_enum_value_fails_closed() -> None:
 def test_c094v2_codec_does_not_authorize_lineage_retention() -> None:
     with pytest.raises(LineageError, match="C-094v2 retention is not authorized"):
         references(spot_bias_result())
+
+
+def test_c105v1_is_not_retained_by_lineage() -> None:
+    with pytest.raises(LineageError, match="C-105v1 retention is not authorized"):
+        references(build_observation_result())
