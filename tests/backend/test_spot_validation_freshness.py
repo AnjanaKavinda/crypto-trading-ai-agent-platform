@@ -8,9 +8,10 @@ import pytest
 from test_wave3_contract_foundation import (
     NOW,
     package,
+)
+from test_wave3_contract_foundation import (
     validation as make_validation,
 )
-
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.lineage.codec import LineageError, decode, encode, key_for
 from trading_platform_api.strategy.contracts import VersionReference
@@ -33,7 +34,6 @@ from trading_platform_api.validation.freshness_contracts_v1 import (
 from trading_platform_api.validation.spot_validation_freshness import (
     assess_spot_validation_freshness,
 )
-
 
 BUILD_REFERENCE = VersionReference(
     "CODE_BUILD",
@@ -76,10 +76,7 @@ def validation(pkg, **kwargs):
 def sources():
     original = package()
     graph = EvidenceGraphV2(
-        tuple(
-            replace(node, method=BUILD_REFERENCE)
-            for node in original.graph.nodes
-        ),
+        tuple(replace(node, method=BUILD_REFERENCE) for node in original.graph.nodes),
         original.graph.edges,
     )
     package_values = {
@@ -166,9 +163,7 @@ def test_exact_identity_match_is_current_and_only_pass_maps_to_review():
     assert report.freshness is ValidationFreshnessStateV1.CURRENT
     assert report.original_validation_outcome is ValidationOutcomeV2.PASS
     assert report.original_gates == result.gates
-    assert (
-        report.governance_review_state.value == "CURRENT_FOR_GOVERNANCE_REVIEW"
-    )
+    assert report.governance_review_state.value == "CURRENT_FOR_GOVERNANCE_REVIEW"
     assert all(item.matches is True for item in report.identity_comparisons)
     comparisons = {item.identity: item.matches for item in report.identity_comparisons}
     assert comparisons["rule_set"] is True
@@ -218,9 +213,7 @@ def test_each_bound_identity_mismatch_is_stale(field, difference):
     assert comparison.original != comparison.current
 
 
-@pytest.mark.parametrize(
-    "field", ("asset", "instrument_type", "timeframe", "regime")
-)
+@pytest.mark.parametrize("field", ("asset", "instrument_type", "timeframe", "regime"))
 def test_each_current_scope_mismatch_is_stale(field):
     pkg, result = sources()
     snapshot = current_snapshot(pkg, result)
@@ -250,9 +243,7 @@ def test_all_current_scope_mismatches_are_reported_as_stale():
     report = assess(pkg, result, changed)
 
     assert report.freshness is ValidationFreshnessStateV1.STALE
-    comparisons = {
-        item.identity: item.matches for item in report.identity_comparisons
-    }
+    comparisons = {item.identity: item.matches for item in report.identity_comparisons}
     assert all(
         comparisons[name] is False
         for name in ("asset", "instrument_type", "timeframe", "regime")
@@ -282,9 +273,7 @@ def test_original_rule_set_reference_is_derived_from_exact_validation():
 
     report = assess(pkg, result)
     rule_set = next(
-        item
-        for item in report.identity_comparisons
-        if item.identity == "rule_set"
+        item for item in report.identity_comparisons if item.identity == "rule_set"
     )
 
     assert rule_set.original == ValidationArtifactReferenceV2(
@@ -370,9 +359,7 @@ def test_expiry_is_inclusive_at_declared_package_boundary():
     pkg, result = sources()
     snapshot = current_snapshot(pkg, result)
 
-    before = assess(
-        pkg, result, snapshot, pkg.expires_at - timedelta(microseconds=1)
-    )
+    before = assess(pkg, result, snapshot, pkg.expires_at - timedelta(microseconds=1))
     boundary = assess(pkg, result, snapshot, pkg.expires_at)
 
     assert before.freshness is ValidationFreshnessStateV1.CURRENT
@@ -438,9 +425,7 @@ def test_stale_mismatch_precedes_expiry_when_all_identities_are_comparable():
         ),
     ),
 )
-def test_original_failed_or_insufficient_validation_is_never_upgraded(
-    outcome, failed
-):
+def test_original_failed_or_insufficient_validation_is_never_upgraded(outcome, failed):
     pkg, _ = sources()
     result = validation(pkg, overall=outcome, failed=failed)
     report = assess(pkg, result)

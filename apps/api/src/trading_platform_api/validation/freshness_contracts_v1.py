@@ -10,8 +10,8 @@ from uuid import UUID, uuid5
 
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.validation.contracts_v2 import (
-    QualificationGateV2,
     QualificationGateResultV2,
+    QualificationGateV2,
     QualificationValidationResultV2,
     ValidationArtifactReferenceV2,
     ValidationOutcomeV2,
@@ -60,11 +60,7 @@ class GovernanceReviewStateV1(StrEnum):
 
 
 def _time(name: str, value: object) -> datetime:
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() is None
-    ):
+    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
         raise FreshnessContractError(f"{name} must be timezone-aware.")
     return value.astimezone(UTC)
 
@@ -123,9 +119,7 @@ class ValidationFreshnessSnapshotV1:
         for name in ("asset", "instrument_type", "timeframe", "regime"):
             value = getattr(self, name)
             if value is not None and (
-                type(value) is not str
-                or not value.strip()
-                or value != value.strip()
+                type(value) is not str or not value.strip() or value != value.strip()
             ):
                 raise FreshnessContractError(
                     f"{name} must be a non-blank trimmed string when supplied."
@@ -149,9 +143,7 @@ class FreshnessIdentityComparisonV1:
             if isinstance(value, ValidationArtifactReferenceV2):
                 _reference(name, value)
             elif value is not None and (
-                type(value) is not str
-                or not value.strip()
-                or value != value.strip()
+                type(value) is not str or not value.strip() or value != value.strip()
             ):
                 raise FreshnessContractError(
                     f"{name} must be a typed reference or non-blank scope value."
@@ -232,17 +224,14 @@ class ValidationFreshnessAssessmentV1:
         if not isinstance(self.freshness, ValidationFreshnessStateV1):
             raise FreshnessContractError("freshness state is unsupported.")
         if not isinstance(self.original_validation_outcome, ValidationOutcomeV2):
-            raise FreshnessContractError(
-                "original validation outcome is unsupported."
-            )
+            raise FreshnessContractError("original validation outcome is unsupported.")
         if (
             type(self.original_gates) is not tuple
             or any(
                 type(item) is not QualificationGateResultV2
                 for item in self.original_gates
             )
-            or {item.gate for item in self.original_gates}
-            != set(QualificationGateV2)
+            or {item.gate for item in self.original_gates} != set(QualificationGateV2)
             or len(self.original_gates) != len(QualificationGateV2)
         ):
             raise FreshnessContractError(
@@ -277,9 +266,8 @@ class ValidationFreshnessAssessmentV1:
             raise FreshnessContractError(
                 "non-current freshness requires an explicit reason."
             )
-        if (
-            type(self.declared_expiries) is not tuple
-            or any(type(item) is not datetime for item in self.declared_expiries)
+        if type(self.declared_expiries) is not tuple or any(
+            type(item) is not datetime for item in self.declared_expiries
         ):
             raise FreshnessContractError("declared_expiries must be a typed tuple.")
         expiries = tuple(
@@ -298,10 +286,7 @@ class ValidationFreshnessAssessmentV1:
             raise FreshnessContractError(
                 "expires_at must be the earliest declared expiry."
             )
-        if (
-            self.performance_decay_reason
-            != "ROLLING_PERFORMANCE_DECAY_NOT_ASSESSED"
-        ):
+        if self.performance_decay_reason != "ROLLING_PERFORMANCE_DECAY_NOT_ASSESSED":
             raise FreshnessContractError(
                 "performance decay reason is fixed in schema 1."
             )
@@ -386,8 +371,8 @@ class ValidationFreshnessAssessmentV1:
         return cls(
             assessment_id=uuid5(_NAMESPACE, digest),
             content_sha256=digest,
-            **values,
-        )  # type: ignore[arg-type]
+            **values,  # type: ignore[arg-type]
+        )
 
 
 def _assessment_payload(value: ValidationFreshnessAssessmentV1) -> dict[str, object]:

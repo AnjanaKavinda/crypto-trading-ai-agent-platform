@@ -26,7 +26,6 @@ from trading_platform_api.validation.freshness_contracts_v1 import (
     validation_result_digest,
 )
 
-
 _CURRENT_REQUIREMENTS = (
     "candidate",
     "strategy_version",
@@ -77,9 +76,7 @@ def _verify_source_pair(
         if item.name
         not in {"package_id", "content_sha256", "contract_id", "schema_version"}
     }
-    rebuilt_package = SignalEvidencePackageV2.build(
-        **package_values
-    )  # type: ignore[arg-type]
+    rebuilt_package = SignalEvidencePackageV2.build(**package_values)  # type: ignore[arg-type]
     if rebuilt_package != package:
         raise FreshnessContractError("C-024v2 source identity is invalid.")
     if result.cost_assumptions.content_sha256 != canonical_sha256(
@@ -97,7 +94,9 @@ def _verify_source_pair(
             if item.name != "content_sha256"
         }
     ):
-        raise FreshnessContractError("C-025-RULESET content digest is invalid.")
+        raise FreshnessContractError(
+            "rule-set content digest (C-025-RULESET) is invalid."
+        )
 
     candidate = _as_validation_reference(package.candidate)
     strategy = _as_validation_reference(package.strategy_version)
@@ -111,15 +110,11 @@ def _verify_source_pair(
         or result.evidence_package_id != package.package_id
         or result.evidence_package_sha256 != package.content_sha256
     ):
-        raise FreshnessContractError(
-            "C-028v2 and C-024v2 source identities conflict."
-        )
+        raise FreshnessContractError("C-028v2 and C-024v2 source identities conflict.")
     if result.methodology != result.rule_set.methodology:
         raise FreshnessContractError("C-028v2 methodology references conflict.")
     data_gate = next(
-        item
-        for item in result.gates
-        if item.gate is QualificationGateV2.DATA_INTEGRITY
+        item for item in result.gates if item.gate is QualificationGateV2.DATA_INTEGRITY
     )
     package_quality = _as_validation_reference(package.data_quality_report)
     if (
@@ -137,9 +132,7 @@ def _verify_source_pair(
     )
     regime = regime_gate.evidence
     if regime is not None and regime.artifact_type != "C-074":
-        raise FreshnessContractError(
-            "regime evidence is not the typed C-074 source."
-        )
+        raise FreshnessContractError("regime evidence is not the typed C-074 source.")
     code_builds: set[ValidationArtifactReferenceV2] = set()
     pending: list[object] = [result, package]
     visited: set[int] = set()
@@ -161,16 +154,12 @@ def _verify_source_pair(
             continue
         if is_dataclass(value):
             pending.extend(getattr(value, item.name) for item in fields(value))
-        elif type(value) in (tuple, list):
+        elif isinstance(value, (tuple, list)):
             pending.extend(value)
     if len(code_builds) > 1:
-        raise FreshnessContractError(
-            "C-028v2/C-024v2 code-build references conflict."
-        )
+        raise FreshnessContractError("C-028v2/C-024v2 code-build references conflict.")
     point_in_time_gate = next(
-        item
-        for item in result.gates
-        if item.gate is QualificationGateV2.POINT_IN_TIME
+        item for item in result.gates if item.gate is QualificationGateV2.POINT_IN_TIME
     )
     dataset = (
         point_in_time_gate.evidence
@@ -225,11 +214,7 @@ def assess_spot_validation_freshness(
     """Assess explicit current identities without resolving external/latest state."""
     if type(current) is not ValidationFreshnessSnapshotV1:
         raise FreshnessContractError("an explicit typed current snapshot is required.")
-    if (
-        type(as_of) is not datetime
-        or as_of.tzinfo is None
-        or as_of.utcoffset() is None
-    ):
+    if type(as_of) is not datetime or as_of.tzinfo is None or as_of.utcoffset() is None:
         raise FreshnessContractError("as_of must be timezone-aware and explicit.")
     original = _verify_source_pair(validation, evidence_package)
     at = as_of.astimezone(current.observed_at.tzinfo)
@@ -238,9 +223,7 @@ def assess_spot_validation_freshness(
     if as_of.astimezone(validation.created_at.tzinfo) < validation.created_at:
         raise FreshnessContractError("as_of precedes the source validation creation.")
 
-    current_values = {
-        name: getattr(current, name) for name in _CURRENT_REQUIREMENTS
-    }
+    current_values = {name: getattr(current, name) for name in _CURRENT_REQUIREMENTS}
     comparisons: list[FreshnessIdentityComparisonV1] = []
     reasons: list[str] = []
     mismatched = False
@@ -248,11 +231,7 @@ def assess_spot_validation_freshness(
     for name in _CURRENT_REQUIREMENTS:
         expected = original[name]
         observed = current_values[name]
-        matches = (
-            None
-            if expected is None or observed is None
-            else expected == observed
-        )
+        matches = None if expected is None or observed is None else expected == observed
         comparisons.append(
             FreshnessIdentityComparisonV1(name, expected, observed, matches)
         )
@@ -273,9 +252,7 @@ def assess_spot_validation_freshness(
         state = ValidationFreshnessStateV1.INCONCLUSIVE
     elif mismatched:
         state = ValidationFreshnessStateV1.STALE
-    elif any(
-        expiry <= as_of.astimezone(expiry.tzinfo) for expiry in expiries
-    ):
+    elif any(expiry <= as_of.astimezone(expiry.tzinfo) for expiry in expiries):
         state = ValidationFreshnessStateV1.EXPIRED
         reasons.append("DECLARED_EVIDENCE_OR_RESULT_EXPIRY_REACHED")
     else:
