@@ -1534,6 +1534,11 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                 )
                 assert bias.replay_result is not None
                 assert bias.trace is not None
+                assert all(
+                    item.evidence_references
+                    == (bias.request, bias.replay_result, bias.trace)
+                    for item in bias.checks
+                )
                 assert bias.request_as_of == request.result_as_of
                 assert bias.request_created_at == request.created_at
                 assert bias.request_expires_at == request.expires_at

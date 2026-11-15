@@ -33,7 +33,10 @@ from trading_platform_api.lineage.codec import (
     decode_value,
     encode,
 )
-from trading_platform_api.lineage.store import SqlAlchemyLineageStore
+from trading_platform_api.lineage.store import (
+    LineageIntegrityError,
+    SqlAlchemyLineageStore,
+)
 from trading_platform_api.orchestration.spot_analysis_fanout import (
     SpotAnalysisFanoutResult,
 )
@@ -733,16 +736,33 @@ async def run_spot_backtest(
         if resolve_spot_backtest_result(bundle) != result:
             raise _ReplayUnavailable("RESULT_READBACK_MISMATCH")
         return bundle
-    except SpotReplayInputUnavailable as exc:
-        return _inconclusive(f"REPLAY_INPUT_{exc.reason.value}")
-    except DatasetLoadError as exc:
-        return _inconclusive(f"EXECUTION_DATA_{exc.reason.value}")
-    except (LineageError, _ReplayUnavailable, SimulationUnavailable) as exc:
-        reason = (
-            exc.reason if isinstance(exc, _ReplayUnavailable) else type(exc).__name__
-        )
-        return _inconclusive(reason)
-    except (OverflowError, ValueError):
+    except (
+        SpotReplayInputUnavailable,
+        DatasetLoadError,
+        LineageError,
+        _ReplayUnavailable,
+        SimulationUnavailable,
+        OverflowError,
+        ValueError,
+    ) as exc:
+        cause: BaseException | None = exc
+        seen: set[int] = set()
+        while cause is not None and id(cause) not in seen:
+            if isinstance(cause, LineageIntegrityError):
+                return _inconclusive("LINEAGE_INTEGRITY_FAILED")
+            seen.add(id(cause))
+            cause = cause.__cause__
+        if isinstance(exc, SpotReplayInputUnavailable):
+            return _inconclusive(f"REPLAY_INPUT_{exc.reason.value}")
+        if isinstance(exc, DatasetLoadError):
+            return _inconclusive(f"EXECUTION_DATA_{exc.reason.value}")
+        if isinstance(exc, (LineageError, _ReplayUnavailable, SimulationUnavailable)):
+            reason = (
+                exc.reason
+                if isinstance(exc, _ReplayUnavailable)
+                else type(exc).__name__
+            )
+            return _inconclusive(reason)
         return _inconclusive("INVALID_OR_STALE_ARCHIVED_ANALYSIS")
 
 

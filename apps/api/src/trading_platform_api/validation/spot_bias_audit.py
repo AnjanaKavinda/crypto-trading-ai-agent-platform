@@ -109,7 +109,7 @@ def _empty_checks(
             reason
             if check_type in _REPLAY_CHECK_TYPES
             else _UNSUPPORTED_REASONS[check_type],
-            (request_ref,) if check_type in _REPLAY_CHECK_TYPES else (),
+            (request_ref,),
         )
         for check_type in CHECK_TYPES
     )
@@ -430,9 +430,7 @@ async def run_spot_bias_audit(
             else "POINT_IN_TIME_REPLAY_CHECK_FAILED"
             if check_type in _REPLAY_CHECK_TYPES
             else _UNSUPPORTED_REASONS[check_type],
-            replay_evidence
-            if check_type in (BiasCheckType.POINT_IN_TIME, BiasCheckType.LOOK_AHEAD)
-            else (),
+            replay_evidence,
         )
         for check_type in CHECK_TYPES
     )

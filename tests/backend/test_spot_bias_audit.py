@@ -1,8 +1,11 @@
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 from trading_platform_api.lineage.codec import (
     LineageError,
     LineageKey,
@@ -10,7 +13,11 @@ from trading_platform_api.lineage.codec import (
     encode,
     key_for,
 )
-from trading_platform_api.lineage.store import references
+from trading_platform_api.lineage.store import (
+    LineageIntegrityError,
+    SqlAlchemyLineageStore,
+    references,
+)
 from trading_platform_api.validation.bias_contracts_v2 import (
     CHECK_TYPES,
     BiasAuditOutcomeV2,
@@ -19,9 +26,62 @@ from trading_platform_api.validation.bias_contracts_v2 import (
 )
 from trading_platform_api.validation.contracts import CheckOutcome
 from trading_platform_api.validation.contracts_v2 import ValidationArtifactReferenceV2
+from trading_platform_api.validation.spot_bias_audit import run_spot_bias_audit
 
 NOW = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
 SHA = "a" * 64
+
+
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [
+        (
+            LineageError("Exact lineage record is missing."),
+            BiasAuditOutcomeV2.INCONCLUSIVE,
+        ),
+        (
+            LineageIntegrityError("Stored document digest mismatch."),
+            BiasAuditOutcomeV2.FAILED,
+        ),
+    ],
+)
+def test_wrapped_lineage_failure_preserves_integrity_classification(
+    monkeypatch, error, outcome
+) -> None:
+    from test_spot_oos import case
+
+    request, _, _, _ = case()
+
+    async def resolve_unavailable(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(SqlAlchemyLineageStore, "resolve", resolve_unavailable)
+
+    async def check() -> None:
+        async with AsyncSession() as session:
+            result = await run_spot_bias_audit(
+                request=request,
+                session=session,
+                strategy_registry=SimpleNamespace(resolve_version=resolve_unavailable),
+                lineage_store=SqlAlchemyLineageStore(session),
+                as_of=max(request.result_as_of, request.created_at),
+                created_at=max(request.result_as_of, request.created_at),
+            )
+        assert result.outcome is outcome
+        assert result.replay_result is None
+        assert all(
+            item.evidence_references == (result.request,) for item in result.checks
+        )
+        assert all(
+            item.outcome is CheckOutcome.INCONCLUSIVE for item in result.checks[2:]
+        )
+        if outcome is BiasAuditOutcomeV2.FAILED:
+            assert all(
+                item.outcome is CheckOutcome.FAILED for item in result.checks[:2]
+            )
+            assert result.reasons[0] == "REPLAY_PIN_OR_PROVENANCE_MISMATCH"
+
+    asyncio.run(check())
 
 
 def _reference(kind: str, version: str) -> ValidationArtifactReferenceV2:

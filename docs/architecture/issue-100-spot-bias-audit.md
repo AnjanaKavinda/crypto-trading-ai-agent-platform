@@ -33,3 +33,9 @@ C-094v1 and its consumers are unchanged. C-094v2 is observation-only, is not
 accepted by qualification, and cannot be retained by the lineage store. It
 grants no strategy, risk, approval, learning, or execution authority. No API,
 provider, migration, DDL, or new replay path is introduced.
+
+Verified lineage content/identity contradictions use `LineageIntegrityError`.
+The existing replay preserves this distinction through chained dataset/input
+errors as `LINEAGE_INTEGRITY_FAILED`; the bias audit reports those as `FAILED`,
+while missing lineage remains `INCONCLUSIVE`. Each check carries the exact
+available request/replay references even when its category is unsupported.
