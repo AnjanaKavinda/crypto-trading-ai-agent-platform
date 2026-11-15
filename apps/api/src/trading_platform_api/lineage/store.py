@@ -720,7 +720,10 @@ class SqlAlchemyLineageStore:
             raise LineageError("Lineage payload is missing.")
         if sha256(document.encode("utf-8")).hexdigest() != row["document_sha256"]:
             raise LineageIntegrityError("Stored document digest mismatch.")
-        decoded_record = decode(document)
+        try:
+            decoded_record = decode(document)
+        except LineageError as exc:
+            raise LineageIntegrityError("Stored lineage document is invalid.") from exc
         if (
             key_for(decoded_record) != key
             or canonical_sha256(decoded_record) != row["evidence_sha256"]

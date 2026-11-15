@@ -1648,6 +1648,43 @@ def test_persisted_postgresql_spot_backtest_entry_and_fail_closed_cases(
                     item.outcome is CheckOutcome.FAILED
                     for item in mismatched_bias.checks[:2]
                 )
+                monkeypatch.setattr(
+                    "trading_platform_api.validation.spot_bias_audit.resolve_spot_backtest_result",
+                    resolve_spot_backtest_result,
+                )
+                chronology_bias = await run_spot_bias_audit(
+                    request=replace(
+                        request, created_at=request.created_at - timedelta(seconds=1)
+                    ),
+                    session=session,
+                    strategy_registry=registry,
+                    lineage_store=lineage,
+                    as_of=bias_as_of,
+                    created_at=bias_as_of,
+                )
+                assert chronology_bias.outcome is BiasAuditOutcomeV2.FAILED
+                expected_bias_evidence = (
+                    chronology_bias.request,
+                    chronology_bias.replay_result,
+                    chronology_bias.trace,
+                )
+                assert all(
+                    item.evidence_references == expected_bias_evidence
+                    for item in chronology_bias.checks
+                )
+                for index in (0, 2):
+                    for invalid_references in (
+                        (),
+                        (chronology_bias.request,),
+                        tuple(reversed(expected_bias_evidence)),
+                        (bias.request, *expected_bias_evidence[1:]),
+                    ):
+                        checks = list(chronology_bias.checks)
+                        checks[index] = replace(
+                            checks[index], evidence_references=invalid_references
+                        )
+                        with pytest.raises(ValueError, match="exact available"):
+                            replace(chronology_bias, checks=tuple(checks))
                 regime = bundle.trace.decisions[
                     0
                 ].archived_analysis.debate.market_context.regime

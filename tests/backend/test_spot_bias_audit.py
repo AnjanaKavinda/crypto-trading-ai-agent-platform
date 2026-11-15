@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid5
 
@@ -30,6 +31,26 @@ from trading_platform_api.validation.spot_bias_audit import run_spot_bias_audit
 
 NOW = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
 SHA = "a" * 64
+
+
+def test_corrupt_persisted_lineage_document_is_an_integrity_failure() -> None:
+    document = "{}"
+    row = {
+        "document": document,
+        "document_sha256": sha256(document.encode()).hexdigest(),
+    }
+
+    async def execute(_statement):
+        return SimpleNamespace(
+            mappings=lambda: SimpleNamespace(one_or_none=lambda: row)
+        )
+
+    async def check() -> None:
+        store = SqlAlchemyLineageStore(SimpleNamespace(execute=execute))
+        with pytest.raises(LineageIntegrityError, match="document is invalid"):
+            await store.get(LineageKey("C-103", SHA))
+
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize(
@@ -161,6 +182,29 @@ def test_schema_two_rejects_missing_or_duplicate_checks_and_unbound_pass() -> No
     duplicated = (*value.checks[:-1], value.checks[0])
     with pytest.raises(ValueError, match="nine ordered checks"):
         replace(value, checks=duplicated)
+
+
+@pytest.mark.parametrize("index", [0, 2])
+@pytest.mark.parametrize(
+    "reference_kind", ["missing", "unrelated", "extra", "reordered"]
+)
+def test_schema_two_rejects_unbound_inconclusive_check_evidence(
+    index, reference_kind
+) -> None:
+    value = _result()
+    unrelated = _reference("C-021", "2")
+    references_by_kind = {
+        "missing": (),
+        "unrelated": (unrelated,),
+        "extra": (value.request, unrelated),
+        "reordered": (unrelated, value.request),
+    }
+    checks = list(value.checks)
+    checks[index] = replace(
+        checks[index], evidence_references=references_by_kind[reference_kind]
+    )
+    with pytest.raises(ValueError, match="exact available request/result/trace"):
+        replace(value, checks=tuple(checks))
 
 
 def test_schema_two_rejects_passing_replay_checks_without_result_pin() -> None:

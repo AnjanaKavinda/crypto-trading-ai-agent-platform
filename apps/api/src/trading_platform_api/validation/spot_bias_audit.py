@@ -388,9 +388,7 @@ async def run_spot_bias_audit(
                 reason
                 if check_type in _REPLAY_CHECK_TYPES
                 else _UNSUPPORTED_REASONS[check_type],
-                (request_ref, replay_result, trace)
-                if check_type in _REPLAY_CHECK_TYPES
-                else (),
+                (request_ref, replay_result, trace),
             )
             for check_type in CHECK_TYPES
         )

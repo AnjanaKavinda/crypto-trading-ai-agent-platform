@@ -405,16 +405,15 @@ class SpotBiasAuditResultV2:
             raise ValidationContractError(
                 "Replay-dependent checks cannot pass without replay."
             )
-        for check in self.checks:
-            if (
-                check.check_type in supported_types
-                and check.outcome is CheckOutcome.PASSED
-            ):
-                expected = (self.request, self.replay_result, self.trace)
-                if check.evidence_references != expected:
-                    raise ValidationContractError(
-                        "Passed replay checks require exact request/result/trace evidence."
-                    )
+        expected_evidence = (
+            (self.request,)
+            if self.replay_result is None
+            else (self.request, self.replay_result, self.trace)
+        )
+        if any(check.evidence_references != expected_evidence for check in self.checks):
+            raise ValidationContractError(
+                "Every bias check requires exact available request/result/trace evidence."
+            )
         _digest("content_sha256", self.content_sha256)
         digest = canonical_sha256(self.identity_payload())
         if self.content_sha256 != digest or self.result_id != uuid5(_NAMESPACE, digest):
