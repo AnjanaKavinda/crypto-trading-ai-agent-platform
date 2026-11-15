@@ -66,6 +66,7 @@ from trading_platform_api.strategy.contracts_v2 import (
     SignalV2,
     StrategyVersionV2,
 )
+from trading_platform_api.validation.bias_contracts_v2 import SpotBiasAuditResultV2
 from trading_platform_api.validation.contracts import OOSResult
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
@@ -109,6 +110,7 @@ MODELS = {
     "C-025": SignalQualificationV2,
     "C-026": NoTradeDecisionV2,
     "C-027": CostAssumptionSetV2,
+    "C-094": SpotBiasAuditResultV2,
     "C-072": MonteCarloResultV2,
     "C-073": SensitivityResultV2,
     "C-074": SpotRegimeValidationResultV2,
@@ -226,6 +228,8 @@ def key_for(record: object) -> LineageKey:
         )
     if type(record) is BacktestResultV3:
         return LineageKey("C-027", str(record.result_id), record.schema_version)
+    if type(record) is SpotBiasAuditResultV2:
+        return LineageKey("C-094", str(record.result_id), record.schema_version)
     if type(record) is MonteCarloResultV2:
         return LineageKey("C-072", str(record.result_id), record.schema_version)
     if type(record) is SensitivityResultV2:
@@ -456,6 +460,10 @@ def decode(document: str) -> object:
                 model = {"2": SpotRegimeValidationResultV2}.get(schema_version)
                 if model is None:
                     raise LineageError("Unsupported C-074 schema version.")
+            if contract_id == "C-094":
+                model = {"2": SpotBiasAuditResultV2}.get(schema_version)
+                if model is None:
+                    raise LineageError("Unsupported C-094 schema version.")
             if contract_id == "C-021":
                 model = {"1": StrategyVersion, "2": StrategyVersionV2}.get(
                     schema_version
@@ -483,6 +491,7 @@ def decode(document: str) -> object:
                 "C-072": "2",
                 "C-073": "2",
                 "C-074": "2",
+                "C-094": schema_version,
                 "C-071": schema_version,
                 "C-029": "2",
                 "C-028": "2",

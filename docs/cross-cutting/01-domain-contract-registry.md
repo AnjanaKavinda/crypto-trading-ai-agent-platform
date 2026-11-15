@@ -114,7 +114,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-091 | DataSourceRecord | Data | Analysis, Validation, Audit | Immutable source/provider/time/licensing/provenance identity for ingested data. |
 | C-092 | DatasetVersion | Data Governance | Validation, Research, Audit | Exact reproducible dataset composition and lineage; never silently mutated. |
 | C-093 | AgentIndependenceReport | Evaluation | Meta Analysis, Governance, Audit | Records exact evidence/source/binding/method overlap; unknown remains unknown and no statistical independence or correlation is inferred. |
-| C-094 | BiasCheckReport | Quant Validation | Validation, Governance, Audit | Leakage, survivorship, look-ahead, and selection-bias checks are explicit and auditable. |
+| C-094 | BiasCheckReport | Quant Validation | Validation, Governance, Audit | Schema 1 remains unchanged. ADR-0027 adds observation-only Spot schema 2 binding exact archive-backed C-027v3 replay/request/trace, C-021, and C-092/C-101/C-102/C-103/C-091 provenance. Only point-in-time/look-ahead checks can be supported by verified replay; seven other categories remain explicitly inconclusive. No qualification or retention authority. |
 | C-095 | ExecutionReport | Execution | Reconciliation, Monitoring, Audit, Safety | Attributable execution outcome including partial/unknown/failure states; never treated as reconciled by assumption. |
 | C-096 | ReconciliationReport | Reconciliation | Portfolio, Risk, Safety, Audit | Internal-versus-exchange deltas remain explicit and block conflicting action while unresolved. |
 | C-097 | SafetyPolicy | Safety Governance | Safety Control Plane, Approval, Execution, Audit | Versioned fail-closed policy authority that control decisions must enforce. |

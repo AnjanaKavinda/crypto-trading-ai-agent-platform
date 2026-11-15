@@ -87,6 +87,7 @@ from trading_platform_api.strategy.contracts_v2 import (
     StrategyVersionV2,
     _qualification_digest,
 )
+from trading_platform_api.validation.bias_contracts_v2 import SpotBiasAuditResultV2
 from trading_platform_api.validation.contracts import OOSResult
 from trading_platform_api.validation.contracts_v2 import (
     CostAssumptionSetV2,
@@ -104,6 +105,10 @@ from trading_platform_api.validation.regime_contracts_v2 import (
 from trading_platform_api.validation.sensitivity_contracts_v2 import (
     SensitivityResultV2,
 )
+
+
+class LineageIntegrityError(LineageError):
+    """Resolved evidence contradicts its immutable identity or content."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +188,10 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) is SpotBiasAuditResultV2:
+        raise LineageError(
+            "C-094v2 retention is not authorized by the observation boundary."
+        )
     if type(record) is MonteCarloResultV2:
         raise LineageError(
             "C-072v2 retention is not authorized by the observation boundary."
@@ -688,7 +697,9 @@ class SqlAlchemyLineageStore:
                     payload["document_sha256"] != row["document_sha256"]
                     or payload["evidence_sha256"] != row["evidence_sha256"]
                 ):
-                    raise LineageError("Hot payload differs from its lineage anchor.")
+                    raise LineageIntegrityError(
+                        "Hot payload differs from its lineage anchor."
+                    )
             elif self._archive_store is not None:
                 from trading_platform_api.lineage.archival import (
                     read_archived_market_document,
@@ -708,13 +719,16 @@ class SqlAlchemyLineageStore:
         if document is None:
             raise LineageError("Lineage payload is missing.")
         if sha256(document.encode("utf-8")).hexdigest() != row["document_sha256"]:
-            raise LineageError("Stored document digest mismatch.")
-        decoded_record = decode(document)
+            raise LineageIntegrityError("Stored document digest mismatch.")
+        try:
+            decoded_record = decode(document)
+        except LineageError as exc:
+            raise LineageIntegrityError("Stored lineage document is invalid.") from exc
         if (
             key_for(decoded_record) != key
             or canonical_sha256(decoded_record) != row["evidence_sha256"]
         ):
-            raise LineageError("Stored identity or evidence digest mismatch.")
+            raise LineageIntegrityError("Stored identity or evidence digest mismatch.")
         actual = (
             (
                 await self._session.execute(
@@ -756,7 +770,7 @@ class SqlAlchemyLineageStore:
             for row in registry_rows
         )
         if actual_keys != {reference.key for reference in references(decoded_record)}:
-            raise LineageError("Stored lineage edges do not match the record.")
+            raise LineageIntegrityError("Stored lineage edges do not match the record.")
         return decoded_record
 
     async def _check_references(
@@ -769,12 +783,12 @@ class SqlAlchemyLineageStore:
                 ref.evidence_sha256 is not None
                 and _reference_content_sha256(target) != ref.evidence_sha256
             ):
-                raise LineageError("Referenced immutable content differs.")
+                raise LineageIntegrityError("Referenced immutable content differs.")
             if ref.lineage_sha256 is not None and (
                 type(target) is not DatasetVersion
                 or target.lineage_sha256 != ref.lineage_sha256
             ):
-                raise LineageError("Referenced dataset lineage differs.")
+                raise LineageIntegrityError("Referenced dataset lineage differs.")
             if (
                 type(record) is ObservationRevision
                 and type(target) is ObservationRevision
@@ -1188,7 +1202,9 @@ class SqlAlchemyLineageStore:
         inserted = (await self._session.execute(statement)).scalar_one_or_none()
         if inserted is None:
             if encode(await self.get(key)) != document:
-                raise LineageError("Immutable identity already has different content.")
+                raise LineageIntegrityError(
+                    "Immutable identity already has different content."
+                )
             return
         if is_market_payload:
             await self._session.execute(

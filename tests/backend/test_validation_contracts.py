@@ -520,6 +520,27 @@ def test_bias_report_requires_every_passed_critical_check() -> None:
         bias_report(checks=tuple(bad_checks))
 
 
+def test_c094_schema_one_layout_and_vocabulary_remain_unchanged() -> None:
+    report = bias_report()
+    assert report.contract_id == "C-094"
+    assert report.schema_version == "1"
+    assert tuple(item.check_type for item in report.checks) == tuple(BiasCheckType)
+    assert tuple(item.name for item in fields(report)) == (
+        "result_id",
+        "strategy_version_id",
+        "lifecycle",
+        "created_at",
+        "as_of",
+        "valid_until",
+        "warnings",
+        "failures",
+        "schema_version",
+        "input_result_id",
+        "checks",
+        "contract_id",
+    )
+
+
 def test_robust_claim_requires_passed_compatible_components() -> None:
     version_id = uuid4()
     with pytest.raises(ValidationContractError, match="complete passed"):
