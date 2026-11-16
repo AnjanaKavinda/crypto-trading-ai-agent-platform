@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.risk import (
     AccountSnapshot,
     ContractReference,
@@ -49,7 +50,6 @@ from trading_platform_api.risk import (
     TakeProfitTarget,
     VersionReference,
 )
-from trading_platform_api.contracts.serialization import canonical_sha256
 
 T = tuple(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=i) for i in range(20))
 HASH_A = "a" * 64
@@ -960,7 +960,8 @@ def test_policy_limit_rejects_malformed_nonfinite_and_unknown_values() -> None:
         RiskLimitScope("SYSTEM", RiskPolicyMode.RESEARCH)  # type: ignore[arg-type]
     with pytest.raises(RiskContractError, match="RiskPolicyMode"):
         RiskLimitScope(
-            RiskLimitHierarchy.SYSTEM, "UNKNOWN"  # type: ignore[arg-type]
+            RiskLimitHierarchy.SYSTEM,
+            "UNKNOWN",  # type: ignore[arg-type]
         )
     with pytest.raises(RiskContractError, match="RiskLimitDirection"):
         RiskLimitDefinition(
@@ -1000,8 +1001,18 @@ def test_policy_digest_and_exact_version_references_bind_content() -> None:
     changed = replace(hard_limit, threshold=Decimal("101"))
     with pytest.raises(RiskContractError, match="digest mismatch"):
         replace(value, limits=(changed,))
-    with pytest.raises(RiskContractError, match="VersionReference digest mismatch"):
+    with pytest.raises(RiskContractError, match="digest mismatch"):
         replace(value, policy_version=version("different-policy"))
+    for field_name in ("policy_version", "configuration_version"):
+        with pytest.raises(RiskContractError, match="VersionReference digest mismatch"):
+            replace(
+                value,
+                **{
+                    field_name: replace(
+                        getattr(value, field_name), content_sha256="b" * 64
+                    )
+                },
+            )
 
 
 def test_policy_rejects_same_level_conflicts_and_ambiguous_scopes() -> None:
@@ -1099,9 +1110,8 @@ def test_hard_parent_is_inherited_and_lower_scopes_may_only_tighten() -> None:
     )
     with pytest.raises(RiskContractError, match="non-comparable"):
         risk_policy((parent, non_comparable))
-    disabled = replace(account_tighter, enabled=False)
     with pytest.raises(RiskContractError, match="enabled"):
-        risk_policy((parent, disabled))
+        replace(account_tighter, enabled=False)
 
 
 def test_hard_parent_greater_equal_direction_can_only_tighten_upward() -> None:
@@ -1136,6 +1146,7 @@ def test_soft_warning_verdict_semantics_remain_non_enforcing_for_review() -> Non
     warning_assessment = assessment(
         outcome=RiskCheckOutcome.WARNING,
         warnings=("Synthetic soft limit warning.",),
+        reason_codes=("SOFT_LIMIT_WARNING",),
         limits=(
             limit(
                 severity=RiskLimitSeverity.SOFT,

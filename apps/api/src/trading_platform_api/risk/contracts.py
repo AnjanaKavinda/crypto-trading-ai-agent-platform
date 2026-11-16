@@ -448,8 +448,7 @@ class RiskLimitScope:
             "user_request_id",
         )
         if any(
-            getattr(self, name) is not None and name not in permitted
-            for name in values
+            getattr(self, name) is not None and name not in permitted for name in values
         ):
             raise RiskContractError(
                 f"{self.hierarchy.value} scope contains an inapplicable identity."
@@ -503,9 +502,7 @@ def _scopes_overlap(left: RiskLimitScope, right: RiskLimitScope) -> bool:
     if left.mode is not right.mode:
         return False
     return all(
-        left_value is None
-        or right_value is None
-        or left_value == right_value
+        left_value is None or right_value is None or left_value == right_value
         for left_value, right_value in zip(
             _scope_values(left), _scope_values(right), strict=True
         )
@@ -519,8 +516,7 @@ def _scope_applies_to(parent: RiskLimitScope, child: RiskLimitScope) -> bool:
     if order.index(parent.hierarchy) >= order.index(child.hierarchy):
         return False
     return all(
-        parent_value is None
-        or parent_value == child_value
+        parent_value is None or parent_value == child_value
         for parent_value, child_value in zip(
             _scope_values(parent), _scope_values(child), strict=True
         )
@@ -538,9 +534,7 @@ class RiskLimitPolicyConfiguration:
         for name in ("policy_version", "configuration_version"):
             if not isinstance(getattr(self, name), VersionReference):
                 raise RiskContractError(f"{name} must be a VersionReference.")
-        limits = _typed_tuple(
-            "limits", self.limits, RiskLimitDefinition, empty=False
-        )
+        limits = _typed_tuple("limits", self.limits, RiskLimitDefinition, empty=False)
         _unique("limit identities", tuple(item.limit_id for item in limits))
 
         for index, left in enumerate(limits):
