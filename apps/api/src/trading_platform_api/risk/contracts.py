@@ -2453,9 +2453,7 @@ class PortfolioExposureAggregation:
         object.__setattr__(
             self, "evaluated_at", _time("evaluated_at", self.evaluated_at)
         )
-        snapshot_ids = _uuid_tuple(
-            "position_snapshot_ids", self.position_snapshot_ids
-        )
+        snapshot_ids = _uuid_tuple("position_snapshot_ids", self.position_snapshot_ids)
         if not snapshot_ids:
             raise RiskContractError("position_snapshot_ids must not be empty.")
         _typed_tuple("breakdowns", self.breakdowns, ExposureBreakdown, empty=False)
@@ -2578,8 +2576,8 @@ def aggregate_portfolio_exposure(
                 ("venue", supplied.venue, currency),
                 ("direction", position.side.value, currency),
             )
-            for key in keys:
-                totals = groups.setdefault(key, [Decimal(0), Decimal(0)])
+            for group_key in keys:
+                totals = groups.setdefault(group_key, [Decimal(0), Decimal(0)])
                 side_index = 0 if position.side is PositionSide.LONG else 1
                 totals[side_index] = _safe_decimal(
                     totals[side_index] + position.notional.amount, "gross exposure"
@@ -2606,9 +2604,7 @@ def aggregate_portfolio_exposure(
         for currency, (gross_long, gross_short) in sorted(currency_totals.items()):
             gross = _safe_decimal(gross_long + gross_short, "currency gross exposure")
             if currency == equity.currency:
-                concentration = _safe_decimal(
-                    gross / equity.amount, "gross/equity"
-                )
+                concentration = _safe_decimal(gross / equity.amount, "gross/equity")
                 concentrations.append(
                     EquityConcentration(
                         currency,
@@ -2878,12 +2874,8 @@ def _moments(
         cross = sum(
             ((x - mean_left) * (y - mean_right) for x, y, _ in pairs), Decimal(0)
         )
-        left_square = sum(
-            ((x - mean_left) ** 2 for x, _, _ in pairs), Decimal(0)
-        )
-        right_square = sum(
-            ((y - mean_right) ** 2 for _, y, _ in pairs), Decimal(0)
-        )
+        left_square = sum(((x - mean_left) ** 2 for x, _, _ in pairs), Decimal(0))
+        right_square = sum(((y - mean_right) ** 2 for _, y, _ in pairs), Decimal(0))
         return (
             _safe_decimal(cross, "sample covariance numerator"),
             _safe_decimal(left_square, "sample variance numerator"),

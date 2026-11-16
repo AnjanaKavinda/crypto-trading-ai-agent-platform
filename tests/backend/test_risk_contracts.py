@@ -28,9 +28,9 @@ from trading_platform_api.risk import (
     PortfolioImpact,
     PortfolioSnapshot,
     PositionExposureInput,
+    PositionSide,
     PositionSizingResult,
     PositionSnapshot,
-    PositionSide,
     PriceValue,
     RatioValue,
     ReturnObservation,
@@ -1740,16 +1740,15 @@ def test_exposure_aggregation_preserves_gross_offsets_and_dimensions() -> None:
     )
     assert instrument.gross == Decimal("220")
     assert instrument.net == Decimal("80")
-    assert len(
-        [
-            item
-            for item in result.breakdowns
-            if item.dimension == "direction"
-        ]
-    ) == 2
-    assert result.input_digest == aggregate_portfolio_exposure(
-        account_value, (short, long), evaluated_at=T[14]
-    ).input_digest
+    assert (
+        len([item for item in result.breakdowns if item.dimension == "direction"]) == 2
+    )
+    assert (
+        result.input_digest
+        == aggregate_portfolio_exposure(
+            account_value, (short, long), evaluated_at=T[14]
+        ).input_digest
+    )
     assert result.position_snapshot_ids == tuple(
         item.position.snapshot_id
         for item in sorted(
@@ -1758,7 +1757,9 @@ def test_exposure_aggregation_preserves_gross_offsets_and_dimensions() -> None:
     )
 
 
-def test_exposure_aggregation_groups_currency_asset_instrument_venue_direction() -> None:
+def test_exposure_aggregation_groups_currency_asset_instrument_venue_direction() -> (
+    None
+):
     account_value = account()
     inputs = (
         exposure_input(
@@ -1913,7 +1914,9 @@ def test_exposure_rejects_invalid_unpriced_and_duplicate_position_inputs() -> No
         )
     with pytest.raises(RiskContractError, match="must be a tuple"):
         aggregate_portfolio_exposure(
-            account_value, [base], T[3]  # type: ignore[arg-type]
+            account_value,
+            [base],
+            T[3],  # type: ignore[arg-type]
         )
 
 
@@ -1997,12 +2000,16 @@ def test_pairwise_window_is_inclusive_and_alignment_uses_exact_timestamps() -> N
         ("0", "2", "4", "6", "8"),
         timestamps=shifted_times,
     )
-    unaligned = pairwise_correlation(
-        (benchmark, shifted),
-        window_start=T[0],
-        window_end=T[4],
-        min_observations=3,
-    ).correlations[0].estimate
+    unaligned = (
+        pairwise_correlation(
+            (benchmark, shifted),
+            window_start=T[0],
+            window_end=T[4],
+            min_observations=3,
+        )
+        .correlations[0]
+        .estimate
+    )
     assert unaligned.state is DescriptiveEstimateState.UNKNOWN
     assert unaligned.value is None
     assert unaligned.reason == "INSUFFICIENT_ALIGNED_OBSERVATIONS"
@@ -2012,12 +2019,16 @@ def test_pairwise_window_is_inclusive_and_alignment_uses_exact_timestamps() -> N
 def test_pairwise_minimum_observations_zero_variance_and_explicit_benchmark() -> None:
     short = return_series("SYNTHETIC-SHORT", ("1", "2"))
     short_peer = return_series("SYNTHETIC-SHORT-PEER", ("2", "4"))
-    insufficient = pairwise_correlation(
-        (short, short_peer),
-        window_start=T[0],
-        window_end=T[1],
-        min_observations=3,
-    ).correlations[0].estimate
+    insufficient = (
+        pairwise_correlation(
+            (short, short_peer),
+            window_start=T[0],
+            window_end=T[1],
+            min_observations=3,
+        )
+        .correlations[0]
+        .estimate
+    )
     assert insufficient.state is DescriptiveEstimateState.UNKNOWN
     assert insufficient.reason == "INSUFFICIENT_ALIGNED_OBSERVATIONS"
     assert insufficient.sample_count == 2
@@ -2032,8 +2043,7 @@ def test_pairwise_minimum_observations_zero_variance_and_explicit_benchmark() ->
         benchmark_instrument_id=constant.instrument_id,
     )
     assert (
-        zero_variance.correlations[0].estimate.state
-        is DescriptiveEstimateState.UNKNOWN
+        zero_variance.correlations[0].estimate.state is DescriptiveEstimateState.UNKNOWN
     )
     assert zero_variance.correlations[0].estimate.reason == "ZERO_VARIANCE"
     assert zero_variance.betas[0].estimate.state is DescriptiveEstimateState.UNKNOWN
@@ -2057,7 +2067,9 @@ def test_pairwise_minimum_observations_zero_variance_and_explicit_benchmark() ->
         )
 
 
-def test_return_series_rejects_malformed_nonfinite_duplicate_and_unbound_inputs() -> None:
+def test_return_series_rejects_malformed_nonfinite_duplicate_and_unbound_inputs() -> (
+    None
+):
     for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
         with pytest.raises(RiskContractError, match="finite Decimal"):
             ReturnObservation(T[0], value)
