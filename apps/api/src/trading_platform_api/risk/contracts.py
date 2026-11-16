@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import TypeVar, cast
 from uuid import UUID
 
-from trading_platform_api.contracts.serialization import canonical_sha256
+from trading_platform_api.contracts.serialization import (
+    ContractSerializationError,
+    canonical_sha256,
+)
 
 CONTRACT_SCHEMA_VERSION = "1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -848,6 +851,215 @@ class AccountSnapshot:
         object.__setattr__(self, "as_of", as_of)
         object.__setattr__(self, "captured_at", captured)
         object.__setattr__(self, "valid_until", valid)
+
+
+class AccountPermissionObservation(StrEnum):
+    """Supplied data only; even ALLOWED grants no platform privilege."""
+
+    ALLOWED = "ALLOWED"
+    DENIED = "DENIED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class AccountEvidenceContext:
+    """Explicit observed or expected identity; None means unknown, never default."""
+
+    account_id: UUID | None
+    source_id: str | None
+    source_version: VersionReference | None
+    venue: str | None
+    mode: RiskPolicyMode | None
+
+    def __post_init__(self) -> None:
+        if self.account_id is not None:
+            _uuid("account_id", self.account_id)
+        for name in ("source_id", "venue"):
+            value = getattr(self, name)
+            if value is not None:
+                _text(name, value)
+        if self.source_version is not None:
+            if not isinstance(self.source_version, VersionReference):
+                raise RiskContractError("source_version must be a VersionReference.")
+            VersionReference.__post_init__(self.source_version)
+        if self.mode is not None and not isinstance(self.mode, RiskPolicyMode):
+            raise RiskContractError("mode must be a RiskPolicyMode.")
+
+
+@dataclass(frozen=True, slots=True)
+class AccountPermissionObservations:
+    """Read/trade/withdraw/transfer observations, not authorization or credentials."""
+
+    read: AccountPermissionObservation | None
+    trade: AccountPermissionObservation | None
+    withdraw: AccountPermissionObservation | None
+    transfer: AccountPermissionObservation | None
+
+    def __post_init__(self) -> None:
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if value is not None and not isinstance(
+                value, AccountPermissionObservation
+            ):
+                raise RiskContractError(
+                    f"{item.name} must be an AccountPermissionObservation or None."
+                )
+
+
+def _account_evidence_context(name: str, value: object) -> None:
+    if value is not None:
+        if not isinstance(value, AccountEvidenceContext):
+            raise RiskContractError(
+                f"{name} must be an AccountEvidenceContext or None."
+            )
+        AccountEvidenceContext.__post_init__(value)
+
+
+def _offline_account_inputs(
+    snapshot: object, observed_context: object, permissions: object
+) -> None:
+    if not isinstance(snapshot, AccountSnapshot):
+        raise RiskContractError("snapshot must be an AccountSnapshot.")
+    # Validate nested money before the legacy VALID constructor dereferences it.
+    # The C-032 constructor, layout, and historical digest semantics stay frozen.
+    for name in (
+        "equity",
+        "available_balance",
+        "used_margin",
+        "free_margin",
+        "unrealized_pnl",
+        "realized_pnl",
+        "daily_pnl",
+        "weekly_pnl",
+    ):
+        value = getattr(snapshot, name)
+        if value is not None:
+            if not isinstance(value, MoneyValue):
+                raise RiskContractError(f"{name} must be a MoneyValue or None.")
+            MoneyValue.__post_init__(value)
+    if snapshot.current_drawdown is not None:
+        if not isinstance(snapshot.current_drawdown, RatioValue):
+            raise RiskContractError("current_drawdown must be a RatioValue or None.")
+        RatioValue.__post_init__(snapshot.current_drawdown)
+    if not isinstance(snapshot.source_version, VersionReference):
+        raise RiskContractError("source_version must be a VersionReference.")
+    VersionReference.__post_init__(snapshot.source_version)
+    if snapshot.contract_id != "C-032" or snapshot.schema_version != "1":
+        raise RiskContractError("snapshot must preserve C-032 schema 1 metadata.")
+    replace(snapshot)  # Reapply existing C-032 validation without mutating the input.
+    _account_evidence_context("observed_context", observed_context)
+    if permissions is not None:
+        if not isinstance(permissions, AccountPermissionObservations):
+            raise RiskContractError(
+                "permissions must be AccountPermissionObservations or None."
+            )
+        AccountPermissionObservations.__post_init__(permissions)
+
+
+def _offline_account_sha256(value: object) -> str:
+    try:
+        return canonical_sha256(value)
+    except ContractSerializationError as exc:
+        raise RiskContractError("offline account evidence is not canonical.") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class OfflineAccountEvidence:
+    """Nonpersisted envelope binding the complete supplied C-032 and offline data."""
+
+    snapshot: AccountSnapshot
+    observed_context: AccountEvidenceContext | None
+    permissions: AccountPermissionObservations | None
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        self.verify()
+
+    @classmethod
+    def create(
+        cls,
+        snapshot: AccountSnapshot,
+        observed_context: AccountEvidenceContext | None,
+        permissions: AccountPermissionObservations | None,
+    ) -> OfflineAccountEvidence:
+        _offline_account_inputs(snapshot, observed_context, permissions)
+        preimage = {
+            "snapshot": snapshot,
+            "observed_context": observed_context,
+            "permissions": permissions,
+        }
+        return cls(
+            snapshot, observed_context, permissions, _offline_account_sha256(preimage)
+        )
+
+    def verify(self) -> None:
+        """Check structure and content binding, not authenticity or provider truth."""
+        _offline_account_inputs(self.snapshot, self.observed_context, self.permissions)
+        _digest("content_sha256", self.content_sha256)
+        preimage = {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if item.name != "content_sha256"
+        }
+        if _offline_account_sha256(preimage) != self.content_sha256:
+            raise RiskContractError("offline account evidence digest mismatch.")
+
+
+@dataclass(frozen=True, slots=True)
+class OfflineAccountAssessment:
+    """Currentness of supplied evidence only; not account truth or a risk decision."""
+
+    evidence: OfflineAccountEvidence
+    expected_context: AccountEvidenceContext | None
+    evaluated_at: datetime
+    current: bool = field(init=False)
+    reason_codes: tuple[str, ...] = field(init=False)
+    independent_source_reconciliation: str = field(default="UNKNOWN", init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evidence, OfflineAccountEvidence):
+            raise RiskContractError("evidence must be OfflineAccountEvidence.")
+        self.evidence.verify()
+        _account_evidence_context("expected_context", self.expected_context)
+        evaluated_at = _time("evaluated_at", self.evaluated_at)
+        snapshot = self.evidence.snapshot
+        observed = self.evidence.observed_context
+        expected = self.expected_context
+        reasons: list[str] = []
+        for name in ("account_id", "source_id", "source_version", "venue", "mode"):
+            actual = getattr(observed, name) if observed is not None else None
+            required = getattr(expected, name) if expected is not None else None
+            if actual is None:
+                reasons.append(f"OBSERVED_{name.upper()}_UNKNOWN")
+            if required is None:
+                reasons.append(f"EXPECTED_{name.upper()}_UNKNOWN")
+            if actual is not None and required is not None and actual != required:
+                reasons.append(f"{name.upper()}_CONTEXT_MISMATCH")
+            if name in ("account_id", "source_id", "source_version"):
+                if actual is not None and actual != getattr(snapshot, name):
+                    reasons.append(f"{name.upper()}_SNAPSHOT_MISMATCH")
+        for name in ("read", "trade", "withdraw", "transfer"):
+            observation = (
+                getattr(self.evidence.permissions, name)
+                if self.evidence.permissions is not None
+                else None
+            )
+            if (
+                observation is None
+                or observation is AccountPermissionObservation.UNKNOWN
+            ):
+                reasons.append(f"{name.upper()}_PERMISSION_UNKNOWN")
+        if snapshot.state is not SnapshotState.VALID:
+            reasons.append(f"SNAPSHOT_{snapshot.state.value}")
+        if snapshot.as_of > evaluated_at:
+            reasons.append("SNAPSHOT_AS_OF_IN_FUTURE")
+        if snapshot.captured_at > evaluated_at:
+            reasons.append("SNAPSHOT_CAPTURE_IN_FUTURE")
+        if evaluated_at > snapshot.valid_until:
+            reasons.append("SNAPSHOT_EXPIRED")
+        object.__setattr__(self, "evaluated_at", evaluated_at)
+        object.__setattr__(self, "current", not reasons)
+        object.__setattr__(self, "reason_codes", tuple(reasons))
 
 
 @dataclass(frozen=True, slots=True)
@@ -2149,6 +2361,9 @@ class RiskRevalidationResult:
 
 __all__ = [
     "CONTRACT_SCHEMA_VERSION",
+    "AccountEvidenceContext",
+    "AccountPermissionObservation",
+    "AccountPermissionObservations",
     "AccountSnapshot",
     "AssessmentReference",
     "ContractReference",
@@ -2158,6 +2373,8 @@ __all__ = [
     "LiquidationAvailability",
     "MarginMode",
     "MoneyValue",
+    "OfflineAccountAssessment",
+    "OfflineAccountEvidence",
     "PortfolioImpact",
     "PortfolioSnapshot",
     "PositionSide",
