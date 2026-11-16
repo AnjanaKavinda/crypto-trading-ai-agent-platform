@@ -8,6 +8,8 @@ from enum import StrEnum
 from typing import TypeVar, cast
 from uuid import UUID
 
+from trading_platform_api.contracts.serialization import canonical_sha256
+
 CONTRACT_SCHEMA_VERSION = "1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _CONTRACT_ID = re.compile(r"C-[0-9]{3}")
@@ -55,6 +57,29 @@ class RiskCheckOutcome(StrEnum):
 class RiskLimitSeverity(StrEnum):
     HARD = "HARD"
     SOFT = "SOFT"
+
+
+class RiskLimitHierarchy(StrEnum):
+    SYSTEM = "SYSTEM"
+    ACCOUNT = "ACCOUNT"
+    PORTFOLIO = "PORTFOLIO"
+    STRATEGY = "STRATEGY"
+    TRADE = "TRADE"
+    USER_REQUEST = "USER_REQUEST"
+
+
+class RiskPolicyMode(StrEnum):
+    RESEARCH = "research"
+    BACKTEST = "backtest"
+    PAPER = "paper"
+    SHADOW = "shadow"
+    TESTNET = "testnet"
+    LIVE_SUPERVISED = "live-supervised"
+
+
+class RiskLimitDirection(StrEnum):
+    LESS_THAN_OR_EQUAL = "LESS_THAN_OR_EQUAL"
+    GREATER_THAN_OR_EQUAL = "GREATER_THAN_OR_EQUAL"
 
 
 class PositionSide(StrEnum):
@@ -313,6 +338,271 @@ class ExposureValue:
             raise RiskContractError("exposure currencies must match.")
         if not isinstance(self.equity_ratio, RatioValue):
             raise RiskContractError("equity_ratio must be a RatioValue.")
+
+
+@dataclass(frozen=True, slots=True)
+class RiskLimitScope:
+    hierarchy: RiskLimitHierarchy
+    mode: RiskPolicyMode
+    account_id: UUID | None = None
+    portfolio_id: UUID | None = None
+    strategy_id: str | None = None
+    venue: str | None = None
+    instrument_id: str | None = None
+    trade_id: UUID | None = None
+    user_request_id: UUID | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.hierarchy, RiskLimitHierarchy):
+            raise RiskContractError("hierarchy must be a RiskLimitHierarchy.")
+        if not isinstance(self.mode, RiskPolicyMode):
+            raise RiskContractError("mode must be a RiskPolicyMode.")
+        for name in ("account_id", "portfolio_id", "trade_id", "user_request_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _uuid(name, value)
+        for name in ("strategy_id", "venue", "instrument_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _text(name, value)
+
+        required_by_hierarchy: dict[RiskLimitHierarchy, tuple[str, ...]] = {
+            RiskLimitHierarchy.SYSTEM: (),
+            RiskLimitHierarchy.ACCOUNT: ("account_id",),
+            RiskLimitHierarchy.PORTFOLIO: ("account_id", "portfolio_id"),
+            RiskLimitHierarchy.STRATEGY: (
+                "account_id",
+                "portfolio_id",
+                "strategy_id",
+            ),
+            RiskLimitHierarchy.TRADE: (
+                "account_id",
+                "portfolio_id",
+                "strategy_id",
+                "venue",
+                "instrument_id",
+                "trade_id",
+            ),
+            RiskLimitHierarchy.USER_REQUEST: (
+                "account_id",
+                "portfolio_id",
+                "strategy_id",
+                "venue",
+                "instrument_id",
+                "trade_id",
+                "user_request_id",
+            ),
+        }
+        required = required_by_hierarchy[self.hierarchy]
+        if any(getattr(self, name) is None for name in required):
+            raise RiskContractError(
+                f"{self.hierarchy.value} scope is missing a required identity."
+            )
+        permitted_by_hierarchy: dict[RiskLimitHierarchy, frozenset[str]] = {
+            RiskLimitHierarchy.SYSTEM: frozenset(),
+            RiskLimitHierarchy.ACCOUNT: frozenset(
+                {"account_id", "venue", "instrument_id"}
+            ),
+            RiskLimitHierarchy.PORTFOLIO: frozenset(
+                {"account_id", "portfolio_id", "venue", "instrument_id"}
+            ),
+            RiskLimitHierarchy.STRATEGY: frozenset(
+                {
+                    "account_id",
+                    "portfolio_id",
+                    "strategy_id",
+                    "venue",
+                    "instrument_id",
+                }
+            ),
+            RiskLimitHierarchy.TRADE: frozenset(
+                {
+                    "account_id",
+                    "portfolio_id",
+                    "strategy_id",
+                    "venue",
+                    "instrument_id",
+                    "trade_id",
+                }
+            ),
+            RiskLimitHierarchy.USER_REQUEST: frozenset(
+                {
+                    "account_id",
+                    "portfolio_id",
+                    "strategy_id",
+                    "venue",
+                    "instrument_id",
+                    "trade_id",
+                    "user_request_id",
+                }
+            ),
+        }
+        permitted = permitted_by_hierarchy[self.hierarchy]
+        values = (
+            "account_id",
+            "portfolio_id",
+            "strategy_id",
+            "venue",
+            "instrument_id",
+            "trade_id",
+            "user_request_id",
+        )
+        if any(
+            getattr(self, name) is not None and name not in permitted for name in values
+        ):
+            raise RiskContractError(
+                f"{self.hierarchy.value} scope contains an inapplicable identity."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RiskLimitDefinition:
+    limit_id: str
+    hierarchy: RiskLimitHierarchy
+    metric: str
+    direction: RiskLimitDirection
+    threshold: Decimal
+    unit: str
+    severity: RiskLimitSeverity
+    scope: RiskLimitScope
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        _text("limit_id", self.limit_id)
+        if not isinstance(self.hierarchy, RiskLimitHierarchy):
+            raise RiskContractError("hierarchy must be a RiskLimitHierarchy.")
+        _text("metric", self.metric)
+        if not isinstance(self.direction, RiskLimitDirection):
+            raise RiskContractError("direction must be a RiskLimitDirection.")
+        _decimal("threshold", self.threshold)
+        _text("unit", self.unit)
+        if not isinstance(self.severity, RiskLimitSeverity):
+            raise RiskContractError("severity must be a RiskLimitSeverity.")
+        if not isinstance(self.scope, RiskLimitScope):
+            raise RiskContractError("scope must be a RiskLimitScope.")
+        if self.scope.hierarchy is not self.hierarchy:
+            raise RiskContractError("limit hierarchy must match its scope hierarchy.")
+        if not isinstance(self.enabled, bool) or not self.enabled:
+            raise RiskContractError("risk limit definitions must be enabled.")
+
+
+def _scope_values(scope: RiskLimitScope) -> tuple[object | None, ...]:
+    return (
+        scope.account_id,
+        scope.portfolio_id,
+        scope.strategy_id,
+        scope.venue,
+        scope.instrument_id,
+        scope.trade_id,
+        scope.user_request_id,
+    )
+
+
+def _scopes_overlap(left: RiskLimitScope, right: RiskLimitScope) -> bool:
+    if left.mode is not right.mode:
+        return False
+    return all(
+        left_value is None or right_value is None or left_value == right_value
+        for left_value, right_value in zip(
+            _scope_values(left), _scope_values(right), strict=True
+        )
+    )
+
+
+def _scope_applies_to(parent: RiskLimitScope, child: RiskLimitScope) -> bool:
+    if parent.mode is not child.mode:
+        return False
+    order = tuple(RiskLimitHierarchy)
+    if order.index(parent.hierarchy) >= order.index(child.hierarchy):
+        return False
+    return all(
+        parent_value is None or parent_value == child_value
+        for parent_value, child_value in zip(
+            _scope_values(parent), _scope_values(child), strict=True
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RiskLimitPolicyConfiguration:
+    policy_version: VersionReference
+    configuration_version: VersionReference
+    limits: tuple[RiskLimitDefinition, ...]
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        for name in ("policy_version", "configuration_version"):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise RiskContractError(f"{name} must be a VersionReference.")
+        limits = _typed_tuple("limits", self.limits, RiskLimitDefinition, empty=False)
+        _unique("limit identities", tuple(item.limit_id for item in limits))
+
+        for index, left in enumerate(limits):
+            for right in limits[index + 1 :]:
+                if left.metric == right.metric and _scopes_overlap(
+                    left.scope, right.scope
+                ):
+                    if left.hierarchy is right.hierarchy:
+                        raise RiskContractError(
+                            "same-level risk limit definitions conflict."
+                        )
+                    hierarchy = tuple(RiskLimitHierarchy)
+                    parent, child = (
+                        (left, right)
+                        if hierarchy.index(left.hierarchy)
+                        < hierarchy.index(right.hierarchy)
+                        else (right, left)
+                    )
+                    if not _scope_applies_to(parent.scope, child.scope):
+                        raise RiskContractError(
+                            "overlapping risk limit definitions have ambiguous or "
+                            "incomparable scopes."
+                        )
+                    if parent.severity is RiskLimitSeverity.HARD:
+                        if child.severity is not RiskLimitSeverity.HARD:
+                            raise RiskContractError(
+                                "lower-level definition cannot soften a HARD limit."
+                            )
+                        if (
+                            parent.unit != child.unit
+                            or parent.direction is not child.direction
+                        ):
+                            raise RiskContractError(
+                                "lower-level definition cannot replace a HARD limit "
+                                "with a non-comparable definition."
+                            )
+                        tighter = (
+                            child.threshold <= parent.threshold
+                            if parent.direction is RiskLimitDirection.LESS_THAN_OR_EQUAL
+                            else child.threshold >= parent.threshold
+                        )
+                        if not tighter:
+                            raise RiskContractError(
+                                "lower-level definition cannot weaken a HARD limit."
+                            )
+
+        preimage = {
+            "policy_version": {
+                "component": self.policy_version.component,
+                "version": self.policy_version.version,
+            },
+            "configuration_version": {
+                "component": self.configuration_version.component,
+                "version": self.configuration_version.version,
+            },
+            "limits": limits,
+        }
+        expected_digest = canonical_sha256(preimage)
+        _digest("content_sha256", self.content_sha256)
+        if self.content_sha256 != expected_digest:
+            raise RiskContractError("risk policy/configuration digest mismatch.")
+        if (
+            self.policy_version.content_sha256 != expected_digest
+            or self.configuration_version.content_sha256 != expected_digest
+        ):
+            raise RiskContractError(
+                "policy/configuration VersionReference digest mismatch."
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1882,8 +2172,14 @@ __all__ = [
     "RiskContext",
     "RiskContractError",
     "RiskDecision",
+    "RiskLimitDefinition",
+    "RiskLimitDirection",
+    "RiskLimitHierarchy",
+    "RiskLimitPolicyConfiguration",
+    "RiskLimitScope",
     "RiskLimitResult",
     "RiskLimitSeverity",
+    "RiskPolicyMode",
     "RiskProposal",
     "RiskRevalidationResult",
     "RiskState",
