@@ -386,12 +386,13 @@ and gross short are retained separately; signed net is `gross_long -
 gross_short`, and gross is `gross_long + gross_short`. Buckets retain their
 currency, so unlike currencies are neither netted nor summed into a fictitious
 portfolio-wide number. Same-currency concentration is `currency_gross /
-account_equity`, calculated with finite `Decimal` at precision 34 and half-even
-rounding; it is not clamped to `[0, 1]`. Concentration in a currency different
-from account equity
-is explicitly `UNKNOWN` (`FOREIGN_CURRENCY_NO_FX`); no FX or currency
-conversion is inferred. These observations are not thresholds, limit checks,
-loss/PnL formulas, mark-to-market, or trading decisions.
+account_equity`; per-asset concentration is each `(asset, currency)` gross
+notional divided by account equity. Both use finite `Decimal` at precision 34
+and half-even rounding and are not clamped to `[0, 1]`. Concentration in a
+currency different from account equity is explicitly `UNKNOWN`
+(`FOREIGN_CURRENCY_NO_FX`); no FX or currency conversion is inferred. These
+observations are not thresholds, limit checks, loss/PnL formulas,
+mark-to-market, or trading decisions.
 The aggregation carries account/snapshot identity, exact position snapshot
 IDs, evaluation time, and a canonical digest binding the supplied account,
 sorted position/venue inputs, and evaluation time. That digest is a content

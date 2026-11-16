@@ -2436,6 +2436,35 @@ class EquityConcentration:
 
 
 @dataclass(frozen=True, slots=True)
+class AssetEquityConcentration:
+    """Gross notional/equity for one asset and quote currency."""
+
+    asset: str
+    currency: str
+    gross: Decimal
+    state: ExposureConcentrationState
+    gross_to_equity: Decimal | None
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        _text("asset", self.asset)
+        _text("currency", self.currency)
+        _nonnegative("gross", self.gross)
+        if not isinstance(self.state, ExposureConcentrationState):
+            raise RiskContractError("state must be an ExposureConcentrationState.")
+        if self.state is ExposureConcentrationState.AVAILABLE:
+            if self.gross_to_equity is None or self.reason is not None:
+                raise RiskContractError("available concentration requires a ratio.")
+            _nonnegative("gross_to_equity", self.gross_to_equity)
+        elif self.gross_to_equity is not None or not self.reason:
+            raise RiskContractError(
+                "unknown concentration requires an explicit reason."
+            )
+        if self.reason is not None:
+            _text("reason", self.reason)
+
+
+@dataclass(frozen=True, slots=True)
 class PortfolioExposureAggregation:
     """Pure, nonpersisted aggregation of the exact supplied exposure snapshots."""
 
@@ -2445,6 +2474,7 @@ class PortfolioExposureAggregation:
     position_snapshot_ids: tuple[UUID, ...]
     breakdowns: tuple[ExposureBreakdown, ...]
     concentrations: tuple[EquityConcentration, ...]
+    asset_concentrations: tuple[AssetEquityConcentration, ...]
     input_digest: str
 
     def __post_init__(self) -> None:
@@ -2469,6 +2499,16 @@ class PortfolioExposureAggregation:
         _unique(
             "concentration currencies",
             tuple(item.currency for item in self.concentrations),
+        )
+        _typed_tuple(
+            "asset_concentrations",
+            self.asset_concentrations,
+            AssetEquityConcentration,
+            empty=False,
+        )
+        _unique(
+            "asset concentration identities",
+            tuple((item.asset, item.currency) for item in self.asset_concentrations),
         )
         _digest("input_digest", self.input_digest)
 
@@ -2625,6 +2665,40 @@ def aggregate_portfolio_exposure(
                     )
                 )
 
+        asset_totals = {
+            (key, currency): values
+            for (dimension, key, currency), values in groups.items()
+            if dimension == "asset"
+        }
+        asset_concentrations: list[AssetEquityConcentration] = []
+        for (asset, currency), (gross_long, gross_short) in sorted(
+            asset_totals.items()
+        ):
+            gross = _safe_decimal(gross_long + gross_short, "asset gross exposure")
+            if currency == equity.currency:
+                concentration = _safe_decimal(gross / equity.amount, "gross/equity")
+                asset_concentrations.append(
+                    AssetEquityConcentration(
+                        asset,
+                        currency,
+                        gross,
+                        ExposureConcentrationState.AVAILABLE,
+                        concentration,
+                        None,
+                    )
+                )
+            else:
+                asset_concentrations.append(
+                    AssetEquityConcentration(
+                        asset,
+                        currency,
+                        gross,
+                        ExposureConcentrationState.UNKNOWN,
+                        None,
+                        "FOREIGN_CURRENCY_NO_FX",
+                    )
+                )
+
     canonical_inputs = {
         "account_snapshot": account_snapshot,
         "positions": ordered_positions,
@@ -2637,6 +2711,7 @@ def aggregate_portfolio_exposure(
         tuple(item.position.snapshot_id for item in ordered_positions),
         tuple(breakdowns),
         tuple(concentrations),
+        tuple(asset_concentrations),
         _risk_digest("portfolio exposure", canonical_inputs),
     )
 
@@ -3032,6 +3107,7 @@ __all__ = [
     "AccountPermissionObservation",
     "AccountPermissionObservations",
     "AccountSnapshot",
+    "AssetEquityConcentration",
     "AssessmentReference",
     "ContractReference",
     "DescriptiveEstimate",

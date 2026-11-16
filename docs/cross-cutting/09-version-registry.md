@@ -735,11 +735,12 @@ is aggregated rather than omitted.
 Each `(dimension, key, currency)` breakdown keeps gross long, gross short,
 signed net (`long - short`), and gross (`long + short`). Currency, asset,
 instrument, venue, and direction are separate dimensions. No unlike-currency
-netting or cross-currency sum is emitted. The same-currency concentration
-formula is gross currency notional divided by positive account equity, using
-finite `Decimal` arithmetic at precision 34 with half-even rounding and without
-a `[0, 1]` clamp. Foreign
-currency concentration is explicitly `UNKNOWN` because FX is out of scope.
+netting or cross-currency sum is emitted. Same-currency concentration is gross
+currency notional divided by positive account equity; per-asset concentration
+is each `(asset, currency)` gross notional divided by positive account equity.
+Both use finite `Decimal` arithmetic at precision 34 with half-even rounding
+and without a `[0, 1]` clamp. Foreign-currency concentration is explicitly
+`UNKNOWN` because FX is out of scope.
 This is not mark-to-market, loss/PnL, exposure-limit or risk-decision logic.
 The aggregation carries account/snapshot identity, exact position snapshot
 IDs, evaluation time, and a canonical digest binding the supplied account,

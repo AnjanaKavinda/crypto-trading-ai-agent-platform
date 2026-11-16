@@ -1837,6 +1837,60 @@ def test_exposure_same_currency_concentration_is_gross_and_not_clamped() -> None
     assert concentration.state is ExposureConcentrationState.AVAILABLE
     assert concentration.gross == Decimal("12000")
     assert concentration.gross_to_equity == Decimal("1.2")
+    asset_concentration = result.asset_concentrations[0]
+    assert asset_concentration.asset == "SYNTHETIC-BTC"
+    assert asset_concentration.gross == Decimal("12000")
+    assert asset_concentration.gross_to_equity == Decimal("1.2")
+
+
+def test_exposure_asset_concentration_is_individual_and_currency_aware() -> None:
+    account_value = account()
+    result = aggregate_portfolio_exposure(
+        account_value,
+        (
+            exposure_input(account_value.account_id, "6000", asset="SYNTHETIC-A"),
+            exposure_input(
+                account_value.account_id,
+                "4000",
+                asset="SYNTHETIC-B",
+                instrument_id="SYNTHETIC-B-USD",
+            ),
+            exposure_input(
+                account_value.account_id,
+                "500",
+                currency="SYNTHETIC-EUR",
+                asset="SYNTHETIC-A",
+                instrument_id="SYNTHETIC-A-EUR",
+            ),
+        ),
+        T[14],
+    )
+    asset_a = next(
+        item
+        for item in result.asset_concentrations
+        if item.asset == "SYNTHETIC-A" and item.currency == USD
+    )
+    asset_b = next(
+        item
+        for item in result.asset_concentrations
+        if item.asset == "SYNTHETIC-B" and item.currency == USD
+    )
+    foreign_asset_a = next(
+        item
+        for item in result.asset_concentrations
+        if item.asset == "SYNTHETIC-A" and item.currency == "SYNTHETIC-EUR"
+    )
+    assert (asset_a.gross, asset_a.gross_to_equity) == (
+        Decimal("6000"),
+        Decimal("0.6"),
+    )
+    assert (asset_b.gross, asset_b.gross_to_equity) == (
+        Decimal("4000"),
+        Decimal("0.4"),
+    )
+    assert foreign_asset_a.state is ExposureConcentrationState.UNKNOWN
+    assert foreign_asset_a.gross_to_equity is None
+    assert foreign_asset_a.reason == "FOREIGN_CURRENCY_NO_FX"
 
 
 def test_exposure_rejects_bad_account_position_venue_and_freshness_inputs() -> None:
