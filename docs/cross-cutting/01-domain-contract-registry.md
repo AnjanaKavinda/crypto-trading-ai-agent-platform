@@ -410,7 +410,9 @@ forward-fill, or default window/count. Pearson correlation is sample covariance
 divided by the product of sample standard deviations. Optional beta is sample
 covariance divided by the sample variance of only the explicitly named,
 supplied benchmark. Arithmetic uses Decimal precision 34 with half-even
-rounding and is not annualized.
+rounding and is not annualized. Pearson results at most `1e-32` beyond
+`[-1, 1]` due to rounding are corrected to the nearest boundary; larger
+violations fail closed.
 
 Results retain exact window, aligned sample timestamps/counts, each series'
 source/version/content digest, and an input digest binding the series, window,

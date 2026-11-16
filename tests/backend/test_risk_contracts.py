@@ -2027,6 +2027,51 @@ def test_pairwise_correlation_and_beta_are_exact_and_provenance_bound() -> None:
     assert repeated == result
 
 
+@pytest.mark.parametrize("opposite", [False, True])
+def test_pairwise_correlation_bounds_decimal_rounding(opposite: bool) -> None:
+    values = (
+        "-0.648857566271132852749344965975",
+        "0.901732323717895592504053270155",
+        "0.698638443136872307396148201025",
+        "0.297735541716413254094506681617",
+        "0.576158120893557105055281624696",
+    )
+    inverse_values = tuple(
+        value[1:] if value.startswith("-") else f"-{value}" for value in values
+    )
+    result = pairwise_correlation(
+        (
+            return_series("A", values),
+            return_series("B", inverse_values if opposite else values),
+        ),
+        window_start=T[0],
+        window_end=T[4],
+        min_observations=3,
+    )
+    estimate = result.correlations[0].estimate
+    assert estimate.state is DescriptiveEstimateState.AVAILABLE
+    assert estimate.value == Decimal("-1" if opposite else "1")
+
+
+def test_pairwise_correlation_rejects_material_range_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_platform_api.risk.contracts as risk_contracts
+
+    monkeypatch.setattr(
+        risk_contracts,
+        "_moments",
+        lambda pairs: (Decimal("1.01"), Decimal("1"), Decimal("1")),
+    )
+    with pytest.raises(RiskContractError, match="exceeds its valid range"):
+        pairwise_correlation(
+            (return_series("A", ("1", "2", "3")), return_series("B", ("1", "2", "3"))),
+            window_start=T[0],
+            window_end=T[2],
+            min_observations=3,
+        )
+
+
 def test_pairwise_window_is_inclusive_and_alignment_uses_exact_timestamps() -> None:
     benchmark = return_series(
         "SYNTHETIC-BENCH",

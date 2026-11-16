@@ -3018,11 +3018,17 @@ def pairwise_correlation(
                     denominator = _safe_decimal(
                         variance_product.sqrt(), "correlation denominator"
                     )
+                    correlation = _safe_decimal(
+                        covariance_numerator / denominator, "Pearson correlation"
+                    )
+                    if abs(correlation) > Decimal(1):
+                        if abs(correlation) - Decimal(1) > Decimal("1e-32"):
+                            raise RiskContractError(
+                                "Pearson correlation exceeds its valid range."
+                            )
+                        correlation = Decimal(1) if correlation > 0 else Decimal(-1)
                     estimate = DescriptiveEstimate(
-                        _safe_decimal(
-                            covariance_numerator / denominator,
-                            "Pearson correlation",
-                        ),
+                        correlation,
                         DescriptiveEstimateState.AVAILABLE,
                         None,
                         len(timestamps),

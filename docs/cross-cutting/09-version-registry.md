@@ -757,7 +757,9 @@ exact pairwise timestamp intersections are sampled. Pearson uses sample
 covariance divided by sample standard deviations; benchmark beta uses sample
 covariance divided by the explicitly named benchmark's sample variance.
 Decimal operations use precision 34 with half-even rounding; there is no
-annualization or float arithmetic. Output identifies every exact aligned sample
+annualization or float arithmetic. Pearson results at most `1e-32` outside
+`[-1, 1]` due to rounding are corrected to the nearest boundary; larger
+violations fail closed. Output identifies every exact aligned sample
 timestamp/count, source, version, series digest, and overall input digest.
 
 Insufficient or unalignable samples, zero pair variance, and zero benchmark
