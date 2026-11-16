@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from enum import StrEnum
+from itertools import combinations
 from typing import TypeVar, cast
 from uuid import UUID
 
@@ -2359,15 +2360,770 @@ class RiskRevalidationResult:
         object.__setattr__(self, "valid_until", valid)
 
 
+@dataclass(frozen=True, slots=True)
+class PositionExposureInput:
+    """Explicit position snapshot and caller-supplied venue identity."""
+
+    position: PositionSnapshot
+    venue: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.position, PositionSnapshot):
+            raise RiskContractError("position must be a PositionSnapshot.")
+        _text("venue", self.venue)
+
+
+@dataclass(frozen=True, slots=True)
+class ExposureBreakdown:
+    """Gross long/short and signed net for one dimension and currency."""
+
+    dimension: str
+    key: str
+    currency: str
+    gross_long: Decimal
+    gross_short: Decimal
+    net: Decimal
+    gross: Decimal
+
+    def __post_init__(self) -> None:
+        for name in ("dimension", "key", "currency"):
+            _text(name, getattr(self, name))
+        for name in ("gross_long", "gross_short", "net", "gross"):
+            _decimal(name, getattr(self, name))
+        if self.gross_long < 0 or self.gross_short < 0 or self.gross < 0:
+            raise RiskContractError("gross exposure values must be non-negative.")
+        with localcontext() as decimal_context:
+            decimal_context.prec = 34
+            decimal_context.rounding = ROUND_HALF_EVEN
+            if self.net != self.gross_long - self.gross_short:
+                raise RiskContractError(
+                    "net exposure must equal gross long minus short."
+                )
+            if self.gross != self.gross_long + self.gross_short:
+                raise RiskContractError("gross exposure must equal long plus short.")
+
+
+class ExposureConcentrationState(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class EquityConcentration:
+    """Gross notional/equity only for the account equity currency."""
+
+    currency: str
+    gross: Decimal
+    state: ExposureConcentrationState
+    gross_to_equity: Decimal | None
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        _text("currency", self.currency)
+        _nonnegative("gross", self.gross)
+        if not isinstance(self.state, ExposureConcentrationState):
+            raise RiskContractError("state must be an ExposureConcentrationState.")
+        if self.state is ExposureConcentrationState.AVAILABLE:
+            if self.gross_to_equity is None or self.reason is not None:
+                raise RiskContractError("available concentration requires a ratio.")
+            _nonnegative("gross_to_equity", self.gross_to_equity)
+        elif self.gross_to_equity is not None or not self.reason:
+            raise RiskContractError(
+                "unknown concentration requires an explicit reason."
+            )
+        if self.reason is not None:
+            _text("reason", self.reason)
+
+
+@dataclass(frozen=True, slots=True)
+class AssetEquityConcentration:
+    """Gross notional/equity for one asset and quote currency."""
+
+    asset: str
+    currency: str
+    gross: Decimal
+    state: ExposureConcentrationState
+    gross_to_equity: Decimal | None
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        _text("asset", self.asset)
+        _text("currency", self.currency)
+        _nonnegative("gross", self.gross)
+        if not isinstance(self.state, ExposureConcentrationState):
+            raise RiskContractError("state must be an ExposureConcentrationState.")
+        if self.state is ExposureConcentrationState.AVAILABLE:
+            if self.gross_to_equity is None or self.reason is not None:
+                raise RiskContractError("available concentration requires a ratio.")
+            _nonnegative("gross_to_equity", self.gross_to_equity)
+        elif self.gross_to_equity is not None or not self.reason:
+            raise RiskContractError(
+                "unknown concentration requires an explicit reason."
+            )
+        if self.reason is not None:
+            _text("reason", self.reason)
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioExposureAggregation:
+    """Pure, nonpersisted aggregation of the exact supplied exposure snapshots."""
+
+    account_id: UUID
+    account_snapshot_id: UUID
+    evaluated_at: datetime
+    position_snapshot_ids: tuple[UUID, ...]
+    breakdowns: tuple[ExposureBreakdown, ...]
+    concentrations: tuple[EquityConcentration, ...]
+    asset_concentrations: tuple[AssetEquityConcentration, ...]
+    input_digest: str
+
+    def __post_init__(self) -> None:
+        _uuid("account_id", self.account_id)
+        _uuid("account_snapshot_id", self.account_snapshot_id)
+        object.__setattr__(
+            self, "evaluated_at", _time("evaluated_at", self.evaluated_at)
+        )
+        snapshot_ids = _uuid_tuple("position_snapshot_ids", self.position_snapshot_ids)
+        if not snapshot_ids:
+            raise RiskContractError("position_snapshot_ids must not be empty.")
+        _typed_tuple("breakdowns", self.breakdowns, ExposureBreakdown, empty=False)
+        _unique(
+            "breakdown identities",
+            tuple(
+                (item.dimension, item.key, item.currency) for item in self.breakdowns
+            ),
+        )
+        _typed_tuple(
+            "concentrations", self.concentrations, EquityConcentration, empty=False
+        )
+        _unique(
+            "concentration currencies",
+            tuple(item.currency for item in self.concentrations),
+        )
+        _typed_tuple(
+            "asset_concentrations",
+            self.asset_concentrations,
+            AssetEquityConcentration,
+            empty=False,
+        )
+        _unique(
+            "asset concentration identities",
+            tuple((item.asset, item.currency) for item in self.asset_concentrations),
+        )
+        _digest("input_digest", self.input_digest)
+
+
+def _risk_digest(name: str, value: object) -> str:
+    try:
+        return canonical_sha256(value)
+    except ContractSerializationError as exc:
+        raise RiskContractError(f"{name} inputs are not canonical.") from exc
+
+
+def _safe_decimal(value: Decimal, name: str) -> Decimal:
+    if not value.is_finite():
+        raise RiskContractError(f"{name} is not finite at precision 34.")
+    return value
+
+
+def aggregate_portfolio_exposure(
+    account_snapshot: AccountSnapshot,
+    positions: tuple[PositionExposureInput, ...],
+    evaluated_at: datetime,
+) -> PortfolioExposureAggregation:
+    """Aggregate explicit snapshots without valuation, FX, or risk decisions."""
+    if not isinstance(account_snapshot, AccountSnapshot):
+        raise RiskContractError("account_snapshot must be an AccountSnapshot.")
+    _typed_tuple("positions", positions, PositionExposureInput, empty=False)
+    evaluated = _time("evaluated_at", evaluated_at)
+    _uuid("account_id", account_snapshot.account_id)
+    _uuid("account_snapshot_id", account_snapshot.snapshot_id)
+    equity = account_snapshot.equity
+    if account_snapshot.state is not SnapshotState.VALID:
+        raise RiskContractError("account snapshot must be VALID.")
+    if equity is None or not isinstance(equity, MoneyValue):
+        raise RiskContractError("account snapshot must have positive equity.")
+    MoneyValue.__post_init__(equity)
+    if equity.amount <= 0:
+        raise RiskContractError("account snapshot must have positive equity.")
+    account_as_of = _time("account_snapshot.as_of", account_snapshot.as_of)
+    account_captured_at = _time(
+        "account_snapshot.captured_at", account_snapshot.captured_at
+    )
+    account_valid_until = _time(
+        "account_snapshot.valid_until", account_snapshot.valid_until
+    )
+    if account_as_of > evaluated or account_captured_at > evaluated:
+        raise RiskContractError("account snapshot cannot be from the future.")
+    if evaluated > account_valid_until:
+        raise RiskContractError("account snapshot is stale.")
+
+    position_ids: set[UUID] = set()
+    snapshot_ids: set[UUID] = set()
+    for supplied in positions:
+        position = supplied.position
+        _uuid("position_id", position.position_id)
+        _uuid("position_snapshot_id", position.snapshot_id)
+        if position.account_id != account_snapshot.account_id:
+            raise RiskContractError("position account identity mismatch.")
+        if position.state is not SnapshotState.VALID:
+            raise RiskContractError("position snapshot must be VALID.")
+        position_as_of = _time("position.as_of", position.as_of)
+        position_captured_at = _time("position.captured_at", position.captured_at)
+        position_valid_until = _time("position.valid_until", position.valid_until)
+        if position_as_of > evaluated or position_captured_at > evaluated:
+            raise RiskContractError("position snapshot cannot be from the future.")
+        if evaluated > position_valid_until:
+            raise RiskContractError("position snapshot is stale.")
+        if not isinstance(position.side, PositionSide):
+            raise RiskContractError("position side must be a PositionSide.")
+        _text("position.asset", position.asset)
+        _text("position.instrument_id", position.instrument_id)
+        if position.notional is None or not isinstance(position.notional, MoneyValue):
+            raise RiskContractError("position must have a positive priced notional.")
+        MoneyValue.__post_init__(position.notional)
+        if position.notional.amount <= 0:
+            raise RiskContractError("position must have a positive priced notional.")
+        if position.position_id in position_ids:
+            raise RiskContractError("duplicate position identity.")
+        if position.snapshot_id in snapshot_ids:
+            raise RiskContractError("duplicate position snapshot identity.")
+        position_ids.add(position.position_id)
+        snapshot_ids.add(position.snapshot_id)
+
+    # Sorting makes fixed-precision Decimal summation independent of tuple order.
+    ordered_positions = tuple(
+        sorted(
+            positions,
+            key=lambda item: (
+                item.position.position_id.hex,
+                item.position.snapshot_id.hex,
+            ),
+        )
+    )
+    groups: dict[tuple[str, str, str], list[Decimal]] = {}
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_HALF_EVEN
+        for supplied in ordered_positions:
+            position = supplied.position
+            assert position.notional is not None
+            currency = position.notional.currency
+            keys = (
+                ("currency", currency, currency),
+                ("asset", position.asset, currency),
+                ("instrument", position.instrument_id, currency),
+                ("venue", supplied.venue, currency),
+                ("direction", position.side.value, currency),
+            )
+            for group_key in keys:
+                totals = groups.setdefault(group_key, [Decimal(0), Decimal(0)])
+                side_index = 0 if position.side is PositionSide.LONG else 1
+                totals[side_index] = _safe_decimal(
+                    totals[side_index] + position.notional.amount, "gross exposure"
+                )
+
+        breakdowns: list[ExposureBreakdown] = []
+        for (dimension, key, currency), (gross_long, gross_short) in sorted(
+            groups.items()
+        ):
+            net = _safe_decimal(gross_long - gross_short, "net exposure")
+            gross = _safe_decimal(gross_long + gross_short, "gross exposure")
+            breakdowns.append(
+                ExposureBreakdown(
+                    dimension, key, currency, gross_long, gross_short, net, gross
+                )
+            )
+
+        currency_totals = {
+            key: values
+            for (dimension, key, currency), values in groups.items()
+            if dimension == "currency" and key == currency
+        }
+        concentrations: list[EquityConcentration] = []
+        for currency, (gross_long, gross_short) in sorted(currency_totals.items()):
+            gross = _safe_decimal(gross_long + gross_short, "currency gross exposure")
+            if currency == equity.currency:
+                concentration = _safe_decimal(gross / equity.amount, "gross/equity")
+                concentrations.append(
+                    EquityConcentration(
+                        currency,
+                        gross,
+                        ExposureConcentrationState.AVAILABLE,
+                        concentration,
+                        None,
+                    )
+                )
+            else:
+                concentrations.append(
+                    EquityConcentration(
+                        currency,
+                        gross,
+                        ExposureConcentrationState.UNKNOWN,
+                        None,
+                        "FOREIGN_CURRENCY_NO_FX",
+                    )
+                )
+
+        asset_totals = {
+            (key, currency): values
+            for (dimension, key, currency), values in groups.items()
+            if dimension == "asset"
+        }
+        asset_concentrations: list[AssetEquityConcentration] = []
+        for (asset, currency), (gross_long, gross_short) in sorted(
+            asset_totals.items()
+        ):
+            gross = _safe_decimal(gross_long + gross_short, "asset gross exposure")
+            if currency == equity.currency:
+                concentration = _safe_decimal(gross / equity.amount, "gross/equity")
+                asset_concentrations.append(
+                    AssetEquityConcentration(
+                        asset,
+                        currency,
+                        gross,
+                        ExposureConcentrationState.AVAILABLE,
+                        concentration,
+                        None,
+                    )
+                )
+            else:
+                asset_concentrations.append(
+                    AssetEquityConcentration(
+                        asset,
+                        currency,
+                        gross,
+                        ExposureConcentrationState.UNKNOWN,
+                        None,
+                        "FOREIGN_CURRENCY_NO_FX",
+                    )
+                )
+
+    canonical_inputs = {
+        "account_snapshot": account_snapshot,
+        "positions": ordered_positions,
+        "evaluated_at": evaluated,
+    }
+    return PortfolioExposureAggregation(
+        account_snapshot.account_id,
+        account_snapshot.snapshot_id,
+        evaluated,
+        tuple(item.position.snapshot_id for item in ordered_positions),
+        tuple(breakdowns),
+        tuple(concentrations),
+        tuple(asset_concentrations),
+        _risk_digest("portfolio exposure", canonical_inputs),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnObservation:
+    """One caller-supplied finite close-to-close log return at an exact timestamp."""
+
+    timestamp: datetime
+    log_return: Decimal
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "timestamp", _time("timestamp", self.timestamp))
+        _decimal("log_return", self.log_return)
+
+
+def _return_series_digest(
+    instrument_id: str,
+    source_id: str,
+    source_version: VersionReference,
+    observations: tuple[ReturnObservation, ...],
+) -> str:
+    return _risk_digest(
+        "return series",
+        {
+            "instrument_id": instrument_id,
+            "source_id": source_id,
+            "source_version": source_version,
+            "observations": observations,
+        },
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentReturnSeries:
+    """Caller-supplied immutable, source/version/digest-bound return observations."""
+
+    instrument_id: str
+    source_id: str
+    source_version: VersionReference
+    observations: tuple[ReturnObservation, ...]
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        _text("instrument_id", self.instrument_id)
+        _text("source_id", self.source_id)
+        if not isinstance(self.source_version, VersionReference):
+            raise RiskContractError("source_version must be a VersionReference.")
+        observations = _typed_tuple(
+            "observations", self.observations, ReturnObservation, empty=False
+        )
+        timestamps = tuple(item.timestamp for item in observations)
+        if any(earlier >= later for earlier, later in zip(timestamps, timestamps[1:])):
+            raise RiskContractError("return timestamps must be strictly increasing.")
+        _digest("content_sha256", self.content_sha256)
+        expected = _return_series_digest(
+            self.instrument_id, self.source_id, self.source_version, observations
+        )
+        if self.content_sha256 != expected:
+            raise RiskContractError("return series digest mismatch.")
+
+
+class DescriptiveEstimateState(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class DescriptiveEstimate:
+    """Descriptive number or explicit unknown; never a confidence or trade signal."""
+
+    value: Decimal | None
+    state: DescriptiveEstimateState
+    reason: str | None
+    sample_count: int
+    sample_timestamps: tuple[datetime, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, DescriptiveEstimateState):
+            raise RiskContractError("state must be a DescriptiveEstimateState.")
+        if (
+            not isinstance(self.sample_count, int)
+            or isinstance(self.sample_count, bool)
+            or self.sample_count < 0
+        ):
+            raise RiskContractError("sample_count must be a non-negative integer.")
+        timestamps = tuple(
+            _time(f"sample_timestamps[{index}]", value)
+            for index, value in enumerate(
+                _tuple("sample_timestamps", self.sample_timestamps)
+            )
+        )
+        if len(timestamps) != self.sample_count:
+            raise RiskContractError("sample_count must match sample timestamps.")
+        if any(earlier >= later for earlier, later in zip(timestamps, timestamps[1:])):
+            raise RiskContractError("sample timestamps must be strictly increasing.")
+        object.__setattr__(self, "sample_timestamps", timestamps)
+        if self.state is DescriptiveEstimateState.AVAILABLE:
+            if self.value is None or self.reason is not None:
+                raise RiskContractError("available estimate requires a value.")
+            _decimal("value", self.value)
+        elif self.value is not None or self.reason is None:
+            raise RiskContractError("unknown estimate requires an explicit reason.")
+        else:
+            _text("reason", self.reason)
+
+
+@dataclass(frozen=True, slots=True)
+class PairwiseCorrelation:
+    instrument_left: str
+    instrument_right: str
+    estimate: DescriptiveEstimate
+
+    def __post_init__(self) -> None:
+        _text("instrument_left", self.instrument_left)
+        _text("instrument_right", self.instrument_right)
+        if self.instrument_left >= self.instrument_right:
+            raise RiskContractError("pair instruments must be uniquely ordered.")
+        if not isinstance(self.estimate, DescriptiveEstimate):
+            raise RiskContractError("estimate must be a DescriptiveEstimate.")
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentBeta:
+    instrument_id: str
+    benchmark_instrument_id: str
+    estimate: DescriptiveEstimate
+
+    def __post_init__(self) -> None:
+        _text("instrument_id", self.instrument_id)
+        _text("benchmark_instrument_id", self.benchmark_instrument_id)
+        if self.instrument_id == self.benchmark_instrument_id:
+            raise RiskContractError("beta instrument must differ from its benchmark.")
+        if not isinstance(self.estimate, DescriptiveEstimate):
+            raise RiskContractError("estimate must be a DescriptiveEstimate.")
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnSeriesProvenance:
+    instrument_id: str
+    source_id: str
+    source_version: VersionReference
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        _text("instrument_id", self.instrument_id)
+        _text("source_id", self.source_id)
+        if not isinstance(self.source_version, VersionReference):
+            raise RiskContractError("source_version must be a VersionReference.")
+        _digest("content_sha256", self.content_sha256)
+
+
+@dataclass(frozen=True, slots=True)
+class PairwiseCorrelationResult:
+    window_start: datetime
+    window_end: datetime
+    min_observations: int
+    benchmark_instrument_id: str | None
+    series_provenance: tuple[ReturnSeriesProvenance, ...]
+    input_digest: str
+    correlations: tuple[PairwiseCorrelation, ...]
+    betas: tuple[InstrumentBeta, ...]
+
+    def __post_init__(self) -> None:
+        start = _time("window_start", self.window_start)
+        end = _time("window_end", self.window_end)
+        _ordered("window_start", start, "window_end", end)
+        _positive_int("min_observations", self.min_observations)
+        if self.min_observations < 3:
+            raise RiskContractError("min_observations must be at least three.")
+        if self.benchmark_instrument_id is not None:
+            _text("benchmark_instrument_id", self.benchmark_instrument_id)
+        provenance = _typed_tuple(
+            "series_provenance",
+            self.series_provenance,
+            ReturnSeriesProvenance,
+            empty=False,
+        )
+        _unique(
+            "series provenance instruments", tuple(x.instrument_id for x in provenance)
+        )
+        _digest("input_digest", self.input_digest)
+        correlations = _typed_tuple(
+            "correlations", self.correlations, PairwiseCorrelation
+        )
+        _unique(
+            "correlation pairs",
+            tuple((x.instrument_left, x.instrument_right) for x in correlations),
+        )
+        betas = _typed_tuple("betas", self.betas, InstrumentBeta)
+        _unique("beta instruments", tuple(x.instrument_id for x in betas))
+        object.__setattr__(self, "window_start", start)
+        object.__setattr__(self, "window_end", end)
+
+
+def _unknown_estimate(
+    reason: str, timestamps: tuple[datetime, ...]
+) -> DescriptiveEstimate:
+    return DescriptiveEstimate(
+        None, DescriptiveEstimateState.UNKNOWN, reason, len(timestamps), timestamps
+    )
+
+
+def _paired_returns(
+    left: InstrumentReturnSeries,
+    right: InstrumentReturnSeries,
+    start: datetime,
+    end: datetime,
+) -> tuple[tuple[Decimal, Decimal, datetime], ...]:
+    left_values = {
+        item.timestamp: item.log_return
+        for item in left.observations
+        if start <= item.timestamp <= end
+    }
+    right_values = {
+        item.timestamp: item.log_return
+        for item in right.observations
+        if start <= item.timestamp <= end
+    }
+    return tuple(
+        (left_values[timestamp], right_values[timestamp], timestamp)
+        for timestamp in sorted(left_values.keys() & right_values.keys())
+    )
+
+
+def _moments(
+    pairs: tuple[tuple[Decimal, Decimal, datetime], ...],
+) -> tuple[Decimal, Decimal, Decimal]:
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_HALF_EVEN
+        count = Decimal(len(pairs))
+        mean_left = sum((x for x, _, _ in pairs), Decimal(0)) / count
+        mean_right = sum((y for _, y, _ in pairs), Decimal(0)) / count
+        cross = sum(
+            ((x - mean_left) * (y - mean_right) for x, y, _ in pairs), Decimal(0)
+        )
+        left_square = sum(((x - mean_left) ** 2 for x, _, _ in pairs), Decimal(0))
+        right_square = sum(((y - mean_right) ** 2 for _, y, _ in pairs), Decimal(0))
+        return (
+            _safe_decimal(cross, "sample covariance numerator"),
+            _safe_decimal(left_square, "sample variance numerator"),
+            _safe_decimal(right_square, "sample variance numerator"),
+        )
+
+
+def pairwise_correlation(
+    series: tuple[InstrumentReturnSeries, ...],
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    min_observations: int,
+    benchmark_instrument_id: str | None = None,
+) -> PairwiseCorrelationResult:
+    """Calculate descriptive pairwise Pearson correlation and optional beta.
+
+    Only exact timestamp intersections in the inclusive caller-supplied window
+    are used. Arithmetic is Decimal-only with precision 34 and no annualization.
+    """
+    supplied = _typed_tuple("series", series, InstrumentReturnSeries, empty=False)
+    start = _time("window_start", window_start)
+    end = _time("window_end", window_end)
+    _ordered("window_start", start, "window_end", end)
+    _positive_int("min_observations", min_observations)
+    if min_observations < 3:
+        raise RiskContractError("min_observations must be at least three.")
+    if len(supplied) < 2:
+        raise RiskContractError("at least two instrument series are required.")
+    instrument_ids = tuple(item.instrument_id for item in supplied)
+    _unique("series instruments", instrument_ids)
+    if benchmark_instrument_id is not None:
+        _text("benchmark_instrument_id", benchmark_instrument_id)
+        if benchmark_instrument_id not in instrument_ids:
+            raise RiskContractError(
+                "explicit benchmark is absent from supplied series."
+            )
+    ordered_series = tuple(sorted(supplied, key=lambda item: item.instrument_id))
+    by_instrument = {item.instrument_id: item for item in ordered_series}
+    pairs: list[PairwiseCorrelation] = []
+    beta_results: list[InstrumentBeta] = []
+    with localcontext() as decimal_context:
+        decimal_context.prec = 34
+        decimal_context.rounding = ROUND_HALF_EVEN
+        for left, right in combinations(ordered_series, 2):
+            observations = _paired_returns(left, right, start, end)
+            timestamps = tuple(item[2] for item in observations)
+            if len(observations) < min_observations:
+                estimate = _unknown_estimate(
+                    "INSUFFICIENT_ALIGNED_OBSERVATIONS", timestamps
+                )
+            else:
+                (
+                    covariance_numerator,
+                    left_variance_numerator,
+                    right_variance_numerator,
+                ) = _moments(observations)
+                if left_variance_numerator == 0 or right_variance_numerator == 0:
+                    estimate = _unknown_estimate("ZERO_VARIANCE", timestamps)
+                else:
+                    variance_product = _safe_decimal(
+                        left_variance_numerator * right_variance_numerator,
+                        "variance product",
+                    )
+                    denominator = _safe_decimal(
+                        variance_product.sqrt(), "correlation denominator"
+                    )
+                    correlation = _safe_decimal(
+                        covariance_numerator / denominator, "Pearson correlation"
+                    )
+                    if abs(correlation) > Decimal(1):
+                        if abs(correlation) - Decimal(1) > Decimal("1e-32"):
+                            raise RiskContractError(
+                                "Pearson correlation exceeds its valid range."
+                            )
+                        correlation = Decimal(1) if correlation > 0 else Decimal(-1)
+                    estimate = DescriptiveEstimate(
+                        correlation,
+                        DescriptiveEstimateState.AVAILABLE,
+                        None,
+                        len(timestamps),
+                        timestamps,
+                    )
+            pairs.append(
+                PairwiseCorrelation(left.instrument_id, right.instrument_id, estimate)
+            )
+
+        if benchmark_instrument_id is not None:
+            benchmark = by_instrument[benchmark_instrument_id]
+            for instrument in ordered_series:
+                if instrument.instrument_id == benchmark_instrument_id:
+                    continue
+                observations = _paired_returns(instrument, benchmark, start, end)
+                timestamps = tuple(item[2] for item in observations)
+                if len(observations) < min_observations:
+                    estimate = _unknown_estimate(
+                        "INSUFFICIENT_ALIGNED_OBSERVATIONS", timestamps
+                    )
+                else:
+                    covariance_numerator, _, benchmark_variance_numerator = _moments(
+                        observations
+                    )
+                    if benchmark_variance_numerator == 0:
+                        estimate = _unknown_estimate(
+                            "ZERO_BENCHMARK_VARIANCE", timestamps
+                        )
+                    else:
+                        estimate = DescriptiveEstimate(
+                            _safe_decimal(
+                                covariance_numerator / benchmark_variance_numerator,
+                                "beta",
+                            ),
+                            DescriptiveEstimateState.AVAILABLE,
+                            None,
+                            len(timestamps),
+                            timestamps,
+                        )
+                beta_results.append(
+                    InstrumentBeta(
+                        instrument.instrument_id,
+                        benchmark_instrument_id,
+                        estimate,
+                    )
+                )
+
+    provenance = tuple(
+        ReturnSeriesProvenance(
+            item.instrument_id,
+            item.source_id,
+            item.source_version,
+            item.content_sha256,
+        )
+        for item in ordered_series
+    )
+    input_digest = _risk_digest(
+        "correlation",
+        {
+            "series": ordered_series,
+            "window_start": start,
+            "window_end": end,
+            "min_observations": min_observations,
+            "benchmark_instrument_id": benchmark_instrument_id,
+        },
+    )
+    return PairwiseCorrelationResult(
+        start,
+        end,
+        min_observations,
+        benchmark_instrument_id,
+        provenance,
+        input_digest,
+        tuple(pairs),
+        tuple(beta_results),
+    )
+
+
 __all__ = [
     "CONTRACT_SCHEMA_VERSION",
     "AccountEvidenceContext",
     "AccountPermissionObservation",
     "AccountPermissionObservations",
     "AccountSnapshot",
+    "AssetEquityConcentration",
     "AssessmentReference",
     "ContractReference",
+    "DescriptiveEstimate",
+    "DescriptiveEstimateState",
+    "EquityConcentration",
+    "ExposureBreakdown",
+    "ExposureConcentrationState",
     "ExposureValue",
+    "InstrumentBeta",
+    "InstrumentReturnSeries",
     "LeverageAssessment",
     "LiquidationAssessment",
     "LiquidationAvailability",
@@ -2375,15 +3131,21 @@ __all__ = [
     "MoneyValue",
     "OfflineAccountAssessment",
     "OfflineAccountEvidence",
+    "PairwiseCorrelation",
+    "PairwiseCorrelationResult",
     "PortfolioImpact",
+    "PortfolioExposureAggregation",
     "PortfolioSnapshot",
     "PositionSide",
+    "PositionExposureInput",
     "PositionSizingResult",
     "PositionSnapshot",
     "PriceValue",
     "RatioValue",
     "RevalidationStatus",
     "RevalidationTrigger",
+    "ReturnObservation",
+    "ReturnSeriesProvenance",
     "RiskAssessment",
     "RiskCheckOutcome",
     "RiskContext",
@@ -2409,4 +3171,6 @@ __all__ = [
     "TakeProfitAssessment",
     "TakeProfitTarget",
     "VersionReference",
+    "aggregate_portfolio_exposure",
+    "pairwise_correlation",
 ]

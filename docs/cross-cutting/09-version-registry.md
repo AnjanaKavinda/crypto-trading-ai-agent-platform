@@ -715,3 +715,66 @@ zero filling, FX, derived authoritative funds, account mutation, store,
 network/integration, downstream consumer wiring, risk decision, approval or
 execution authority. External verification and consumer integration remain
 deferred. Focused cases are added in `tests/backend/test_risk_contracts.py`.
+
+## Issue #103 (canonical issue; GitHub #105) — offline exposure and correlation
+
+The profile adds immutable nonpersisted values/calculations only. It does not
+add a contract ID or schema, persistence/codec registration, database,
+migration, API, scheduler, external lookup, or downstream authority. The
+earlier Issue #103 embedded policy/configuration entry is a separate retained
+implementation slice.
+
+Exposure input is the explicit C-032 account plus caller-supplied C-075
+positions and per-position venue identity. `VALID` status, same account,
+positive equity and notional, unique position/snapshot identities, aware
+evaluation time, nonfuture `as_of`/capture, and freshness are required.
+`evaluated_at == valid_until` is valid. Invalid or unpriced evidence and
+missing/malformed venue information fail closed. Repeated instrument exposure
+is aggregated rather than omitted.
+
+Each `(dimension, key, currency)` breakdown keeps gross long, gross short,
+signed net (`long - short`), and gross (`long + short`). Currency, asset,
+instrument, venue, and direction are separate dimensions. No unlike-currency
+netting or cross-currency sum is emitted. Same-currency concentration is gross
+currency notional divided by positive account equity; per-asset concentration
+is each `(asset, currency)` gross notional divided by positive account equity.
+Both use finite `Decimal` arithmetic at precision 34 with half-even rounding
+and without a `[0, 1]` clamp. Foreign-currency concentration is explicitly
+`UNKNOWN` because FX is out of scope.
+This is not mark-to-market, loss/PnL, exposure-limit or risk-decision logic.
+The aggregation carries account/snapshot identity, exact position snapshot
+IDs, evaluation time, and a canonical digest binding the supplied account,
+sorted position/venue inputs, and evaluation time; that digest does not
+authenticate external truth.
+
+Each caller-supplied return series binds its instrument, source identity,
+`VersionReference`, finite Decimal log returns, strictly increasing aware
+timestamps, and a canonical SHA-256 over exactly those series fields.
+Correlation's exact inclusive
+window, minimum count (caller-supplied, at least three), optional explicitly
+named benchmark, and all input series are bound in output provenance. Only
+exact pairwise timestamp intersections are sampled. Pearson uses sample
+covariance divided by sample standard deviations; benchmark beta uses sample
+covariance divided by the explicitly named benchmark's sample variance.
+Decimal operations use precision 34 with half-even rounding; there is no
+annualization or float arithmetic. Pearson results at most `1e-32` outside
+`[-1, 1]` due to rounding are corrected to the nearest boundary; larger
+violations fail closed. Output identifies every exact aligned sample
+timestamp/count, source, version, series digest, and overall input digest.
+
+Insufficient or unalignable samples, zero pair variance, and zero benchmark
+variance produce explicit `UNKNOWN` results/reasons rather than zero. No
+default window, minimum count, benchmark, interpolation, resampling, forward
+fill, cleaning, or omission of malformed series exists. These descriptive
+statistics do not claim confidence, independence, persistence, future
+stability, authorization, a limit decision, or trading authority.
+Return-series digests bind supplied content deterministically; they do not
+authenticate its source, external provenance, or market data. Neither
+exposure nor return digests authenticate account truth.
+
+C-033 and C-075 schema 1 constructors, meanings and consumers remain unchanged.
+Legacy C-033 correlation fields are not populated or reinterpreted. No real
+market/account/exchange access, secrets, credentials, FX, strategy grouping,
+pending orders, leverage/margin, threshold, approval, execution, or live
+trading path is introduced. Focused synthetic tests live in
+`tests/backend/test_risk_contracts.py`.

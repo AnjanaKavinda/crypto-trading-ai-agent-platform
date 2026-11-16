@@ -12,7 +12,10 @@ from trading_platform_api.risk import (
     AccountPermissionObservations,
     AccountSnapshot,
     ContractReference,
+    DescriptiveEstimateState,
+    ExposureConcentrationState,
     ExposureValue,
+    InstrumentReturnSeries,
     LeverageAssessment,
     LiquidationAssessment,
     LiquidationAvailability,
@@ -20,13 +23,17 @@ from trading_platform_api.risk import (
     MoneyValue,
     OfflineAccountAssessment,
     OfflineAccountEvidence,
+    PairwiseCorrelationResult,
+    PortfolioExposureAggregation,
     PortfolioImpact,
     PortfolioSnapshot,
+    PositionExposureInput,
     PositionSide,
     PositionSizingResult,
     PositionSnapshot,
     PriceValue,
     RatioValue,
+    ReturnObservation,
     RevalidationStatus,
     RevalidationTrigger,
     RiskAssessment,
@@ -54,6 +61,8 @@ from trading_platform_api.risk import (
     TakeProfitAssessment,
     TakeProfitTarget,
     VersionReference,
+    aggregate_portfolio_exposure,
+    pairwise_correlation,
 )
 
 T = tuple(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=i) for i in range(20))
@@ -1636,3 +1645,569 @@ def test_soft_warning_verdict_semantics_remain_non_enforcing_for_review() -> Non
     )
     assert value.verdict is RiskVerdict.PASS_WITH_WARNING
     assert value.execution_authorized is False
+
+
+def exposure_input(
+    account_id: UUID,
+    amount: str,
+    *,
+    side: PositionSide = PositionSide.LONG,
+    currency: str = USD,
+    asset: str = "SYNTHETIC-BTC",
+    instrument_id: str = "SYNTHETIC-BTC-USD",
+    venue: str = "synthetic-venue",
+    **overrides: object,
+) -> PositionExposureInput:
+    position_value = position(
+        account_id,
+        side=side,
+        asset=asset,
+        instrument_id=instrument_id,
+        entry_price=PriceValue(Decimal("100"), currency),
+        mark_price=PriceValue(Decimal("101"), currency),
+        liquidation_price=PriceValue(Decimal("50"), currency),
+        stop_loss=PriceValue(Decimal("90"), currency),
+        notional=MoneyValue(Decimal(amount), currency),
+        margin_used=MoneyValue(Decimal("0"), currency),
+        unrealized_pnl=MoneyValue(Decimal("0"), currency),
+        take_profit_targets=(),
+        **overrides,
+    )
+    return PositionExposureInput(position_value, venue)
+
+
+def return_series(
+    instrument_id: str,
+    values: tuple[str, ...],
+    *,
+    timestamps: tuple[datetime, ...] | None = None,
+    source_id: str = "synthetic-returns",
+    source_version: VersionReference | None = None,
+) -> InstrumentReturnSeries:
+    sample_times = timestamps or T[: len(values)]
+    observations = tuple(
+        ReturnObservation(timestamp, Decimal(value))
+        for timestamp, value in zip(sample_times, values, strict=True)
+    )
+    series_version = source_version or version("synthetic-return-source")
+    digest = canonical_sha256(
+        {
+            "instrument_id": instrument_id,
+            "source_id": source_id,
+            "source_version": series_version,
+            "observations": observations,
+        }
+    )
+    return InstrumentReturnSeries(
+        instrument_id,
+        source_id,
+        series_version,
+        observations,
+        digest,
+    )
+
+
+def test_exposure_aggregation_preserves_gross_offsets_and_dimensions() -> None:
+    account_value = account()
+    long = exposure_input(
+        account_value.account_id, "150", instrument_id="SYNTHETIC-PAIR"
+    )
+    short = exposure_input(
+        account_value.account_id,
+        "70",
+        side=PositionSide.SHORT,
+        instrument_id="SYNTHETIC-PAIR",
+        venue="synthetic-venue-2",
+    )
+    result = aggregate_portfolio_exposure(
+        account_value, (long, short), evaluated_at=T[14]
+    )
+    currency = next(
+        item
+        for item in result.breakdowns
+        if item.dimension == "currency" and item.key == USD
+    )
+    assert (
+        currency.gross_long,
+        currency.gross_short,
+        currency.net,
+        currency.gross,
+    ) == (Decimal("150"), Decimal("70"), Decimal("80"), Decimal("220"))
+    instrument = next(
+        item
+        for item in result.breakdowns
+        if item.dimension == "instrument" and item.key == "SYNTHETIC-PAIR"
+    )
+    assert instrument.gross == Decimal("220")
+    assert instrument.net == Decimal("80")
+    assert (
+        len([item for item in result.breakdowns if item.dimension == "direction"]) == 2
+    )
+    assert (
+        result.input_digest
+        == aggregate_portfolio_exposure(
+            account_value, (short, long), evaluated_at=T[14]
+        ).input_digest
+    )
+    assert result.position_snapshot_ids == tuple(
+        item.position.snapshot_id
+        for item in sorted(
+            (long, short), key=lambda item: item.position.position_id.hex
+        )
+    )
+
+
+def test_exposure_aggregation_groups_currency_asset_instrument_venue_direction() -> (
+    None
+):
+    account_value = account()
+    inputs = (
+        exposure_input(
+            account_value.account_id,
+            "60",
+            asset="SYNTHETIC-A",
+            instrument_id="SYNTHETIC-A-USD",
+            venue="venue-a",
+        ),
+        exposure_input(
+            account_value.account_id,
+            "40",
+            asset="SYNTHETIC-A",
+            instrument_id="SYNTHETIC-B-USD",
+            venue="venue-a",
+        ),
+        exposure_input(
+            account_value.account_id,
+            "50",
+            currency="SYNTHETIC-EUR",
+            asset="SYNTHETIC-A",
+            instrument_id="SYNTHETIC-B-EUR",
+            venue="venue-b",
+        ),
+    )
+    result = aggregate_portfolio_exposure(account_value, inputs, T[14])
+    asset_a = next(
+        item
+        for item in result.breakdowns
+        if item.dimension == "asset"
+        and item.key == "SYNTHETIC-A"
+        and item.currency == USD
+    )
+    assert asset_a.currency == USD and asset_a.gross == Decimal("100")
+    asset_a_foreign = next(
+        item
+        for item in result.breakdowns
+        if item.dimension == "asset"
+        and item.key == "SYNTHETIC-A"
+        and item.currency == "SYNTHETIC-EUR"
+    )
+    assert asset_a_foreign.gross == Decimal("50")
+    venue_a = next(
+        item
+        for item in result.breakdowns
+        if item.dimension == "venue" and item.key == "venue-a"
+    )
+    assert venue_a.gross == Decimal("100")
+    assert {
+        item.currency for item in result.breakdowns if item.dimension == "currency"
+    } == {USD, "SYNTHETIC-EUR"}
+    foreign = next(
+        item for item in result.concentrations if item.currency == "SYNTHETIC-EUR"
+    )
+    assert foreign.state is ExposureConcentrationState.UNKNOWN
+    assert foreign.gross_to_equity is None
+    assert foreign.reason == "FOREIGN_CURRENCY_NO_FX"
+
+
+def test_exposure_same_currency_concentration_is_gross_and_not_clamped() -> None:
+    account_value = account()
+    result = aggregate_portfolio_exposure(
+        account_value,
+        (
+            exposure_input(account_value.account_id, "7000"),
+            exposure_input(
+                account_value.account_id,
+                "5000",
+                side=PositionSide.SHORT,
+            ),
+        ),
+        T[14],
+    )
+    concentration = result.concentrations[0]
+    assert concentration.state is ExposureConcentrationState.AVAILABLE
+    assert concentration.gross == Decimal("12000")
+    assert concentration.gross_to_equity == Decimal("1.2")
+    asset_concentration = result.asset_concentrations[0]
+    assert asset_concentration.asset == "SYNTHETIC-BTC"
+    assert asset_concentration.gross == Decimal("12000")
+    assert asset_concentration.gross_to_equity == Decimal("1.2")
+
+
+def test_exposure_asset_concentration_is_individual_and_currency_aware() -> None:
+    account_value = account()
+    result = aggregate_portfolio_exposure(
+        account_value,
+        (
+            exposure_input(account_value.account_id, "6000", asset="SYNTHETIC-A"),
+            exposure_input(
+                account_value.account_id,
+                "4000",
+                asset="SYNTHETIC-B",
+                instrument_id="SYNTHETIC-B-USD",
+            ),
+            exposure_input(
+                account_value.account_id,
+                "500",
+                currency="SYNTHETIC-EUR",
+                asset="SYNTHETIC-A",
+                instrument_id="SYNTHETIC-A-EUR",
+            ),
+        ),
+        T[14],
+    )
+    asset_a = next(
+        item
+        for item in result.asset_concentrations
+        if item.asset == "SYNTHETIC-A" and item.currency == USD
+    )
+    asset_b = next(
+        item
+        for item in result.asset_concentrations
+        if item.asset == "SYNTHETIC-B" and item.currency == USD
+    )
+    foreign_asset_a = next(
+        item
+        for item in result.asset_concentrations
+        if item.asset == "SYNTHETIC-A" and item.currency == "SYNTHETIC-EUR"
+    )
+    assert (asset_a.gross, asset_a.gross_to_equity) == (
+        Decimal("6000"),
+        Decimal("0.6"),
+    )
+    assert (asset_b.gross, asset_b.gross_to_equity) == (
+        Decimal("4000"),
+        Decimal("0.4"),
+    )
+    assert foreign_asset_a.state is ExposureConcentrationState.UNKNOWN
+    assert foreign_asset_a.gross_to_equity is None
+    assert foreign_asset_a.reason == "FOREIGN_CURRENCY_NO_FX"
+
+
+def test_exposure_rejects_bad_account_position_venue_and_freshness_inputs() -> None:
+    account_value = account()
+    valid_position = exposure_input(account_value.account_id, "10")
+    with pytest.raises(RiskContractError, match="must be VALID"):
+        aggregate_portfolio_exposure(
+            account(state=SnapshotState.STALE, reason_codes=("STALE",)),
+            (valid_position,),
+            T[3],
+        )
+    with pytest.raises(RiskContractError, match="identity mismatch"):
+        aggregate_portfolio_exposure(
+            account_value, (exposure_input(uuid4(), "10"),), T[3]
+        )
+    with pytest.raises(RiskContractError, match="stale"):
+        aggregate_portfolio_exposure(account_value, (valid_position,), T[15])
+    future = exposure_input(
+        account_value.account_id, "10", as_of=T[4], captured_at=T[5]
+    )
+    with pytest.raises(RiskContractError, match="future"):
+        aggregate_portfolio_exposure(account_value, (future,), T[3])
+    with pytest.raises(RiskContractError, match="must not be empty"):
+        aggregate_portfolio_exposure(account_value, (), T[3])
+    with pytest.raises(RiskContractError, match="must not be blank"):
+        PositionExposureInput(valid_position.position, " ")
+    with pytest.raises(RiskContractError, match="timezone-aware"):
+        aggregate_portfolio_exposure(
+            account_value,
+            (valid_position,),
+            datetime(2026, 1, 4),
+        )
+
+    account_future = account(as_of=T[4], captured_at=T[5])
+    with pytest.raises(
+        RiskContractError, match="account snapshot cannot be from the future"
+    ):
+        aggregate_portfolio_exposure(account_future, (valid_position,), T[3])
+    # Expiry equality is accepted by both account and position checks.
+    accepted = replace(valid_position.position, valid_until=T[15])
+    result = aggregate_portfolio_exposure(
+        account_value, (PositionExposureInput(accepted, "synthetic-venue"),), T[15]
+    )
+    assert result.evaluated_at == T[15]
+
+
+def test_exposure_rejects_invalid_unpriced_and_duplicate_position_inputs() -> None:
+    account_value = account()
+    base = exposure_input(account_value.account_id, "10")
+    invalid = replace(
+        base.position,
+        state=SnapshotState.INCOMPLETE,
+        reason_codes=("NOT_PRICED",),
+        notional=None,
+    )
+    with pytest.raises(RiskContractError, match="must be VALID"):
+        aggregate_portfolio_exposure(
+            account_value, (PositionExposureInput(invalid, "venue"),), T[3]
+        )
+    unpriced = replace(base.position)
+    object.__setattr__(unpriced, "notional", None)
+    with pytest.raises(RiskContractError, match="positive priced notional"):
+        aggregate_portfolio_exposure(
+            account_value, (PositionExposureInput(unpriced, "venue"),), T[3]
+        )
+    duplicate_snapshot = replace(base.position, snapshot_id=uuid4())
+    with pytest.raises(RiskContractError, match="duplicate position identity"):
+        aggregate_portfolio_exposure(
+            account_value,
+            (
+                base,
+                PositionExposureInput(duplicate_snapshot, "venue"),
+            ),
+            T[3],
+        )
+    with pytest.raises(RiskContractError, match="must be a tuple"):
+        aggregate_portfolio_exposure(
+            account_value,
+            [base],
+            T[3],  # type: ignore[arg-type]
+        )
+
+
+def test_pairwise_correlation_and_beta_are_exact_and_provenance_bound() -> None:
+    benchmark = return_series("SYNTHETIC-BENCH", ("-3", "-1", "1", "3"))
+    asset = return_series(
+        "SYNTHETIC-ASSET",
+        ("-6", "-2", "2", "6"),
+        source_id="synthetic-source-asset",
+        source_version=version("asset-return-source"),
+    )
+    inverse = return_series("SYNTHETIC-INVERSE", ("3", "1", "-1", "-3"))
+    result = pairwise_correlation(
+        (asset, inverse, benchmark),
+        window_start=T[0],
+        window_end=T[3],
+        min_observations=3,
+        benchmark_instrument_id=benchmark.instrument_id,
+    )
+    assert isinstance(result, PairwiseCorrelationResult)
+    assert result.correlations[0].instrument_left == "SYNTHETIC-ASSET"
+    assert result.correlations[0].instrument_right == "SYNTHETIC-BENCH"
+    assert result.correlations[0].estimate.value == Decimal("1")
+    assert result.correlations[0].estimate.sample_count == 4
+    inverse_correlation = next(
+        item
+        for item in result.correlations
+        if item.instrument_left == "SYNTHETIC-BENCH"
+        and item.instrument_right == "SYNTHETIC-INVERSE"
+    )
+    assert inverse_correlation.estimate.value == Decimal("-1")
+    beta = next(
+        item for item in result.betas if item.instrument_id == asset.instrument_id
+    )
+    assert beta.estimate.value == Decimal("2")
+    assert beta.estimate.sample_timestamps == T[:4]
+    assert result.window_start == T[0] and result.window_end == T[3]
+    provenance = next(
+        item
+        for item in result.series_provenance
+        if item.instrument_id == asset.instrument_id
+    )
+    assert provenance.source_id == "synthetic-source-asset"
+    assert provenance.source_version == asset.source_version
+    assert provenance.content_sha256 == asset.content_sha256
+    assert len(result.input_digest) == 64
+    repeated = pairwise_correlation(
+        (benchmark, inverse, asset),
+        window_start=T[0],
+        window_end=T[3],
+        min_observations=3,
+        benchmark_instrument_id=benchmark.instrument_id,
+    )
+    assert repeated == result
+
+
+@pytest.mark.parametrize("opposite", [False, True])
+def test_pairwise_correlation_bounds_decimal_rounding(opposite: bool) -> None:
+    values = (
+        "-0.648857566271132852749344965975",
+        "0.901732323717895592504053270155",
+        "0.698638443136872307396148201025",
+        "0.297735541716413254094506681617",
+        "0.576158120893557105055281624696",
+    )
+    inverse_values = tuple(
+        value[1:] if value.startswith("-") else f"-{value}" for value in values
+    )
+    result = pairwise_correlation(
+        (
+            return_series("A", values),
+            return_series("B", inverse_values if opposite else values),
+        ),
+        window_start=T[0],
+        window_end=T[4],
+        min_observations=3,
+    )
+    estimate = result.correlations[0].estimate
+    assert estimate.state is DescriptiveEstimateState.AVAILABLE
+    assert estimate.value == Decimal("-1" if opposite else "1")
+
+
+def test_pairwise_correlation_rejects_material_range_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_platform_api.risk.contracts as risk_contracts
+
+    monkeypatch.setattr(
+        risk_contracts,
+        "_moments",
+        lambda pairs: (Decimal("1.01"), Decimal("1"), Decimal("1")),
+    )
+    with pytest.raises(RiskContractError, match="exceeds its valid range"):
+        pairwise_correlation(
+            (return_series("A", ("1", "2", "3")), return_series("B", ("1", "2", "3"))),
+            window_start=T[0],
+            window_end=T[2],
+            min_observations=3,
+        )
+
+
+def test_pairwise_window_is_inclusive_and_alignment_uses_exact_timestamps() -> None:
+    benchmark = return_series(
+        "SYNTHETIC-BENCH",
+        ("0", "1", "2", "3", "100"),
+        timestamps=T[:5],
+    )
+    asset = return_series(
+        "SYNTHETIC-ASSET",
+        ("999", "2", "4", "6", "200"),
+        timestamps=T[:5],
+    )
+    inclusive = pairwise_correlation(
+        (benchmark, asset),
+        window_start=T[1],
+        window_end=T[4],
+        min_observations=3,
+    )
+    estimate = inclusive.correlations[0].estimate
+    assert estimate.sample_timestamps == T[1:5]
+    assert estimate.value == Decimal("1")
+
+    shifted_times = tuple(item + timedelta(hours=1) for item in T[:5])
+    shifted = return_series(
+        "SYNTHETIC-SHIFTED",
+        ("0", "2", "4", "6", "8"),
+        timestamps=shifted_times,
+    )
+    unaligned = (
+        pairwise_correlation(
+            (benchmark, shifted),
+            window_start=T[0],
+            window_end=T[4],
+            min_observations=3,
+        )
+        .correlations[0]
+        .estimate
+    )
+    assert unaligned.state is DescriptiveEstimateState.UNKNOWN
+    assert unaligned.value is None
+    assert unaligned.reason == "INSUFFICIENT_ALIGNED_OBSERVATIONS"
+    assert unaligned.sample_count == 0
+
+
+def test_pairwise_minimum_observations_zero_variance_and_explicit_benchmark() -> None:
+    short = return_series("SYNTHETIC-SHORT", ("1", "2"))
+    short_peer = return_series("SYNTHETIC-SHORT-PEER", ("2", "4"))
+    insufficient = (
+        pairwise_correlation(
+            (short, short_peer),
+            window_start=T[0],
+            window_end=T[1],
+            min_observations=3,
+        )
+        .correlations[0]
+        .estimate
+    )
+    assert insufficient.state is DescriptiveEstimateState.UNKNOWN
+    assert insufficient.reason == "INSUFFICIENT_ALIGNED_OBSERVATIONS"
+    assert insufficient.sample_count == 2
+
+    constant = return_series("SYNTHETIC-CONSTANT", ("1", "1", "1"))
+    variable = return_series("SYNTHETIC-VARIABLE", ("1", "2", "3"))
+    zero_variance = pairwise_correlation(
+        (constant, variable),
+        window_start=T[0],
+        window_end=T[2],
+        min_observations=3,
+        benchmark_instrument_id=constant.instrument_id,
+    )
+    assert (
+        zero_variance.correlations[0].estimate.state is DescriptiveEstimateState.UNKNOWN
+    )
+    assert zero_variance.correlations[0].estimate.reason == "ZERO_VARIANCE"
+    assert zero_variance.betas[0].estimate.state is DescriptiveEstimateState.UNKNOWN
+    assert zero_variance.betas[0].estimate.reason == "ZERO_BENCHMARK_VARIANCE"
+    assert zero_variance.betas[0].estimate.value is None
+
+    with pytest.raises(RiskContractError, match="at least three"):
+        pairwise_correlation(
+            (constant, variable),
+            window_start=T[0],
+            window_end=T[2],
+            min_observations=2,
+        )
+    with pytest.raises(RiskContractError, match="explicit benchmark"):
+        pairwise_correlation(
+            (constant, variable),
+            window_start=T[0],
+            window_end=T[2],
+            min_observations=3,
+            benchmark_instrument_id="UNSUPPLIED",
+        )
+
+
+def test_return_series_rejects_malformed_nonfinite_duplicate_and_unbound_inputs() -> (
+    None
+):
+    for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+        with pytest.raises(RiskContractError, match="finite Decimal"):
+            ReturnObservation(T[0], value)
+    with pytest.raises(RiskContractError, match="timezone-aware"):
+        ReturnObservation(datetime(2026, 1, 1), Decimal("0.1"))
+    with pytest.raises(RiskContractError, match="strictly increasing"):
+        return_series(
+            "SYNTHETIC-DUPLICATE-TIME",
+            ("1", "2"),
+            timestamps=(T[0], T[0]),
+        )
+    value = return_series("SYNTHETIC-BOUND", ("1", "2", "3"))
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(value, content_sha256="b" * 64)
+    with pytest.raises(RiskContractError, match="must not contain duplicates"):
+        pairwise_correlation(
+            (value, value),
+            window_start=T[0],
+            window_end=T[2],
+            min_observations=3,
+        )
+    with pytest.raises(RiskContractError, match="must not be after"):
+        pairwise_correlation(
+            (value, return_series("SYNTHETIC-OTHER", ("1", "2", "3"))),
+            window_start=T[2],
+            window_end=T[0],
+            min_observations=3,
+        )
+
+
+def test_new_risk_values_are_immutable_and_do_not_change_c033_or_c075() -> None:
+    account_value = account()
+    result = aggregate_portfolio_exposure(
+        account_value,
+        (exposure_input(account_value.account_id, "100"),),
+        T[3],
+    )
+    assert isinstance(result, PortfolioExposureAggregation)
+    with pytest.raises(FrozenInstanceError):
+        result.input_digest = HASH_A  # type: ignore[misc]
+    assert portfolio(account_value).contract_id == "C-033"
+    assert position(account_value.account_id).contract_id == "C-075"
