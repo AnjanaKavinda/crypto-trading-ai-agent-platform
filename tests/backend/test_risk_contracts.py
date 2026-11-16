@@ -909,7 +909,9 @@ def test_offline_times_normalize_to_utc_and_reject_naive_or_malformed_input() ->
     for invalid in (datetime(2026, 1, 4), "2026-01-04", None):
         with pytest.raises(RiskContractError, match="evaluated_at"):
             OfflineAccountAssessment(
-                evidence, evidence.observed_context, invalid  # type: ignore[arg-type]
+                evidence,
+                evidence.observed_context,
+                invalid,  # type: ignore[arg-type]
             )
     snapshot = replace(
         evidence.snapshot,
@@ -1108,7 +1110,9 @@ def test_offline_boundary_rejects_wrong_value_types_as_risk_contract_errors() ->
         replace(evidence, observed_context={})
     with pytest.raises(RiskContractError, match="permissions"):
         OfflineAccountEvidence.create(
-            evidence.snapshot, evidence.observed_context, ()  # type: ignore[arg-type]
+            evidence.snapshot,
+            evidence.observed_context,
+            (),  # type: ignore[arg-type]
         )
     with pytest.raises(RiskContractError, match="read"):
         replace(offline_permissions(), read=True)  # type: ignore[arg-type]
