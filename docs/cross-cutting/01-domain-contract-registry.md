@@ -364,6 +364,72 @@ External completeness, independent-source verification, ingestion and all
 consumer integration remain deferred; this scope does not complete live
 account integration.
 
+## Issue #103 (canonical issue; GitHub #105) — offline exposure and correlation
+
+This profile adds only immutable, nonpersisted risk-package values and pure
+deterministic calculations. It creates no `C-###` contract, stored artifact,
+codec, API, database object, migration, consumer wiring, or architecture
+change. The earlier embedded risk policy/configuration entry labeled Issue #103
+is a separate retained implementation slice.
+
+Exposure aggregation requires an explicit `VALID` C-032 account snapshot with
+positive equity, a nonempty tuple of explicit C-075 position snapshots, one
+nonblank caller-supplied venue per position, and an aware evaluation timestamp.
+Every snapshot must belong to the same account, must not be future-dated, and
+must remain fresh; equality at `valid_until` is accepted. Position and snapshot
+identities must be unique. Invalid, incomplete, unpriced, malformed, missing
+venue, or duplicate input fails closed rather than being omitted or zero-filled.
+Repeated instruments are intentionally grouped, not discarded.
+
+For each currency, asset, instrument, venue, and direction bucket, gross long
+and gross short are retained separately; signed net is `gross_long -
+gross_short`, and gross is `gross_long + gross_short`. Buckets retain their
+currency, so unlike currencies are neither netted nor summed into a fictitious
+portfolio-wide number. Same-currency concentration is `currency_gross /
+account_equity`, calculated with finite `Decimal` at precision 34 and half-even
+rounding; it is not clamped to `[0, 1]`. Concentration in a currency different
+from account equity
+is explicitly `UNKNOWN` (`FOREIGN_CURRENCY_NO_FX`); no FX or currency
+conversion is inferred. These observations are not thresholds, limit checks,
+loss/PnL formulas, mark-to-market, or trading decisions.
+The aggregation carries account/snapshot identity, exact position snapshot
+IDs, evaluation time, and a canonical digest binding the supplied account,
+sorted position/venue inputs, and evaluation time. That digest is a content
+binding, not external authentication.
+
+Pairwise analysis accepts only caller-supplied immutable, source/version and
+SHA-256 input-digest-bound series of finite Decimal close-to-close log returns.
+Each series digest is the canonical SHA-256 of its instrument ID, source ID,
+`VersionReference`, and exact observation tuple.
+The caller supplies an explicit inclusive aware-time window and minimum sample
+count of at least three. Each series has a unique instrument identity and
+strictly increasing timestamps. Each pair uses only the exact intersection of
+timestamps inside the window; there is no cleaning, resampling, interpolation,
+forward-fill, or default window/count. Pearson correlation is sample covariance
+divided by the product of sample standard deviations. Optional beta is sample
+covariance divided by the sample variance of only the explicitly named,
+supplied benchmark. Arithmetic uses Decimal precision 34 with half-even
+rounding and is not annualized.
+
+Results retain exact window, aligned sample timestamps/counts, each series'
+source/version/content digest, and an input digest binding the series, window,
+minimum sample count, and optional benchmark. Insufficient aligned samples,
+unalignable inputs, zero variance, or zero benchmark variance return `UNKNOWN`
+with an explicit reason, never numeric zero. Values are descriptive only: they
+do not establish statistical confidence, independence, persistence, future
+stability, authorization, a risk-limit result, or a trade decision.
+Return-series digests provide deterministic content binding, not
+authentication of source identity, external provenance, or market data.
+Neither exposure nor return digests authenticate account truth.
+
+C-033 `PortfolioSnapshot` and C-075 `PositionSnapshot` remain schema 1 with
+their exact existing constructors, meanings, and consumers. This profile does
+not populate, reinterpret, or change legacy C-033 correlation fields. It adds
+no market/account/exchange lookup, external access, credentials, approval,
+execution, FX, leverage/margin, pending-order, strategy-grouping, threshold,
+loss/PnL, or mark-to-market behavior. No secrets or live-execution path are
+introduced.
+
 ## Approval scope and change control
 
 - Registry approval establishes cross-domain semantics and ownership; schemas and implementation artifacts are intentionally deferred.
