@@ -7,6 +7,9 @@ from uuid import UUID, uuid4
 import pytest
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.risk import (
+    AccountEvidenceContext,
+    AccountPermissionObservation,
+    AccountPermissionObservations,
     AccountSnapshot,
     ContractReference,
     ExposureValue,
@@ -15,6 +18,8 @@ from trading_platform_api.risk import (
     LiquidationAvailability,
     MarginMode,
     MoneyValue,
+    OfflineAccountAssessment,
+    OfflineAccountEvidence,
     PortfolioImpact,
     PortfolioSnapshot,
     PositionSide,
@@ -691,6 +696,474 @@ def test_account_unknown_values_are_explicit_and_fail_closed() -> None:
     assert value.equity is None
     with pytest.raises(RiskContractError, match="requires all values"):
         account(equity=None)
+
+
+def offline_context(snapshot: AccountSnapshot) -> AccountEvidenceContext:
+    return AccountEvidenceContext(
+        snapshot.account_id,
+        snapshot.source_id,
+        snapshot.source_version,
+        "synthetic-venue",
+        RiskPolicyMode.RESEARCH,
+    )
+
+
+def offline_permissions() -> AccountPermissionObservations:
+    return AccountPermissionObservations(
+        AccountPermissionObservation.ALLOWED,
+        AccountPermissionObservation.DENIED,
+        AccountPermissionObservation.DENIED,
+        AccountPermissionObservation.DENIED,
+    )
+
+
+def offline_evidence() -> OfflineAccountEvidence:
+    snapshot = account()
+    return OfflineAccountEvidence.create(
+        snapshot, offline_context(snapshot), offline_permissions()
+    )
+
+
+def test_offline_account_currentness_is_deterministic_data_not_authorization() -> None:
+    evidence = offline_evidence()
+    expected = evidence.observed_context
+    result = OfflineAccountAssessment(evidence, expected, T[3])
+    assert result == OfflineAccountAssessment(evidence, expected, T[3])
+    assert result.current
+    assert result.reason_codes == ()
+    assert result.independent_source_reconciliation == "UNKNOWN"
+    assert evidence.permissions == offline_permissions()
+    assert not hasattr(result, "approved")
+    assert not hasattr(result, "execution_authorized")
+    assert not hasattr(evidence, "contract_id")
+    assert not hasattr(result, "contract_id")
+    assert not hasattr(evidence, "schema_version")
+    for value, name, replacement in (
+        (evidence, "content_sha256", "b" * 64),
+        (expected, "venue", "other-venue"),
+        (evidence.permissions, "read", AccountPermissionObservation.UNKNOWN),
+        (result, "current", False),
+    ):
+        with pytest.raises(FrozenInstanceError):
+            setattr(value, name, replacement)
+
+
+@pytest.mark.parametrize("observation", list(AccountPermissionObservation))
+def test_offline_known_denied_and_allowed_permissions_are_complete(
+    observation: AccountPermissionObservation,
+) -> None:
+    evidence = offline_evidence()
+    permissions = AccountPermissionObservations(*(observation,) * 4)
+    evidence = OfflineAccountEvidence.create(
+        evidence.snapshot, evidence.observed_context, permissions
+    )
+    result = OfflineAccountAssessment(evidence, evidence.observed_context, T[3])
+    assert result.current is (observation is not AccountPermissionObservation.UNKNOWN)
+    assert result.independent_source_reconciliation == "UNKNOWN"
+
+
+@pytest.mark.parametrize("name", ["read", "trade", "withdraw", "transfer"])
+@pytest.mark.parametrize("observation", [None, AccountPermissionObservation.UNKNOWN])
+def test_offline_missing_permission_observations_are_noncurrent(
+    name: str, observation: AccountPermissionObservation | None
+) -> None:
+    evidence = offline_evidence()
+    assert evidence.permissions is not None
+    permissions = replace(evidence.permissions, **{name: observation})
+    evidence = OfflineAccountEvidence.create(
+        evidence.snapshot, evidence.observed_context, permissions
+    )
+    result = OfflineAccountAssessment(evidence, evidence.observed_context, T[3])
+    assert not result.current
+    assert result.reason_codes == (f"{name.upper()}_PERMISSION_UNKNOWN",)
+
+
+@pytest.mark.parametrize(
+    ("name", "conflict"),
+    [
+        ("account_id", UUID(int=1)),
+        ("source_id", "other-source"),
+        ("source_version", VersionReference("account-source", "other-v", HASH_A)),
+        ("source_version", VersionReference("other-component", "synthetic-v1", HASH_A)),
+        (
+            "source_version",
+            VersionReference("account-source", "synthetic-v1", "b" * 64),
+        ),
+        ("venue", "other-venue"),
+        ("mode", RiskPolicyMode.PAPER),
+    ],
+)
+def test_offline_expected_context_mismatches_are_noncurrent(
+    name: str, conflict: object
+) -> None:
+    evidence = offline_evidence()
+    assert evidence.observed_context is not None
+    expected = replace(evidence.observed_context, **{name: conflict})
+    result = OfflineAccountAssessment(evidence, expected, T[3])
+    assert not result.current
+    assert result.reason_codes == (f"{name.upper()}_CONTEXT_MISMATCH",)
+
+
+@pytest.mark.parametrize(
+    ("name", "conflict"),
+    [
+        ("account_id", UUID(int=1)),
+        ("source_id", "other-source"),
+        ("source_version", VersionReference("other-component", "other-v", "b" * 64)),
+    ],
+)
+def test_offline_observed_context_must_also_bind_snapshot(
+    name: str, conflict: object
+) -> None:
+    original = offline_evidence()
+    assert original.observed_context is not None
+    observed = replace(original.observed_context, **{name: conflict})
+    evidence = OfflineAccountEvidence.create(
+        original.snapshot, observed, original.permissions
+    )
+    result = OfflineAccountAssessment(evidence, observed, T[3])
+    assert not result.current
+    assert result.reason_codes == (f"{name.upper()}_SNAPSHOT_MISMATCH",)
+
+
+@pytest.mark.parametrize(
+    "name", ["account_id", "source_id", "source_version", "venue", "mode"]
+)
+@pytest.mark.parametrize("side", ["observed", "expected"])
+def test_offline_unknown_context_fields_are_not_inferred(name: str, side: str) -> None:
+    original = offline_evidence()
+    assert original.observed_context is not None
+    unknown = replace(original.observed_context, **{name: None})
+    observed = unknown if side == "observed" else original.observed_context
+    expected = unknown if side == "expected" else original.observed_context
+    evidence = OfflineAccountEvidence.create(
+        original.snapshot, observed, original.permissions
+    )
+    result = OfflineAccountAssessment(evidence, expected, T[3])
+    assert not result.current
+    assert result.reason_codes == (f"{side.upper()}_{name.upper()}_UNKNOWN",)
+
+
+def test_offline_entirely_missing_context_and_permissions_remain_unknown() -> None:
+    evidence = OfflineAccountEvidence.create(account(), None, None)
+    result = OfflineAccountAssessment(evidence, None, T[3])
+    assert not result.current
+    assert len(result.reason_codes) == 14
+    assert "OBSERVED_ACCOUNT_ID_UNKNOWN" in result.reason_codes
+    assert "EXPECTED_MODE_UNKNOWN" in result.reason_codes
+    assert "TRANSFER_PERMISSION_UNKNOWN" in result.reason_codes
+    assert evidence.observed_context is None
+    assert evidence.permissions is None
+
+
+@pytest.mark.parametrize(
+    "state", [s for s in SnapshotState if s is not SnapshotState.VALID]
+)
+def test_offline_nonvalid_snapshot_cannot_be_current(state: SnapshotState) -> None:
+    snapshot = account(state=state, reason_codes=("SYNTHETIC_SOURCE_LIMITATION",))
+    evidence = OfflineAccountEvidence.create(
+        snapshot, offline_context(snapshot), offline_permissions()
+    )
+    result = OfflineAccountAssessment(evidence, evidence.observed_context, T[3])
+    assert not result.current
+    assert result.reason_codes == (f"SNAPSHOT_{state.value}",)
+
+
+@pytest.mark.parametrize(
+    ("evaluated_at", "reasons"),
+    [
+        (
+            T[0] - timedelta(microseconds=1),
+            ("SNAPSHOT_AS_OF_IN_FUTURE", "SNAPSHOT_CAPTURE_IN_FUTURE"),
+        ),
+        (T[0], ("SNAPSHOT_CAPTURE_IN_FUTURE",)),
+        (T[1] - timedelta(microseconds=1), ("SNAPSHOT_CAPTURE_IN_FUTURE",)),
+        (T[1], ()),
+        (T[15], ()),
+        (T[15] + timedelta(microseconds=1), ("SNAPSHOT_EXPIRED",)),
+    ],
+)
+def test_offline_time_boundaries_are_explicit_and_inclusive(
+    evaluated_at: datetime, reasons: tuple[str, ...]
+) -> None:
+    evidence = offline_evidence()
+    result = OfflineAccountAssessment(evidence, evidence.observed_context, evaluated_at)
+    assert result.reason_codes == reasons
+    assert result.current is (not reasons)
+
+
+def test_offline_asof_capture_and_expiry_equality_passes() -> None:
+    snapshot = account(as_of=T[3], captured_at=T[3], valid_until=T[3])
+    evidence = OfflineAccountEvidence.create(
+        snapshot, offline_context(snapshot), offline_permissions()
+    )
+    assert OfflineAccountAssessment(evidence, evidence.observed_context, T[3]).current
+
+
+def test_offline_times_normalize_to_utc_and_reject_naive_or_malformed_input() -> None:
+    evidence = offline_evidence()
+    local_time = datetime.fromisoformat("2026-01-04T05:30:00+05:30")
+    result = OfflineAccountAssessment(evidence, evidence.observed_context, local_time)
+    assert result.evaluated_at == T[3]
+    assert result.evaluated_at.tzinfo is UTC
+    for invalid in (datetime(2026, 1, 4), "2026-01-04", None):
+        with pytest.raises(RiskContractError, match="evaluated_at"):
+            OfflineAccountAssessment(
+                evidence,
+                evidence.observed_context,
+                invalid,  # type: ignore[arg-type]
+            )
+    snapshot = replace(
+        evidence.snapshot,
+        as_of=evidence.snapshot.as_of.astimezone(local_time.tzinfo),
+        captured_at=evidence.snapshot.captured_at.astimezone(local_time.tzinfo),
+        valid_until=evidence.snapshot.valid_until.astimezone(local_time.tzinfo),
+    )
+    equivalent = OfflineAccountEvidence.create(
+        snapshot, evidence.observed_context, evidence.permissions
+    )
+    assert equivalent == evidence
+
+
+def test_offline_digest_binds_complete_snapshot_without_authenticating_it() -> None:
+    evidence = offline_evidence()
+    preimage = {
+        item.name: getattr(evidence, item.name)
+        for item in fields(evidence)
+        if item.name != "content_sha256"
+    }
+    assert evidence.content_sha256 == canonical_sha256(preimage)
+    assert evidence.snapshot.content_sha256 == HASH_A
+    assert evidence.snapshot.contract_id == "C-032"
+    assert evidence.snapshot.schema_version == "1"
+    evidence.verify()
+    changed_snapshot = replace(evidence.snapshot, content_sha256="b" * 64)
+    changed = OfflineAccountEvidence.create(
+        changed_snapshot, evidence.observed_context, evidence.permissions
+    )
+    assert changed.content_sha256 != evidence.content_sha256
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(evidence, snapshot=changed_snapshot)
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(evidence, content_sha256="0" * 64)
+    assert OfflineAccountAssessment(changed, changed.observed_context, T[3]).current
+
+
+@pytest.mark.parametrize("name", [item.name for item in fields(AccountSnapshot)])
+def test_offline_digest_rejects_tampering_with_every_snapshot_field(name: str) -> None:
+    evidence = offline_evidence()
+    snapshot = replace(evidence.snapshot)
+    original = getattr(snapshot, name)
+    if isinstance(original, UUID):
+        changed: object = UUID(int=1)
+    elif isinstance(original, MoneyValue):
+        changed = replace(original, amount=original.amount + Decimal("1"))
+    elif isinstance(original, RatioValue):
+        changed = replace(original, value=Decimal("0.02"))
+    elif isinstance(original, VersionReference):
+        changed = replace(original, content_sha256="b" * 64)
+    elif isinstance(original, datetime):
+        changed = original + timedelta(microseconds=1)
+    elif isinstance(original, tuple):
+        changed = ("SYNTHETIC_CHANGED",)
+    elif isinstance(original, SnapshotState):
+        changed = SnapshotState.STALE
+    else:
+        changed = "b" * 64 if name == "content_sha256" else "synthetic-changed"
+    object.__setattr__(snapshot, name, changed)  # Simulate bypassing frozen storage.
+    with pytest.raises(RiskContractError):
+        replace(evidence, snapshot=snapshot)
+
+
+@pytest.mark.parametrize(
+    "name", ["account_id", "source_id", "source_version", "venue", "mode"]
+)
+def test_offline_digest_binds_each_observed_identity(name: str) -> None:
+    evidence = offline_evidence()
+    assert evidence.observed_context is not None
+    observed = replace(evidence.observed_context, **{name: None})
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(evidence, observed_context=observed)
+
+
+@pytest.mark.parametrize("name", ["read", "trade", "withdraw", "transfer"])
+def test_offline_digest_binds_every_permission_observation(name: str) -> None:
+    evidence = offline_evidence()
+    assert evidence.permissions is not None
+    permissions = replace(
+        evidence.permissions, **{name: AccountPermissionObservation.UNKNOWN}
+    )
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        replace(evidence, permissions=permissions)
+
+
+def test_offline_assessment_reverifies_evidence() -> None:
+    evidence = offline_evidence()
+    object.__setattr__(
+        evidence, "snapshot", replace(evidence.snapshot, available_balance=money("1"))
+    )
+    with pytest.raises(RiskContractError, match="digest mismatch"):
+        OfflineAccountAssessment(evidence, evidence.observed_context, T[3])
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        True,
+        1,
+        1.0,
+        "1",
+        Decimal("NaN"),
+        Decimal("sNaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+    ],
+)
+def test_offline_boundary_rejects_malformed_nested_money(invalid: object) -> None:
+    snapshot = account()
+    malformed = money()
+    object.__setattr__(malformed, "amount", invalid)
+    object.__setattr__(snapshot, "equity", malformed)
+    with pytest.raises(RiskContractError, match="finite Decimal"):
+        OfflineAccountEvidence.create(
+            snapshot, offline_context(snapshot), offline_permissions()
+        )
+
+
+def test_offline_preserves_c032_rules_without_fund_inference() -> None:
+    with pytest.raises(RiskContractError, match="snapshot currency"):
+        account(available_balance=MoneyValue(Decimal("1"), "OTHER-SYNTHETIC-USD"))
+    with pytest.raises(RiskContractError, match="non-negative"):
+        account(free_margin=money("-1"))
+    with pytest.raises(RiskContractError, match="positive"):
+        account(equity=money("0"))
+    snapshot = account(
+        state=SnapshotState.INCOMPLETE,
+        reason_codes=("SYNTHETIC_MISSING_FUNDS",),
+        available_balance=None,
+        free_margin=None,
+        used_margin=None,
+        current_drawdown=None,
+    )
+    evidence = OfflineAccountEvidence.create(
+        snapshot, offline_context(snapshot), offline_permissions()
+    )
+    result = OfflineAccountAssessment(evidence, evidence.observed_context, T[3])
+    assert not result.current
+    assert evidence.snapshot.available_balance is None
+    assert evidence.snapshot.free_margin is None
+    assert evidence.snapshot.used_margin is None
+    assert evidence.snapshot.current_drawdown is None
+    # C-032 accepts supplied values without imposing reconciliation formulas.
+    unusual = account(available_balance=money("50000"), free_margin=money("0"))
+    assert OfflineAccountAssessment(
+        OfflineAccountEvidence.create(
+            unusual, offline_context(unusual), offline_permissions()
+        ),
+        offline_context(unusual),
+        T[3],
+    ).current
+
+
+@pytest.mark.parametrize(
+    ("name", "invalid"),
+    [
+        ("account_id", "not-a-uuid"),
+        ("source_id", ""),
+        ("source_version", "not-a-version"),
+        ("venue", " synthetic-venue"),
+        ("mode", "research"),
+    ],
+)
+def test_offline_context_rejects_malformed_supplied_values(
+    name: str, invalid: object
+) -> None:
+    with pytest.raises(RiskContractError):
+        replace(offline_context(account()), **{name: invalid})
+
+
+@pytest.mark.parametrize("name", ["read", "trade", "withdraw", "transfer"])
+@pytest.mark.parametrize("invalid", ["ALLOWED", "DENIED", "UNKNOWN", True, 1, 1.0])
+def test_offline_permission_values_require_typed_observations(
+    name: str, invalid: object
+) -> None:
+    with pytest.raises(RiskContractError, match="AccountPermissionObservation"):
+        replace(offline_permissions(), **{name: invalid})
+
+
+@pytest.mark.parametrize("name", ["as_of", "captured_at", "valid_until"])
+def test_offline_snapshot_times_must_be_timezone_aware(name: str) -> None:
+    with pytest.raises(RiskContractError, match="timezone-aware"):
+        account(**{name: datetime(2026, 1, 2)})
+
+
+def test_offline_snapshot_state_rejects_raw_enum_strings() -> None:
+    with pytest.raises(RiskContractError, match="SnapshotState"):
+        account(state="VALID")
+
+
+def test_offline_boundary_rejects_wrong_value_types_as_risk_contract_errors() -> None:
+    evidence = offline_evidence()
+    with pytest.raises(RiskContractError, match="snapshot"):
+        OfflineAccountEvidence.create(None, None, None)  # type: ignore[arg-type]
+    with pytest.raises(RiskContractError, match="observed_context"):
+        replace(evidence, observed_context={})
+    with pytest.raises(RiskContractError, match="permissions"):
+        OfflineAccountEvidence.create(
+            evidence.snapshot,
+            evidence.observed_context,
+            (),  # type: ignore[arg-type]
+        )
+    with pytest.raises(RiskContractError, match="read"):
+        replace(offline_permissions(), read=True)  # type: ignore[arg-type]
+    with pytest.raises(RiskContractError, match="expected_context"):
+        OfflineAccountAssessment(evidence, "research", T[3])  # type: ignore[arg-type]
+    with pytest.raises(RiskContractError, match="evidence"):
+        OfflineAccountAssessment(None, None, T[3])  # type: ignore[arg-type]
+    snapshot = replace(evidence.snapshot)
+    object.__setattr__(snapshot, "equity", "100")
+    with pytest.raises(RiskContractError, match="MoneyValue"):
+        OfflineAccountEvidence.create(snapshot, None, None)
+
+
+def test_offline_evidence_does_not_change_account_or_portfolio_consumers() -> None:
+    snapshot = account()
+    original_fields = (
+        "snapshot_id",
+        "account_id",
+        "source_id",
+        "state",
+        "reason_codes",
+        "currency",
+        "equity",
+        "available_balance",
+        "used_margin",
+        "free_margin",
+        "unrealized_pnl",
+        "realized_pnl",
+        "daily_pnl",
+        "weekly_pnl",
+        "current_drawdown",
+        "source_version",
+        "as_of",
+        "captured_at",
+        "valid_until",
+        "content_sha256",
+        "contract_id",
+        "schema_version",
+    )
+    assert tuple(item.name for item in fields(AccountSnapshot)) == original_fields
+    original_digest = canonical_sha256(snapshot)
+    evidence = OfflineAccountEvidence.create(
+        snapshot, offline_context(snapshot), offline_permissions()
+    )
+    assert evidence.snapshot is snapshot
+    assert canonical_sha256(snapshot) == original_digest
+    assert portfolio(snapshot).account_snapshot is snapshot
+    arguments = tuple(
+        getattr(snapshot, item.name) for item in fields(AccountSnapshot) if item.init
+    )
+    assert AccountSnapshot(*arguments) == snapshot
 
 
 def test_valid_position_requires_attribution_and_positive_values() -> None:

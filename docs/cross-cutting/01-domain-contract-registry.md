@@ -320,6 +320,50 @@ This is a typed value-object and validation boundary only. It adds no default
 policy or thresholds, policy store/resolver/API/database/migration, risk
 consumer, account/portfolio calculation, approval, or execution authority.
 
+## Issue #104 (canonical 102) — offline account evidence
+
+The frozen `OFFLINE_ACCOUNT_EVIDENCE` scope adds only nonpersisted, immutable
+`AccountEvidenceContext`, `AccountPermissionObservations`,
+`OfflineAccountEvidence`, and `OfflineAccountAssessment` values in the risk
+package. These are embedded/internal values, not new `C-###` contracts.
+`AccountSnapshot` C-032 schema `1`, its constructor/financial validation, its
+legacy digest meaning, and `PortfolioSnapshot` consumers remain unchanged.
+Chat 8 §§6 and 78 and ADR-0018 govern this bounded implementation.
+
+Evidence embeds the entire supplied C-032 snapshot and explicitly observed
+account UUID, source string, source `VersionReference`, venue, operating mode,
+and read/trade/withdraw/transfer permission observations. Context identities
+and observations may be explicitly missing (`None`); permissions additionally
+have typed `UNKNOWN`, `ALLOWED`, and `DENIED` observations. Known `DENIED`
+observations are complete data, not failures of observation. No observation,
+including `ALLOWED`, grants any permission to the platform or risk engine.
+
+Assessment compares an explicitly supplied expected context to the observed
+context and binds observed account/source/version to C-032. Unknown or
+conflicting identities, missing/unknown permission observations, non-`VALID`
+snapshots, future snapshot `as_of`/capture, or evaluation after `valid_until`
+produce noncurrent results with explicit reason codes. Equality at capture
+and expiry passes. Evaluation time must be explicitly timezone-aware and is
+normalized to UTC; no wall clock is consulted. Independent-source
+reconciliation is always `UNKNOWN`, even for otherwise current evidence.
+Currentness describes only these supplied inputs, not external account truth,
+privilege, risk acceptance, approval, readiness, or execution authority.
+
+The evidence digest binds the complete snapshot (including its legacy
+`content_sha256` and fixed contract/schema metadata) and all observed offline
+metadata, excluding only the evidence's own digest. Verification recomputes
+that binding before assessment; it does not authenticate the legacy digest,
+the source, or provider truth. Money remains finite typed `Decimal` with
+explicit currency and C-032 validation: no missing-to-zero conversion, FX,
+balance inference, authoritative derived funds, or financial reconciliation
+formula is introduced.
+
+No persisted schema, codec registration, store, migration, API, integration,
+network call, downstream wiring, execution, or approval path is added.
+External completeness, independent-source verification, ingestion and all
+consumer integration remain deferred; this scope does not complete live
+account integration.
+
 ## Approval scope and change control
 
 - Registry approval establishes cross-domain semantics and ownership; schemas and implementation artifacts are intentionally deferred.

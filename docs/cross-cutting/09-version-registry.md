@@ -679,3 +679,39 @@ store/resolver/API/DB/migration, consumers, account/portfolio math, or
 approval/execution authority. Existing `PASS_WITH_WARNING` semantics remain;
 this value-object change does not enforce downstream human review or
 acknowledgment for soft breaches.
+
+## Issue #104 (canonical 102) — offline account evidence values
+
+`OFFLINE_ACCOUNT_EVIDENCE` adds immutable, nonpersisted risk-package evidence,
+context, permission-observation and deterministic assessment values only.
+There is no new C ID or schema version. C-032 `AccountSnapshot` schema `1`
+retains its exact constructor, monetary/currency rules, fixed metadata and
+legacy `content_sha256` semantics; C-033/`PortfolioSnapshot` consumers are
+unchanged. No migration or codec/storage registration is introduced.
+
+`OfflineAccountEvidence.content_sha256` uses the existing
+`canonical-json-v1`/`canonical_sha256` serializer over every envelope field
+except its own digest. The preimage includes the entire supplied snapshot,
+including C-032's legacy digest and fixed contract/schema metadata, plus
+observed account UUID/source string/source `VersionReference`/venue/mode and
+all read/trade/withdraw/transfer observations, including missing and `UNKNOWN`
+values. Construction/verification reject mismatched evidence digests, and
+assessment verifies again. A recomputed binding is not authentication of the
+legacy digest, external provenance, account truth, or completeness.
+
+The separate assessment accepts an explicit expected context and a supplied
+timezone-aware evaluation datetime, normalized to UTC without a clock.
+Expected context and evaluation time are comparison inputs, not assertions
+that external truth is current. Unknown/missing or mismatching context,
+observed account/source/version conflicting with C-032, missing/unknown
+permissions, non-`VALID` snapshots, future `as_of`/capture or evaluation
+strictly after `valid_until` yield explicit noncurrent reasons; equality at
+the boundary passes. Known `DENIED` is a complete observation. All permission
+observations are descriptive only, and independent-source reconciliation
+always remains `UNKNOWN`, even when currentness passes.
+
+Chat 8 §§6,78 and ADR-0018 boundaries remain intact: no financial formulas,
+zero filling, FX, derived authoritative funds, account mutation, store,
+network/integration, downstream consumer wiring, risk decision, approval or
+execution authority. External verification and consumer integration remain
+deferred. Focused cases are added in `tests/backend/test_risk_contracts.py`.
