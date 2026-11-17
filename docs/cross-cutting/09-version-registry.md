@@ -778,3 +778,48 @@ market/account/exchange access, secrets, credentials, FX, strategy grouping,
 pending orders, leverage/margin, threshold, approval, execution, or live
 trading path is introduced. Focused synthetic tests live in
 `tests/backend/test_risk_contracts.py`.
+
+## Issue #104 (canonical issue; GitHub #106) — offline position sizing
+
+C-036 remains schema 1 with unchanged fields, constructor and consumers.
+The pure `calculate_position_size` function accepts immutable nonpersisted
+`PositionSizingRequest`, `SizingInstrumentTerms` and `SizingCosts` values.
+No new canonical contract ID, codec, persistence, API, migration or external
+integration is added.
+
+Inputs explicitly bind model, policy, configuration, effective-budget,
+instrument and cost versions; volatility/Kelly versions are required for
+those methods. A caller-attested common validity window covers all supplied
+assumptions. Account/portfolio IDs, schema versions, digests and expiries must
+match `RiskContext`; the portfolio must embed the exact supplied account with
+matching equity. Snapshots (including embedded positions), context references
+and assumptions must be current at the explicit evaluation time. An expiry
+equal to evaluation is valid. Reference digests and expiries are mandatory.
+
+The result content digest hashes the complete request and complete C-036
+output fields excluding the output `content_sha256`. This binds every supplied
+value, version, result ID, time, reason and computed amount. VersionReference
+digests identify caller-supplied versions; neither those identifiers nor the
+result hash authenticate external truth or policy-budget completeness.
+Result validity is bounded by the earliest evidence/reference expiry. A
+failure on expired inputs expires at evaluation and carries no recommendation.
+
+The domain registry documents all five formulas and unit conventions.
+Precision is 34, half-even, isolated from the caller's Decimal context;
+unit and final stepped monetary calculations must be exact or fail closed.
+Targets/step counts round down and Kelly's losing term rounds up. All methods
+respect the effective risk, quantity, notional and free-margin caps; a reduced
+notional, percentage, Kelly or volatility-derived target is explicit WARNING.
+Unrepresentable/structurally malformed
+inputs raise `RiskContractError`; invalid or insufficient evidence produces
+FAILED/INSUFFICIENT_DATA with reasons and no recommendation.
+
+Kelly is research/backtest only and uses explicit probability/payoff/fraction
+versions. Volatility uses an explicitly supplied loss-per-unit, never an
+estimated statistic. Only LINEAR instruments and same-currency amounts are
+supported. The effective budget is already policy/open-risk adjusted by the
+caller. No sizing result evaluates that policy, establishes overall risk
+acceptability, or grants approval/execution authority. Leverage, liquidation,
+portfolio decisions, synchronization, external lookup, credentials, live
+trading and runtime wiring remain excluded. Focused synthetic regressions
+are in `tests/backend/test_risk_contracts.py`.

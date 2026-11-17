@@ -1,6 +1,6 @@
 from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -29,6 +29,7 @@ from trading_platform_api.risk import (
     PortfolioSnapshot,
     PositionExposureInput,
     PositionSide,
+    PositionSizingRequest,
     PositionSizingResult,
     PositionSnapshot,
     PriceValue,
@@ -53,6 +54,8 @@ from trading_platform_api.risk import (
     RiskRevalidationResult,
     RiskState,
     RiskVerdict,
+    SizingCosts,
+    SizingInstrumentTerms,
     SizingMethod,
     SnapshotState,
     StopLossAssessment,
@@ -62,6 +65,7 @@ from trading_platform_api.risk import (
     TakeProfitTarget,
     VersionReference,
     aggregate_portfolio_exposure,
+    calculate_position_size,
     pairwise_correlation,
 )
 
@@ -1214,6 +1218,480 @@ def test_position_sizing_requires_complete_bounded_output() -> None:
         quantity_step=None,
     )
     assert insufficient.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+
+
+def sizing_request(
+    method: SizingMethod = SizingMethod.RISK_BASED,
+    **overrides: object,
+) -> PositionSizingRequest:
+    account_value = account()
+    portfolio_value = portfolio(account_value)
+    ctx = replace(
+        context(),
+        account_snapshot=ContractReference(
+            "C-032",
+            account_value.snapshot_id,
+            "1",
+            account_value.content_sha256,
+            account_value.valid_until,
+        ),
+        portfolio_snapshot=ContractReference(
+            "C-033",
+            portfolio_value.snapshot_id,
+            "1",
+            portfolio_value.content_sha256,
+            portfolio_value.valid_until,
+        ),
+    )
+    values: dict[str, object] = {
+        "result_id": UUID(int=106),
+        "context": ctx,
+        "account": account_value,
+        "portfolio": portfolio_value,
+        "method": method,
+        "mode": RiskPolicyMode.RESEARCH,
+        "entry": price("100"),
+        "stop": price("90"),
+        "effective_risk": money("120"),
+        "policy_version": version("policy"),
+        "configuration_version": version("configuration"),
+        "budget_version": version("effective-budget"),
+        "model_version": version("sizing"),
+        "evaluated_at": T[4],
+        "assumptions_as_of": T[2],
+        "assumptions_valid_until": T[14],
+        "instrument": SizingInstrumentTerms(
+            ctx.asset,
+            ctx.instrument_id,
+            "synthetic-venue",
+            "LINEAR",
+            USD,
+            Decimal("1"),
+            Decimal("0.01"),
+            Decimal("0.1"),
+            Decimal("100"),
+            Decimal("0.1"),
+            money("100000"),
+            money("20"),
+            version("instrument"),
+        ),
+        "costs": SizingCosts(money("1"), money("0.5"), money("0.5"), version("cost")),
+    }
+    values.update(overrides)
+    return PositionSizingRequest(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("method", "inputs", "quantity", "loss"),
+    [
+        (SizingMethod.RISK_BASED, {}, "10", "120"),
+        (
+            SizingMethod.FIXED_NOTIONAL,
+            {"requested_notional": money("600")},
+            "6",
+            "72",
+        ),
+        (
+            SizingMethod.PERCENTAGE_OF_EQUITY,
+            {"equity_fraction": Decimal("0.02")},
+            "2",
+            "24",
+        ),
+        (
+            SizingMethod.VOLATILITY_ADJUSTED,
+            {
+                "volatility_loss_per_unit": money("22"),
+                "volatility_version": version("volatility"),
+            },
+            "5",
+            "120",
+        ),
+        (
+            SizingMethod.FRACTIONAL_KELLY,
+            {
+                "win_probability": Decimal("0.6"),
+                "win_loss_ratio": Decimal("1"),
+                "kelly_fraction": Decimal("0.25"),
+                "kelly_version": version("kelly"),
+            },
+            "5",
+            "60",
+        ),
+    ],
+)
+def test_sizing_calculates_all_five_methods(
+    method: SizingMethod, inputs: dict[str, object], quantity: str, loss: str
+) -> None:
+    request = sizing_request(method, **inputs)
+    result = calculate_position_size(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.contract_id == "C-036" and result.schema_version == "1"
+    assert result.recommended_quantity == Decimal(quantity)
+    assert result.recommended_notional == money(str(Decimal(quantity) * 100))
+    assert result.recommended_margin == money(str(Decimal(quantity) * 20))
+    assert result.maximum_loss == money(loss)
+    assert result.account_risk == ratio(
+        str(Decimal(loss) / 10000), "maximum-loss/equity"
+    )
+    assert result.stop_distance == Decimal("10")
+    assert result.valid_until == T[14]
+    assert calculate_position_size(request) == result
+    assert request.budget_version in result.sizing_assumptions
+    assert request.policy_version in result.sizing_assumptions
+    assert request.configuration_version in result.sizing_assumptions
+    assert request.instrument is not None and request.costs is not None
+    assert request.instrument.version in result.sizing_assumptions
+    assert request.costs.version in result.sizing_assumptions
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected"),
+    [
+        ({"maximum_quantity": Decimal("3.09")}, "3"),
+        ({"maximum_notional": money("305")}, "3"),
+        ({"initial_margin_per_unit": money("2300")}, "3"),
+        ({"quantity_step": Decimal("3")}, "9"),
+    ],
+)
+def test_sizing_applies_quantity_notional_margin_and_step_caps(
+    updates: dict[str, object], expected: str
+) -> None:
+    request = sizing_request()
+    assert request.instrument is not None
+    request = replace(request, instrument=replace(request.instrument, **updates))
+    result = calculate_position_size(request)
+    assert result.recommended_quantity == Decimal(expected)
+    assert result.maximum_loss is not None
+    assert result.maximum_loss.amount <= request.effective_risk.amount
+    assert result.recommended_margin is not None
+    assert request.account.free_margin is not None
+    assert result.recommended_margin.amount <= request.account.free_margin.amount
+    assert result.recommended_notional is not None
+    assert (
+        result.recommended_notional.amount <= request.instrument.maximum_notional.amount
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "inputs"),
+    [
+        (SizingMethod.FIXED_NOTIONAL, {"requested_notional": money("2000")}),
+        (SizingMethod.PERCENTAGE_OF_EQUITY, {"equity_fraction": Decimal("0.2")}),
+        (
+            SizingMethod.FRACTIONAL_KELLY,
+            {
+                "win_probability": Decimal("0.8"),
+                "win_loss_ratio": Decimal("1"),
+                "kelly_fraction": Decimal("1"),
+                "kelly_version": version("kelly"),
+            },
+        ),
+    ],
+)
+def test_sizing_reduced_targets_are_explicit(
+    method: SizingMethod, inputs: dict[str, object]
+) -> None:
+    result = calculate_position_size(sizing_request(method, **inputs))
+    assert result.outcome is RiskCheckOutcome.WARNING
+    assert result.reason_codes == ("REQUESTED_TARGET_REDUCED",)
+    assert result.recommended_quantity == Decimal("10")
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected"),
+    [
+        ({"maximum_quantity": Decimal("3")}, "3"),
+        ({"quantity_step": Decimal("2")}, "4"),
+    ],
+)
+def test_sizing_volatility_target_reductions_are_explicit(
+    updates: dict[str, object], expected: str
+) -> None:
+    request = sizing_request(
+        SizingMethod.VOLATILITY_ADJUSTED,
+        volatility_loss_per_unit=money("22"),
+        volatility_version=version("volatility"),
+    )
+    assert request.instrument is not None
+    request = replace(request, instrument=replace(request.instrument, **updates))
+    result = calculate_position_size(request)
+    assert result.outcome is RiskCheckOutcome.WARNING
+    assert result.reason_codes == ("REQUESTED_TARGET_REDUCED",)
+    assert result.recommended_quantity == Decimal(expected)
+    assert result.maximum_loss is not None
+    assert result.maximum_loss.amount <= request.effective_risk.amount
+
+
+def test_sizing_rounds_down_and_never_raises_quantity_to_minimum() -> None:
+    request = sizing_request(effective_risk=money("1"))
+    result = calculate_position_size(request)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert result.reason_codes == ("NO_TRADE_BELOW_MINIMUM",)
+    assert result.recommended_quantity is None
+    assert result.recommended_notional is None
+    assert result.recommended_margin is None
+    assert result.maximum_loss is None
+    result = calculate_position_size(
+        sizing_request(SizingMethod.FIXED_NOTIONAL, requested_notional=money("605"))
+    )
+    assert result.recommended_quantity == Decimal("6")
+    assert result.reason_codes == ("REQUESTED_TARGET_REDUCED",)
+
+
+@pytest.mark.parametrize(
+    ("method", "reason"),
+    [
+        (SizingMethod.FIXED_NOTIONAL, "NOTIONAL_MISSING"),
+        (SizingMethod.PERCENTAGE_OF_EQUITY, "EQUITY_FRACTION_MISSING"),
+        (SizingMethod.VOLATILITY_ADJUSTED, "VOLATILITY_INPUTS_MISSING"),
+        (SizingMethod.FRACTIONAL_KELLY, "KELLY_INPUTS_MISSING"),
+    ],
+)
+def test_sizing_missing_method_inputs_never_fall_back(
+    method: SizingMethod, reason: str
+) -> None:
+    result = calculate_position_size(sizing_request(method))
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.reason_codes == (reason,)
+    assert result.recommended_quantity is None
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        RiskPolicyMode.PAPER,
+        RiskPolicyMode.SHADOW,
+        RiskPolicyMode.TESTNET,
+        RiskPolicyMode.LIVE_SUPERVISED,
+    ],
+)
+def test_sizing_kelly_is_research_only(mode: RiskPolicyMode) -> None:
+    result = calculate_position_size(
+        sizing_request(
+            SizingMethod.FRACTIONAL_KELLY,
+            mode=mode,
+            win_probability=Decimal("0.6"),
+            win_loss_ratio=Decimal("1"),
+            kelly_fraction=Decimal("0.25"),
+            kelly_version=version("kelly"),
+        )
+    )
+    assert result.reason_codes == ("KELLY_RESEARCH_ONLY",)
+    assert result.recommended_quantity is None
+
+
+@pytest.mark.parametrize("probability", ["0", "0.4", "0.5"])
+def test_sizing_nonpositive_kelly_returns_no_trade(probability: str) -> None:
+    result = calculate_position_size(
+        sizing_request(
+            SizingMethod.FRACTIONAL_KELLY,
+            win_probability=Decimal(probability),
+            win_loss_ratio=Decimal("1"),
+            kelly_fraction=Decimal("0.25"),
+            kelly_version=version("kelly"),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert result.reason_codes == ("NO_TRADE_NONPOSITIVE_KELLY",)
+    assert result.recommended_quantity is None
+
+
+@pytest.mark.parametrize(
+    ("updates", "reason"),
+    [
+        ({"stop": price("100")}, "INVALID_STOP_DIRECTION"),
+        ({"stop": price("110")}, "INVALID_STOP_DIRECTION"),
+        ({"stop": PriceValue(Decimal("90"), "FOREIGN")}, "SIZING_CURRENCY_MISMATCH"),
+        (
+            {"effective_risk": MoneyValue(Decimal("120"), "FOREIGN")},
+            "SIZING_CURRENCY_MISMATCH",
+        ),
+        ({"entry": price("100.001")}, "PRICE_OFF_TICK"),
+        ({"instrument": None}, "SIZING_ASSUMPTIONS_MISSING"),
+        ({"costs": None}, "SIZING_ASSUMPTIONS_MISSING"),
+        ({"assumptions_valid_until": T[3]}, "ASSUMPTIONS_NOT_CURRENT"),
+        ({"assumptions_as_of": T[5]}, "ASSUMPTIONS_NOT_CURRENT"),
+        ({"evaluated_at": T[16]}, "SNAPSHOT_NOT_CURRENT"),
+        ({"effective_risk": money("10001")}, "RISK_EXCEEDS_EQUITY"),
+    ],
+)
+def test_sizing_rejects_invalid_and_unknown_evidence(
+    updates: dict[str, object], reason: str
+) -> None:
+    result = calculate_position_size(sizing_request(**updates))
+    assert result.reason_codes == (reason,)
+    assert result.outcome in {
+        RiskCheckOutcome.FAILED,
+        RiskCheckOutcome.INSUFFICIENT_DATA,
+    }
+    assert result.recommended_quantity is None
+
+
+def test_sizing_short_direction_multiplier_and_explicit_zero_costs() -> None:
+    request = sizing_request(stop=price("110"))
+    assert request.instrument is not None and request.costs is not None
+    request = replace(
+        request,
+        context=replace(request.context, side=PositionSide.SHORT),
+        instrument=replace(request.instrument, contract_multiplier=Decimal("2")),
+        costs=SizingCosts(money("0"), money("0"), money("0"), version("zero-cost")),
+    )
+    result = calculate_position_size(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.recommended_quantity == Decimal("6")
+    assert result.recommended_notional == money("1200")
+    assert result.maximum_loss == money("120")
+    assert calculate_position_size(replace(request, stop=price("90"))).reason_codes == (
+        "INVALID_STOP_DIRECTION",
+    )
+
+
+def test_sizing_checks_context_snapshot_identity_freshness_and_model() -> None:
+    request = sizing_request()
+    assert request.instrument is not None
+    changed = replace(request.context.account_snapshot, content_sha256="b" * 64)
+    invalid_context = replace(request.context, account_snapshot=changed)
+    assert calculate_position_size(
+        replace(request, context=invalid_context)
+    ).reason_codes == ("SNAPSHOT_REFERENCE_MISMATCH",)
+    invalid_portfolio = portfolio()
+    assert calculate_position_size(
+        replace(request, portfolio=invalid_portfolio)
+    ).reason_codes == ("ACCOUNT_PORTFOLIO_MISMATCH",)
+    invalid_signal = replace(request.context.signal, valid_until=T[3])
+    assert calculate_position_size(
+        replace(request, context=replace(request.context, signal=invalid_signal))
+    ).reason_codes == ("CONTEXT_EVIDENCE_NOT_CURRENT",)
+    assert calculate_position_size(
+        replace(request, instrument=replace(request.instrument, model="INVERSE"))
+    ).reason_codes == ("UNSUPPORTED_INSTRUMENT_MODEL",)
+    assert calculate_position_size(
+        replace(request, instrument=replace(request.instrument, instrument_id="OTHER"))
+    ).reason_codes == ("INSTRUMENT_CONTEXT_MISMATCH",)
+    assert (
+        calculate_position_size(replace(request, evaluated_at=T[14])).outcome
+        is RiskCheckOutcome.PASSED
+    )
+    assert (
+        calculate_position_size(replace(request, evaluated_at=T[3])).outcome
+        is RiskCheckOutcome.PASSED
+    )
+
+
+def test_sizing_digest_binds_inputs_versions_and_outputs() -> None:
+    request = sizing_request()
+    result = calculate_position_size(request)
+    expected = canonical_sha256(
+        {
+            "request": request,
+            "result": {
+                item.name: getattr(result, item.name)
+                for item in fields(result)
+                if item.name != "content_sha256"
+            },
+        }
+    )
+    assert result.content_sha256 == expected
+    altered = replace(request, policy_version=version("different-policy"))
+    assert calculate_position_size(altered).content_sha256 != result.content_sha256
+    assert (
+        calculate_position_size(
+            replace(request, effective_risk=money("119"))
+        ).content_sha256
+        != result.content_sha256
+    )
+    with localcontext() as ambient:
+        ambient.prec = 5
+        ambient.rounding = ROUND_UP
+        ambient.traps[Inexact] = True
+        assert calculate_position_size(request) == result
+
+
+def test_sizing_nonterminating_risk_division_never_exceeds_budget() -> None:
+    request = sizing_request(effective_risk=money("1"))
+    assert request.instrument is not None
+    request = replace(
+        request,
+        stop=price("99.7"),
+        instrument=replace(
+            request.instrument,
+            quantity_step=Decimal("0.001"),
+            minimum_quantity=Decimal("0.001"),
+        ),
+        costs=SizingCosts(money("0"), money("0"), money("0"), version("zero-cost")),
+    )
+    result = calculate_position_size(request)
+    assert result.recommended_quantity == Decimal("3.333")
+    assert result.maximum_loss == money("0.9999")
+    assert result.maximum_loss.amount <= request.effective_risk.amount
+    with pytest.raises(RiskContractError, match="precision 34"):
+        calculate_position_size(
+            replace(
+                request,
+                instrument=replace(
+                    request.instrument,
+                    contract_multiplier=Decimal("1.123456789012345678901234567890123"),
+                ),
+            )
+        )
+
+
+def test_sizing_low_volatility_cannot_reduce_stop_risk() -> None:
+    request = sizing_request(
+        SizingMethod.VOLATILITY_ADJUSTED,
+        volatility_loss_per_unit=money("1"),
+        volatility_version=version("volatility"),
+    )
+    result = calculate_position_size(request)
+    assert result.recommended_quantity == Decimal("10")
+    assert result.maximum_loss == money("120")
+    assert request.volatility_version in result.sizing_assumptions
+
+
+def test_sizing_rejects_nonvalid_future_and_inconsistent_portfolio_evidence() -> None:
+    request = sizing_request()
+    invalid = replace(
+        request.portfolio, state=SnapshotState.STALE, reason_codes=("STALE",)
+    )
+    assert calculate_position_size(
+        replace(request, portfolio=invalid)
+    ).reason_codes == ("SNAPSHOT_NOT_VALID",)
+    assert calculate_position_size(
+        replace(request, portfolio=replace(request.portfolio, equity=money("9000")))
+    ).reason_codes == ("PORTFOLIO_EQUITY_MISMATCH",)
+    future = replace(request.portfolio, as_of=T[5], captured_at=T[6])
+    assert calculate_position_size(replace(request, portfolio=future)).reason_codes == (
+        "SNAPSHOT_NOT_CURRENT",
+    )
+    stale_position = replace(request.portfolio.positions[0], valid_until=T[3])
+    assert calculate_position_size(
+        replace(
+            request,
+            portfolio=replace(request.portfolio, positions=(stale_position,)),
+        )
+    ).reason_codes == ("SNAPSHOT_NOT_CURRENT",)
+    assert request.instrument is not None and request.costs is not None
+    with pytest.raises(RiskContractError, match="positive"):
+        replace(request.instrument, initial_margin_per_unit=money("0"))
+    with pytest.raises(RiskContractError, match="non-negative"):
+        replace(request.costs, funding=money("-1"))
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"effective_risk": money("0")},
+        {"equity_fraction": Decimal("0")},
+        {"kelly_fraction": Decimal("1.1")},
+        {"win_probability": Decimal("-0.1")},
+        {"win_loss_ratio": Decimal("0")},
+        {"equity_fraction": Decimal("NaN")},
+        {"win_probability": 0.6},
+    ],
+)
+def test_sizing_rejects_malformed_request(updates: dict[str, object]) -> None:
+    with pytest.raises(RiskContractError):
+        sizing_request(**updates)
 
 
 def test_leverage_hard_limit_and_unknown_constraints_cannot_pass() -> None:
