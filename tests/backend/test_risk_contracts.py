@@ -1,6 +1,6 @@
 from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_UP, Decimal, Inexact, localcontext
+from decimal import Context, ROUND_DOWN, ROUND_UP, Decimal, Inexact, localcontext
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -59,6 +59,10 @@ from trading_platform_api.risk import (
     SizingMethod,
     SnapshotState,
     StopLossAssessment,
+    StopLossAssessmentRequest,
+    StopLossStructuralEvidence,
+    StopLossVolatilityEvidence,
+    StopLossLiquidationEvidence,
     StressScenarioResult,
     StressTestResult,
     TakeProfitAssessment,
@@ -66,6 +70,7 @@ from trading_platform_api.risk import (
     VersionReference,
     aggregate_portfolio_exposure,
     calculate_position_size,
+    calculate_stop_loss_assessment,
     pairwise_correlation,
 )
 
@@ -1279,6 +1284,372 @@ def sizing_request(
     }
     values.update(overrides)
     return PositionSizingRequest(**values)  # type: ignore[arg-type]
+
+
+def stop_assessment_request(
+    side: PositionSide = PositionSide.LONG, **overrides: object
+) -> StopLossAssessmentRequest:
+    account_value = account()
+    portfolio_value = portfolio(account_value)
+    ctx = replace(
+        context(),
+        side=side,
+        account_snapshot=ContractReference(
+            "C-032",
+            account_value.snapshot_id,
+            "1",
+            account_value.content_sha256,
+            account_value.valid_until,
+        ),
+        portfolio_snapshot=ContractReference(
+            "C-033",
+            portfolio_value.snapshot_id,
+            "1",
+            portfolio_value.content_sha256,
+            portfolio_value.valid_until,
+        ),
+    )
+    invalidation = ref("C-023", valid_until=T[12])
+    entry = price("100")
+    stop_loss = price("90") if side is PositionSide.LONG else price("110")
+    bounds = (
+        (price("80"), price("95"))
+        if side is PositionSide.LONG
+        else (price("105"), price("120"))
+    )
+    values: dict[str, object] = {
+        "result_id": UUID(int=107),
+        "context": ctx,
+        "account": account_value,
+        "portfolio": portfolio_value,
+        "entry_price": entry,
+        "stop_loss": stop_loss,
+        "quantity": Decimal("2"),
+        "effective_maximum_loss": money("24.5"),
+        "instrument": SizingInstrumentTerms(
+            ctx.asset,
+            ctx.instrument_id,
+            "synthetic-venue",
+            "LINEAR",
+            USD,
+            Decimal("1"),
+            Decimal("0.01"),
+            Decimal("0.1"),
+            Decimal("100"),
+            Decimal("0.1"),
+            money("100000"),
+            money("20"),
+            version("instrument"),
+        ),
+        "costs": SizingCosts(money("1"), money("0.5"), money("0.5"), version("cost")),
+        "policy_version": version("policy"),
+        "configuration_version": version("configuration"),
+        "model_version": version("stop-model"),
+        "account_source_version": account_value.source_version,
+        "portfolio_source_version": portfolio_value.source_version,
+        "strategy_invalidation": invalidation,
+        "minimum_stop_distance": Decimal("10"),
+        "adverse_gap_displacement": Decimal("0.25"),
+        "gap_version": version("gap"),
+        "evaluated_at": T[4],
+        "assumptions_as_of": T[2],
+        "assumptions_valid_until": T[10],
+        "structural_evidence": StopLossStructuralEvidence(
+            invalidation,
+            ctx,
+            ctx.strategy_version,
+            ctx.asset,
+            ctx.instrument_id,
+            side,
+            bounds[0],
+            bounds[1],
+            version("strategy-invalidation"),
+            T[3],
+            T[11],
+        ),
+        "volatility_evidence": StopLossVolatilityEvidence(
+            ctx,
+            ctx.asset,
+            ctx.instrument_id,
+            side,
+            Decimal("10"),
+            USD,
+            version("volatility-boundary"),
+            T[3],
+            T[11],
+        ),
+        "liquidation_evidence": StopLossLiquidationEvidence(
+            ctx,
+            ctx.asset,
+            ctx.instrument_id,
+            side,
+            LiquidationAvailability.AVAILABLE,
+            price("70") if side is PositionSide.LONG else price("130"),
+            Decimal("15"),
+            USD,
+            False,
+            version("liquidation-input"),
+            T[3],
+            T[11],
+        ),
+    }
+    values.update(overrides)
+    return StopLossAssessmentRequest(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("side", [PositionSide.LONG, PositionSide.SHORT])
+def test_stop_assessment_calculates_bounded_loss_for_both_sides(
+    side: PositionSide,
+) -> None:
+    request = stop_assessment_request(side)
+    result = calculate_stop_loss_assessment(request)
+
+    assert result.contract_id == "C-078"
+    assert result.schema_version == "1"
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.side is side
+    assert result.stop_distance == Decimal("10")
+    assert result.stop_distance_ratio == ratio("0.1", "stop-distance-to-entry")
+    assert result.maximum_loss == money("24.5")
+    assert result.valid_until == T[10]
+    assert result.content_sha256 != HASH_A
+
+
+@pytest.mark.parametrize(
+    ("stop_loss", "outcome", "reason"),
+    [
+        (price("100"), RiskCheckOutcome.FAILED, "STOP_LOSS_DIRECTION_INVALID"),
+        (price("101"), RiskCheckOutcome.FAILED, "STOP_LOSS_DIRECTION_INVALID"),
+        (None, RiskCheckOutcome.INSUFFICIENT_DATA, "STOP_LOSS_MISSING"),
+    ],
+)
+def test_stop_assessment_fail_closed_for_invalid_or_missing_stop(
+    stop_loss: PriceValue | None,
+    outcome: RiskCheckOutcome,
+    reason: str,
+) -> None:
+    result = calculate_stop_loss_assessment(
+        stop_assessment_request(stop_loss=stop_loss)
+    )
+
+    assert result.outcome is outcome
+    assert reason in result.reason_codes
+    assert result.stop_loss is None
+    assert result.stop_distance is None
+    assert result.stop_distance_ratio is None
+    assert result.maximum_loss is None
+    assert canonical_sha256(result)
+
+
+def test_stop_assessment_enforces_tick_quantity_currency_and_notional_limits() -> None:
+    tick_mismatch = calculate_stop_loss_assessment(
+        stop_assessment_request(entry_price=price("100.005"))
+    )
+    assert tick_mismatch.outcome is RiskCheckOutcome.FAILED
+    assert "ENTRY_PRICE_TICK_MISMATCH" in tick_mismatch.reason_codes
+
+    step_mismatch = calculate_stop_loss_assessment(
+        stop_assessment_request(quantity=Decimal("0.15"))
+    )
+    assert step_mismatch.outcome is RiskCheckOutcome.FAILED
+    assert "QUANTITY_STEP_MISMATCH" in step_mismatch.reason_codes
+
+    quantity_out_of_bounds = calculate_stop_loss_assessment(
+        stop_assessment_request(quantity=Decimal("100.1"))
+    )
+    assert quantity_out_of_bounds.outcome is RiskCheckOutcome.FAILED
+    assert "QUANTITY_OUT_OF_BOUNDS" in quantity_out_of_bounds.reason_codes
+
+    stop_currency_mismatch = calculate_stop_loss_assessment(
+        stop_assessment_request(stop_loss=PriceValue(Decimal("90"), "SYNTHETIC-EUR"))
+    )
+    assert stop_currency_mismatch.outcome is RiskCheckOutcome.FAILED
+    assert "STOP_CURRENCY_MISMATCH" in stop_currency_mismatch.reason_codes
+    assert stop_currency_mismatch.maximum_loss is None
+
+    small_notional = replace(
+        stop_assessment_request(),
+        instrument=replace(
+            stop_assessment_request().instrument,
+            maximum_notional=money("100"),
+        ),
+    )
+    notional_result = calculate_stop_loss_assessment(small_notional)
+    assert notional_result.outcome is RiskCheckOutcome.FAILED
+    assert "MAXIMUM_NOTIONAL_EXCEEDED" in notional_result.reason_codes
+
+
+def test_stop_assessment_policy_volatility_and_structural_boundaries() -> None:
+    base_request = stop_assessment_request()
+    volatility = base_request.volatility_evidence
+    assert volatility is not None
+    exact_boundary = calculate_stop_loss_assessment(base_request)
+    assert exact_boundary.outcome is RiskCheckOutcome.PASSED
+
+    policy_breach = calculate_stop_loss_assessment(
+        stop_assessment_request(minimum_stop_distance=Decimal("10.01"))
+    )
+    assert policy_breach.outcome is RiskCheckOutcome.FAILED
+    assert "POLICY_MINIMUM_STOP_DISTANCE_BREACH" in policy_breach.reason_codes
+
+    volatility_breach = calculate_stop_loss_assessment(
+        replace(
+            base_request,
+            volatility_evidence=replace(
+                volatility,
+                minimum_distance=Decimal("10.01"),
+            ),
+        )
+    )
+    assert volatility_breach.outcome is RiskCheckOutcome.FAILED
+    assert "VOLATILITY_MINIMUM_DISTANCE_BREACH" in volatility_breach.reason_codes
+
+    interval = base_request.structural_evidence
+    assert interval is not None
+    upper_edge = calculate_stop_loss_assessment(
+        replace(
+            base_request,
+            stop_loss=interval.upper_stop,
+            minimum_stop_distance=Decimal("5"),
+            volatility_evidence=replace(
+                volatility, minimum_distance=Decimal("5")
+            ),
+        )
+    )
+    assert upper_edge.outcome is RiskCheckOutcome.PASSED
+    outside = calculate_stop_loss_assessment(
+        stop_assessment_request(stop_loss=price("79"))
+    )
+    assert outside.outcome is RiskCheckOutcome.FAILED
+    assert "STOP_OUTSIDE_STRUCTURAL_INTERVAL" in outside.reason_codes
+
+    wrong_lineage = replace(
+        interval,
+        strategy_version=ref("C-021"),
+    )
+    wrong_lineage_result = calculate_stop_loss_assessment(
+        replace(base_request, structural_evidence=wrong_lineage)
+    )
+    assert wrong_lineage_result.outcome is RiskCheckOutcome.FAILED
+    assert "STRUCTURAL_LINEAGE_MISMATCH" in wrong_lineage_result.reason_codes
+
+
+def test_stop_assessment_liquidation_side_buffer_applicability_and_staleness() -> None:
+    base_request = stop_assessment_request()
+    liquidation = base_request.liquidation_evidence
+    assert liquidation is not None
+    wrong_side_evidence = replace(
+        liquidation,
+        liquidation_price=price("95"),
+    )
+    wrong_side = calculate_stop_loss_assessment(
+        replace(base_request, liquidation_evidence=wrong_side_evidence)
+    )
+    assert wrong_side.outcome is RiskCheckOutcome.FAILED
+    assert "LIQUIDATION_NOT_BEYOND_STOP" in wrong_side.reason_codes
+
+    insufficient_buffer = replace(
+        liquidation,
+        liquidation_price=price("80"),
+        minimum_buffer=Decimal("11"),
+    )
+    buffer_result = calculate_stop_loss_assessment(
+        replace(base_request, liquidation_evidence=insufficient_buffer)
+    )
+    assert buffer_result.outcome is RiskCheckOutcome.FAILED
+    assert "STOP_TO_LIQUIDATION_BUFFER_BREACH" in buffer_result.reason_codes
+
+    spot_not_applicable = replace(
+        liquidation,
+        availability=LiquidationAvailability.NOT_APPLICABLE,
+        liquidation_price=None,
+        fully_funded_spot=True,
+    )
+    spot_result = calculate_stop_loss_assessment(
+        replace(base_request, liquidation_evidence=spot_not_applicable)
+    )
+    assert spot_result.outcome is RiskCheckOutcome.PASSED
+    assert "LIQUIDATION_NOT_APPLICABLE_FULLY_FUNDED_SPOT" in spot_result.reason_codes
+
+    unknown = replace(
+        liquidation,
+        availability=LiquidationAvailability.UNAVAILABLE,
+        liquidation_price=None,
+    )
+    unknown_result = calculate_stop_loss_assessment(
+        replace(base_request, liquidation_evidence=unknown)
+    )
+    assert unknown_result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert "LIQUIDATION_APPLICABILITY_UNKNOWN" in unknown_result.reason_codes
+
+    stale = replace(
+        liquidation,
+        valid_until=T[3],
+    )
+    stale_result = calculate_stop_loss_assessment(
+        replace(base_request, liquidation_evidence=stale)
+    )
+    assert stale_result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert "LIQUIDATION_EVIDENCE_NOT_CURRENT" in stale_result.reason_codes
+    assert stale_result.valid_until == T[4]
+
+
+def test_stop_assessment_matches_context_versions_budget_and_digest() -> None:
+    request = stop_assessment_request()
+    result = calculate_stop_loss_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+
+    bad_source_version = calculate_stop_loss_assessment(
+        replace(request, account_source_version=version("unexpected-account-source"))
+    )
+    assert bad_source_version.outcome is RiskCheckOutcome.FAILED
+    assert "ACCOUNT_SOURCE_VERSION_MISMATCH" in bad_source_version.reason_codes
+
+    bad_snapshot_reference_context = replace(
+        request.context,
+        account_snapshot=replace(
+            request.context.account_snapshot, content_sha256="b" * 64
+        ),
+    )
+    bad_snapshot_reference = calculate_stop_loss_assessment(
+        replace(request, context=bad_snapshot_reference_context)
+    )
+    assert bad_snapshot_reference.outcome is RiskCheckOutcome.FAILED
+    assert "SNAPSHOT_REFERENCE_MISMATCH" in bad_snapshot_reference.reason_codes
+
+    under_budget = calculate_stop_loss_assessment(
+        replace(request, effective_maximum_loss=money("24.49"))
+    )
+    assert under_budget.outcome is RiskCheckOutcome.FAILED
+    assert "EFFECTIVE_MAXIMUM_LOSS_EXCEEDED" in under_budget.reason_codes
+    assert under_budget.maximum_loss == money("24.5")
+
+    changed_request = replace(request, adverse_gap_displacement=Decimal("0.5"))
+    changed_result = calculate_stop_loss_assessment(changed_request)
+    assert changed_result.content_sha256 != result.content_sha256
+    assert changed_result.maximum_loss == money("25")
+
+    expired_assumptions = calculate_stop_loss_assessment(
+        replace(request, assumptions_valid_until=T[3])
+    )
+    assert expired_assumptions.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert "ASSUMPTIONS_NOT_CURRENT" in expired_assumptions.reason_codes
+    assert expired_assumptions.valid_until == T[4]
+
+
+def test_stop_assessment_isolated_decimal_context_and_loss_budget_boundary() -> None:
+    request = stop_assessment_request()
+    with localcontext(Context(prec=2, rounding=ROUND_DOWN)):
+        exact_budget = calculate_stop_loss_assessment(request)
+        below_budget = calculate_stop_loss_assessment(
+            replace(request, effective_maximum_loss=money("24.499"))
+        )
+
+    assert exact_budget.outcome is RiskCheckOutcome.PASSED
+    assert exact_budget.maximum_loss == money("24.5")
+    assert exact_budget.maximum_loss is not None
+    assert exact_budget.maximum_loss.amount <= request.effective_maximum_loss.amount
+    assert below_budget.outcome is RiskCheckOutcome.FAILED
 
 
 @pytest.mark.parametrize(
