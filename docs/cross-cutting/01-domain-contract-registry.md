@@ -513,6 +513,94 @@ not a risk-policy pass or trade authorization. Later leverage (#109),
 liquidation (#110), portfolio impact (#111), proposal (#113) and revalidation
 (#114) work retain their own responsibilities.
 
+## Issue #105 (canonical; GitHub #107) — offline stop-loss assessment
+
+`calculate_stop_loss_assessment(StopLossAssessmentRequest)` produces the
+existing C-078 schema `1` without changing its constructor, fields, meanings,
+consumers, or authority. The request and its immutable structural, volatility,
+and liquidation evidence values are nonpersisted inputs, not new canonical
+contracts. The calculator is pure and offline; it adds no codec, persistence,
+API, database, migration, external lookup, or runtime integration.
+
+The request explicitly binds a result UUID, evaluation time, `RiskContext`,
+matching C-032/C-033 snapshots and their source versions, model/policy/
+configuration versions, effective maximum-loss budget, proposed quantity,
+entry/stop, linear instrument terms, adverse costs, gap displacement and
+version, policy minimum stop distance, and an assumptions validity window.
+The caller has already reduced the effective budget for policy and consumed
+open risk; the calculator neither resolves policy hierarchy nor authenticates
+that budget. Account/portfolio identity, equity, currency, schema, content
+digest, source version, timestamp and expiry must agree with the context and
+caller-supplied evidence. Context references require schema `1`, digest, and
+expiry. Evaluation at an expiry boundary is accepted.
+
+Only the existing `SizingInstrumentTerms` and `SizingCosts` linear inputs from
+issue #106 are consumed. Quantity is in contract units; multiplier is base
+units per contract; prices and gap displacement are quote currency per base
+unit; fee, slippage and funding are adverse quote currency per contract.
+Entry, stop, multiplier, tick, step, quantity bounds and maximum notional are
+validated explicitly. Entry and stop must be tick-conforming; quantity must
+be within minimum/maximum bounds and an exact step multiple anchored at zero.
+No FX, nonlinear instrument model, exchange lookup, stop movement, rounding,
+or quantity adjustment is performed.
+
+LONG requires `stop < entry`; SHORT requires `stop > entry`. The result
+includes absolute stop distance and `distance / entry`, with ratio arithmetic
+at fixed Decimal precision 34, half-even. C-078 `RatioValue` cannot represent
+a ratio above one, so that case fails closed with no ratio rather than being
+clamped. An explicit, version-bound policy minimum distance and
+caller-supplied, versioned volatility minimum-distance threshold are both in
+the request's explicit `price_unit_currency` and are compared to actual
+distance. The volatility value is an input threshold, not an estimated
+volatility statistic.
+
+Structural alignment requires current caller-attested C-023 invalidation
+evidence with a priced inclusive lower/upper acceptable-stop interval, exact
+strategy-version and risk-context references, and matching asset, instrument,
+and side. A bare boolean is not evidence; unpriced/qualitative invalidation is
+not evaluated. The interval is a materialized boundary, not a claim that the
+calculator evaluates every C-021 strategy rule. Leveraged positions require
+current, versioned caller-supplied liquidation price and nonnegative
+stop-to-liquidation buffer evidence. Liquidation must be beyond the stop in
+the adverse direction and the buffer must be met. No-liquidation
+nonapplicability passes only with explicit caller-attested fully funded spot
+evidence. Unknown applicability, missing leveraged liquidation price, or
+stale evidence cannot pass.
+
+For valid same-currency inputs, maximum loss is calculated exactly at isolated
+Decimal precision 34:
+
+`quantity * ((abs(entry - stop) + adverse_gap_displacement) * multiplier + fee_per_unit + slippage_per_unit + funding_per_unit)`
+
+Costs must be nonnegative and explicit, including explicit zero values.
+Adverse gap displacement is additional price movement and is not an
+already-cost-inclusive aggregate. Monetary arithmetic that cannot be
+represented exactly at precision 34 raises `RiskContractError`; budget
+comparison has no tolerance or loss clamp. The estimate is bounded by the
+supplied assumptions, not a guaranteed maximum market loss.
+
+`PASSED` requires all evidence to be present/current and structural,
+volatility, liquidation, instrument, quantity, distance, notional, and hard
+loss-budget checks to pass. Deterministic constraint breaches are `FAILED`;
+missing, stale, future, or unknown evidence is `INSUFFICIENT_DATA`. If the stop
+is missing or directionally invalid, C-078 leaves the stop and derived fields
+unset to preserve its constructor invariant; callers must retain the original
+request alongside the result. The canonical result digest binds the complete
+request, assumptions, versions, reason codes, and all C-078 output fields
+except its own digest. `valid_until` is bounded by the earliest applicable
+context, snapshot, source, assumption, strategy, volatility, and liquidation
+expiry; an incomplete/stale assessment is valid only at evaluation time.
+The existing C-078 `cost_assumptions` field retains only the supplied
+`SizingCosts` version; gap, instrument, policy, and other request versions
+remain bound by the complete request digest. Hashes bind supplied content but
+do not authenticate external truth.
+
+The assessment validates only stop-specific inputs. It does not generate a
+stop, estimate volatility, evaluate all strategy rules, size a position,
+calculate leverage/liquidation, decide portfolio impact, approve risk, or
+authorize approval/execution. A sizing pass does not imply stop validity, and
+a stop pass is not overall risk approval or execution authority.
+
 ## Approval scope and change control
 
 - Registry approval establishes cross-domain semantics and ownership; schemas and implementation artifacts are intentionally deferred.

@@ -1751,6 +1751,7 @@ class StopLossAssessmentRequest:
     portfolio_source_version: VersionReference
     strategy_invalidation: ContractReference
     minimum_stop_distance: Decimal
+    price_unit_currency: str
     adverse_gap_displacement: Decimal
     gap_version: VersionReference
     evaluated_at: datetime
@@ -1796,6 +1797,7 @@ class StopLossAssessmentRequest:
         if self.strategy_invalidation.contract_id != "C-023":
             raise RiskContractError("strategy_invalidation must reference C-023.")
         _nonnegative("minimum_stop_distance", self.minimum_stop_distance)
+        _text("price_unit_currency", self.price_unit_currency)
         _nonnegative("adverse_gap_displacement", self.adverse_gap_displacement)
         for name, expected in (
             ("structural_evidence", StopLossStructuralEvidence),
@@ -2388,7 +2390,7 @@ def _stop_assessment_result(
         "stop_distance": stop_distance,
         "stop_distance_ratio": stop_distance_ratio,
         "maximum_loss": maximum_loss,
-        "cost_assumptions": (request.costs.version, request.gap_version),
+        "cost_assumptions": (request.costs.version,),
         "strategy_invalidation": request.strategy_invalidation,
         "structural_check": structural_check,
         "volatility_check": volatility_check,
@@ -2513,9 +2515,11 @@ def _calculate_stop_loss_assessment(
         fail("ACCOUNT_SOURCE_VERSION_MISMATCH")
     if request.portfolio_source_version != portfolio.source_version:
         fail("PORTFOLIO_SOURCE_VERSION_MISMATCH")
-    snapshots: tuple[
-        AccountSnapshot | PortfolioSnapshot | PositionSnapshot, ...
-    ] = (account, portfolio, *portfolio.positions)
+    snapshots: tuple[AccountSnapshot | PortfolioSnapshot | PositionSnapshot, ...] = (
+        account,
+        portfolio,
+        *portfolio.positions,
+    )
     if any(item.state is not SnapshotState.VALID for item in snapshots):
         insufficient("SNAPSHOT_NOT_VALID")
     if any(
@@ -2536,13 +2540,12 @@ def _calculate_stop_loss_assessment(
     currency = instrument.quote_currency
     price_units_valid = (
         request.entry_price.quote_currency == currency
-        and (
-            request.stop_loss is None
-            or request.stop_loss.quote_currency == currency
-        )
+        and request.price_unit_currency == currency
+        and (request.stop_loss is None or request.stop_loss.quote_currency == currency)
     )
     cost_units_valid = all(
-        value.currency == currency for value in (costs.fee, costs.slippage, costs.funding)
+        value.currency == currency
+        for value in (costs.fee, costs.slippage, costs.funding)
     )
     budget_currency_valid = request.effective_maximum_loss.currency == currency
     instrument_lineage_valid = (
@@ -2558,21 +2561,17 @@ def _calculate_stop_loss_assessment(
         fail("UNSUPPORTED_INSTRUMENT_MODEL")
     if account.currency != currency or portfolio.currency != currency:
         fail("ACCOUNT_INSTRUMENT_CURRENCY_MISMATCH")
-    money_units_valid = (
-        account.currency == currency and portfolio.currency == currency
-    )
     if request.entry_price.quote_currency != currency:
         fail("ENTRY_CURRENCY_MISMATCH")
+    if request.price_unit_currency != currency:
+        fail("PRICE_DISTANCE_CURRENCY_MISMATCH")
     if request.effective_maximum_loss.currency != currency:
         fail("BUDGET_CURRENCY_MISMATCH")
     if costs.fee.currency != currency or costs.slippage.currency != currency:
         fail("COST_CURRENCY_MISMATCH")
     if costs.funding.currency != currency:
         fail("FUNDING_CURRENCY_MISMATCH")
-    if any(
-        value.amount < 0
-        for value in (costs.fee, costs.slippage, costs.funding)
-    ):
+    if any(value.amount < 0 for value in (costs.fee, costs.slippage, costs.funding)):
         fail("NEGATIVE_ADVERSE_COST")
     if request.stop_loss is not None and request.stop_loss.quote_currency != currency:
         fail("STOP_CURRENCY_MISMATCH")
@@ -2580,7 +2579,11 @@ def _calculate_stop_loss_assessment(
         fail("ENTRY_PRICE_TICK_MISMATCH")
     if request.quantity % instrument.quantity_step != 0:
         fail("QUANTITY_STEP_MISMATCH")
-    if not instrument.minimum_quantity <= request.quantity <= instrument.maximum_quantity:
+    if (
+        not instrument.minimum_quantity
+        <= request.quantity
+        <= instrument.maximum_quantity
+    ):
         fail("QUANTITY_OUT_OF_BOUNDS")
 
     stop_loss = request.stop_loss
@@ -2620,9 +2623,7 @@ def _calculate_stop_loss_assessment(
                 stop_distance_ratio = RatioValue(
                     distance_ratio, "stop-distance-to-entry"
                 )
-            with localcontext(
-                Context(prec=34, rounding=ROUND_HALF_EVEN)
-            ) as exact:
+            with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as exact:
                 exact.traps[Inexact] = True
                 if instrument_lineage_valid:
                     notional = (
@@ -2635,14 +2636,16 @@ def _calculate_stop_loss_assessment(
                     and notional > instrument.maximum_notional.amount
                 ):
                     fail("MAXIMUM_NOTIONAL_EXCEEDED")
-                if instrument_lineage_valid and cost_units_valid and not any(
-                    value.amount < 0
-                    for value in (costs.fee, costs.slippage, costs.funding)
+                if (
+                    instrument_lineage_valid
+                    and cost_units_valid
+                    and not any(
+                        value.amount < 0
+                        for value in (costs.fee, costs.slippage, costs.funding)
+                    )
                 ):
                     unit_loss = (
-                        (
-                            stop_distance + request.adverse_gap_displacement
-                        )
+                        (stop_distance + request.adverse_gap_displacement)
                         * instrument.contract_multiplier
                         + costs.fee.amount
                         + costs.slippage.amount
@@ -2674,9 +2677,7 @@ def _calculate_stop_loss_assessment(
             fail("POLICY_MINIMUM_STOP_DISTANCE_BREACH")
     if maximum_loss is not None:
         if budget_currency_valid:
-            budget_passed = (
-                maximum_loss.amount <= request.effective_maximum_loss.amount
-            )
+            budget_passed = maximum_loss.amount <= request.effective_maximum_loss.amount
             limits.append(
                 RiskLimitResult(
                     "EFFECTIVE_MAXIMUM_LOSS",
@@ -2735,10 +2736,7 @@ def _calculate_stop_loss_assessment(
         ):
             structural_check = RiskCheckOutcome.FAILED
             fail("STRUCTURAL_LINEAGE_MISMATCH")
-        elif (
-            structural.as_of > evaluated_at
-            or structural.valid_until < evaluated_at
-        ):
+        elif structural.as_of > evaluated_at or structural.valid_until < evaluated_at:
             insufficient("STRUCTURAL_EVIDENCE_NOT_CURRENT")
         elif structural.lower_stop.quote_currency != currency:
             structural_check = RiskCheckOutcome.FAILED
@@ -2770,10 +2768,7 @@ def _calculate_stop_loss_assessment(
         ):
             volatility_check = RiskCheckOutcome.FAILED
             fail("VOLATILITY_LINEAGE_MISMATCH")
-        elif (
-            volatility.as_of > evaluated_at
-            or volatility.valid_until < evaluated_at
-        ):
+        elif volatility.as_of > evaluated_at or volatility.valid_until < evaluated_at:
             insufficient("VOLATILITY_EVIDENCE_NOT_CURRENT")
         elif volatility.quote_currency != currency:
             volatility_check = RiskCheckOutcome.FAILED
@@ -2801,10 +2796,7 @@ def _calculate_stop_loss_assessment(
         ):
             liquidation_check = RiskCheckOutcome.FAILED
             fail("LIQUIDATION_LINEAGE_MISMATCH")
-        elif (
-            liquidation.as_of > evaluated_at
-            or liquidation.valid_until < evaluated_at
-        ):
+        elif liquidation.as_of > evaluated_at or liquidation.valid_until < evaluated_at:
             insufficient("LIQUIDATION_EVIDENCE_NOT_CURRENT")
         elif liquidation.quote_currency != currency or (
             liquidation.liquidation_price is not None
@@ -2813,7 +2805,10 @@ def _calculate_stop_loss_assessment(
             liquidation_check = RiskCheckOutcome.FAILED
             fail("LIQUIDATION_CURRENCY_MISMATCH")
         elif liquidation.availability is LiquidationAvailability.NOT_APPLICABLE:
-            if liquidation.fully_funded_spot:
+            if liquidation.liquidation_price is not None:
+                liquidation_check = RiskCheckOutcome.FAILED
+                fail("LIQUIDATION_APPLICABILITY_CONFLICT")
+            elif liquidation.fully_funded_spot:
                 liquidation_check = RiskCheckOutcome.PASSED
                 reasons.append("LIQUIDATION_NOT_APPLICABLE_FULLY_FUNDED_SPOT")
             else:
@@ -2884,8 +2879,7 @@ def calculate_stop_loss_assessment(
             return _calculate_stop_loss_assessment(request)
     except DecimalException as exc:
         raise RiskContractError(
-            "stop assessment arithmetic cannot be represented safely at "
-            "precision 34."
+            "stop assessment arithmetic cannot be represented safely at precision 34."
         ) from exc
 
 

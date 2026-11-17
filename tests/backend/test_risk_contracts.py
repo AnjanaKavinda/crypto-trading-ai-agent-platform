@@ -1,6 +1,6 @@
 from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Context, ROUND_DOWN, ROUND_UP, Decimal, Inexact, localcontext
+from decimal import ROUND_DOWN, ROUND_UP, Context, Decimal, Inexact, localcontext
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -60,9 +60,9 @@ from trading_platform_api.risk import (
     SnapshotState,
     StopLossAssessment,
     StopLossAssessmentRequest,
+    StopLossLiquidationEvidence,
     StopLossStructuralEvidence,
     StopLossVolatilityEvidence,
-    StopLossLiquidationEvidence,
     StressScenarioResult,
     StressTestResult,
     TakeProfitAssessment,
@@ -1349,6 +1349,7 @@ def stop_assessment_request(
         "portfolio_source_version": portfolio_value.source_version,
         "strategy_invalidation": invalidation,
         "minimum_stop_distance": Decimal("10"),
+        "price_unit_currency": USD,
         "adverse_gap_displacement": Decimal("0.25"),
         "gap_version": version("gap"),
         "evaluated_at": T[4],
@@ -1411,6 +1412,7 @@ def test_stop_assessment_calculates_bounded_loss_for_both_sides(
     assert result.stop_distance == Decimal("10")
     assert result.stop_distance_ratio == ratio("0.1", "stop-distance-to-entry")
     assert result.maximum_loss == money("24.5")
+    assert result.cost_assumptions == (request.costs.version,)
     assert result.valid_until == T[10]
     assert result.content_sha256 != HASH_A
 
@@ -1441,6 +1443,19 @@ def test_stop_assessment_fail_closed_for_invalid_or_missing_stop(
     assert canonical_sha256(result)
 
 
+def test_stop_assessment_fails_closed_when_ratio_cannot_fit_c078() -> None:
+    request = stop_assessment_request(
+        PositionSide.SHORT,
+        stop_loss=price("201"),
+    )
+    result = calculate_stop_loss_assessment(request)
+
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "STOP_DISTANCE_RATIO_UNREPRESENTABLE" in result.reason_codes
+    assert result.stop_distance == Decimal("101")
+    assert result.stop_distance_ratio is None
+
+
 def test_stop_assessment_enforces_tick_quantity_currency_and_notional_limits() -> None:
     tick_mismatch = calculate_stop_loss_assessment(
         stop_assessment_request(entry_price=price("100.005"))
@@ -1466,6 +1481,27 @@ def test_stop_assessment_enforces_tick_quantity_currency_and_notional_limits() -
     assert stop_currency_mismatch.outcome is RiskCheckOutcome.FAILED
     assert "STOP_CURRENCY_MISMATCH" in stop_currency_mismatch.reason_codes
     assert stop_currency_mismatch.maximum_loss is None
+
+    distance_currency_mismatch = calculate_stop_loss_assessment(
+        stop_assessment_request(price_unit_currency="SYNTHETIC-EUR")
+    )
+    assert distance_currency_mismatch.outcome is RiskCheckOutcome.FAILED
+    assert "PRICE_DISTANCE_CURRENCY_MISMATCH" in distance_currency_mismatch.reason_codes
+    assert distance_currency_mismatch.maximum_loss is None
+
+    cost_currency_mismatch = calculate_stop_loss_assessment(
+        stop_assessment_request(
+            costs=SizingCosts(
+                MoneyValue(Decimal("1"), "SYNTHETIC-EUR"),
+                MoneyValue(Decimal("0.5"), "SYNTHETIC-EUR"),
+                MoneyValue(Decimal("0.5"), "SYNTHETIC-EUR"),
+                version("foreign-costs"),
+            )
+        )
+    )
+    assert cost_currency_mismatch.outcome is RiskCheckOutcome.FAILED
+    assert "COST_CURRENCY_MISMATCH" in cost_currency_mismatch.reason_codes
+    assert cost_currency_mismatch.maximum_loss is None
 
     small_notional = replace(
         stop_assessment_request(),
@@ -1511,9 +1547,7 @@ def test_stop_assessment_policy_volatility_and_structural_boundaries() -> None:
             base_request,
             stop_loss=interval.upper_stop,
             minimum_stop_distance=Decimal("5"),
-            volatility_evidence=replace(
-                volatility, minimum_distance=Decimal("5")
-            ),
+            volatility_evidence=replace(volatility, minimum_distance=Decimal("5")),
         )
     )
     assert upper_edge.outcome is RiskCheckOutcome.PASSED
@@ -1547,6 +1581,20 @@ def test_stop_assessment_liquidation_side_buffer_applicability_and_staleness() -
     )
     assert wrong_side.outcome is RiskCheckOutcome.FAILED
     assert "LIQUIDATION_NOT_BEYOND_STOP" in wrong_side.reason_codes
+
+    short_request = stop_assessment_request(PositionSide.SHORT)
+    short_liquidation = short_request.liquidation_evidence
+    assert short_liquidation is not None
+    short_wrong_side = calculate_stop_loss_assessment(
+        replace(
+            short_request,
+            liquidation_evidence=replace(
+                short_liquidation, liquidation_price=price("105")
+            ),
+        )
+    )
+    assert short_wrong_side.outcome is RiskCheckOutcome.FAILED
+    assert "LIQUIDATION_NOT_BEYOND_STOP" in short_wrong_side.reason_codes
 
     insufficient_buffer = replace(
         liquidation,
@@ -1628,6 +1676,10 @@ def test_stop_assessment_matches_context_versions_budget_and_digest() -> None:
     changed_result = calculate_stop_loss_assessment(changed_request)
     assert changed_result.content_sha256 != result.content_sha256
     assert changed_result.maximum_loss == money("25")
+    changed_quantity = calculate_stop_loss_assessment(
+        replace(request, quantity=Decimal("1"))
+    )
+    assert changed_quantity.content_sha256 != result.content_sha256
 
     expired_assumptions = calculate_stop_loss_assessment(
         replace(request, assumptions_valid_until=T[3])
@@ -1635,6 +1687,27 @@ def test_stop_assessment_matches_context_versions_budget_and_digest() -> None:
     assert expired_assumptions.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
     assert "ASSUMPTIONS_NOT_CURRENT" in expired_assumptions.reason_codes
     assert expired_assumptions.valid_until == T[4]
+
+    missing_evidence = calculate_stop_loss_assessment(
+        replace(
+            request,
+            structural_evidence=None,
+            volatility_evidence=None,
+            liquidation_evidence=None,
+        )
+    )
+    assert missing_evidence.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert {
+        "STRUCTURAL_EVIDENCE_MISSING",
+        "VOLATILITY_EVIDENCE_MISSING",
+        "LIQUIDATION_EVIDENCE_MISSING",
+    }.issubset(missing_evidence.reason_codes)
+    assert missing_evidence.valid_until == T[4]
+
+    at_expiry = calculate_stop_loss_assessment(
+        replace(request, assumptions_valid_until=T[4])
+    )
+    assert at_expiry.outcome is RiskCheckOutcome.PASSED
 
 
 def test_stop_assessment_isolated_decimal_context_and_loss_budget_boundary() -> None:
@@ -1650,6 +1723,29 @@ def test_stop_assessment_isolated_decimal_context_and_loss_budget_boundary() -> 
     assert exact_budget.maximum_loss is not None
     assert exact_budget.maximum_loss.amount <= request.effective_maximum_loss.amount
     assert below_budget.outcome is RiskCheckOutcome.FAILED
+
+    explicit_zero_costs = calculate_stop_loss_assessment(
+        replace(
+            request,
+            costs=SizingCosts(
+                money("0"),
+                money("0"),
+                money("0"),
+                version("explicit-zero-costs"),
+            ),
+            adverse_gap_displacement=Decimal("0"),
+            effective_maximum_loss=money("20"),
+        )
+    )
+    assert explicit_zero_costs.outcome is RiskCheckOutcome.PASSED
+    assert explicit_zero_costs.maximum_loss == money("20")
+
+    unrepresentable = replace(
+        request,
+        quantity=Decimal("1.2345678901234567890123456789012345"),
+    )
+    with pytest.raises(RiskContractError, match="precision 34"):
+        calculate_stop_loss_assessment(unrepresentable)
 
 
 @pytest.mark.parametrize(
