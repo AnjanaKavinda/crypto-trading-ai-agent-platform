@@ -433,6 +433,86 @@ execution, FX, leverage/margin, pending-order, strategy-grouping, threshold,
 loss/PnL, or mark-to-market behavior. No secrets or live-execution path are
 introduced.
 
+## Issue #104 (canonical issue; GitHub #106) — offline position sizing
+
+`calculate_position_size(PositionSizingRequest)` calculates the existing C-036
+schema 1 without changing its constructor, fields, consumers, or authority.
+`SizingInstrumentTerms`, `SizingCosts`, and `PositionSizingRequest` are immutable
+nonpersisted inputs, not new canonical contracts. There is no API, storage,
+producer, exchange access, or runtime integration.
+
+The caller supplies an explicit result ID, evaluation time, `RiskContext`,
+matching valid account/portfolio snapshots, positive effective risk budget,
+policy/configuration/budget/model versions, and a common assumptions-validity
+window. The caller attests that window covers the supplied instrument, costs,
+budget and selected volatility/Kelly inputs. All context references require
+digests and explicit expiry. Snapshot IDs, schema, digests and expiry must
+match their references; portfolio account/equity must match the supplied account.
+Future or expired snapshots, embedded positions, assumptions or references
+cannot produce a recommendation. Equality at expiry is accepted.
+
+Only explicitly identified `LINEAR` instruments are supported. Quantity is
+contract units, multiplier is base units per contract, price is quote per base,
+and costs/margin are quote currency per contract. Entry/stop must conform to
+the supplied tick, and stop direction must be valid for LONG or SHORT.
+All money uses the account/instrument quote currency; FX is not inferred.
+The caller supplies nonnegative round-trip adverse fee, slippage and funding
+per contract (including explicit zero if applicable), positive initial margin
+per contract, quantity min/max/step and maximum notional.
+
+Per-unit stop loss is `abs(entry - stop) * multiplier`. Per-unit entry notional
+is `entry * multiplier`. The five existing methods are:
+
+- RISK_BASED: target quantity is effective budget divided by per-unit stop
+  loss plus adverse costs.
+- FIXED_NOTIONAL: target quantity is requested notional divided by per-unit
+  entry notional.
+- PERCENTAGE_OF_EQUITY: target notional is equity times the explicit fraction
+  in `(0, 1]`.
+- VOLATILITY_ADJUSTED: budget denominator is
+  `max(per-unit stop loss, supplied volatility loss per unit) + adverse costs`.
+  The reported maximum loss is this conservative loss basis times quantity,
+  not a volatility forecast or guaranteed worst loss.
+- FRACTIONAL_KELLY: target notional is equity times
+  `fraction * (p - (1 - p) / win_loss_ratio)`. Probability is in `[0, 1]`,
+  fraction is in `(0, 1]`, and payoff ratio is positive. Versioned caller
+  estimates are required; only RESEARCH/BACKTEST is allowed. A nonpositive
+  edge returns FAILED/NO_TRADE, never a fallback method.
+
+Every method is capped by effective budget, maximum quantity, maximum notional
+and available free margin. Quantities are rounded down to step multiples
+anchored at zero, never up to minimum; an infeasible minimum returns no trade.
+Budget above account equity is rejected because C-036's account-risk ratio
+cannot represent a loss fraction above one. The caller must have already
+reduced the effective budget for policy hierarchy and consumed/open risk;
+this calculator does not evaluate that hierarchy or authenticate the budget.
+
+Arithmetic uses an isolated Decimal precision-34, half-even context. Unit
+loss/notional/margin and final stepped amounts must be exactly representable;
+otherwise calculation raises `RiskContractError`. Step counts and target
+calculations round down, and Kelly's losing-probability term rounds up.
+Every final amount is checked against its cap without tolerance or upward
+rounding. Account risk is reported loss/equity, half-even at precision 34.
+Capped notional/percentage/Kelly targets and volatility budget-derived targets
+(including step reductions) yield WARNING with `REQUESTED_TARGET_REDUCED`,
+not silent target alteration.
+
+Malformed inputs raise `RiskContractError`; missing/currentness failures
+yield INSUFFICIENT_DATA and deterministic constraint failures yield FAILED,
+with explicit reasons and no recommended size/notional/margin/loss.
+Failed expired evidence produces a result expiring at evaluation time, never
+a PASSED result with refreshed validity. The result digest is canonical SHA-256
+of `{"request": request, "result": result fields except content_sha256}`.
+It binds exact versions, context, inputs and outputs, but authenticates neither
+source identity nor external completeness.
+
+No volatility/Kelly estimation, nonlinear instrument model, leverage selection,
+liquidation, portfolio-impact decision, stop recommendation, approval, order
+construction or execution is introduced. C-036 PASSED is a sizing observation,
+not a risk-policy pass or trade authorization. Later leverage (#109),
+liquidation (#110), portfolio impact (#111), proposal (#113) and revalidation
+(#114) work retain their own responsibilities.
+
 ## Approval scope and change control
 
 - Registry approval establishes cross-domain semantics and ownership; schemas and implementation artifacts are intentionally deferred.

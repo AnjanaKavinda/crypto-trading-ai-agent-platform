@@ -3,7 +3,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_EVEN, Decimal, localcontext
+from decimal import (
+    ROUND_CEILING,
+    ROUND_FLOOR,
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    DecimalException,
+    Inexact,
+    localcontext,
+)
 from enum import StrEnum
 from itertools import combinations
 from typing import TypeVar, cast
@@ -1451,6 +1460,469 @@ class PositionSizingResult(_AssessmentBase):
                 raise RiskContractError(
                     "recommended quantity violates exchange bounds."
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class SizingInstrumentTerms:
+    """Caller-supplied linear terms; quantities are in contract units."""
+
+    asset: str
+    instrument_id: str
+    venue: str
+    model: str
+    quote_currency: str
+    contract_multiplier: Decimal
+    tick_size: Decimal
+    minimum_quantity: Decimal
+    maximum_quantity: Decimal
+    quantity_step: Decimal
+    maximum_notional: MoneyValue
+    initial_margin_per_unit: MoneyValue
+    version: VersionReference
+
+    def __post_init__(self) -> None:
+        for name in ("asset", "instrument_id", "venue", "model", "quote_currency"):
+            _text(name, getattr(self, name))
+        for name in (
+            "contract_multiplier",
+            "tick_size",
+            "minimum_quantity",
+            "maximum_quantity",
+            "quantity_step",
+        ):
+            _positive(name, getattr(self, name))
+        if self.minimum_quantity > self.maximum_quantity:
+            raise RiskContractError("minimum quantity exceeds maximum quantity.")
+        for name in ("maximum_notional", "initial_margin_per_unit"):
+            value = _money(name, getattr(self, name), positive=True)
+            if value.currency != self.quote_currency:
+                raise RiskContractError("instrument money currency mismatch.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("instrument version must be a VersionReference.")
+
+
+@dataclass(frozen=True, slots=True)
+class SizingCosts:
+    """Explicit adverse round-trip costs per quantity unit, never inferred."""
+
+    fee: MoneyValue
+    slippage: MoneyValue
+    funding: MoneyValue
+    version: VersionReference
+
+    def __post_init__(self) -> None:
+        for name in ("fee", "slippage", "funding"):
+            _money(name, getattr(self, name))
+        if len({self.fee.currency, self.slippage.currency, self.funding.currency}) != 1:
+            raise RiskContractError("cost currencies must match.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("cost version must be a VersionReference.")
+
+
+@dataclass(frozen=True, slots=True)
+class PositionSizingRequest:
+    """Offline inputs; the caller attests the common assumptions' validity window."""
+
+    result_id: UUID
+    context: RiskContext
+    account: AccountSnapshot
+    portfolio: PortfolioSnapshot
+    method: SizingMethod
+    mode: RiskPolicyMode
+    entry: PriceValue
+    stop: PriceValue
+    effective_risk: MoneyValue
+    policy_version: VersionReference
+    configuration_version: VersionReference
+    budget_version: VersionReference
+    model_version: VersionReference
+    evaluated_at: datetime
+    assumptions_as_of: datetime
+    assumptions_valid_until: datetime
+    instrument: SizingInstrumentTerms | None
+    costs: SizingCosts | None
+    requested_notional: MoneyValue | None = None
+    equity_fraction: Decimal | None = None
+    volatility_loss_per_unit: MoneyValue | None = None
+    volatility_version: VersionReference | None = None
+    win_probability: Decimal | None = None
+    win_loss_ratio: Decimal | None = None
+    kelly_fraction: Decimal | None = None
+    kelly_version: VersionReference | None = None
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        if not isinstance(self.account, AccountSnapshot):
+            raise RiskContractError("account must be an AccountSnapshot.")
+        if not isinstance(self.portfolio, PortfolioSnapshot):
+            raise RiskContractError("portfolio must be a PortfolioSnapshot.")
+        if not isinstance(self.method, SizingMethod):
+            raise RiskContractError("method must be a SizingMethod.")
+        if not isinstance(self.mode, RiskPolicyMode):
+            raise RiskContractError("mode must be a RiskPolicyMode.")
+        for name in ("entry", "stop"):
+            if not isinstance(getattr(self, name), PriceValue):
+                raise RiskContractError(f"{name} must be a PriceValue.")
+        _money("effective_risk", self.effective_risk, positive=True)
+        for name in (
+            "policy_version",
+            "configuration_version",
+            "budget_version",
+            "model_version",
+        ):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise RiskContractError(f"{name} must be a VersionReference.")
+        for name, expected in (
+            ("instrument", SizingInstrumentTerms),
+            ("costs", SizingCosts),
+            ("volatility_version", VersionReference),
+            ("kelly_version", VersionReference),
+        ):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, expected):
+                raise RiskContractError(f"{name} has an invalid type.")
+        for name in ("requested_notional", "volatility_loss_per_unit"):
+            value = getattr(self, name)
+            if value is not None:
+                _money(name, value, positive=True)
+        for name in ("equity_fraction", "kelly_fraction"):
+            value = getattr(self, name)
+            if value is not None and not Decimal(0) < _decimal(name, value) <= 1:
+                raise RiskContractError(f"{name} must be in (0, 1].")
+        if self.win_probability is not None:
+            value = _decimal("win_probability", self.win_probability)
+            if not 0 <= value <= 1:
+                raise RiskContractError("win_probability must be in [0, 1].")
+        if self.win_loss_ratio is not None:
+            _positive("win_loss_ratio", self.win_loss_ratio)
+        for name in ("evaluated_at", "assumptions_as_of", "assumptions_valid_until"):
+            object.__setattr__(self, name, _time(name, getattr(self, name)))
+        _ordered(
+            "assumptions_as_of",
+            self.assumptions_as_of,
+            "assumptions_valid_until",
+            self.assumptions_valid_until,
+        )
+        _ordered("context.as_of", self.context.as_of, "evaluated_at", self.evaluated_at)
+
+
+def _sizing_input_failure(
+    request: PositionSizingRequest,
+) -> tuple[RiskCheckOutcome, str] | None:
+    account, portfolio = request.account, request.portfolio
+    if portfolio.account_snapshot != account:
+        return RiskCheckOutcome.FAILED, "ACCOUNT_PORTFOLIO_MISMATCH"
+    if portfolio.equity != account.equity or portfolio.currency != account.currency:
+        return RiskCheckOutcome.FAILED, "PORTFOLIO_EQUITY_MISMATCH"
+    for snapshot, reference in (
+        (account, request.context.account_snapshot),
+        (portfolio, request.context.portfolio_snapshot),
+    ):
+        if (
+            reference.entity_id != snapshot.snapshot_id
+            or reference.schema_version != snapshot.schema_version
+            or reference.content_sha256 != snapshot.content_sha256
+            or reference.valid_until != snapshot.valid_until
+        ):
+            return RiskCheckOutcome.FAILED, "SNAPSHOT_REFERENCE_MISMATCH"
+    snapshots: tuple[AccountSnapshot | PortfolioSnapshot | PositionSnapshot, ...] = (
+        account,
+        portfolio,
+        *portfolio.positions,
+    )
+    if any(item.state is not SnapshotState.VALID for item in snapshots):
+        return RiskCheckOutcome.INSUFFICIENT_DATA, "SNAPSHOT_NOT_VALID"
+    if any(
+        item.as_of > request.evaluated_at
+        or item.captured_at > request.evaluated_at
+        or item.valid_until < request.evaluated_at
+        for item in snapshots
+    ):
+        return RiskCheckOutcome.INSUFFICIENT_DATA, "SNAPSHOT_NOT_CURRENT"
+    for name in (
+        "signal",
+        "validation",
+        "strategy_version",
+        "account_snapshot",
+        "portfolio_snapshot",
+    ):
+        reference = getattr(request.context, name)
+        if (
+            reference.content_sha256 is None
+            or reference.valid_until is None
+            or reference.valid_until < request.evaluated_at
+        ):
+            return RiskCheckOutcome.INSUFFICIENT_DATA, "CONTEXT_EVIDENCE_NOT_CURRENT"
+    if (
+        request.assumptions_as_of > request.evaluated_at
+        or request.assumptions_valid_until < request.evaluated_at
+    ):
+        return RiskCheckOutcome.INSUFFICIENT_DATA, "ASSUMPTIONS_NOT_CURRENT"
+    terms, costs = request.instrument, request.costs
+    if terms is None or costs is None:
+        return RiskCheckOutcome.INSUFFICIENT_DATA, "SIZING_ASSUMPTIONS_MISSING"
+    if terms.model != "LINEAR":
+        return RiskCheckOutcome.FAILED, "UNSUPPORTED_INSTRUMENT_MODEL"
+    if (
+        terms.instrument_id != request.context.instrument_id
+        or terms.asset != request.context.asset
+    ):
+        return RiskCheckOutcome.FAILED, "INSTRUMENT_CONTEXT_MISMATCH"
+    currency = terms.quote_currency
+    if (
+        account.currency != currency
+        or request.entry.quote_currency != currency
+        or request.stop.quote_currency != currency
+        or any(
+            value.currency != currency
+            for value in (
+                request.effective_risk,
+                costs.fee,
+                costs.slippage,
+                costs.funding,
+                request.requested_notional,
+                request.volatility_loss_per_unit,
+            )
+            if value is not None
+        )
+    ):
+        return RiskCheckOutcome.FAILED, "SIZING_CURRENCY_MISMATCH"
+    if (
+        request.context.side is PositionSide.LONG
+        and request.stop.amount >= request.entry.amount
+    ) or (
+        request.context.side is PositionSide.SHORT
+        and request.stop.amount <= request.entry.amount
+    ):
+        return RiskCheckOutcome.FAILED, "INVALID_STOP_DIRECTION"
+    if (
+        request.entry.amount % terms.tick_size != 0
+        or request.stop.amount % terms.tick_size != 0
+    ):
+        return RiskCheckOutcome.FAILED, "PRICE_OFF_TICK"
+    return None
+
+
+def _sizing_result(
+    request: PositionSizingRequest,
+    outcome: RiskCheckOutcome,
+    reasons: tuple[str, ...],
+    *,
+    quantity: Decimal | None = None,
+    notional: Decimal | None = None,
+    margin: Decimal | None = None,
+    loss: Decimal | None = None,
+    account_risk: Decimal | None = None,
+    stop_distance: Decimal | None = None,
+) -> PositionSizingResult:
+    versions = (
+        request.policy_version,
+        request.configuration_version,
+        request.budget_version,
+        request.model_version,
+        request.instrument.version if request.instrument is not None else None,
+        request.costs.version if request.costs is not None else None,
+        request.volatility_version,
+        request.kelly_version,
+    )
+    expiry = min(
+        request.assumptions_valid_until,
+        request.account.valid_until,
+        request.portfolio.valid_until,
+        *(item.valid_until for item in request.portfolio.positions),
+        *(
+            reference.valid_until
+            for reference in (
+                request.context.signal,
+                request.context.validation,
+                request.context.strategy_version,
+                request.context.account_snapshot,
+                request.context.portfolio_snapshot,
+            )
+            if reference.valid_until is not None
+        ),
+    )
+    currency = request.effective_risk.currency
+    terms = request.instrument
+    result = PositionSizingResult(
+        result_id=request.result_id,
+        context=request.context,
+        outcome=outcome,
+        reason_codes=reasons,
+        model_version=request.model_version,
+        as_of=request.context.as_of,
+        evaluated_at=request.evaluated_at,
+        valid_until=max(expiry, request.evaluated_at),
+        content_sha256="0" * 64,
+        method=request.method,
+        sizing_assumptions=tuple(value for value in versions if value is not None),
+        requested_risk=request.effective_risk,
+        requested_notional=request.requested_notional,
+        recommended_quantity=quantity,
+        recommended_notional=MoneyValue(notional, currency)
+        if notional is not None
+        else None,
+        recommended_margin=MoneyValue(margin, currency) if margin is not None else None,
+        stop_distance=stop_distance,
+        maximum_loss=MoneyValue(loss, currency) if loss is not None else None,
+        account_risk=RatioValue(account_risk, "maximum-loss/equity")
+        if account_risk is not None
+        else None,
+        minimum_quantity=terms.minimum_quantity if terms is not None else None,
+        maximum_quantity=terms.maximum_quantity if terms is not None else None,
+        quantity_step=terms.quantity_step if terms is not None else None,
+    )
+    return replace(
+        result,
+        content_sha256=_risk_digest(
+            "position sizing",
+            {
+                "request": request,
+                "result": {
+                    item.name: getattr(result, item.name)
+                    for item in fields(result)
+                    if item.name != "content_sha256"
+                },
+            },
+        ),
+    )
+
+
+def _sizing_target_notional(
+    request: PositionSizingRequest, equity: Decimal
+) -> tuple[Decimal | None, tuple[RiskCheckOutcome, str] | None]:
+    if request.method is SizingMethod.FIXED_NOTIONAL:
+        if request.requested_notional is None:
+            return None, (RiskCheckOutcome.INSUFFICIENT_DATA, "NOTIONAL_MISSING")
+        return request.requested_notional.amount, None
+    if request.method is SizingMethod.PERCENTAGE_OF_EQUITY:
+        if request.equity_fraction is None:
+            return None, (RiskCheckOutcome.INSUFFICIENT_DATA, "EQUITY_FRACTION_MISSING")
+        return equity * request.equity_fraction, None
+    if request.method is SizingMethod.FRACTIONAL_KELLY:
+        if request.mode not in {RiskPolicyMode.RESEARCH, RiskPolicyMode.BACKTEST}:
+            return None, (RiskCheckOutcome.FAILED, "KELLY_RESEARCH_ONLY")
+        if (
+            request.win_probability is None
+            or request.win_loss_ratio is None
+            or request.kelly_fraction is None
+            or request.kelly_version is None
+        ):
+            return None, (RiskCheckOutcome.INSUFFICIENT_DATA, "KELLY_INPUTS_MISSING")
+        # Round the losing-probability term upward so edge is never overstated.
+        with localcontext() as context:
+            context.rounding = ROUND_CEILING
+            losing_term = (
+                Decimal(1) - request.win_probability
+            ) / request.win_loss_ratio
+        with localcontext() as context:
+            context.rounding = ROUND_FLOOR
+            fraction = request.kelly_fraction * (request.win_probability - losing_term)
+            if fraction <= 0:
+                return None, (RiskCheckOutcome.FAILED, "NO_TRADE_NONPOSITIVE_KELLY")
+            return equity * fraction, None
+    return None, None
+
+
+def calculate_position_size(request: PositionSizingRequest) -> PositionSizingResult:
+    """Calculate offline sizing, never approval, with precision-34 safe caps."""
+    if not isinstance(request, PositionSizingRequest):
+        raise RiskContractError("request must be a PositionSizingRequest.")
+    try:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+            failure = _sizing_input_failure(request)
+            if failure is not None:
+                return _sizing_result(request, failure[0], (failure[1],))
+            terms, costs = request.instrument, request.costs
+            assert terms is not None and costs is not None
+            equity, free_margin = request.account.equity, request.account.free_margin
+            assert equity is not None and free_margin is not None
+            if request.effective_risk.amount > equity.amount:
+                return _sizing_result(
+                    request, RiskCheckOutcome.FAILED, ("RISK_EXCEEDS_EQUITY",)
+                )
+            # Exact unit math fails closed if precision 34 cannot represent it.
+            with localcontext() as exact:
+                exact.traps[Inexact] = True
+                distance = abs(request.entry.amount - request.stop.amount)
+                stop_loss = distance * terms.contract_multiplier
+                loss_basis = stop_loss
+                if request.method is SizingMethod.VOLATILITY_ADJUSTED:
+                    if (
+                        request.volatility_loss_per_unit is None
+                        or request.volatility_version is None
+                    ):
+                        return _sizing_result(
+                            request,
+                            RiskCheckOutcome.INSUFFICIENT_DATA,
+                            ("VOLATILITY_INPUTS_MISSING",),
+                        )
+                    loss_basis = max(stop_loss, request.volatility_loss_per_unit.amount)
+                unit_loss = (
+                    loss_basis
+                    + costs.fee.amount
+                    + costs.slippage.amount
+                    + costs.funding.amount
+                )
+                unit_notional = request.entry.amount * terms.contract_multiplier
+                step_loss = unit_loss * terms.quantity_step
+                step_notional = unit_notional * terms.quantity_step
+                step_margin = terms.initial_margin_per_unit.amount * terms.quantity_step
+            with localcontext() as downward:
+                downward.rounding = ROUND_FLOOR
+                target, failure = _sizing_target_notional(request, equity.amount)
+                if failure is not None:
+                    return _sizing_result(request, failure[0], (failure[1],))
+                caps = (
+                    request.effective_risk.amount / step_loss,
+                    terms.maximum_quantity / terms.quantity_step,
+                    terms.maximum_notional.amount / step_notional,
+                    free_margin.amount / step_margin,
+                )
+                step_count = min(
+                    (*caps, target / step_notional) if target is not None else caps
+                ).to_integral_value(rounding=ROUND_FLOOR)
+            with localcontext() as exact:
+                exact.traps[Inexact] = True
+                quantity = step_count * terms.quantity_step
+                notional = step_count * step_notional
+                margin = step_count * step_margin
+                loss = step_count * step_loss
+            if quantity < terms.minimum_quantity:
+                return _sizing_result(
+                    request, RiskCheckOutcome.FAILED, ("NO_TRADE_BELOW_MINIMUM",)
+                )
+            if (
+                quantity > terms.maximum_quantity
+                or loss > request.effective_risk.amount
+                or notional > terms.maximum_notional.amount
+                or margin > free_margin.amount
+                or (target is not None and notional > target)
+            ):
+                return _sizing_result(
+                    request, RiskCheckOutcome.FAILED, ("SIZING_BOUNDS_VIOLATED",)
+                )
+            capped = (target is not None and notional < target) or (
+                request.method is SizingMethod.VOLATILITY_ADJUSTED
+                and loss < request.effective_risk.amount
+            )
+            return _sizing_result(
+                request,
+                RiskCheckOutcome.WARNING if capped else RiskCheckOutcome.PASSED,
+                ("REQUESTED_TARGET_REDUCED",) if capped else (),
+                quantity=quantity,
+                notional=notional,
+                margin=margin,
+                loss=loss,
+                account_risk=loss / equity.amount,
+                stop_distance=distance,
+            )
+    except DecimalException as exc:
+        raise RiskContractError(
+            "sizing arithmetic cannot be represented safely at precision 34."
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -3139,6 +3611,7 @@ __all__ = [
     "PositionSide",
     "PositionExposureInput",
     "PositionSizingResult",
+    "PositionSizingRequest",
     "PositionSnapshot",
     "PriceValue",
     "RatioValue",
@@ -3164,6 +3637,8 @@ __all__ = [
     "RiskState",
     "RiskVerdict",
     "SizingMethod",
+    "SizingInstrumentTerms",
+    "SizingCosts",
     "SnapshotState",
     "StopLossAssessment",
     "StressScenarioResult",
@@ -3172,5 +3647,6 @@ __all__ = [
     "TakeProfitTarget",
     "VersionReference",
     "aggregate_portfolio_exposure",
+    "calculate_position_size",
     "pairwise_correlation",
 ]
