@@ -1608,6 +1608,222 @@ class PositionSizingRequest:
         _ordered("context.as_of", self.context.as_of, "evaluated_at", self.evaluated_at)
 
 
+@dataclass(frozen=True, slots=True)
+class StopLossStructuralEvidence:
+    """Caller-attested priced invalidation interval and exact strategy lineage."""
+
+    reference: ContractReference
+    context: RiskContext
+    strategy_version: ContractReference
+    asset: str
+    instrument_id: str
+    side: PositionSide
+    lower_stop: PriceValue
+    upper_stop: PriceValue
+    version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference, ContractReference):
+            raise RiskContractError("reference must be a ContractReference.")
+        if self.reference.contract_id != "C-023":
+            raise RiskContractError("reference must reference C-023.")
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        if not isinstance(self.strategy_version, ContractReference):
+            raise RiskContractError("strategy_version must be a ContractReference.")
+        if self.strategy_version.contract_id != "C-021":
+            raise RiskContractError("strategy_version must reference C-021.")
+        _text("asset", self.asset)
+        _text("instrument_id", self.instrument_id)
+        if not isinstance(self.side, PositionSide):
+            raise RiskContractError("side must be a PositionSide.")
+        for name in ("lower_stop", "upper_stop"):
+            if not isinstance(getattr(self, name), PriceValue):
+                raise RiskContractError(f"{name} must be a PriceValue.")
+        if self.lower_stop.quote_currency != self.upper_stop.quote_currency:
+            raise RiskContractError("structural interval currencies must match.")
+        if self.lower_stop.amount > self.upper_stop.amount:
+            raise RiskContractError("structural interval bounds are reversed.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be a VersionReference.")
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class StopLossVolatilityEvidence:
+    """Caller-supplied minimum-distance threshold; this does not estimate volatility."""
+
+    context: RiskContext
+    asset: str
+    instrument_id: str
+    side: PositionSide
+    minimum_distance: Decimal
+    quote_currency: str
+    version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        _text("asset", self.asset)
+        _text("instrument_id", self.instrument_id)
+        if not isinstance(self.side, PositionSide):
+            raise RiskContractError("side must be a PositionSide.")
+        _nonnegative("minimum_distance", self.minimum_distance)
+        _text("quote_currency", self.quote_currency)
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be a VersionReference.")
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class StopLossLiquidationEvidence:
+    """Caller-supplied liquidation boundary; no liquidation model is evaluated."""
+
+    context: RiskContext
+    asset: str
+    instrument_id: str
+    side: PositionSide
+    availability: LiquidationAvailability
+    liquidation_price: PriceValue | None
+    minimum_buffer: Decimal
+    quote_currency: str
+    fully_funded_spot: bool
+    version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        _text("asset", self.asset)
+        _text("instrument_id", self.instrument_id)
+        if not isinstance(self.side, PositionSide):
+            raise RiskContractError("side must be a PositionSide.")
+        if not isinstance(self.availability, LiquidationAvailability):
+            raise RiskContractError("availability must be LiquidationAvailability.")
+        if self.liquidation_price is not None and not isinstance(
+            self.liquidation_price, PriceValue
+        ):
+            raise RiskContractError("liquidation_price must be a PriceValue or None.")
+        _nonnegative("minimum_buffer", self.minimum_buffer)
+        _text("quote_currency", self.quote_currency)
+        if not isinstance(self.fully_funded_spot, bool):
+            raise RiskContractError("fully_funded_spot must be a bool.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be a VersionReference.")
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class StopLossAssessmentRequest:
+    """Explicit offline inputs for a bounded C-078 stop-loss assessment."""
+
+    result_id: UUID
+    context: RiskContext
+    account: AccountSnapshot
+    portfolio: PortfolioSnapshot
+    entry_price: PriceValue
+    stop_loss: PriceValue | None
+    quantity: Decimal
+    effective_maximum_loss: MoneyValue
+    instrument: SizingInstrumentTerms
+    costs: SizingCosts
+    policy_version: VersionReference
+    configuration_version: VersionReference
+    model_version: VersionReference
+    account_source_version: VersionReference
+    portfolio_source_version: VersionReference
+    strategy_invalidation: ContractReference
+    minimum_stop_distance: Decimal
+    price_unit_currency: str
+    adverse_gap_displacement: Decimal
+    gap_version: VersionReference
+    evaluated_at: datetime
+    assumptions_as_of: datetime
+    assumptions_valid_until: datetime
+    structural_evidence: StopLossStructuralEvidence | None
+    volatility_evidence: StopLossVolatilityEvidence | None
+    liquidation_evidence: StopLossLiquidationEvidence | None
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        if not isinstance(self.account, AccountSnapshot):
+            raise RiskContractError("account must be an AccountSnapshot.")
+        if not isinstance(self.portfolio, PortfolioSnapshot):
+            raise RiskContractError("portfolio must be a PortfolioSnapshot.")
+        for name in ("entry_price",):
+            if not isinstance(getattr(self, name), PriceValue):
+                raise RiskContractError(f"{name} must be a PriceValue.")
+        if self.stop_loss is not None and not isinstance(self.stop_loss, PriceValue):
+            raise RiskContractError("stop_loss must be a PriceValue or None.")
+        _positive("quantity", self.quantity)
+        _money("effective_maximum_loss", self.effective_maximum_loss, positive=True)
+        if not isinstance(self.instrument, SizingInstrumentTerms):
+            raise RiskContractError("instrument must be SizingInstrumentTerms.")
+        if not isinstance(self.costs, SizingCosts):
+            raise RiskContractError("costs must be SizingCosts.")
+        for name in (
+            "policy_version",
+            "configuration_version",
+            "model_version",
+            "account_source_version",
+            "portfolio_source_version",
+            "gap_version",
+        ):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise RiskContractError(f"{name} must be a VersionReference.")
+        if not isinstance(self.strategy_invalidation, ContractReference):
+            raise RiskContractError(
+                "strategy_invalidation must be a ContractReference."
+            )
+        if self.strategy_invalidation.contract_id != "C-023":
+            raise RiskContractError("strategy_invalidation must reference C-023.")
+        _nonnegative("minimum_stop_distance", self.minimum_stop_distance)
+        _text("price_unit_currency", self.price_unit_currency)
+        _nonnegative("adverse_gap_displacement", self.adverse_gap_displacement)
+        for name, expected in (
+            ("structural_evidence", StopLossStructuralEvidence),
+            ("volatility_evidence", StopLossVolatilityEvidence),
+            ("liquidation_evidence", StopLossLiquidationEvidence),
+        ):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, expected):
+                raise RiskContractError(f"{name} has an invalid type.")
+        evaluated = _time("evaluated_at", self.evaluated_at)
+        assumptions_as_of = _time("assumptions_as_of", self.assumptions_as_of)
+        assumptions_valid_until = _time(
+            "assumptions_valid_until", self.assumptions_valid_until
+        )
+        _ordered(
+            "assumptions_as_of",
+            assumptions_as_of,
+            "assumptions_valid_until",
+            assumptions_valid_until,
+        )
+        _ordered("context.as_of", self.context.as_of, "evaluated_at", evaluated)
+        object.__setattr__(self, "evaluated_at", evaluated)
+        object.__setattr__(self, "assumptions_as_of", assumptions_as_of)
+        object.__setattr__(self, "assumptions_valid_until", assumptions_valid_until)
+
+
 def _sizing_input_failure(
     request: PositionSizingRequest,
 ) -> tuple[RiskCheckOutcome, str] | None:
@@ -2142,6 +2358,532 @@ class StopLossAssessment(_AssessmentBase):
                 raise RiskContractError(
                     "passed stop assessment cannot contain failures."
                 )
+
+
+def _stop_assessment_result(
+    request: StopLossAssessmentRequest,
+    *,
+    outcome: RiskCheckOutcome,
+    reason_codes: tuple[str, ...],
+    valid_until: datetime,
+    stop_loss: PriceValue | None,
+    stop_distance: Decimal | None,
+    stop_distance_ratio: RatioValue | None,
+    maximum_loss: MoneyValue | None,
+    structural_check: RiskCheckOutcome,
+    volatility_check: RiskCheckOutcome,
+    liquidation_check: RiskCheckOutcome,
+    limits: tuple[RiskLimitResult, ...],
+) -> StopLossAssessment:
+    result_fields: dict[str, object] = {
+        "result_id": request.result_id,
+        "context": request.context,
+        "outcome": outcome,
+        "reason_codes": reason_codes,
+        "model_version": request.model_version,
+        "as_of": request.context.as_of,
+        "evaluated_at": request.evaluated_at,
+        "valid_until": valid_until,
+        "side": request.context.side,
+        "entry_price": request.entry_price,
+        "stop_loss": stop_loss,
+        "stop_distance": stop_distance,
+        "stop_distance_ratio": stop_distance_ratio,
+        "maximum_loss": maximum_loss,
+        "cost_assumptions": (request.costs.version,),
+        "strategy_invalidation": request.strategy_invalidation,
+        "structural_check": structural_check,
+        "volatility_check": volatility_check,
+        "liquidation_check": liquidation_check,
+        "limits": limits,
+        "contract_id": "C-078",
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+    }
+    digest = _risk_digest(
+        "stop assessment",
+        {"request": request, "result": result_fields},
+    )
+    assessment_fields = {
+        key: value
+        for key, value in result_fields.items()
+        if key not in {"contract_id", "schema_version"}
+    }
+    return StopLossAssessment(
+        **{
+            **assessment_fields,
+            "content_sha256": digest,
+        }  # type: ignore[arg-type]
+    )
+
+
+def _stop_reference_status(
+    reference: ContractReference,
+    expected_contract_id: str,
+    evaluated_at: datetime,
+) -> tuple[RiskCheckOutcome | None, str | None]:
+    if reference.contract_id != expected_contract_id:
+        return RiskCheckOutcome.FAILED, "REFERENCE_CONTRACT_MISMATCH"
+    supported_schemas = (
+        {"1", "2"} if expected_contract_id in {"C-021", "C-028", "C-070"} else {"1"}
+    )
+    if (
+        reference.schema_version not in supported_schemas
+        or reference.content_sha256 is None
+        or reference.valid_until is None
+    ):
+        return RiskCheckOutcome.INSUFFICIENT_DATA, "REFERENCE_PROVENANCE_INCOMPLETE"
+    if reference.valid_until < evaluated_at:
+        return RiskCheckOutcome.INSUFFICIENT_DATA, "REFERENCE_EXPIRED"
+    return None, None
+
+
+def _stop_evidence_matches(
+    context: RiskContext,
+    asset: str,
+    instrument_id: str,
+    side: PositionSide,
+    request: StopLossAssessmentRequest,
+) -> bool:
+    return (
+        context == request.context
+        and asset == request.context.asset
+        and instrument_id == request.context.instrument_id
+        and side is request.context.side
+    )
+
+
+def _calculate_stop_loss_assessment(
+    request: StopLossAssessmentRequest,
+) -> StopLossAssessment:
+    if not isinstance(request, StopLossAssessmentRequest):
+        raise RiskContractError("request must be a StopLossAssessmentRequest.")
+
+    reasons: list[str] = []
+    hard_failure = False
+    missing_data = False
+    incomplete_expiry = False
+
+    def fail(code: str) -> None:
+        nonlocal hard_failure
+        hard_failure = True
+        reasons.append(code)
+
+    def insufficient(code: str) -> None:
+        nonlocal incomplete_expiry, missing_data
+        missing_data = True
+        incomplete_expiry = True
+        reasons.append(code)
+
+    evaluated_at = request.evaluated_at
+    expiries = [request.assumptions_valid_until]
+    context_references = (
+        (request.context.signal, "C-070"),
+        (request.context.validation, "C-028"),
+        (request.context.strategy_version, "C-021"),
+        (request.context.account_snapshot, "C-032"),
+        (request.context.portfolio_snapshot, "C-033"),
+        (request.strategy_invalidation, "C-023"),
+    )
+    for reference, contract_id in context_references:
+        status, code = _stop_reference_status(reference, contract_id, evaluated_at)
+        if status is not None:
+            if status is RiskCheckOutcome.FAILED:
+                fail(code or "REFERENCE_CONTRACT_MISMATCH")
+            else:
+                insufficient(code or "REFERENCE_PROVENANCE_INCOMPLETE")
+        if reference.valid_until is not None:
+            expiries.append(reference.valid_until)
+
+    account, portfolio = request.account, request.portfolio
+    if portfolio.account_snapshot != account:
+        fail("ACCOUNT_PORTFOLIO_MISMATCH")
+    if (
+        portfolio.equity != account.equity
+        or portfolio.currency != account.currency
+        or portfolio.account_snapshot.account_id != account.account_id
+    ):
+        fail("PORTFOLIO_EQUITY_OR_CURRENCY_MISMATCH")
+    for snapshot, reference in (
+        (account, request.context.account_snapshot),
+        (portfolio, request.context.portfolio_snapshot),
+    ):
+        if (
+            reference.entity_id != snapshot.snapshot_id
+            or reference.schema_version != snapshot.schema_version
+            or reference.content_sha256 != snapshot.content_sha256
+            or reference.valid_until != snapshot.valid_until
+        ):
+            fail("SNAPSHOT_REFERENCE_MISMATCH")
+    if request.account_source_version != account.source_version:
+        fail("ACCOUNT_SOURCE_VERSION_MISMATCH")
+    if request.portfolio_source_version != portfolio.source_version:
+        fail("PORTFOLIO_SOURCE_VERSION_MISMATCH")
+    snapshots: tuple[AccountSnapshot | PortfolioSnapshot | PositionSnapshot, ...] = (
+        account,
+        portfolio,
+        *portfolio.positions,
+    )
+    if any(item.state is not SnapshotState.VALID for item in snapshots):
+        insufficient("SNAPSHOT_NOT_VALID")
+    if any(
+        item.as_of > evaluated_at
+        or item.captured_at > evaluated_at
+        or item.valid_until < evaluated_at
+        for item in snapshots
+    ):
+        insufficient("SNAPSHOT_NOT_CURRENT")
+    expiries.extend(item.valid_until for item in snapshots)
+    if (
+        request.assumptions_as_of > evaluated_at
+        or request.assumptions_valid_until < evaluated_at
+    ):
+        insufficient("ASSUMPTIONS_NOT_CURRENT")
+
+    instrument, costs = request.instrument, request.costs
+    currency = instrument.quote_currency
+    price_units_valid = (
+        request.entry_price.quote_currency == currency
+        and request.price_unit_currency == currency
+        and (request.stop_loss is None or request.stop_loss.quote_currency == currency)
+    )
+    cost_units_valid = all(
+        value.currency == currency
+        for value in (costs.fee, costs.slippage, costs.funding)
+    )
+    budget_currency_valid = request.effective_maximum_loss.currency == currency
+    instrument_lineage_valid = (
+        instrument.asset == request.context.asset
+        and instrument.instrument_id == request.context.instrument_id
+        and instrument.model == "LINEAR"
+    )
+    if instrument.asset != request.context.asset:
+        fail("INSTRUMENT_ASSET_MISMATCH")
+    if instrument.instrument_id != request.context.instrument_id:
+        fail("INSTRUMENT_ID_MISMATCH")
+    if instrument.model != "LINEAR":
+        fail("UNSUPPORTED_INSTRUMENT_MODEL")
+    if account.currency != currency or portfolio.currency != currency:
+        fail("ACCOUNT_INSTRUMENT_CURRENCY_MISMATCH")
+    if request.entry_price.quote_currency != currency:
+        fail("ENTRY_CURRENCY_MISMATCH")
+    if request.price_unit_currency != currency:
+        fail("PRICE_DISTANCE_CURRENCY_MISMATCH")
+    if request.effective_maximum_loss.currency != currency:
+        fail("BUDGET_CURRENCY_MISMATCH")
+    if costs.fee.currency != currency or costs.slippage.currency != currency:
+        fail("COST_CURRENCY_MISMATCH")
+    if costs.funding.currency != currency:
+        fail("FUNDING_CURRENCY_MISMATCH")
+    if any(value.amount < 0 for value in (costs.fee, costs.slippage, costs.funding)):
+        fail("NEGATIVE_ADVERSE_COST")
+    if request.stop_loss is not None and request.stop_loss.quote_currency != currency:
+        fail("STOP_CURRENCY_MISMATCH")
+    if request.entry_price.amount % instrument.tick_size != 0:
+        fail("ENTRY_PRICE_TICK_MISMATCH")
+    if request.quantity % instrument.quantity_step != 0:
+        fail("QUANTITY_STEP_MISMATCH")
+    if (
+        not instrument.minimum_quantity
+        <= request.quantity
+        <= instrument.maximum_quantity
+    ):
+        fail("QUANTITY_OUT_OF_BOUNDS")
+
+    stop_loss = request.stop_loss
+    direction_valid = False
+    if stop_loss is None:
+        insufficient("STOP_LOSS_MISSING")
+    elif (
+        request.context.side is PositionSide.LONG
+        and stop_loss.amount < request.entry_price.amount
+    ) or (
+        request.context.side is PositionSide.SHORT
+        and stop_loss.amount > request.entry_price.amount
+    ):
+        direction_valid = True
+    else:
+        fail("STOP_LOSS_DIRECTION_INVALID")
+        stop_loss = None
+
+    stop_distance: Decimal | None = None
+    stop_distance_ratio: RatioValue | None = None
+    maximum_loss: MoneyValue | None = None
+    notional: Decimal | None = None
+    if direction_valid and request.stop_loss is not None and price_units_valid:
+        stop_distance = abs(request.entry_price.amount - request.stop_loss.amount)
+        if request.stop_loss.amount % instrument.tick_size != 0:
+            fail("STOP_PRICE_TICK_MISMATCH")
+        try:
+            if stop_distance > request.entry_price.amount:
+                stop_distance_ratio = None
+                fail("STOP_DISTANCE_RATIO_UNREPRESENTABLE")
+            else:
+                with localcontext(
+                    Context(prec=34, rounding=ROUND_HALF_EVEN)
+                ) as ratio_context:
+                    ratio_context.traps[Inexact] = False
+                    distance_ratio = stop_distance / request.entry_price.amount
+                stop_distance_ratio = RatioValue(
+                    distance_ratio, "stop-distance-to-entry"
+                )
+            with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as exact:
+                exact.traps[Inexact] = True
+                if instrument_lineage_valid:
+                    notional = (
+                        request.entry_price.amount
+                        * instrument.contract_multiplier
+                        * request.quantity
+                    )
+                if (
+                    notional is not None
+                    and notional > instrument.maximum_notional.amount
+                ):
+                    fail("MAXIMUM_NOTIONAL_EXCEEDED")
+                if (
+                    instrument_lineage_valid
+                    and cost_units_valid
+                    and not any(
+                        value.amount < 0
+                        for value in (costs.fee, costs.slippage, costs.funding)
+                    )
+                ):
+                    unit_loss = (
+                        (stop_distance + request.adverse_gap_displacement)
+                        * instrument.contract_multiplier
+                        + costs.fee.amount
+                        + costs.slippage.amount
+                        + costs.funding.amount
+                    )
+                    loss_amount = request.quantity * unit_loss
+                    maximum_loss = MoneyValue(loss_amount, currency)
+        except DecimalException as exc:
+            raise RiskContractError(
+                "stop assessment arithmetic cannot be represented safely at "
+                "precision 34."
+            ) from exc
+
+    limits: list[RiskLimitResult] = []
+    if stop_distance is not None:
+        policy_passed = stop_distance >= request.minimum_stop_distance
+        limits.append(
+            RiskLimitResult(
+                "POLICY_MINIMUM_STOP_DISTANCE",
+                RiskLimitSeverity.HARD,
+                stop_distance,
+                request.minimum_stop_distance,
+                f"price:{currency}",
+                RiskCheckOutcome.PASSED if policy_passed else RiskCheckOutcome.FAILED,
+                "Explicit policy minimum stop distance.",
+            )
+        )
+        if not policy_passed:
+            fail("POLICY_MINIMUM_STOP_DISTANCE_BREACH")
+    if maximum_loss is not None:
+        if budget_currency_valid:
+            budget_passed = maximum_loss.amount <= request.effective_maximum_loss.amount
+            limits.append(
+                RiskLimitResult(
+                    "EFFECTIVE_MAXIMUM_LOSS",
+                    RiskLimitSeverity.HARD,
+                    maximum_loss.amount,
+                    request.effective_maximum_loss.amount,
+                    currency,
+                    RiskCheckOutcome.PASSED
+                    if budget_passed
+                    else RiskCheckOutcome.FAILED,
+                    "Caller-supplied effective maximum-loss budget.",
+                )
+            )
+            if not budget_passed:
+                fail("EFFECTIVE_MAXIMUM_LOSS_EXCEEDED")
+    if notional is not None:
+        limits.append(
+            RiskLimitResult(
+                "INSTRUMENT_MAXIMUM_NOTIONAL",
+                RiskLimitSeverity.HARD,
+                notional,
+                instrument.maximum_notional.amount,
+                currency,
+                RiskCheckOutcome.PASSED
+                if notional <= instrument.maximum_notional.amount
+                else RiskCheckOutcome.FAILED,
+                "Instrument terms maximum notional.",
+            )
+        )
+
+    structural = request.structural_evidence
+    structural_check = RiskCheckOutcome.INSUFFICIENT_DATA
+    if structural is None:
+        insufficient("STRUCTURAL_EVIDENCE_MISSING")
+    else:
+        expiries.append(structural.valid_until)
+        status, code = _stop_reference_status(
+            structural.reference, "C-023", evaluated_at
+        )
+        if status is not None:
+            if status is RiskCheckOutcome.FAILED:
+                structural_check = RiskCheckOutcome.FAILED
+                fail(code or "STRUCTURAL_REFERENCE_INVALID")
+            else:
+                insufficient(code or "STRUCTURAL_REFERENCE_INCOMPLETE")
+        elif (
+            structural.reference != request.strategy_invalidation
+            or structural.strategy_version != request.context.strategy_version
+            or not _stop_evidence_matches(
+                structural.context,
+                structural.asset,
+                structural.instrument_id,
+                structural.side,
+                request,
+            )
+        ):
+            structural_check = RiskCheckOutcome.FAILED
+            fail("STRUCTURAL_LINEAGE_MISMATCH")
+        elif structural.as_of > evaluated_at or structural.valid_until < evaluated_at:
+            insufficient("STRUCTURAL_EVIDENCE_NOT_CURRENT")
+        elif structural.lower_stop.quote_currency != currency:
+            structural_check = RiskCheckOutcome.FAILED
+            fail("STRUCTURAL_INTERVAL_CURRENCY_MISMATCH")
+        elif not direction_valid or request.stop_loss is None:
+            insufficient("STRUCTURAL_STOP_UNAVAILABLE")
+        elif not (
+            structural.lower_stop.amount
+            <= request.stop_loss.amount
+            <= structural.upper_stop.amount
+        ):
+            structural_check = RiskCheckOutcome.FAILED
+            fail("STOP_OUTSIDE_STRUCTURAL_INTERVAL")
+        else:
+            structural_check = RiskCheckOutcome.PASSED
+
+    volatility = request.volatility_evidence
+    volatility_check = RiskCheckOutcome.INSUFFICIENT_DATA
+    if volatility is None:
+        insufficient("VOLATILITY_EVIDENCE_MISSING")
+    else:
+        expiries.append(volatility.valid_until)
+        if not _stop_evidence_matches(
+            volatility.context,
+            volatility.asset,
+            volatility.instrument_id,
+            volatility.side,
+            request,
+        ):
+            volatility_check = RiskCheckOutcome.FAILED
+            fail("VOLATILITY_LINEAGE_MISMATCH")
+        elif volatility.as_of > evaluated_at or volatility.valid_until < evaluated_at:
+            insufficient("VOLATILITY_EVIDENCE_NOT_CURRENT")
+        elif volatility.quote_currency != currency:
+            volatility_check = RiskCheckOutcome.FAILED
+            fail("VOLATILITY_CURRENCY_MISMATCH")
+        elif stop_distance is None:
+            insufficient("VOLATILITY_STOP_DISTANCE_UNAVAILABLE")
+        elif stop_distance < volatility.minimum_distance:
+            volatility_check = RiskCheckOutcome.FAILED
+            fail("VOLATILITY_MINIMUM_DISTANCE_BREACH")
+        else:
+            volatility_check = RiskCheckOutcome.PASSED
+
+    liquidation = request.liquidation_evidence
+    liquidation_check = RiskCheckOutcome.INSUFFICIENT_DATA
+    if liquidation is None:
+        insufficient("LIQUIDATION_EVIDENCE_MISSING")
+    else:
+        expiries.append(liquidation.valid_until)
+        if not _stop_evidence_matches(
+            liquidation.context,
+            liquidation.asset,
+            liquidation.instrument_id,
+            liquidation.side,
+            request,
+        ):
+            liquidation_check = RiskCheckOutcome.FAILED
+            fail("LIQUIDATION_LINEAGE_MISMATCH")
+        elif liquidation.as_of > evaluated_at or liquidation.valid_until < evaluated_at:
+            insufficient("LIQUIDATION_EVIDENCE_NOT_CURRENT")
+        elif liquidation.quote_currency != currency or (
+            liquidation.liquidation_price is not None
+            and liquidation.liquidation_price.quote_currency != currency
+        ):
+            liquidation_check = RiskCheckOutcome.FAILED
+            fail("LIQUIDATION_CURRENCY_MISMATCH")
+        elif liquidation.availability is LiquidationAvailability.NOT_APPLICABLE:
+            if liquidation.liquidation_price is not None:
+                liquidation_check = RiskCheckOutcome.FAILED
+                fail("LIQUIDATION_APPLICABILITY_CONFLICT")
+            elif liquidation.fully_funded_spot:
+                liquidation_check = RiskCheckOutcome.PASSED
+                reasons.append("LIQUIDATION_NOT_APPLICABLE_FULLY_FUNDED_SPOT")
+            else:
+                liquidation_check = RiskCheckOutcome.FAILED
+                fail("LIQUIDATION_NOT_APPLICABLE_WITHOUT_FUNDED_SPOT_EVIDENCE")
+        elif liquidation.availability is LiquidationAvailability.UNAVAILABLE:
+            insufficient("LIQUIDATION_APPLICABILITY_UNKNOWN")
+        elif liquidation.liquidation_price is None:
+            insufficient("LIQUIDATION_PRICE_MISSING")
+        elif stop_distance is None or request.stop_loss is None:
+            insufficient("LIQUIDATION_STOP_UNAVAILABLE")
+        else:
+            price_value = liquidation.liquidation_price.amount
+            if request.context.side is PositionSide.LONG:
+                beyond_stop = price_value < request.stop_loss.amount
+                buffer = request.stop_loss.amount - price_value
+            else:
+                beyond_stop = price_value > request.stop_loss.amount
+                buffer = price_value - request.stop_loss.amount
+            if not beyond_stop:
+                liquidation_check = RiskCheckOutcome.FAILED
+                fail("LIQUIDATION_NOT_BEYOND_STOP")
+            elif buffer < liquidation.minimum_buffer:
+                liquidation_check = RiskCheckOutcome.FAILED
+                fail("STOP_TO_LIQUIDATION_BUFFER_BREACH")
+            else:
+                liquidation_check = RiskCheckOutcome.PASSED
+
+    valid_until = min(expiries)
+    if hard_failure:
+        outcome = RiskCheckOutcome.FAILED
+    elif missing_data or any(
+        check is RiskCheckOutcome.INSUFFICIENT_DATA
+        for check in (structural_check, volatility_check, liquidation_check)
+    ):
+        outcome = RiskCheckOutcome.INSUFFICIENT_DATA
+    else:
+        outcome = RiskCheckOutcome.PASSED
+    if incomplete_expiry or valid_until < evaluated_at:
+        valid_until = evaluated_at
+    if outcome is not RiskCheckOutcome.PASSED and not reasons:
+        reasons.append("STOP_ASSESSMENT_INCOMPLETE")
+    return _stop_assessment_result(
+        request,
+        outcome=outcome,
+        reason_codes=tuple(dict.fromkeys(reasons)),
+        valid_until=valid_until,
+        stop_loss=stop_loss,
+        stop_distance=stop_distance,
+        stop_distance_ratio=stop_distance_ratio,
+        maximum_loss=maximum_loss,
+        structural_check=structural_check,
+        volatility_check=volatility_check,
+        liquidation_check=liquidation_check,
+        limits=tuple(limits),
+    )
+
+
+def calculate_stop_loss_assessment(
+    request: StopLossAssessmentRequest,
+) -> StopLossAssessment:
+    """Assess explicit stop inputs offline; this does not approve or size a trade."""
+    try:
+        with localcontext(
+            Context(prec=34, rounding=ROUND_HALF_EVEN)
+        ) as decimal_context:
+            decimal_context.traps[Inexact] = True
+            return _calculate_stop_loss_assessment(request)
+    except DecimalException as exc:
+        raise RiskContractError(
+            "stop assessment arithmetic cannot be represented safely at precision 34."
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -3641,6 +4383,10 @@ __all__ = [
     "SizingCosts",
     "SnapshotState",
     "StopLossAssessment",
+    "StopLossAssessmentRequest",
+    "StopLossStructuralEvidence",
+    "StopLossVolatilityEvidence",
+    "StopLossLiquidationEvidence",
     "StressScenarioResult",
     "StressTestResult",
     "TakeProfitAssessment",
@@ -3648,5 +4394,6 @@ __all__ = [
     "VersionReference",
     "aggregate_portfolio_exposure",
     "calculate_position_size",
+    "calculate_stop_loss_assessment",
     "pairwise_correlation",
 ]

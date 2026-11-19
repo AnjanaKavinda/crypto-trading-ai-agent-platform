@@ -823,3 +823,96 @@ acceptability, or grants approval/execution authority. Leverage, liquidation,
 portfolio decisions, synchronization, external lookup, credentials, live
 trading and runtime wiring remain excluded. Focused synthetic regressions
 are in `tests/backend/test_risk_contracts.py`.
+
+## Issue #105 (canonical; GitHub #107) — offline stop-loss assessment
+
+C-078 `StopLossAssessment` remains schema `1` with its exact constructor,
+fields, meanings and consumers. `StopLossAssessmentRequest`,
+`StopLossStructuralEvidence`, `StopLossVolatilityEvidence`, and
+`StopLossLiquidationEvidence` are immutable nonpersisted inputs only; no new
+canonical ID, codec, persistence, API, database, migration, or runtime wiring
+is introduced. `calculate_stop_loss_assessment` reuses the existing linear
+`SizingInstrumentTerms` and `SizingCosts` values and does not change C-036.
+
+The request explicitly binds result ID, evaluation time, `RiskContext`, exact
+matching C-032/C-033 snapshots and source versions, model/policy/configuration
+versions, proposed quantity, effective maximum-loss budget, entry/stop,
+instrument/cost/gap provenance, policy minimum distance, and a common
+assumption validity window. Account/portfolio IDs, schema, digests, expiry,
+state, equity and currency must match their references; embedded positions
+must be current. C-021, C-028 and C-070 references accept schemas `1` and `2`;
+C-023, C-032 and C-033 references require schema `1`. Unknown schemas fail
+closed. Every reference requires a digest and expiry; the complete
+version-qualified references are retained without payload down-conversion,
+and C-078 output remains schema `1`.
+Evidence/as-of times cannot be future-dated; an expiry equal to
+evaluation passes. Stale, future, absent, or unknown evidence cannot produce
+PASSED. The caller-attested budget is already reduced for applicable policy
+and open-risk consumption; the calculator neither verifies policy
+completeness nor authenticates external truth.
+
+The supported instrument model is explicitly `LINEAR`. Quantity is contract
+units, multiplier is base units per contract, entry/stop/gap are quote-price
+units, and fee/slippage/funding are quote currency per contract. Entry and
+stop must conform to tick size; quantity must be within supplied bounds and
+an exact quantity-step multiple anchored at zero. Notional is
+`entry * multiplier * quantity` and cannot exceed instrument maximum.
+No FX, external lookup, nonlinear model, quantity adjustment, leverage
+selection, or stop rounding is introduced.
+
+LONG requires stop below entry; SHORT requires stop above entry. The
+calculator reports absolute stop distance and distance/entry ratio; ratio
+division is isolated at Decimal precision 34, half-even. C-078 `RatioValue`
+cannot encode a ratio above one, so exact distance is checked against entry
+before division. A ratio above one fails closed even when precision-34
+rounding would yield one. Explicit policy and caller-supplied volatility minimum
+distances use the request's explicit `price_unit_currency`; no volatility
+estimate or hidden multiplier is derived. Structural acceptance requires a
+current, versioned C-023 interval
+with inclusive price bounds and exact C-021 strategy, context, asset,
+instrument, and side lineage. This caller-attested materialized interval does
+not claim to evaluate every strategy invalidation rule. A bare boolean or
+unpriced qualitative evidence cannot pass.
+
+For leveraged exposure, liquidation assessment consumes caller-supplied
+current price and nonnegative minimum buffer in quote-price units. Liquidation
+must be beyond the stop in the adverse direction, and the distance from stop
+to liquidation must meet the buffer. No liquidation engine or C-077 result
+is generated. Explicit no-liquidation applicability is accepted only with
+caller-attested fully funded spot evidence; unknown applicability or missing
+leveraged liquidation price is insufficient.
+
+Maximum loss is:
+
+`quantity * ((abs(entry - stop) + adverse_gap_displacement) * multiplier + fee_per_unit + slippage_per_unit + funding_per_unit)`
+
+All monetary inputs use the same account/instrument quote currency. Gap
+displacement is separate additional adverse price movement. Fee, slippage,
+funding and gap values are explicit, version-bound, nonnegative costs (zero
+must be explicit). Monetary arithmetic runs in an isolated precision-34
+Decimal context with `Inexact` trapped; unrepresentable arithmetic raises
+`RiskContractError`. The budget comparison is exact, with no tolerance,
+rounding up quantity, loss clamp, or stop adjustment. This is an
+assumption-bounded estimate, not a guaranteed maximum market loss.
+
+Only complete current evidence and passing structural, volatility,
+liquidation, distance, quantity, notional, and hard-loss-budget checks produce
+PASSED. Deterministic constraint breaches produce FAILED; missing/stale/
+unknown evidence produces INSUFFICIENT_DATA with reason codes. Missing or
+directionally invalid stops leave stop and derived C-078 fields unset to
+preserve the existing constructor invariant; callers retain the original
+request alongside the result. The canonical digest binds the complete request
+and all output fields except its own digest. `valid_until` is bounded by the
+earliest applicable context/reference, account/portfolio/position, source,
+assumption, structural, volatility, and liquidation expiry; incomplete
+evidence is valid only at evaluation. Digests bind content, not provider truth.
+The existing C-078 `cost_assumptions` field contains only the supplied
+`SizingCosts` version; gap, instrument, policy, and other request versions are
+bound by the complete request digest without changing C-078 field semantics.
+
+The assessment validates only stop-specific evidence. It does not generate a
+stop, size a position, estimate volatility, evaluate all strategy rules,
+choose leverage, calculate liquidation, assess portfolio impact, perform
+policy hierarchy resolution, approve risk, or authorize approval/execution.
+A C-036 sizing pass does not imply stop validity; a C-078 pass does not imply
+overall risk approval or execution authority.
