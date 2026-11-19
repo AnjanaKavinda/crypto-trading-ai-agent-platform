@@ -1417,6 +1417,77 @@ def test_stop_assessment_calculates_bounded_loss_for_both_sides(
     assert result.content_sha256 != HASH_A
 
 
+@pytest.mark.parametrize("schema_version", ["1", "2", "3"])
+def test_stop_assessment_accepts_only_registered_upstream_reference_versions(
+    schema_version: str,
+) -> None:
+    request = stop_assessment_request()
+    ctx = replace(
+        request.context,
+        signal=replace(request.context.signal, schema_version=schema_version),
+        validation=replace(request.context.validation, schema_version=schema_version),
+        strategy_version=replace(
+            request.context.strategy_version, schema_version=schema_version
+        ),
+    )
+    assert request.structural_evidence is not None
+    assert request.volatility_evidence is not None
+    assert request.liquidation_evidence is not None
+    request = replace(
+        request,
+        context=ctx,
+        structural_evidence=replace(
+            request.structural_evidence,
+            context=ctx,
+            strategy_version=ctx.strategy_version,
+        ),
+        volatility_evidence=replace(request.volatility_evidence, context=ctx),
+        liquidation_evidence=replace(request.liquidation_evidence, context=ctx),
+    )
+    result = calculate_stop_loss_assessment(request)
+
+    if schema_version in {"1", "2"}:
+        assert result.outcome is RiskCheckOutcome.PASSED
+        assert result.context == ctx
+        assert result.schema_version == "1"
+    else:
+        assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+        assert "REFERENCE_PROVENANCE_INCOMPLETE" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "reference_name",
+    ["account_snapshot", "portfolio_snapshot", "strategy_invalidation"],
+)
+def test_stop_assessment_rejects_schema_two_for_schema_one_only_references(
+    reference_name: str,
+) -> None:
+    request = stop_assessment_request()
+    if reference_name == "strategy_invalidation":
+        request = replace(
+            request,
+            strategy_invalidation=replace(
+                request.strategy_invalidation, schema_version="2"
+            ),
+        )
+    else:
+        request = replace(
+            request,
+            context=replace(
+                request.context,
+                **{
+                    reference_name: replace(
+                        getattr(request.context, reference_name), schema_version="2"
+                    )
+                },
+            ),
+        )
+    result = calculate_stop_loss_assessment(request)
+
+    assert result.outcome is not RiskCheckOutcome.PASSED
+    assert "REFERENCE_PROVENANCE_INCOMPLETE" in result.reason_codes
+
+
 @pytest.mark.parametrize(
     ("stop_loss", "outcome", "reason"),
     [
@@ -1454,6 +1525,56 @@ def test_stop_assessment_fails_closed_when_ratio_cannot_fit_c078() -> None:
     assert "STOP_DISTANCE_RATIO_UNREPRESENTABLE" in result.reason_codes
     assert result.stop_distance == Decimal("101")
     assert result.stop_distance_ratio is None
+
+
+@pytest.mark.parametrize(
+    ("stop_amount", "expected_outcome"),
+    [
+        ("5.999999999999999999999999999999999", RiskCheckOutcome.PASSED),
+        ("6", RiskCheckOutcome.PASSED),
+        ("6.000000000000000000000000000000001", RiskCheckOutcome.FAILED),
+    ],
+)
+def test_stop_assessment_checks_exact_ratio_boundary_before_rounding(
+    stop_amount: str, expected_outcome: RiskCheckOutcome
+) -> None:
+    request = stop_assessment_request(PositionSide.SHORT)
+    assert request.structural_evidence is not None
+    assert request.volatility_evidence is not None
+    assert request.liquidation_evidence is not None
+    request = replace(
+        request,
+        entry_price=price("3"),
+        stop_loss=price(stop_amount),
+        quantity=Decimal("1"),
+        minimum_stop_distance=Decimal("0"),
+        adverse_gap_displacement=Decimal("0"),
+        effective_maximum_loss=money("100"),
+        costs=SizingCosts(money("0"), money("0"), money("0"), version("zero-cost")),
+        instrument=replace(
+            request.instrument, tick_size=Decimal("1e-33"), quantity_step=Decimal("1")
+        ),
+        structural_evidence=replace(
+            request.structural_evidence, lower_stop=price("5"), upper_stop=price("7")
+        ),
+        volatility_evidence=replace(
+            request.volatility_evidence, minimum_distance=Decimal("0")
+        ),
+        liquidation_evidence=replace(
+            request.liquidation_evidence,
+            liquidation_price=price("10"),
+            minimum_buffer=Decimal("0"),
+        ),
+    )
+    result = calculate_stop_loss_assessment(request)
+
+    assert result.outcome is expected_outcome
+    if expected_outcome is RiskCheckOutcome.FAILED:
+        assert "STOP_DISTANCE_RATIO_UNREPRESENTABLE" in result.reason_codes
+        assert result.stop_distance_ratio is None
+    else:
+        assert result.stop_distance_ratio is not None
+        assert result.stop_distance_ratio.value <= 1
 
 
 def test_stop_assessment_enforces_tick_quantity_currency_and_notional_limits() -> None:

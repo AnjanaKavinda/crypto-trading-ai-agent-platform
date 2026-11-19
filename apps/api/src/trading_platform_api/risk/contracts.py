@@ -2423,8 +2423,11 @@ def _stop_reference_status(
 ) -> tuple[RiskCheckOutcome | None, str | None]:
     if reference.contract_id != expected_contract_id:
         return RiskCheckOutcome.FAILED, "REFERENCE_CONTRACT_MISMATCH"
+    supported_schemas = (
+        {"1", "2"} if expected_contract_id in {"C-021", "C-028", "C-070"} else {"1"}
+    )
     if (
-        reference.schema_version != CONTRACT_SCHEMA_VERSION
+        reference.schema_version not in supported_schemas
         or reference.content_sha256 is None
         or reference.valid_until is None
     ):
@@ -2611,15 +2614,15 @@ def _calculate_stop_loss_assessment(
         if request.stop_loss.amount % instrument.tick_size != 0:
             fail("STOP_PRICE_TICK_MISMATCH")
         try:
-            with localcontext(
-                Context(prec=34, rounding=ROUND_HALF_EVEN)
-            ) as ratio_context:
-                ratio_context.traps[Inexact] = False
-                distance_ratio = stop_distance / request.entry_price.amount
-            if distance_ratio > 1:
+            if stop_distance > request.entry_price.amount:
                 stop_distance_ratio = None
                 fail("STOP_DISTANCE_RATIO_UNREPRESENTABLE")
             else:
+                with localcontext(
+                    Context(prec=34, rounding=ROUND_HALF_EVEN)
+                ) as ratio_context:
+                    ratio_context.traps[Inexact] = False
+                    distance_ratio = stop_distance / request.entry_price.amount
                 stop_distance_ratio = RatioValue(
                     distance_ratio, "stop-distance-to-entry"
                 )

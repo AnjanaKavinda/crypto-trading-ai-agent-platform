@@ -840,8 +840,12 @@ versions, proposed quantity, effective maximum-loss budget, entry/stop,
 instrument/cost/gap provenance, policy minimum distance, and a common
 assumption validity window. Account/portfolio IDs, schema, digests, expiry,
 state, equity and currency must match their references; embedded positions
-must be current. All context and C-023 references require schema `1`, digest,
-and expiry. Evidence/as-of times cannot be future-dated; an expiry equal to
+must be current. C-021, C-028 and C-070 references accept schemas `1` and `2`;
+C-023, C-032 and C-033 references require schema `1`. Unknown schemas fail
+closed. Every reference requires a digest and expiry; the complete
+version-qualified references are retained without payload down-conversion,
+and C-078 output remains schema `1`.
+Evidence/as-of times cannot be future-dated; an expiry equal to
 evaluation passes. Stale, future, absent, or unknown evidence cannot produce
 PASSED. The caller-attested budget is already reduced for applicable policy
 and open-risk consumption; the calculator neither verifies policy
@@ -859,8 +863,9 @@ selection, or stop rounding is introduced.
 LONG requires stop below entry; SHORT requires stop above entry. The
 calculator reports absolute stop distance and distance/entry ratio; ratio
 division is isolated at Decimal precision 34, half-even. C-078 `RatioValue`
-cannot encode a ratio above one, so such a result fails closed without a
-clamped ratio. Explicit policy and caller-supplied volatility minimum
+cannot encode a ratio above one, so exact distance is checked against entry
+before division. A ratio above one fails closed even when precision-34
+rounding would yield one. Explicit policy and caller-supplied volatility minimum
 distances use the request's explicit `price_unit_currency`; no volatility
 estimate or hidden multiplier is derived. Structural acceptance requires a
 current, versioned C-023 interval

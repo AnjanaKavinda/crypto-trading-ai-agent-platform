@@ -531,8 +531,11 @@ The caller has already reduced the effective budget for policy and consumed
 open risk; the calculator neither resolves policy hierarchy nor authenticates
 that budget. Account/portfolio identity, equity, currency, schema, content
 digest, source version, timestamp and expiry must agree with the context and
-caller-supplied evidence. Context references require schema `1`, digest, and
-expiry. Evaluation at an expiry boundary is accepted.
+caller-supplied evidence. C-021, C-028 and C-070 references accept registered
+schemas `1` and `2`; C-023, C-032 and C-033 references require schema `1`.
+Unknown schemas fail closed. All references require a digest and expiry;
+version-qualified identities are preserved without payload down-conversion.
+Evaluation at an expiry boundary is accepted. C-078 output remains schema `1`.
 
 Only the existing `SizingInstrumentTerms` and `SizingCosts` linear inputs from
 issue #106 are consumed. Quantity is in contract units; multiplier is base
@@ -547,8 +550,9 @@ or quantity adjustment is performed.
 LONG requires `stop < entry`; SHORT requires `stop > entry`. The result
 includes absolute stop distance and `distance / entry`, with ratio arithmetic
 at fixed Decimal precision 34, half-even. C-078 `RatioValue` cannot represent
-a ratio above one, so that case fails closed with no ratio rather than being
-clamped. An explicit, version-bound policy minimum distance and
+a ratio above one, so the exact distance is compared with entry before ratio
+division; out-of-range ratios fail closed even if rounding would yield one.
+An explicit, version-bound policy minimum distance and
 caller-supplied, versioned volatility minimum-distance threshold are both in
 the request's explicit `price_unit_currency` and are compared to actual
 distance. The volatility value is an input threshold, not an estimated
