@@ -937,16 +937,22 @@ stop must pass; C-036 must be current, schema 1, same-context, and match the
 stop quantity, distance, and instrument/cost assumptions. Its nominal loss
 plus the exact adverse-gap adjustment must match recomputed C-078 maximum
 loss. C-036/stop warnings propagate.
+C-036 notional/margin amounts and currencies are validated against exact
+quantity/entry/instrument terms, notional cap and available margin. Its
+min/max/step bounds must match the instrument; nominal loss must fit its risk
+budget. Warnings do not bypass these checks or permit missing bounded outputs.
 Hard failures dominate missing evidence and warnings; missing, stale, future,
 or unknown evidence cannot pass.
 
-The target sequence is immutable, unique, and ascending; allocations sum
+Input target expected profit must be unset (even zero is rejected). The target
+sequence is immutable, unique, and ascending; allocations sum
 exactly to one. LONG prices increase and SHORT prices decrease, all targets
 conform to the instrument tick, and each allocated quantity satisfies
 minimum/maximum/step bounds without rounding or adjustment. Each expected
 profit is directional gross profit less that target's explicit adverse
 fee/slippage/funding inputs. The minimum R:R test compares exact cross
-products with recomputed C-078 maximum loss; reported division is descriptive.
+products with recomputed C-078 maximum loss before division; the reported ratio
+is descriptive and rounded downward at precision 34 so it never overstates R:R.
 Priced bounds bind exact C-021/C-023 and `RiskContext` lineage and must be
 current. C-021/C-028/C-070 schema 1/2 references use the registered explicit
 compatibility dispatch; C-079 output stays schema 1.

@@ -628,12 +628,18 @@ minimum risk-reward ratio and version; and model/assumption versions and a
 validity window. The stop must pass. C-036 must be a current schema-1
 `PositionSizingResult` in the same context and its recommended quantity,
 stop distance, and instrument/cost assumptions must match the stop inputs.
+Notional and initial margin are checked against the exact entry, multiplier,
+quantity and instrument terms, including the notional cap and available margin.
+All supplied sizing money uses the quote currency; sizing min/max/step bounds
+match the instrument and nominal loss cannot exceed the sizing risk budget.
+These checks also apply to warnings; missing bounded outputs remain unknown.
 Its nominal maximum loss plus the exact supplied adverse-gap adjustment must
 match recomputed C-078 maximum loss. A C-036 warning is retained as a C-079
 warning; missing or stale evidence is `INSUFFICIENT_DATA`, and hard failures
 take precedence over missing data and warnings.
 
-Targets must sum to exactly one allocation. LONG targets are strictly
+Input target `expected_profit` must be unset, including zero; this calculator
+computes it. Targets must sum to exactly one allocation. LONG targets are strictly
 ascending above entry; SHORT targets are strictly descending below entry.
 Every target price conforms to the supplied instrument tick. Each allocated
 quantity (sizing quantity times target allocation) must satisfy the
@@ -642,7 +648,8 @@ target, directional gross profit is reduced by that target's explicit
 per-unit fee, slippage, and funding from versioned `SizingCosts`; no costs or
 price data are inferred. A versioned minimum R:R is checked by exact
 cross-multiplication against the recomputed C-078 maximum loss; the displayed
-ratio is not used as the threshold authority.
+ratio is rounded downward at precision 34 and is not used as the threshold
+authority.
 
 Each target also requires current caller-supplied priced bounds with exact
 C-021 strategy, C-023 invalidation, `RiskContext`, asset, instrument, side,

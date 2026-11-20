@@ -2971,6 +2971,8 @@ class TakeProfitAssessmentRequest:
         if not isinstance(self.sizing_result, PositionSizingResult):
             raise RiskContractError("sizing_result must be a PositionSizingResult.")
         targets = _typed_tuple("targets", self.targets, TakeProfitTarget, empty=False)
+        if any(target.expected_profit is not None for target in targets):
+            raise RiskContractError("target expected_profit must be unset on input.")
         bounds = _typed_tuple(
             "target_bounds", self.target_bounds, TakeProfitTargetBound, empty=False
         )
@@ -3243,6 +3245,73 @@ def _calculate_take_profit_assessment(
         missing("SIZING_NOT_CURRENT")
     expiries.append(sizing.valid_until)
 
+    # C-036 is caller-supplied evidence; validate its backed outputs even when
+    # WARNING is legitimate, since that constructor allows incomplete warnings.
+    sizing_money = (
+        sizing.requested_risk,
+        sizing.requested_notional,
+        sizing.recommended_notional,
+        sizing.recommended_margin,
+        sizing.maximum_loss,
+    )
+    if any(
+        value is not None and value.currency != terms.quote_currency
+        for value in sizing_money
+    ):
+        fail("SIZING_CURRENCY_MISMATCH")
+    if any(
+        value is None
+        for value in (
+            sizing.recommended_notional,
+            sizing.recommended_margin,
+            sizing.maximum_loss,
+            sizing.minimum_quantity,
+            sizing.maximum_quantity,
+            sizing.quantity_step,
+        )
+    ):
+        missing("SIZING_BOUNDED_OUTPUTS_UNAVAILABLE")
+    if any(
+        supplied is not None and supplied != expected
+        for supplied, expected in (
+            (sizing.minimum_quantity, terms.minimum_quantity),
+            (sizing.maximum_quantity, terms.maximum_quantity),
+            (sizing.quantity_step, terms.quantity_step),
+        )
+    ):
+        fail("SIZING_BOUNDS_MISMATCH")
+    sized_quantity = sizing.recommended_quantity
+    if sized_quantity is not None:
+        if not terms.minimum_quantity <= sized_quantity <= terms.maximum_quantity:
+            fail("SIZING_QUANTITY_OUT_OF_BOUNDS")
+        if sized_quantity % terms.quantity_step != 0:
+            fail("SIZING_QUANTITY_STEP_MISMATCH")
+        expected_notional = (
+            request.entry_price.amount * terms.contract_multiplier * sized_quantity
+        )
+        if sizing.recommended_notional is not None and (
+            sizing.recommended_notional.amount != expected_notional
+            or sizing.recommended_notional.amount > terms.maximum_notional.amount
+        ):
+            fail("SIZING_NOTIONAL_MISMATCH")
+        expected_margin = terms.initial_margin_per_unit.amount * sized_quantity
+        free_margin = stop_request.account.free_margin
+        if sizing.recommended_margin is not None:
+            if sizing.recommended_margin.amount != expected_margin:
+                fail("SIZING_MARGIN_MISMATCH")
+            if free_margin is None:
+                missing("SIZING_FREE_MARGIN_UNAVAILABLE")
+            elif (
+                free_margin.currency != terms.quote_currency
+                or sizing.recommended_margin.amount > free_margin.amount
+            ):
+                fail("SIZING_MARGIN_UNAVAILABLE")
+    if (
+        sizing.maximum_loss is not None
+        and sizing.maximum_loss.amount > sizing.requested_risk.amount
+    ):
+        fail("SIZING_RISK_BUDGET_EXCEEDED")
+
     stop_assessment = calculate_stop_loss_assessment(stop_request)
     if stop_assessment.outcome is RiskCheckOutcome.FAILED:
         fail("STOP_ASSESSMENT_FAILED")
@@ -3361,10 +3430,7 @@ def _calculate_take_profit_assessment(
         for target in request.targets
     ):
         fail("TARGET_CURRENCY_MISMATCH")
-    if any(
-        target.price.amount % terms.tick_size != 0
-        for target in request.targets
-    ):
+    if any(target.price.amount % terms.tick_size != 0 for target in request.targets):
         fail("TARGET_PRICE_TICK_MISMATCH")
     if any(
         (
@@ -3393,9 +3459,7 @@ def _calculate_take_profit_assessment(
         ):
             fail("TARGET_BOUND_CURRENCY_MISMATCH", invalidation=True)
         elif not (
-            bound.lower_price.amount
-            <= target.price.amount
-            <= bound.upper_price.amount
+            bound.lower_price.amount <= target.price.amount <= bound.upper_price.amount
         ):
             fail("TARGET_OUTSIDE_STRATEGY_BOUND", invalidation=True)
         if any(
@@ -3409,9 +3473,7 @@ def _calculate_take_profit_assessment(
             if allocated_quantity % terms.quantity_step != 0:
                 fail("TARGET_QUANTITY_STEP_MISMATCH")
             if not (
-                terms.minimum_quantity
-                <= allocated_quantity
-                <= terms.maximum_quantity
+                terms.minimum_quantity <= allocated_quantity <= terms.maximum_quantity
             ):
                 fail("TARGET_QUANTITY_OUT_OF_BOUNDS")
             directional_move = (
@@ -3455,10 +3517,10 @@ def _calculate_take_profit_assessment(
         and total_profit > 0
     ):
         expected_profit = MoneyValue(total_profit, terms.quote_currency)
-        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
-            risk_reward_ratio = total_profit / maximum_loss.amount
         if total_profit < request.minimum_risk_reward * maximum_loss.amount:
             fail("MINIMUM_RISK_REWARD_NOT_MET")
+        with localcontext(Context(prec=34, rounding=ROUND_FLOOR)):
+            risk_reward_ratio = total_profit / maximum_loss.amount
     else:
         missing("RISK_REWARD_INPUTS_UNAVAILABLE")
 
