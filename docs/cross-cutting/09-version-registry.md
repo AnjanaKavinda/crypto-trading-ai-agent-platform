@@ -752,8 +752,11 @@ Each caller-supplied return series binds its instrument, source identity,
 timestamps, and a canonical SHA-256 over exactly those series fields.
 Correlation's exact inclusive
 window, minimum count (caller-supplied, at least three), optional explicitly
-named benchmark, and all input series are bound in output provenance. Only
-exact pairwise timestamp intersections are sampled. Pearson uses sample
+named benchmark, and all input series are bound in output provenance. Each pair
+requires identical timestamp sets inside that window. A mismatch yields
+`UNKNOWN` / `TIMESTAMP_MISMATCH` for correlation and beta, with no value or used
+samples; it never silently drops observations to form an intersection. Outside
+the window, differing timestamps do not affect the estimates. Pearson uses sample
 covariance divided by sample standard deviations; benchmark beta uses sample
 covariance divided by the explicitly named benchmark's sample variance.
 Decimal operations use precision 34 with half-even rounding; there is no

@@ -4134,7 +4134,7 @@ def _paired_returns(
     right: InstrumentReturnSeries,
     start: datetime,
     end: datetime,
-) -> tuple[tuple[Decimal, Decimal, datetime], ...]:
+) -> tuple[tuple[Decimal, Decimal, datetime], ...] | None:
     left_values = {
         item.timestamp: item.log_return
         for item in left.observations
@@ -4145,9 +4145,11 @@ def _paired_returns(
         for item in right.observations
         if start <= item.timestamp <= end
     }
+    if left_values.keys() != right_values.keys():
+        return None
     return tuple(
         (left_values[timestamp], right_values[timestamp], timestamp)
-        for timestamp in sorted(left_values.keys() & right_values.keys())
+        for timestamp in sorted(left_values)
     )
 
 
@@ -4182,8 +4184,8 @@ def pairwise_correlation(
 ) -> PairwiseCorrelationResult:
     """Calculate descriptive pairwise Pearson correlation and optional beta.
 
-    Only exact timestamp intersections in the inclusive caller-supplied window
-    are used. Arithmetic is Decimal-only with precision 34 and no annualization.
+    Each pair requires identical timestamps in the inclusive supplied window.
+    Arithmetic is Decimal-only with precision 34 and no annualization.
     """
     supplied = _typed_tuple("series", series, InstrumentReturnSeries, empty=False)
     start = _time("window_start", window_start)
@@ -4211,8 +4213,10 @@ def pairwise_correlation(
         decimal_context.rounding = ROUND_HALF_EVEN
         for left, right in combinations(ordered_series, 2):
             observations = _paired_returns(left, right, start, end)
-            timestamps = tuple(item[2] for item in observations)
-            if len(observations) < min_observations:
+            timestamps = tuple(item[2] for item in observations or ())
+            if observations is None:
+                estimate = _unknown_estimate("TIMESTAMP_MISMATCH", ())
+            elif len(observations) < min_observations:
                 estimate = _unknown_estimate(
                     "INSUFFICIENT_ALIGNED_OBSERVATIONS", timestamps
                 )
@@ -4258,8 +4262,10 @@ def pairwise_correlation(
                 if instrument.instrument_id == benchmark_instrument_id:
                     continue
                 observations = _paired_returns(instrument, benchmark, start, end)
-                timestamps = tuple(item[2] for item in observations)
-                if len(observations) < min_observations:
+                timestamps = tuple(item[2] for item in observations or ())
+                if observations is None:
+                    estimate = _unknown_estimate("TIMESTAMP_MISMATCH", ())
+                elif len(observations) < min_observations:
                     estimate = _unknown_estimate(
                         "INSUFFICIENT_ALIGNED_OBSERVATIONS", timestamps
                     )

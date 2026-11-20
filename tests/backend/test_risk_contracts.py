@@ -3177,8 +3177,77 @@ def test_pairwise_window_is_inclusive_and_alignment_uses_exact_timestamps() -> N
     )
     assert unaligned.state is DescriptiveEstimateState.UNKNOWN
     assert unaligned.value is None
-    assert unaligned.reason == "INSUFFICIENT_ALIGNED_OBSERVATIONS"
+    assert unaligned.reason == "TIMESTAMP_MISMATCH"
     assert unaligned.sample_count == 0
+
+
+@pytest.mark.parametrize(
+    ("left_indexes", "right_indexes"),
+    [
+        ((0, 1, 2, 3), (0, 1, 2)),
+        ((0, 1, 2), (0, 1, 2, 3)),
+        ((0, 1, 2, 3), (0, 1, 3, 4)),
+    ],
+)
+def test_pairwise_partial_overlap_is_unknown_without_dropping_observations(
+    left_indexes: tuple[int, ...], right_indexes: tuple[int, ...]
+) -> None:
+    left = return_series(
+        "SYNTHETIC-A",
+        tuple(str(index + 1) for index in left_indexes),
+        timestamps=tuple(T[index] for index in left_indexes),
+    )
+    right = return_series(
+        "SYNTHETIC-B",
+        tuple(str(2 * (index + 1)) for index in right_indexes),
+        timestamps=tuple(T[index] for index in right_indexes),
+    )
+    # A matching third series proves that a mismatch affects only its own pairs.
+    peer = return_series(
+        "SYNTHETIC-C",
+        tuple(str(3 * (index + 1)) for index in left_indexes),
+        timestamps=tuple(item.timestamp for item in left.observations),
+    )
+    result = pairwise_correlation(
+        (left, right, peer),
+        window_start=T[0],
+        window_end=T[4],
+        min_observations=3,
+        benchmark_instrument_id=left.instrument_id,
+    )
+    for pair in result.correlations:
+        if right.instrument_id in (pair.instrument_left, pair.instrument_right):
+            assert pair.estimate.state is DescriptiveEstimateState.UNKNOWN
+            assert pair.estimate.value is None
+            assert pair.estimate.reason == "TIMESTAMP_MISMATCH"
+            assert pair.estimate.sample_count == 0
+            assert pair.estimate.sample_timestamps == ()
+        else:
+            assert pair.estimate.state is DescriptiveEstimateState.AVAILABLE
+            assert pair.estimate.value == Decimal("1")
+    betas = {item.instrument_id: item.estimate for item in result.betas}
+    assert betas[right.instrument_id].state is DescriptiveEstimateState.UNKNOWN
+    assert betas[right.instrument_id].value is None
+    assert betas[right.instrument_id].reason == "TIMESTAMP_MISMATCH"
+    assert betas[right.instrument_id].sample_timestamps == ()
+    assert betas[right.instrument_id].sample_count == 0
+    assert betas[peer.instrument_id].value == Decimal("3")
+
+
+def test_pairwise_timestamp_mismatch_outside_window_does_not_affect_estimates() -> None:
+    left = return_series("SYNTHETIC-A", ("999", "1", "2", "3"), timestamps=T[:4])
+    right = return_series("SYNTHETIC-B", ("2", "4", "6", "999"), timestamps=T[1:5])
+    result = pairwise_correlation(
+        (left, right),
+        window_start=T[1],
+        window_end=T[3],
+        min_observations=3,
+        benchmark_instrument_id=left.instrument_id,
+    )
+    assert result.correlations[0].estimate.value == Decimal("1")
+    assert result.correlations[0].estimate.sample_timestamps == T[1:4]
+    assert result.betas[0].estimate.value == Decimal("2")
+    assert result.betas[0].estimate.sample_timestamps == T[1:4]
 
 
 def test_pairwise_minimum_observations_zero_variance_and_explicit_benchmark() -> None:

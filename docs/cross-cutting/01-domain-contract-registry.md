@@ -404,8 +404,11 @@ Each series digest is the canonical SHA-256 of its instrument ID, source ID,
 `VersionReference`, and exact observation tuple.
 The caller supplies an explicit inclusive aware-time window and minimum sample
 count of at least three. Each series has a unique instrument identity and
-strictly increasing timestamps. Each pair uses only the exact intersection of
-timestamps inside the window; there is no cleaning, resampling, interpolation,
+strictly increasing timestamps. Each pair requires identical timestamp sets
+inside the window. A mismatch returns `UNKNOWN` with `TIMESTAMP_MISMATCH`, no
+value, and zero used samples for both correlation and beta; unmatched
+observations are never silently dropped. Mismatches outside the explicit window
+do not affect the calculation. There is no cleaning, resampling, interpolation,
 forward-fill, or default window/count. Pearson correlation is sample covariance
 divided by the product of sample standard deviations. Optional beta is sample
 covariance divided by the sample variance of only the explicitly named,
