@@ -2887,6 +2887,155 @@ def calculate_stop_loss_assessment(
 
 
 @dataclass(frozen=True, slots=True)
+class TakeProfitTargetBound:
+    """Current, priced strategy invalidation bounds for one target."""
+
+    sequence: int
+    context: RiskContext
+    strategy_version: ContractReference
+    strategy_invalidation: ContractReference
+    asset: str
+    instrument_id: str
+    side: PositionSide
+    lower_price: PriceValue
+    upper_price: PriceValue
+    version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        _positive_int("sequence", self.sequence)
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        if (
+            not isinstance(self.strategy_version, ContractReference)
+            or self.strategy_version.contract_id != "C-021"
+        ):
+            raise RiskContractError("strategy_version must reference C-021.")
+        if (
+            not isinstance(self.strategy_invalidation, ContractReference)
+            or self.strategy_invalidation.contract_id != "C-023"
+        ):
+            raise RiskContractError("strategy_invalidation must reference C-023.")
+        _text("asset", self.asset)
+        _text("instrument_id", self.instrument_id)
+        if not isinstance(self.side, PositionSide):
+            raise RiskContractError("side must be a PositionSide.")
+        for name in ("lower_price", "upper_price"):
+            if not isinstance(getattr(self, name), PriceValue):
+                raise RiskContractError(f"{name} must be a PriceValue.")
+        if (
+            self.lower_price.quote_currency != self.upper_price.quote_currency
+            or self.lower_price.amount > self.upper_price.amount
+        ):
+            raise RiskContractError("target price bounds are invalid.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be a VersionReference.")
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class TakeProfitAssessmentRequest:
+    """Explicit offline inputs for a bounded C-079 target assessment."""
+
+    result_id: UUID
+    context: RiskContext
+    entry_price: PriceValue
+    stop_loss_request: StopLossAssessmentRequest
+    sizing_result: PositionSizingResult
+    targets: tuple[TakeProfitTarget, ...]
+    target_bounds: tuple[TakeProfitTargetBound, ...]
+    target_costs: tuple[SizingCosts, ...]
+    minimum_risk_reward: Decimal
+    minimum_risk_reward_version: VersionReference
+    assumptions_version: VersionReference
+    model_version: VersionReference
+    evaluated_at: datetime
+    assumptions_as_of: datetime
+    assumptions_valid_until: datetime
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        if not isinstance(self.entry_price, PriceValue):
+            raise RiskContractError("entry_price must be a PriceValue.")
+        if not isinstance(self.stop_loss_request, StopLossAssessmentRequest):
+            raise RiskContractError(
+                "stop_loss_request must be a StopLossAssessmentRequest."
+            )
+        if not isinstance(self.sizing_result, PositionSizingResult):
+            raise RiskContractError("sizing_result must be a PositionSizingResult.")
+        targets = _typed_tuple("targets", self.targets, TakeProfitTarget, empty=False)
+        bounds = _typed_tuple(
+            "target_bounds", self.target_bounds, TakeProfitTargetBound, empty=False
+        )
+        costs = _typed_tuple(
+            "target_costs", self.target_costs, SizingCosts, empty=False
+        )
+        sequences = tuple(target.sequence for target in targets)
+        if sequences != tuple(sorted(sequences)) or len(set(sequences)) != len(
+            sequences
+        ):
+            raise RiskContractError("targets must have unique ascending sequences.")
+        if tuple(bound.sequence for bound in bounds) != sequences:
+            raise RiskContractError("target bounds must match target sequences.")
+        if len(costs) != len(targets):
+            raise RiskContractError("each target requires explicit versioned costs.")
+        try:
+            with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as context:
+                context.traps[Inexact] = True
+                allocation_total = sum(
+                    (target.allocation.value for target in targets), Decimal("0")
+                )
+        except DecimalException as exc:
+            raise RiskContractError(
+                "target allocations cannot be represented exactly at precision 34."
+            ) from exc
+        if allocation_total != 1:
+            raise RiskContractError("target allocations must sum exactly to 1.")
+        if any(
+            (
+                self.context.side is PositionSide.LONG
+                and target.price.amount <= self.entry_price.amount
+            )
+            or (
+                self.context.side is PositionSide.SHORT
+                and target.price.amount >= self.entry_price.amount
+            )
+            for target in targets
+        ):
+            raise RiskContractError("take-profit target is on the wrong side of entry.")
+        _positive("minimum_risk_reward", self.minimum_risk_reward)
+        for name in (
+            "minimum_risk_reward_version",
+            "assumptions_version",
+            "model_version",
+        ):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise RiskContractError(f"{name} must be a VersionReference.")
+        evaluated = _time("evaluated_at", self.evaluated_at)
+        assumptions_as_of = _time("assumptions_as_of", self.assumptions_as_of)
+        assumptions_valid_until = _time(
+            "assumptions_valid_until", self.assumptions_valid_until
+        )
+        _ordered(
+            "assumptions_as_of",
+            assumptions_as_of,
+            "assumptions_valid_until",
+            assumptions_valid_until,
+        )
+        _ordered("context.as_of", self.context.as_of, "evaluated_at", evaluated)
+        object.__setattr__(self, "evaluated_at", evaluated)
+        object.__setattr__(self, "assumptions_as_of", assumptions_as_of)
+        object.__setattr__(self, "assumptions_valid_until", assumptions_valid_until)
+
+
+@dataclass(frozen=True, slots=True)
 class TakeProfitAssessment(_AssessmentBase):
     side: PositionSide
     entry_price: PriceValue
@@ -2942,6 +3091,447 @@ class TakeProfitAssessment(_AssessmentBase):
                 self.invalidation_consistency is not RiskCheckOutcome.PASSED
             ):
                 raise RiskContractError("passed targets require consistency checks.")
+
+
+def _take_profit_assessment_result(
+    request: TakeProfitAssessmentRequest,
+    *,
+    outcome: RiskCheckOutcome,
+    reason_codes: tuple[str, ...],
+    valid_until: datetime,
+    targets: tuple[TakeProfitTarget, ...],
+    expected_profit: MoneyValue | None,
+    risk_reward_ratio: Decimal | None,
+    strategy_consistency: RiskCheckOutcome,
+    invalidation_consistency: RiskCheckOutcome,
+    assumptions: tuple[VersionReference, ...],
+) -> TakeProfitAssessment:
+    result_fields: dict[str, object] = {
+        "result_id": request.result_id,
+        "context": request.context,
+        "outcome": outcome,
+        "reason_codes": reason_codes,
+        "model_version": request.model_version,
+        "as_of": request.context.as_of,
+        "evaluated_at": request.evaluated_at,
+        "valid_until": valid_until,
+        "side": request.context.side,
+        "entry_price": request.entry_price,
+        "targets": targets,
+        "expected_profit": expected_profit,
+        "risk_reward_ratio": risk_reward_ratio,
+        "strategy_consistency": strategy_consistency,
+        "invalidation_consistency": invalidation_consistency,
+        "assumptions": assumptions,
+        "contract_id": "C-079",
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+    }
+    digest = _risk_digest(
+        "take-profit assessment",
+        {"request": request, "result": result_fields},
+    )
+    assessment_fields = {
+        key: value
+        for key, value in result_fields.items()
+        if key not in {"contract_id", "schema_version"}
+    }
+    return TakeProfitAssessment(
+        **{
+            **assessment_fields,
+            "content_sha256": digest,
+        }  # type: ignore[arg-type]
+    )
+
+
+def _calculate_take_profit_assessment(
+    request: TakeProfitAssessmentRequest,
+) -> TakeProfitAssessment:
+    if not isinstance(request, TakeProfitAssessmentRequest):
+        raise RiskContractError("request must be a TakeProfitAssessmentRequest.")
+
+    evaluated_at = request.evaluated_at
+    stop_request = request.stop_loss_request
+    sizing = request.sizing_result
+    terms = stop_request.instrument
+    reasons: list[str] = []
+    hard_failure = False
+    insufficient = False
+    warning = False
+    strategy_check = RiskCheckOutcome.PASSED
+    invalidation_check = RiskCheckOutcome.PASSED
+
+    def fail(code: str, *, invalidation: bool = False) -> None:
+        nonlocal hard_failure, strategy_check, invalidation_check
+        hard_failure = True
+        reasons.append(code)
+        if invalidation:
+            invalidation_check = RiskCheckOutcome.FAILED
+        else:
+            strategy_check = RiskCheckOutcome.FAILED
+
+    def missing(code: str, *, invalidation: bool = False) -> None:
+        nonlocal insufficient, strategy_check, invalidation_check
+        insufficient = True
+        reasons.append(code)
+        if invalidation:
+            invalidation_check = RiskCheckOutcome.INSUFFICIENT_DATA
+        else:
+            strategy_check = RiskCheckOutcome.INSUFFICIENT_DATA
+
+    if (
+        request.assumptions_as_of > evaluated_at
+        or request.assumptions_valid_until < evaluated_at
+    ):
+        missing("ASSUMPTIONS_NOT_CURRENT")
+    expiries = [request.assumptions_valid_until]
+    context_references = (
+        (request.context.signal, "C-070"),
+        (request.context.validation, "C-028"),
+        (request.context.strategy_version, "C-021"),
+        (request.context.account_snapshot, "C-032"),
+        (request.context.portfolio_snapshot, "C-033"),
+        (stop_request.strategy_invalidation, "C-023"),
+    )
+    for reference, contract_id in context_references:
+        is_invalidation = contract_id == "C-023"
+        status, code = _stop_reference_status(reference, contract_id, evaluated_at)
+        if status is RiskCheckOutcome.FAILED:
+            fail(
+                code or "REFERENCE_CONTRACT_MISMATCH",
+                invalidation=is_invalidation,
+            )
+        elif status is RiskCheckOutcome.INSUFFICIENT_DATA:
+            missing(
+                code or "REFERENCE_PROVENANCE_INCOMPLETE",
+                invalidation=is_invalidation,
+            )
+        if reference.valid_until is not None:
+            expiries.append(reference.valid_until)
+
+    if request.context != stop_request.context:
+        fail("STOP_CONTEXT_MISMATCH")
+    if (
+        request.entry_price != stop_request.entry_price
+        or request.entry_price.quote_currency != stop_request.instrument.quote_currency
+    ):
+        fail("STOP_ENTRY_MISMATCH")
+    if stop_request.evaluated_at != evaluated_at:
+        fail("STOP_EVALUATION_TIME_MISMATCH")
+    if (
+        stop_request.assumptions_as_of > evaluated_at
+        or stop_request.assumptions_valid_until < evaluated_at
+    ):
+        missing("STOP_ASSUMPTIONS_NOT_CURRENT")
+    if sizing.contract_id != "C-036" or sizing.schema_version != "1":
+        missing("SIZING_SCHEMA_UNSUPPORTED")
+    if sizing.context != request.context:
+        fail("SIZING_CONTEXT_MISMATCH")
+    if sizing.outcome is RiskCheckOutcome.FAILED:
+        fail("SIZING_FAILED")
+    elif sizing.outcome is RiskCheckOutcome.INSUFFICIENT_DATA:
+        missing("SIZING_INSUFFICIENT_DATA")
+    elif sizing.outcome not in {
+        RiskCheckOutcome.PASSED,
+        RiskCheckOutcome.WARNING,
+    }:
+        missing("SIZING_NOT_PASSING")
+    if (
+        sizing.as_of > evaluated_at
+        or sizing.evaluated_at > evaluated_at
+        or sizing.valid_until < evaluated_at
+    ):
+        missing("SIZING_NOT_CURRENT")
+    expiries.append(sizing.valid_until)
+
+    stop_assessment = calculate_stop_loss_assessment(stop_request)
+    if stop_assessment.outcome is RiskCheckOutcome.FAILED:
+        fail("STOP_ASSESSMENT_FAILED")
+    elif stop_assessment.outcome is RiskCheckOutcome.INSUFFICIENT_DATA:
+        missing("STOP_ASSESSMENT_INSUFFICIENT_DATA")
+    elif stop_assessment.outcome is RiskCheckOutcome.WARNING:
+        warning = True
+        reasons.extend(stop_assessment.reason_codes)
+    if stop_assessment.context != request.context:
+        fail("STOP_ASSESSMENT_CONTEXT_MISMATCH")
+    if (
+        stop_assessment.entry_price != request.entry_price
+        or stop_assessment.side is not request.context.side
+    ):
+        fail("STOP_ASSESSMENT_TRADE_MISMATCH")
+    expiries.append(stop_assessment.valid_until)
+    if stop_assessment.outcome in {
+        RiskCheckOutcome.PASSED,
+        RiskCheckOutcome.WARNING,
+    }:
+        if (
+            sizing.recommended_quantity is None
+            or sizing.recommended_quantity != stop_request.quantity
+        ):
+            fail("SIZING_QUANTITY_MISMATCH")
+        if sizing.stop_distance is None or (
+            stop_assessment.stop_distance is not None
+            and sizing.stop_distance != stop_assessment.stop_distance
+        ):
+            fail("SIZING_STOP_DISTANCE_MISMATCH")
+        if (
+            terms.version not in sizing.sizing_assumptions
+            or stop_request.costs.version not in sizing.sizing_assumptions
+        ):
+            fail("SIZING_ASSUMPTIONS_MISMATCH")
+        if sizing.maximum_loss is None or stop_assessment.maximum_loss is None:
+            fail("SIZING_MAXIMUM_LOSS_MISMATCH")
+        else:
+            gap_loss = (
+                stop_request.adverse_gap_displacement
+                * terms.contract_multiplier
+                * stop_request.quantity
+            )
+            if (
+                sizing.maximum_loss.amount + gap_loss
+                != stop_assessment.maximum_loss.amount
+            ):
+                fail("SIZING_MAXIMUM_LOSS_MISMATCH")
+    if sizing.outcome is RiskCheckOutcome.WARNING:
+        warning = True
+        reasons.extend(sizing.reason_codes)
+    if any(
+        item.severity is RiskLimitSeverity.SOFT
+        and item.outcome is RiskCheckOutcome.WARNING
+        for item in stop_assessment.limits
+    ):
+        warning = True
+        reasons.extend(
+            item.reason
+            for item in stop_assessment.limits
+            if item.severity is RiskLimitSeverity.SOFT
+            and item.outcome is RiskCheckOutcome.WARNING
+        )
+
+    if terms.asset != request.context.asset or (
+        terms.instrument_id != request.context.instrument_id
+    ):
+        fail("INSTRUMENT_LINEAGE_MISMATCH")
+    if terms.model != "LINEAR":
+        fail("UNSUPPORTED_INSTRUMENT_MODEL")
+    if request.entry_price.quote_currency != terms.quote_currency:
+        fail("ENTRY_CURRENCY_MISMATCH")
+    quantity = sizing.recommended_quantity
+    if quantity is None:
+        missing("SIZING_QUANTITY_UNAVAILABLE")
+
+    for bound in request.target_bounds:
+        expiries.append(bound.valid_until)
+        if bound.context != request.context:
+            fail("TARGET_BOUND_CONTEXT_MISMATCH")
+        if bound.strategy_version != request.context.strategy_version:
+            fail("TARGET_BOUND_STRATEGY_MISMATCH")
+        if bound.strategy_invalidation != stop_request.strategy_invalidation:
+            fail("TARGET_BOUND_INVALIDATION_MISMATCH", invalidation=True)
+        if (
+            bound.asset != request.context.asset
+            or bound.instrument_id != request.context.instrument_id
+            or bound.side is not request.context.side
+        ):
+            fail("TARGET_BOUND_INSTRUMENT_OR_SIDE_MISMATCH")
+        if bound.as_of > evaluated_at or bound.valid_until < evaluated_at:
+            missing("TARGET_BOUND_NOT_CURRENT")
+        bound_status, bound_code = _stop_reference_status(
+            bound.strategy_version, "C-021", evaluated_at
+        )
+        if bound_status is RiskCheckOutcome.FAILED:
+            fail(bound_code or "TARGET_STRATEGY_REFERENCE_MISMATCH")
+        elif bound_status is RiskCheckOutcome.INSUFFICIENT_DATA:
+            missing(bound_code or "TARGET_STRATEGY_REFERENCE_INCOMPLETE")
+        invalidation_status, invalidation_code = _stop_reference_status(
+            bound.strategy_invalidation, "C-023", evaluated_at
+        )
+        if invalidation_status is RiskCheckOutcome.FAILED:
+            fail(
+                invalidation_code or "TARGET_INVALIDATION_REFERENCE_MISMATCH",
+                invalidation=True,
+            )
+        elif invalidation_status is RiskCheckOutcome.INSUFFICIENT_DATA:
+            missing(
+                invalidation_code or "TARGET_INVALIDATION_REFERENCE_INCOMPLETE",
+                invalidation=True,
+            )
+
+    if any(
+        target.price.quote_currency != terms.quote_currency
+        for target in request.targets
+    ):
+        fail("TARGET_CURRENCY_MISMATCH")
+    if any(
+        target.price.amount % terms.tick_size != 0
+        for target in request.targets
+    ):
+        fail("TARGET_PRICE_TICK_MISMATCH")
+    if any(
+        (
+            request.context.side is PositionSide.LONG
+            and earlier.price.amount >= later.price.amount
+        )
+        or (
+            request.context.side is PositionSide.SHORT
+            and earlier.price.amount <= later.price.amount
+        )
+        for earlier, later in zip(request.targets, request.targets[1:])
+    ):
+        fail("TARGET_PRICES_NOT_PROGRESSIVE")
+
+    computed_targets: list[TakeProfitTarget] = []
+    total_profit = Decimal("0")
+    profit_available = quantity is not None
+    for target, costs, bound in zip(
+        request.targets, request.target_costs, request.target_bounds, strict=True
+    ):
+        if not (
+            bound.lower_price.quote_currency
+            == bound.upper_price.quote_currency
+            == target.price.quote_currency
+            == terms.quote_currency
+        ):
+            fail("TARGET_BOUND_CURRENCY_MISMATCH", invalidation=True)
+        elif not (
+            bound.lower_price.amount
+            <= target.price.amount
+            <= bound.upper_price.amount
+        ):
+            fail("TARGET_OUTSIDE_STRATEGY_BOUND", invalidation=True)
+        if any(
+            value.currency != terms.quote_currency
+            for value in (costs.fee, costs.slippage, costs.funding)
+        ):
+            fail("TARGET_COST_CURRENCY_MISMATCH")
+        target_profit: Decimal | None = None
+        if quantity is not None and stop_request.stop_loss is not None:
+            allocated_quantity = quantity * target.allocation.value
+            if allocated_quantity % terms.quantity_step != 0:
+                fail("TARGET_QUANTITY_STEP_MISMATCH")
+            if not (
+                terms.minimum_quantity
+                <= allocated_quantity
+                <= terms.maximum_quantity
+            ):
+                fail("TARGET_QUANTITY_OUT_OF_BOUNDS")
+            directional_move = (
+                target.price.amount - request.entry_price.amount
+                if request.context.side is PositionSide.LONG
+                else request.entry_price.amount - target.price.amount
+            )
+            gross_profit = (
+                directional_move * terms.contract_multiplier * allocated_quantity
+            )
+            cost_per_unit = (
+                costs.fee.amount + costs.slippage.amount + costs.funding.amount
+            )
+            target_profit = gross_profit - cost_per_unit * allocated_quantity
+            if target_profit <= 0:
+                fail("TARGET_COSTS_EXCEED_DIRECTIONAL_PROFIT")
+                target_profit = None
+                profit_available = False
+            else:
+                total_profit += target_profit
+        else:
+            profit_available = False
+        computed_targets.append(
+            replace(
+                target,
+                expected_profit=(
+                    MoneyValue(target_profit, terms.quote_currency)
+                    if target_profit is not None
+                    else None
+                ),
+            )
+        )
+
+    expected_profit: MoneyValue | None = None
+    risk_reward_ratio: Decimal | None = None
+    maximum_loss = stop_assessment.maximum_loss
+    if (
+        profit_available
+        and maximum_loss is not None
+        and maximum_loss.amount > 0
+        and total_profit > 0
+    ):
+        expected_profit = MoneyValue(total_profit, terms.quote_currency)
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+            risk_reward_ratio = total_profit / maximum_loss.amount
+        if total_profit < request.minimum_risk_reward * maximum_loss.amount:
+            fail("MINIMUM_RISK_REWARD_NOT_MET")
+    else:
+        missing("RISK_REWARD_INPUTS_UNAVAILABLE")
+
+    assumptions = tuple(
+        dict.fromkeys(
+            (
+                request.assumptions_version,
+                request.minimum_risk_reward_version,
+                request.model_version,
+                stop_request.model_version,
+                stop_request.policy_version,
+                stop_request.configuration_version,
+                stop_request.gap_version,
+                stop_request.instrument.version,
+                stop_request.costs.version,
+                sizing.model_version,
+                *sizing.sizing_assumptions,
+                *(cost.version for cost in request.target_costs),
+                *(bound.version for bound in request.target_bounds),
+            )
+        )
+    )
+    valid_until = min(expiries)
+    if valid_until < evaluated_at:
+        valid_until = evaluated_at
+        insufficient = True
+        reasons.append("ASSESSMENT_EVIDENCE_EXPIRED")
+    if hard_failure:
+        outcome = RiskCheckOutcome.FAILED
+    elif insufficient:
+        outcome = RiskCheckOutcome.INSUFFICIENT_DATA
+    elif warning:
+        outcome = RiskCheckOutcome.WARNING
+        if not reasons:
+            reasons.append("UPSTREAM_WARNING")
+    else:
+        outcome = RiskCheckOutcome.PASSED
+    if outcome is not RiskCheckOutcome.PASSED and not reasons:
+        reasons.append("TAKE_PROFIT_ASSESSMENT_INCOMPLETE")
+    if outcome is RiskCheckOutcome.INSUFFICIENT_DATA:
+        expected_profit = None
+        risk_reward_ratio = None
+        computed_targets = [
+            replace(target, expected_profit=None) for target in request.targets
+        ]
+    return _take_profit_assessment_result(
+        request,
+        outcome=outcome,
+        reason_codes=tuple(dict.fromkeys(reasons)),
+        valid_until=valid_until,
+        targets=tuple(computed_targets),
+        expected_profit=expected_profit,
+        risk_reward_ratio=risk_reward_ratio,
+        strategy_consistency=strategy_check,
+        invalidation_consistency=invalidation_check,
+        assumptions=assumptions,
+    )
+
+
+def calculate_take_profit_assessment(
+    request: TakeProfitAssessmentRequest,
+) -> TakeProfitAssessment:
+    """Assess explicit take-profit inputs offline; grants no trade authority."""
+    try:
+        with localcontext(
+            Context(prec=34, rounding=ROUND_HALF_EVEN)
+        ) as decimal_context:
+            decimal_context.traps[Inexact] = True
+            return _calculate_take_profit_assessment(request)
+    except DecimalException as exc:
+        raise RiskContractError(
+            "take-profit arithmetic cannot be represented safely at precision 34."
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -4396,10 +4986,13 @@ __all__ = [
     "StressScenarioResult",
     "StressTestResult",
     "TakeProfitAssessment",
+    "TakeProfitAssessmentRequest",
     "TakeProfitTarget",
+    "TakeProfitTargetBound",
     "VersionReference",
     "aggregate_portfolio_exposure",
     "calculate_position_size",
     "calculate_stop_loss_assessment",
+    "calculate_take_profit_assessment",
     "pairwise_correlation",
 ]

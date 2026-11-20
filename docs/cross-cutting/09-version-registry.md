@@ -919,3 +919,43 @@ choose leverage, calculate liquidation, assess portfolio impact, perform
 policy hierarchy resolution, approve risk, or authorize approval/execution.
 A C-036 sizing pass does not imply stop validity; a C-078 pass does not imply
 overall risk approval or execution authority.
+
+## Issue #108 — C-079 offline take-profit assessment
+
+C-079 `TakeProfitAssessment` remains schema `1`; its constructor, fields,
+semantics, and consumers are unchanged. The additive
+`TakeProfitAssessmentRequest`, `TakeProfitTargetBound`, and
+`calculate_take_profit_assessment` are immutable nonpersisted implementation
+inputs/behavior only. No new canonical contract ID, codec, persistence,
+migration, API, or runtime integration is introduced.
+
+The request binds explicit result ID/evaluation time, exact C-078 request
+inputs (recomputed through `calculate_stop_loss_assessment`), current typed
+C-036 sizing evidence, targets, per-target current priced strategy bounds,
+versioned per-target `SizingCosts`, and positive versioned minimum R:R. The
+stop must pass; C-036 must be current, schema 1, same-context, and match the
+stop quantity, distance, and instrument/cost assumptions. Its nominal loss
+plus the exact adverse-gap adjustment must match recomputed C-078 maximum
+loss. C-036/stop warnings propagate.
+Hard failures dominate missing evidence and warnings; missing, stale, future,
+or unknown evidence cannot pass.
+
+The target sequence is immutable, unique, and ascending; allocations sum
+exactly to one. LONG prices increase and SHORT prices decrease, all targets
+conform to the instrument tick, and each allocated quantity satisfies
+minimum/maximum/step bounds without rounding or adjustment. Each expected
+profit is directional gross profit less that target's explicit adverse
+fee/slippage/funding inputs. The minimum R:R test compares exact cross
+products with recomputed C-078 maximum loss; reported division is descriptive.
+Priced bounds bind exact C-021/C-023 and `RiskContext` lineage and must be
+current. C-021/C-028/C-070 schema 1/2 references use the registered explicit
+compatibility dispatch; C-079 output stays schema 1.
+
+Arithmetic is isolated to Decimal precision 34, half-even, with exact
+operations trapped and unrepresentable arithmetic rejected as
+`RiskContractError`. The canonical result digest covers the complete request
+and complete C-079 output except its digest; result expiry is the earliest
+applicable context, upstream, assumption, and target-bound expiry. Callers
+retain the exact nonpersisted request alongside its C-079 result. This
+observation grants no sizing, policy, portfolio, approval, execution, or
+authorization authority.
