@@ -1365,6 +1365,20 @@ def liquidation_assessment_request(
         side=side, margin_mode=margin_mode, **(leverage_overrides or {})
     )
     sizing_value = leverage_value.sizing_request
+    if (
+        leverage_overrides
+        and "sizing_request" in leverage_overrides
+        and leverage_value.margin_rule is not None
+    ):
+        # Bind this synthetic rule to the explicitly supplied fixture account.
+        leverage_value = replace(
+            leverage_value,
+            margin_rule=replace(
+                leverage_value.margin_rule,
+                account_id=sizing_value.account.account_id,
+                account_snapshot_id=sizing_value.account.snapshot_id,
+            ),
+        )
     expected_stop = stop_loss or sizing_value.stop
     expected_liquidation = liquidation_price or (
         "80" if side is PositionSide.LONG else "120"
@@ -1426,6 +1440,8 @@ def liquidation_assessment_request(
     }
     cost_values.update(cost_overrides or {})
     costs = LiquidationCostEvidence(**cost_values)  # type: ignore[arg-type]
+    if not estimate_overrides or "cost_basis" not in estimate_overrides:
+        estimate_value = replace(estimate_value, cost_basis=costs)
     return LiquidationAssessmentRequest(
         UUID(int=110),
         leverage_value.evaluated_at,
@@ -4605,7 +4621,9 @@ def test_liquidation_unknown_or_noncurrent_estimate_is_unavailable(
 def test_liquidation_basis_cost_currency_and_unknown_treatment_fail_closed() -> None:
     request = liquidation_assessment_request()
     assert request.estimate is not None
-    altered_basis = replace(request.estimate.basis_request, requested_leverage=Decimal("4"))
+    altered_basis = replace(
+        request.estimate.basis_request, requested_leverage=Decimal("4")
+    )
     mismatch = replace(
         request,
         estimate=replace(request.estimate, basis_request=altered_basis),
@@ -4655,7 +4673,10 @@ def test_liquidation_propagates_upstream_failure_and_warning() -> None:
         requested_notional=money("2000"),
     )
     warned_leverage = replace(leverage_value, sizing_request=warning_sizing)
-    assert calculate_leverage_assessment(warned_leverage).outcome is RiskCheckOutcome.WARNING
+    assert (
+        calculate_leverage_assessment(warned_leverage).outcome
+        is RiskCheckOutcome.WARNING
+    )
     warned = liquidation_assessment_request(
         leverage_overrides={"sizing_request": warning_sizing}
     )
@@ -4673,9 +4694,7 @@ def test_liquidation_context_schema_digest_and_expiry_binding() -> None:
         context_value,
         signal=signal_v2,
         validation=replace(context_value.validation, schema_version="2"),
-        strategy_version=replace(
-            context_value.strategy_version, schema_version="2"
-        ),
+        strategy_version=replace(context_value.strategy_version, schema_version="2"),
     )
     sizing_v2 = replace(request.leverage_request.sizing_request, context=context_v2)
     leverage_v2 = replace(request.leverage_request, sizing_request=sizing_v2)
@@ -4699,12 +4718,16 @@ def test_liquidation_context_schema_digest_and_expiry_binding() -> None:
     same_boundary = liquidation_assessment_request(
         estimate_overrides={"valid_until": T[4]}
     )
-    assert calculate_liquidation_assessment(same_boundary).outcome is RiskCheckOutcome.PASSED
-    earliest = liquidation_assessment_request(
-        threshold_overrides={"valid_until": T[6]}
+    assert (
+        calculate_liquidation_assessment(same_boundary).outcome
+        is RiskCheckOutcome.PASSED
     )
+    earliest = liquidation_assessment_request(threshold_overrides={"valid_until": T[6]})
     assert calculate_liquidation_assessment(earliest).valid_until == T[6]
-    assert calculate_liquidation_assessment(request).content_sha256 != result.content_sha256
+    assert (
+        calculate_liquidation_assessment(request).content_sha256
+        != result.content_sha256
+    )
     changed_source = liquidation_assessment_request(
         estimate_overrides={"source_id": "another-explicit-source"}
     )
@@ -4751,7 +4774,9 @@ def test_liquidation_reference_provenance_and_hard_failure_precedence() -> None:
         )
     )
     assert missing_digest_result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
-    assert "SNAPSHOT_REFERENCE_PROVENANCE_INCOMPLETE" in missing_digest_result.reason_codes
+    assert (
+        "SNAPSHOT_REFERENCE_PROVENANCE_INCOMPLETE" in missing_digest_result.reason_codes
+    )
     hard_with_missing = calculate_liquidation_assessment(
         replace(request, estimate=None, stop_loss=price("110"))
     )
@@ -4807,12 +4832,15 @@ def test_liquidation_ratio_bounds_exact_arithmetic_and_decimal_context() -> None
         result = calculate_liquidation_assessment(request)
     assert result.outcome is RiskCheckOutcome.PASSED
     assert result.entry_to_liquidation == ratio("0.2", "entry-distance/entry")
-    assert calculate_liquidation_assessment(
-        replace(request, estimate=None)
-    ).availability is LiquidationAvailability.UNAVAILABLE
+    assert (
+        calculate_liquidation_assessment(replace(request, estimate=None)).availability
+        is LiquidationAvailability.UNAVAILABLE
+    )
 
 
-def test_c077_schema_one_constructor_and_unavailable_contract_remain_unchanged() -> None:
+def test_c077_schema_one_constructor_and_unavailable_contract_remain_unchanged() -> (
+    None
+):
     expected_names = {
         "availability",
         "margin_mode",
@@ -4829,13 +4857,100 @@ def test_c077_schema_one_constructor_and_unavailable_contract_remain_unchanged()
     }
     assert expected_names <= {item.name for item in fields(LiquidationAssessment)}
     assert LiquidationAssessment.__dataclass_fields__["availability"].init
-    assert liquidation(
-        availability=LiquidationAvailability.UNAVAILABLE,
-        liquidation_price=None,
-        entry_to_liquidation=None,
-        stop_to_liquidation=None,
-        formula_version=None,
-        exchange_constraints=None,
-        outcome=RiskCheckOutcome.INSUFFICIENT_DATA,
-        reason_codes=("LIQUIDATION_MODEL_UNAVAILABLE",),
-    ).availability is LiquidationAvailability.UNAVAILABLE
+    assert (
+        liquidation(
+            availability=LiquidationAvailability.UNAVAILABLE,
+            liquidation_price=None,
+            entry_to_liquidation=None,
+            stop_to_liquidation=None,
+            formula_version=None,
+            exchange_constraints=None,
+            outcome=RiskCheckOutcome.INSUFFICIENT_DATA,
+            reason_codes=("LIQUIDATION_MODEL_UNAVAILABLE",),
+        ).availability
+        is LiquidationAvailability.UNAVAILABLE
+    )
+
+
+def test_liquidation_estimate_cannot_reuse_changed_cost_assumptions() -> None:
+    request = liquidation_assessment_request()
+    changed = replace(request, costs=replace(request.costs, fee_reserve=money("200")))
+    result = calculate_liquidation_assessment(changed)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert result.availability is LiquidationAvailability.UNAVAILABLE
+    assert result.liquidation_price is None
+    assert "LIQUIDATION_ESTIMATE_COST_BASIS_MISMATCH" in result.reason_codes
+
+
+def test_liquidation_unknown_sizing_quantity_does_not_prove_mismatch() -> None:
+    request = liquidation_assessment_request()
+    assert request.estimate is not None
+    leverage_value = replace(
+        request.leverage_request,
+        sizing_request=replace(
+            request.leverage_request.sizing_request, instrument=None
+        ),
+    )
+    result = calculate_liquidation_assessment(
+        replace(
+            request,
+            leverage_request=leverage_value,
+            estimate=replace(request.estimate, basis_request=leverage_value),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert "LIQUIDATION_ESTIMATE_BASIS_MISMATCH" not in result.reason_codes
+
+
+@pytest.mark.parametrize("kind", ["quantity", "venue", "currency"])
+def test_liquidation_unusable_price_cannot_report_passing_comparison(kind: str) -> None:
+    request = liquidation_assessment_request()
+    assert request.estimate is not None
+    if kind == "quantity":
+        estimate = replace(request.estimate, quantity=Decimal("11"))
+    elif kind == "venue":
+        estimate = replace(request.estimate, venue="different-venue")
+    else:
+        estimate = replace(
+            request.estimate, liquidation_price=PriceValue(Decimal("80"), "OTHER-USD")
+        )
+    result = calculate_liquidation_assessment(replace(request, estimate=estimate))
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert result.availability is LiquidationAvailability.UNAVAILABLE
+    assert "PASSED" not in result.volatility_relationship
+    assert "PASSED" not in result.stress_relationship
+
+
+def test_liquidation_missing_cost_binding_is_unavailable() -> None:
+    request = liquidation_assessment_request(estimate_overrides={"cost_basis": None})
+    result = calculate_liquidation_assessment(request)
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.availability is LiquidationAvailability.UNAVAILABLE
+    assert "LIQUIDATION_ESTIMATE_COST_BASIS_MISSING" in result.reason_codes
+    assert "PASSED" not in result.stress_relationship
+
+
+@pytest.mark.parametrize("field", ["content_sha256", "valid_until"])
+def test_sizing_missing_snapshot_provenance_stays_unknown(field: str) -> None:
+    request = sizing_request()
+    reference = replace(request.context.account_snapshot, **{field: None})
+    result = calculate_position_size(
+        replace(request, context=replace(request.context, account_snapshot=reference))
+    )
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.recommended_quantity is None
+
+
+@pytest.mark.parametrize(
+    "field,value", [("content_sha256", "b" * 64), ("valid_until", T[14])]
+)
+def test_sizing_known_snapshot_provenance_conflict_still_fails(
+    field: str, value: object
+) -> None:
+    request = sizing_request()
+    reference = replace(request.context.account_snapshot, **{field: value})
+    result = calculate_position_size(
+        replace(request, context=replace(request.context, account_snapshot=reference))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "SNAPSHOT_REFERENCE_MISMATCH" in result.reason_codes

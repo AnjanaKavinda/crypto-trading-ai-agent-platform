@@ -1734,6 +1734,7 @@ class LiquidationPriceEvidence:
     basis_request: LeverageAssessmentRequest
     as_of: datetime
     valid_until: datetime
+    cost_basis: LiquidationCostEvidence | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, RiskContext):
@@ -1757,12 +1758,16 @@ class LiquidationPriceEvidence:
         for name in ("formula_version", "source_version", "exchange_constraints"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, VersionReference):
-                raise RiskContractError(
-                    f"{name} must be a VersionReference or None."
-                )
+                raise RiskContractError(f"{name} must be a VersionReference or None.")
         if not isinstance(self.basis_request, LeverageAssessmentRequest):
             raise RiskContractError(
                 "basis_request must be a LeverageAssessmentRequest."
+            )
+        if self.cost_basis is not None and not isinstance(
+            self.cost_basis, LiquidationCostEvidence
+        ):
+            raise RiskContractError(
+                "cost_basis must be LiquidationCostEvidence or None."
             )
         as_of = _time("as_of", self.as_of)
         valid_until = _time("valid_until", self.valid_until)
@@ -1839,9 +1844,7 @@ class LiquidationCostEvidence:
         _money("funding_reserve", self.funding_reserve)
         if self.treatment is not None:
             _text("treatment", self.treatment)
-        if self.version is not None and not isinstance(
-            self.version, VersionReference
-        ):
+        if self.version is not None and not isinstance(self.version, VersionReference):
             raise RiskContractError("version must be a VersionReference or None.")
         as_of = _time("as_of", self.as_of)
         valid_until = _time("valid_until", self.valid_until)
@@ -1880,9 +1883,7 @@ class LiquidationAssessmentRequest:
                 "estimate must be LiquidationPriceEvidence or None."
             )
         if not isinstance(self.thresholds, LiquidationDistanceThresholds):
-            raise RiskContractError(
-                "thresholds must be LiquidationDistanceThresholds."
-            )
+            raise RiskContractError("thresholds must be LiquidationDistanceThresholds.")
         if not isinstance(self.costs, LiquidationCostEvidence):
             raise RiskContractError("costs must be LiquidationCostEvidence.")
         object.__setattr__(self, "evaluated_at", evaluated_at)
@@ -2119,8 +2120,14 @@ def _sizing_input_failure(
         if (
             reference.entity_id != snapshot.snapshot_id
             or reference.schema_version != snapshot.schema_version
-            or reference.content_sha256 != snapshot.content_sha256
-            or reference.valid_until != snapshot.valid_until
+            or (
+                reference.content_sha256 is not None
+                and reference.content_sha256 != snapshot.content_sha256
+            )
+            or (
+                reference.valid_until is not None
+                and reference.valid_until != snapshot.valid_until
+            )
         ):
             return RiskCheckOutcome.FAILED, "SNAPSHOT_REFERENCE_MISMATCH"
     snapshots: tuple[AccountSnapshot | PortfolioSnapshot | PositionSnapshot, ...] = (
@@ -3027,6 +3034,7 @@ def calculate_liquidation_assessment(
             terms = sizing_request.instrument
             thresholds, estimate = request.thresholds, request.estimate
             leverage = calculate_leverage_assessment(leverage_request)
+            sizing = calculate_position_size(sizing_request)
             reasons: list[str] = []
             failed = leverage.outcome is RiskCheckOutcome.FAILED
             insufficient = leverage.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
@@ -3042,9 +3050,9 @@ def calculate_liquidation_assessment(
                 )
                 warned = warned or outcome is RiskCheckOutcome.WARNING
 
-            for code in leverage.reason_codes:
-                if code not in reasons:
-                    reasons.append(code)
+            for upstream_reason in leverage.reason_codes:
+                if upstream_reason not in reasons:
+                    reasons.append(upstream_reason)
             expiries = [
                 leverage.valid_until,
                 sizing_request.assumptions_valid_until,
@@ -3074,12 +3082,9 @@ def calculate_liquidation_assessment(
                 (context.account_snapshot, account, "C-032"),
                 (context.portfolio_snapshot, portfolio, "C-033"),
             ):
-                if (
-                    reference.entity_id != snapshot.snapshot_id
-                    or (
-                        reference.content_sha256 is not None
-                        and reference.content_sha256 != snapshot.content_sha256
-                    )
+                if reference.entity_id != snapshot.snapshot_id or (
+                    reference.content_sha256 is not None
+                    and reference.content_sha256 != snapshot.content_sha256
                 ):
                     record("SNAPSHOT_REFERENCE_MISMATCH", RiskCheckOutcome.FAILED)
                 if (
@@ -3097,9 +3102,7 @@ def calculate_liquidation_assessment(
                 if snapshot.as_of > request.evaluated_at or (
                     snapshot.captured_at > request.evaluated_at
                 ):
-                    record(
-                        "SNAPSHOT_FUTURE_DATED", RiskCheckOutcome.INSUFFICIENT_DATA
-                    )
+                    record("SNAPSHOT_FUTURE_DATED", RiskCheckOutcome.INSUFFICIENT_DATA)
                 expiries.append(snapshot.valid_until)
 
             if terms is None:
@@ -3160,11 +3163,15 @@ def calculate_liquidation_assessment(
                 context.instrument_id,
                 context.side,
             )
-            if thresholds.context != context or (
-                thresholds.asset,
-                thresholds.instrument_id,
-                thresholds.side,
-            ) != expected_basis[1:]:
+            if (
+                thresholds.context != context
+                or (
+                    thresholds.asset,
+                    thresholds.instrument_id,
+                    thresholds.side,
+                )
+                != expected_basis[1:]
+            ):
                 record(
                     "LIQUIDATION_THRESHOLD_BASIS_MISMATCH",
                     RiskCheckOutcome.FAILED,
@@ -3177,7 +3184,6 @@ def calculate_liquidation_assessment(
                     estimate.side,
                     estimate.entry_price,
                     estimate.stop_loss,
-                    estimate.quantity,
                     estimate.basis_request,
                 ) != (
                     context.asset,
@@ -3185,11 +3191,27 @@ def calculate_liquidation_assessment(
                     context.side,
                     sizing_request.entry,
                     request.stop_loss,
-                    calculate_position_size(sizing_request).recommended_quantity,
                     leverage_request,
                 ):
                     record(
                         "LIQUIDATION_ESTIMATE_BASIS_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if (
+                    sizing.recommended_quantity is not None
+                    and estimate.quantity != sizing.recommended_quantity
+                ):
+                    record(
+                        "LIQUIDATION_ESTIMATE_BASIS_MISMATCH", RiskCheckOutcome.FAILED
+                    )
+                if estimate.cost_basis is None:
+                    record(
+                        "LIQUIDATION_ESTIMATE_COST_BASIS_MISSING",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                elif estimate.cost_basis != request.costs:
+                    record(
+                        "LIQUIDATION_ESTIMATE_COST_BASIS_MISMATCH",
                         RiskCheckOutcome.FAILED,
                     )
                 if estimate.margin_mode is not leverage_request.margin_mode:
@@ -3297,16 +3319,24 @@ def calculate_liquidation_assessment(
                     if liquidation_price >= stop:
                         record("LIQUIDATION_AT_OR_INSIDE_STOP", RiskCheckOutcome.FAILED)
                     if liquidation_price >= entry:
-                        record("LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY", RiskCheckOutcome.FAILED)
+                        record(
+                            "LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY",
+                            RiskCheckOutcome.FAILED,
+                        )
                 else:
                     entry_distance = liquidation_price - entry
                     stop_clearance = liquidation_price - stop
                     if liquidation_price <= stop:
                         record("LIQUIDATION_AT_OR_INSIDE_STOP", RiskCheckOutcome.FAILED)
                     if liquidation_price <= entry:
-                        record("LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY", RiskCheckOutcome.FAILED)
+                        record(
+                            "LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY",
+                            RiskCheckOutcome.FAILED,
+                        )
                 if entry_distance <= 0:
-                    record("LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY", RiskCheckOutcome.FAILED)
+                    record(
+                        "LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY", RiskCheckOutcome.FAILED
+                    )
                 if stop_clearance <= 0:
                     record("LIQUIDATION_AT_OR_INSIDE_STOP", RiskCheckOutcome.FAILED)
 
@@ -3314,7 +3344,11 @@ def calculate_liquidation_assessment(
             stop_ratio: Decimal | None = None
             normal_minimum = Decimal(0)
             stress_minimum = Decimal(0)
-            if entry_distance is not None and stop_clearance is not None and terms is not None:
+            if (
+                entry_distance is not None
+                and stop_clearance is not None
+                and terms is not None
+            ):
                 with localcontext() as exact:
                     exact.traps[Inexact] = True
                     minimum_distance = (
@@ -3371,6 +3405,19 @@ def calculate_liquidation_assessment(
                 and estimate.as_of >= context.as_of
                 and estimate.as_of <= request.evaluated_at
                 and estimate.valid_until >= request.evaluated_at
+                and estimate.venue == terms.venue
+                and estimate.quantity == sizing.recommended_quantity
+                and estimate.cost_basis == request.costs
+                and estimate.cost_basis is not None
+                and estimate.liquidation_price.quote_currency == terms.quote_currency
+                and estimate.entry_price.quote_currency == terms.quote_currency
+                and estimate.stop_loss.quote_currency == terms.quote_currency
+                and request.stop_loss == sizing_request.stop
+                and thresholds.quote_currency == terms.quote_currency
+                and request.costs.fee_reserve.currency == terms.quote_currency
+                and request.costs.funding_reserve.currency == terms.quote_currency
+                and 0 < entry_distance <= sizing_request.entry.amount
+                and 0 < stop_clearance <= sizing_request.entry.amount
                 and estimate.context == context
                 and estimate.asset == context.asset
                 and estimate.instrument_id == context.instrument_id
@@ -3399,8 +3446,7 @@ def calculate_liquidation_assessment(
                 and request.costs.as_of >= context.as_of
                 and request.costs.as_of <= request.evaluated_at
                 and request.costs.valid_until >= request.evaluated_at
-                and request.costs.treatment
-                == "ALREADY_INCLUDED_IN_SUPPLIED_ESTIMATE"
+                and request.costs.treatment == "ALREADY_INCLUDED_IN_SUPPLIED_ESTIMATE"
             )
             normal_passed = (
                 comparison_available
@@ -3462,6 +3508,8 @@ def calculate_liquidation_assessment(
             )
             unusable_codes = {
                 "LIQUIDATION_ESTIMATE_MISSING",
+                "LIQUIDATION_ESTIMATE_COST_BASIS_MISSING",
+                "LIQUIDATION_ESTIMATE_COST_BASIS_MISMATCH",
                 "REFERENCE_PROVENANCE_INCOMPLETE",
                 "REFERENCE_EXPIRED",
                 "SNAPSHOT_REFERENCE_MISMATCH",
@@ -3555,7 +3603,9 @@ def calculate_liquidation_assessment(
                 volatility_relationship=volatility_relationship,
                 stress_relationship=stress_relationship,
                 formula_version=estimate.formula_version if estimate else None,
-                exchange_constraints=estimate.exchange_constraints if estimate else None,
+                exchange_constraints=estimate.exchange_constraints
+                if estimate
+                else None,
             )
             return replace(
                 result,

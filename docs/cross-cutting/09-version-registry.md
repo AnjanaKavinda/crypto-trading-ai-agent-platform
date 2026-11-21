@@ -1037,6 +1037,15 @@ reference, snapshot, rule, estimate, and threshold expiries; equality is valid.
 C-077 is a component observation, not overall risk acceptance, approval, or
 execution authority.
 
+The supplied estimate embeds the exact liquidation-cost evidence as its
+`cost_basis`. Missing cost binding is unavailable; changed amounts, treatment,
+version, currency or timestamps cannot reuse the old estimate. Invalid price,
+venue, quantity or unit evidence cannot produce a passing relationship label.
+The shared sizing precheck distinguishes absent snapshot digest/expiry from a
+known conflicting value: missing provenance remains insufficient, while known
+identity/schema/digest/expiry mismatches still fail. No canonical constructor
+or schema changes accompany this dependency correction.
+
 ## Issue #108 — C-079 offline take-profit assessment
 
 C-079 `TakeProfitAssessment` remains schema `1`; its constructor, fields,
