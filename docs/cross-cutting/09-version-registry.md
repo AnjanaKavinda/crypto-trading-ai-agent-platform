@@ -920,6 +920,68 @@ policy hierarchy resolution, approve risk, or authorize approval/execution.
 A C-036 sizing pass does not imply stop validity; a C-078 pass does not imply
 overall risk approval or execution authority.
 
+## Issue #107 — offline leverage and margin assessment
+
+C-076 `LeverageAssessment` remains schema 1 with unchanged constructor, fields,
+meaning, consumers, and authority. The pure
+`calculate_leverage_assessment(LeverageAssessmentRequest)` recomputes C-036
+from the exact supplied `PositionSizingRequest`. The immutable request and
+`LinearMarginRuleEvidence` are nonpersisted inputs, not new canonical
+contracts. No API, codec, persistence, migration, external access, or runtime
+wiring is added.
+
+The request explicitly supplies result identity/time, requested leverage,
+margin mode, policy/account/venue leverage caps, post-trade gross leverage
+cap, minimum free-margin buffer, additional reserved quote-currency cost, and
+one versioned caller-attested rule tier bound to venue, instrument, account
+snapshot, and exact mode. Model/policy/configuration versions and the common
+validity window are inherited from the sizing request. No cap defaults,
+policy precedence resolver, leverage recommendation, clamping, or override
+exists. An edit requires a fresh assessment.
+
+Only LINEAR rules with matching CROSS or ISOLATED mode pass. Inclusive tier
+bounds, initial rate, maintenance rate, rule version, and validity are
+explicit. The implementation uses one supplied tier and does not discover or
+select exchange tiers. It assumes incremental same-currency linear margin
+only, with no cross/isolated behavioral equivalence claim, offsets, netting,
+hedging benefits, collateral conversion, FX, or liquidation assumptions.
+
+The recomputed sizing result must be current, bounded, and consistent with
+exact quantity, entry, multiplier, initial margin per unit, currency, context,
+account, portfolio, and instrument terms. Current account/portfolio snapshots
+and complete positions are required. Position identities must be unique;
+absolute position notionals are summed and must equal C-033 gross exposure.
+An empty positions tuple is zero exposure only for an explicitly VALID
+portfolio reporting zero gross exposure. Positive matching equity is required.
+Account/rule evidence is caller-attested; this is not live account/rule
+authentication, reconciliation, or balance reconstruction.
+
+For `N` recommended notional and `M` recommended margin:
+
+- required initial margin is `max(M, N / requested_leverage,
+  N * initial_margin_rate)`;
+- proposed margin `M` must cover that requirement;
+- incremental maintenance margin is `N * maintenance_margin_rate`;
+- effective leverage is `N / M`;
+- post-trade gross leverage is `(existing absolute gross + N) / equity`.
+
+All leverage limits use exact cross multiplication. `M` plus the explicit
+incremental reserve must fit both available balance and free margin, and the
+remaining free margin must meet the explicit buffer. Decimal arithmetic is
+isolated at precision 34; exact sums/products and threshold comparisons fail
+closed when unrepresentable, while division and reported ratios round upward.
+Hard breaches are FAILED and dominate unknown evidence/warnings. Missing,
+stale, future, or unknown required evidence is INSUFFICIENT_DATA. Upstream
+sizing warnings propagate. Failed/insufficient assessments omit numeric
+recommendations; C-036/C-076 passes do not constitute overall risk acceptance,
+approval, or execution authority.
+
+The canonical digest binds the complete request, recomputed C-036 output, and
+C-076 output fields except its own digest. Validity is bounded by the sizing
+evidence, context/snapshot/position references, and supplied margin rule;
+equality at expiry is valid. Hash binding does not authenticate data-source
+truth, completeness, or exchange-rule authenticity.
+
 ## Issue #108 — C-079 offline take-profit assessment
 
 C-079 `TakeProfitAssessment` remains schema `1`; its constructor, fields,

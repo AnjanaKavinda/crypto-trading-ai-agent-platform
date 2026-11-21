@@ -96,7 +96,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-073 | SensitivityResult | Quant Validation | RobustnessResult, Risk | V1 remains unchanged. ADR-0025 adds observation-only Spot schema 2 bound to exact C-027v3/#94 scenarios, policy, parameter/cost assumptions, metrics, and provenance; no qualification integration or retention. |
 | C-074 | RegimeValidationResult | Quant Validation | ValidationResult, Strategy, Risk | V1 regime-scope semantics remain unchanged. ADR-0026 adds observation-only Spot schema 2 binding exact C-027v3/#94 runs to decision-time C-005 contexts and explicit asset/timeframe coverage; no C-030/C-028 qualification or retention authority. |
 | C-075 | PositionSnapshot | Portfolio | Risk, Reconciliation, UX | Point-in-time position truth is attributable and reconcilable to fills/orders. |
-| C-076 | LeverageAssessment | Risk | RiskProposal, Approval | Leverage limits are deterministic and fail-closed on unknown account/exchange state. |
+| C-076 | LeverageAssessment | Risk | RiskProposal, Approval | Schema 1 remains unchanged. Offline leverage/margin assessment is deterministic, fail-closed on unknown evidence, and never grants overall risk acceptance, approval, or execution authority. |
 | C-077 | LiquidationAssessment | Risk | RiskProposal, Approval, Safety | Liquidation distance assumptions are explicit, deterministic, and conservative. |
 | C-078 | StopLossAssessment | Risk | RiskProposal, Approval | Stop-loss validity must align with strategy logic and maximum-loss policy bounds. |
 | C-079 | TakeProfitAssessment | Risk | RiskProposal, Approval | Take-profit targets must preserve risk-reward and invalidation consistency. |
@@ -607,6 +607,65 @@ stop, estimate volatility, evaluate all strategy rules, size a position,
 calculate leverage/liquidation, decide portfolio impact, approve risk, or
 authorize approval/execution. A sizing pass does not imply stop validity, and
 a stop pass is not overall risk approval or execution authority.
+
+## Issue #107 — offline leverage and margin assessment
+
+C-076 `LeverageAssessment` remains schema `1` with its exact constructor,
+fields, meanings, consumers, and authority. The pure
+`calculate_leverage_assessment(LeverageAssessmentRequest)` reuses
+`PositionSizingRequest`, recalculates C-036 with `calculate_position_size`, and
+returns the existing C-076 result. `LinearMarginRuleEvidence` and
+`LeverageAssessmentRequest` are immutable nonpersisted inputs, not new
+canonical contracts. No codec, API, database, migration, external lookup, or
+runtime integration is introduced.
+
+The request binds a result UUID and evaluation time; the exact sizing request;
+requested leverage; explicit policy, account, venue, and post-trade gross
+leverage caps; margin mode; minimum remaining free margin; incremental
+reserved quote-currency cost; and caller-attested, versioned margin-tier
+evidence. The sizing request's explicit model/policy/configuration versions and
+common assumption-validity window remain bound in full. There is no default,
+policy hierarchy resolver, clamping, or override path. Material edits require
+a fresh request and assessment.
+
+Only LINEAR models and matching explicitly supplied CROSS or ISOLATED
+incremental margin rules are supported. Rule evidence binds venue, instrument,
+account and exact mode, applicable inclusive gross-notional tier bounds,
+initial/maintenance rates, version, and validity. The caller supplies one
+applicable tier; the calculator does not query or select venue tiers. No
+offsets, netting, hedging benefit, collateral conversion, FX, or liquidation
+behavior is inferred.
+
+The calculator requires current, matching C-032/C-033 snapshots and complete
+valid C-075 positions, rejects duplicate snapshot/position identities, sums
+absolute position notionals, and checks that this gross sum agrees with C-033.
+An explicitly valid empty position tuple represents zero exposure only when
+C-033 gross exposure is zero. It requires positive matching equity and uses
+both available balance and free margin. Account/source assertions and supplied
+rule content remain caller-attested; this does not authenticate exchange rules,
+reconcile the external account, reconstruct balances, or estimate collateral
+haircuts.
+
+For recomputed C-036 notional `N` and proposed margin `M`, notional and margin
+are verified against exact quantity/instrument terms. Required initial margin
+is `max(M, N / requested_leverage, N * initial_margin_rate)`; only the
+division is rounded upward at Decimal precision 34. `M` must cover that
+requirement. Maintenance margin is the incremental `N * maintenance_rate`;
+effective leverage is `N / M`. Post-trade gross leverage uses absolute
+existing gross exposure plus `N`, divided by matching equity. Leverage caps
+are checked by exact cross multiplication. `M` plus the explicit incremental
+reserve must fit available balance and leave the minimum free-margin buffer.
+Only ratios are rounded upward; unrepresentable arithmetic raises
+`RiskContractError`.
+
+Hard breaches yield `FAILED`; missing, stale, future, or unknown required
+evidence yields `INSUFFICIENT_DATA`; upstream sizing warnings propagate, and a
+hard failure dominates. Failed/insufficient results do not carry numeric
+recommendations. The digest binds the complete request, recomputed C-036
+evidence, and C-076 output excluding its own digest; it proves content binding,
+not source authenticity. Validity is bounded by upstream and rule expiries;
+expiry equality is valid. C-036/C-076 passes are component observations only,
+not overall risk acceptance, human approval, or execution authority.
 
 ## Issue #108 — offline take-profit / risk-reward assessment
 
