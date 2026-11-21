@@ -1609,6 +1609,100 @@ class PositionSizingRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class LinearMarginRuleEvidence:
+    """Caller-attested incremental linear margin tier for one account and mode."""
+
+    venue: str
+    instrument_id: str
+    account_id: UUID
+    account_snapshot_id: UUID
+    margin_mode: MarginMode
+    tier_lower_bound: MoneyValue
+    tier_upper_bound: MoneyValue
+    initial_margin_rate: Decimal
+    maintenance_margin_rate: Decimal
+    model: str
+    version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        for name in ("venue", "instrument_id", "model"):
+            _text(name, getattr(self, name))
+        _uuid("account_id", self.account_id)
+        _uuid("account_snapshot_id", self.account_snapshot_id)
+        if not isinstance(self.margin_mode, MarginMode):
+            raise RiskContractError("margin_mode must be a MarginMode.")
+        lower = _money("tier_lower_bound", self.tier_lower_bound)
+        upper = _money("tier_upper_bound", self.tier_upper_bound, positive=True)
+        if lower.currency != upper.currency or lower.amount > upper.amount:
+            raise RiskContractError("margin tier bounds must be ordered in one currency.")
+        _decimal("initial_margin_rate", self.initial_margin_rate)
+        _decimal("maintenance_margin_rate", self.maintenance_margin_rate)
+        if not (
+            Decimal(0)
+            <= self.maintenance_margin_rate
+            <= self.initial_margin_rate
+            <= Decimal(1)
+        ) or self.initial_margin_rate <= 0:
+            raise RiskContractError("margin rates must satisfy 0 <= maintenance <= initial <= 1.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be a VersionReference.")
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class LeverageAssessmentRequest:
+    """Explicit offline inputs for a bounded C-076 leverage assessment."""
+
+    result_id: UUID
+    evaluated_at: datetime
+    sizing_request: PositionSizingRequest
+    requested_leverage: Decimal
+    margin_mode: MarginMode
+    policy_maximum_leverage: Decimal
+    account_maximum_leverage: Decimal
+    venue_maximum_leverage: Decimal
+    maximum_post_trade_gross_leverage: Decimal
+    minimum_remaining_free_margin: MoneyValue
+    additional_reserved_cost: MoneyValue
+    margin_rule: LinearMarginRuleEvidence | None
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        evaluated_at = _time("evaluated_at", self.evaluated_at)
+        if not isinstance(self.sizing_request, PositionSizingRequest):
+            raise RiskContractError("sizing_request must be a PositionSizingRequest.")
+        if self.sizing_request.evaluated_at != evaluated_at:
+            raise RiskContractError("sizing_request evaluation time mismatch.")
+        for name in (
+            "requested_leverage",
+            "policy_maximum_leverage",
+            "account_maximum_leverage",
+            "venue_maximum_leverage",
+            "maximum_post_trade_gross_leverage",
+        ):
+            _positive(name, getattr(self, name))
+        if self.requested_leverage < 1:
+            raise RiskContractError("requested_leverage must be at least one.")
+        if not isinstance(self.margin_mode, MarginMode):
+            raise RiskContractError("margin_mode must be a MarginMode.")
+        _money("minimum_remaining_free_margin", self.minimum_remaining_free_margin)
+        _money("additional_reserved_cost", self.additional_reserved_cost)
+        if self.margin_rule is not None and not isinstance(
+            self.margin_rule, LinearMarginRuleEvidence
+        ):
+            raise RiskContractError(
+                "margin_rule must be LinearMarginRuleEvidence or None."
+            )
+        object.__setattr__(self, "evaluated_at", evaluated_at)
+
+
+@dataclass(frozen=True, slots=True)
 class StopLossStructuralEvidence:
     """Caller-attested priced invalidation interval and exact strategy lineage."""
 
@@ -2138,6 +2232,431 @@ def calculate_position_size(request: PositionSizingRequest) -> PositionSizingRes
     except DecimalException as exc:
         raise RiskContractError(
             "sizing arithmetic cannot be represented safely at precision 34."
+        ) from exc
+
+
+def _leverage_assessment_result(
+    request: LeverageAssessmentRequest,
+    sizing: PositionSizingResult,
+    outcome: RiskCheckOutcome,
+    reasons: tuple[str, ...],
+    limits: tuple[RiskLimitResult, ...],
+    *,
+    maximum_permitted_leverage: Decimal | None = None,
+    effective_leverage: Decimal | None = None,
+    portfolio_leverage: Decimal | None = None,
+    initial_margin: MoneyValue | None = None,
+    maintenance_margin: MoneyValue | None = None,
+    proposed_margin: MoneyValue | None = None,
+    post_trade_free_margin: MoneyValue | None = None,
+) -> LeverageAssessment:
+    sizing_request = request.sizing_request
+    valid_until = min(
+        sizing.valid_until,
+        request.margin_rule.valid_until
+        if request.margin_rule is not None
+        else sizing.valid_until,
+    )
+    valid_until = max(valid_until, request.evaluated_at)
+    result = LeverageAssessment(
+        result_id=request.result_id,
+        context=sizing_request.context,
+        outcome=outcome,
+        reason_codes=reasons,
+        model_version=sizing_request.model_version,
+        as_of=sizing_request.context.as_of,
+        evaluated_at=request.evaluated_at,
+        valid_until=valid_until,
+        content_sha256="0" * 64,
+        requested_leverage=request.requested_leverage,
+        maximum_permitted_leverage=maximum_permitted_leverage,
+        effective_leverage=effective_leverage,
+        post_trade_portfolio_leverage=portfolio_leverage,
+        margin_mode=request.margin_mode,
+        initial_margin=initial_margin,
+        maintenance_margin=maintenance_margin,
+        proposed_margin=proposed_margin,
+        post_trade_free_margin=post_trade_free_margin,
+        exchange_constraints=(
+            request.margin_rule.version if request.margin_rule is not None else None
+        ),
+        limits=limits,
+    )
+    return replace(
+        result,
+        content_sha256=_risk_digest(
+            "leverage assessment",
+            {
+                "request": request,
+                "sizing_result": sizing,
+                "result": {
+                    item.name: getattr(result, item.name)
+                    for item in fields(result)
+                    if item.name != "content_sha256"
+                },
+            },
+        ),
+    )
+
+
+def calculate_leverage_assessment(
+    request: LeverageAssessmentRequest,
+) -> LeverageAssessment:
+    """Assess explicit incremental linear margin evidence; never authorize trading."""
+    if not isinstance(request, LeverageAssessmentRequest):
+        raise RiskContractError("request must be a LeverageAssessmentRequest.")
+    sizing_request = request.sizing_request
+    try:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+            sizing = calculate_position_size(sizing_request)
+            reasons: list[str] = list(sizing.reason_codes)
+            limits: list[RiskLimitResult] = []
+            failed = sizing.outcome is RiskCheckOutcome.FAILED
+            insufficient = sizing.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+            warned = sizing.outcome is RiskCheckOutcome.WARNING
+
+            def record(
+                code: str, outcome: RiskCheckOutcome, *, hard: bool = True
+            ) -> None:
+                nonlocal failed, insufficient, warned
+                if code not in reasons:
+                    reasons.append(code)
+                failed = failed or outcome is RiskCheckOutcome.FAILED
+                insufficient = (
+                    insufficient or outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+                )
+                warned = warned or outcome is RiskCheckOutcome.WARNING
+                if hard and outcome in {
+                    RiskCheckOutcome.FAILED,
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                }:
+                    failed = failed or outcome is RiskCheckOutcome.FAILED
+
+            def check(
+                limit_id: str,
+                observed: Decimal,
+                boundary: Decimal,
+                unit: str,
+                passed: bool,
+                reason: str,
+            ) -> None:
+                outcome = (
+                    RiskCheckOutcome.PASSED if passed else RiskCheckOutcome.FAILED
+                )
+                limits.append(
+                    RiskLimitResult(
+                        limit_id,
+                        RiskLimitSeverity.HARD,
+                        observed,
+                        boundary,
+                        unit,
+                        outcome,
+                        reason,
+                    )
+                )
+                if not passed:
+                    record(reason, RiskCheckOutcome.FAILED)
+
+            refs = (
+                (sizing_request.context.signal, "C-070"),
+                (sizing_request.context.validation, "C-028"),
+                (sizing_request.context.strategy_version, "C-021"),
+                (sizing_request.context.account_snapshot, "C-032"),
+                (sizing_request.context.portfolio_snapshot, "C-033"),
+            )
+            for reference, contract_id in refs:
+                status, code = _stop_reference_status(
+                    reference, contract_id, request.evaluated_at
+                )
+                if status is not None:
+                    record(code or "REFERENCE_PROVENANCE_INCOMPLETE", status)
+
+            account, portfolio = sizing_request.account, sizing_request.portfolio
+            terms, rule = sizing_request.instrument, request.margin_rule
+            if terms is None:
+                record("SIZING_INSTRUMENT_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+            if rule is None:
+                record("MARGIN_RULE_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+            if account.state is not SnapshotState.VALID:
+                record("ACCOUNT_SNAPSHOT_NOT_VALID", RiskCheckOutcome.INSUFFICIENT_DATA)
+            if portfolio.state is not SnapshotState.VALID:
+                record(
+                    "PORTFOLIO_SNAPSHOT_NOT_VALID", RiskCheckOutcome.INSUFFICIENT_DATA
+                )
+            if account.account_id != portfolio.account_snapshot.account_id:
+                record("PORTFOLIO_ACCOUNT_MISMATCH", RiskCheckOutcome.FAILED)
+            if account.currency != portfolio.currency:
+                record("PORTFOLIO_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
+            if (
+                account.equity is None
+                or account.equity.amount <= 0
+                or portfolio.equity is None
+                or portfolio.equity.amount <= 0
+                or portfolio.equity != account.equity
+            ):
+                record("POSITIVE_MATCHING_EQUITY_REQUIRED", RiskCheckOutcome.FAILED)
+            if (
+                terms is not None
+                and (
+                    account.currency != terms.quote_currency
+                    or portfolio.currency != terms.quote_currency
+                    or request.minimum_remaining_free_margin.currency
+                    != terms.quote_currency
+                    or request.additional_reserved_cost.currency != terms.quote_currency
+                    or (
+                        rule is not None
+                        and rule.tier_lower_bound.currency != terms.quote_currency
+                    )
+                )
+            ):
+                record("LEVERAGE_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
+
+            if rule is not None and rule.model != "LINEAR":
+                record("UNSUPPORTED_MARGIN_MODEL", RiskCheckOutcome.FAILED)
+            if rule is not None and terms is not None and rule.venue != terms.venue:
+                record("MARGIN_RULE_VENUE_MISMATCH", RiskCheckOutcome.FAILED)
+            if (
+                rule is not None
+                and terms is not None
+                and rule.instrument_id != terms.instrument_id
+            ):
+                record("MARGIN_RULE_INSTRUMENT_MISMATCH", RiskCheckOutcome.FAILED)
+            if rule is not None and (
+                rule.account_id != account.account_id
+                or rule.account_snapshot_id != account.snapshot_id
+            ):
+                record("MARGIN_RULE_ACCOUNT_MISMATCH", RiskCheckOutcome.FAILED)
+            if rule is not None and rule.margin_mode is not request.margin_mode:
+                record("MARGIN_RULE_MODE_MISMATCH", RiskCheckOutcome.FAILED)
+            if rule is not None and rule.as_of > request.evaluated_at:
+                record("MARGIN_RULE_FUTURE_DATED", RiskCheckOutcome.INSUFFICIENT_DATA)
+            if rule is not None and rule.valid_until < request.evaluated_at:
+                record("MARGIN_RULE_EXPIRED", RiskCheckOutcome.INSUFFICIENT_DATA)
+            if sizing_request.assumptions_as_of > request.evaluated_at:
+                record("ASSUMPTIONS_FUTURE_DATED", RiskCheckOutcome.INSUFFICIENT_DATA)
+            if sizing_request.assumptions_valid_until < request.evaluated_at:
+                record("ASSUMPTIONS_EXPIRED", RiskCheckOutcome.INSUFFICIENT_DATA)
+
+            positions = portfolio.positions
+            if len({item.snapshot_id for item in positions}) != len(positions) or len(
+                {item.position_id for item in positions}
+            ) != len(positions):
+                record("DUPLICATE_POSITION_IDENTITY", RiskCheckOutcome.FAILED)
+            if len(
+                {
+                    account.snapshot_id,
+                    portfolio.snapshot_id,
+                    *(item.snapshot_id for item in positions),
+                }
+            ) != len(positions) + 2:
+                record("DUPLICATE_SNAPSHOT_IDENTITY", RiskCheckOutcome.FAILED)
+            for item in positions:
+                if item.account_id != account.account_id:
+                    record("POSITION_ACCOUNT_MISMATCH", RiskCheckOutcome.FAILED)
+                if item.state is not SnapshotState.VALID:
+                    record(
+                        "POSITION_SNAPSHOT_NOT_VALID",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                if (
+                    item.as_of > request.evaluated_at
+                    or item.captured_at > request.evaluated_at
+                    or item.valid_until < request.evaluated_at
+                ):
+                    record("POSITION_SNAPSHOT_NOT_CURRENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+                if not isinstance(item.source_version, VersionReference):
+                    record("POSITION_PROVENANCE_INCOMPLETE", RiskCheckOutcome.INSUFFICIENT_DATA)
+                if item.notional is None:
+                    record("POSITION_NOTIONAL_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+                elif terms is not None and item.notional.currency != terms.quote_currency:
+                    record("POSITION_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
+
+            if sizing.outcome in {
+                RiskCheckOutcome.FAILED,
+                RiskCheckOutcome.INSUFFICIENT_DATA,
+            }:
+                failed = failed or sizing.outcome is RiskCheckOutcome.FAILED
+                insufficient = (
+                    insufficient or sizing.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+                )
+            elif any(
+                value is None
+                for value in (
+                    sizing.recommended_quantity,
+                    sizing.recommended_notional,
+                    sizing.recommended_margin,
+                )
+            ):
+                record("SIZING_OUTPUT_INCOMPLETE", RiskCheckOutcome.INSUFFICIENT_DATA)
+
+            if failed or insufficient:
+                outcome = (
+                    RiskCheckOutcome.FAILED if failed else RiskCheckOutcome.INSUFFICIENT_DATA
+                )
+                return _leverage_assessment_result(
+                    request, sizing, outcome, tuple(reasons), tuple(limits)
+                )
+
+            assert terms is not None
+            assert rule is not None
+            assert account.equity is not None
+            assert account.available_balance is not None
+            assert account.free_margin is not None
+            assert portfolio.gross_exposure is not None
+            assert sizing.recommended_quantity is not None
+            assert sizing.recommended_notional is not None
+            assert sizing.recommended_margin is not None
+            quantity = sizing.recommended_quantity
+            notional = sizing.recommended_notional.amount
+            proposed_margin = sizing.recommended_margin.amount
+            currency = terms.quote_currency
+            exact = localcontext()
+            with exact as arithmetic:
+                arithmetic.prec = 34
+                arithmetic.rounding = ROUND_HALF_EVEN
+                arithmetic.traps[Inexact] = True
+                expected_notional = (
+                    quantity * sizing_request.entry.amount * terms.contract_multiplier
+                )
+                expected_margin = quantity * terms.initial_margin_per_unit.amount
+                gross_exposure = sum(
+                    (item.notional.amount for item in positions if item.notional is not None),
+                    Decimal(0),
+                )
+                instrument_gross = sum(
+                    (
+                        item.notional.amount
+                        for item in positions
+                        if item.instrument_id == terms.instrument_id
+                        and item.notional is not None
+                    ),
+                    Decimal(0),
+                )
+                if notional != expected_notional or proposed_margin != expected_margin:
+                    record("SIZING_AMOUNT_INCONSISTENT", RiskCheckOutcome.FAILED)
+                check(
+                    "portfolio-gross-exposure",
+                    gross_exposure,
+                    portfolio.gross_exposure.amount,
+                    currency,
+                    gross_exposure == portfolio.gross_exposure.amount,
+                    "PORTFOLIO_GROSS_EXPOSURE_MISMATCH",
+                )
+                post_trade_gross = gross_exposure + notional
+                instrument_post_gross = instrument_gross + notional
+                equity = account.equity.amount
+                maximum_leverage = min(
+                    request.policy_maximum_leverage,
+                    request.account_maximum_leverage,
+                    request.venue_maximum_leverage,
+                )
+                check(
+                    "requested-leverage-cap",
+                    request.requested_leverage,
+                    maximum_leverage,
+                    "leverage",
+                    request.requested_leverage <= maximum_leverage,
+                    "REQUESTED_LEVERAGE_EXCEEDS_CAP",
+                )
+                check(
+                    "margin-tier-lower",
+                    instrument_post_gross,
+                    rule.tier_lower_bound.amount,
+                    currency,
+                    instrument_post_gross >= rule.tier_lower_bound.amount,
+                    "MARGIN_TIER_LOWER_BOUND_MISSED",
+                )
+                check(
+                    "margin-tier-upper",
+                    instrument_post_gross,
+                    rule.tier_upper_bound.amount,
+                    currency,
+                    instrument_post_gross <= rule.tier_upper_bound.amount,
+                    "MARGIN_TIER_UPPER_BOUND_EXCEEDED",
+                )
+                with localcontext(Context(prec=34, rounding=ROUND_CEILING)):
+                    divided_margin = notional / request.requested_leverage
+                    effective_leverage = notional / proposed_margin
+                    portfolio_leverage = post_trade_gross / equity
+                required_margin = max(
+                    proposed_margin,
+                    divided_margin,
+                    notional * rule.initial_margin_rate,
+                )
+                maintenance_margin = notional * rule.maintenance_margin_rate
+                check(
+                    "effective-leverage-cap",
+                    notional,
+                    proposed_margin * maximum_leverage,
+                    f"{currency}-notional-cross-multiplied",
+                    notional <= proposed_margin * maximum_leverage,
+                    "EFFECTIVE_LEVERAGE_EXCEEDS_CAP",
+                )
+                check(
+                    "initial-margin-coverage",
+                    proposed_margin,
+                    required_margin,
+                    currency,
+                    proposed_margin >= required_margin,
+                    "PROPOSED_MARGIN_INSUFFICIENT",
+                )
+                consumed_funds = proposed_margin + request.additional_reserved_cost.amount
+                check(
+                    "available-balance",
+                    consumed_funds,
+                    account.available_balance.amount,
+                    currency,
+                    consumed_funds <= account.available_balance.amount,
+                    "AVAILABLE_BALANCE_INSUFFICIENT",
+                )
+                post_free_margin = account.free_margin.amount - consumed_funds
+                check(
+                    "minimum-free-margin",
+                    post_free_margin,
+                    request.minimum_remaining_free_margin.amount,
+                    currency,
+                    post_free_margin >= request.minimum_remaining_free_margin.amount,
+                    "FREE_MARGIN_BUFFER_BREACHED",
+                )
+                check(
+                    "gross-portfolio-leverage-cap",
+                    post_trade_gross,
+                    equity * request.maximum_post_trade_gross_leverage,
+                    f"{currency}-notional-cross-multiplied",
+                    post_trade_gross
+                    <= equity * request.maximum_post_trade_gross_leverage,
+                    "POST_TRADE_GROSS_LEVERAGE_EXCEEDS_CAP",
+                )
+
+            if failed:
+                outcome = RiskCheckOutcome.FAILED
+            elif insufficient:
+                outcome = RiskCheckOutcome.INSUFFICIENT_DATA
+            elif warned:
+                outcome = RiskCheckOutcome.WARNING
+            else:
+                outcome = RiskCheckOutcome.PASSED
+            if outcome is not RiskCheckOutcome.PASSED:
+                return _leverage_assessment_result(
+                    request, sizing, outcome, tuple(reasons), tuple(limits)
+                )
+            return _leverage_assessment_result(
+                request,
+                sizing,
+                outcome,
+                tuple(reasons),
+                tuple(limits),
+                maximum_permitted_leverage=maximum_leverage,
+                effective_leverage=effective_leverage,
+                portfolio_leverage=portfolio_leverage,
+                initial_margin=MoneyValue(required_margin, currency),
+                maintenance_margin=MoneyValue(maintenance_margin, currency),
+                proposed_margin=MoneyValue(proposed_margin, currency),
+                post_trade_free_margin=MoneyValue(post_free_margin, currency),
+            )
+    except DecimalException as exc:
+        raise RiskContractError(
+            "leverage arithmetic cannot be represented safely at precision 34."
         ) from exc
 
 
@@ -4997,6 +5516,8 @@ __all__ = [
     "InstrumentBeta",
     "InstrumentReturnSeries",
     "LeverageAssessment",
+    "LeverageAssessmentRequest",
+    "LinearMarginRuleEvidence",
     "LiquidationAssessment",
     "LiquidationAvailability",
     "MarginMode",
@@ -5053,6 +5574,7 @@ __all__ = [
     "TakeProfitTargetBound",
     "VersionReference",
     "aggregate_portfolio_exposure",
+    "calculate_leverage_assessment",
     "calculate_position_size",
     "calculate_stop_loss_assessment",
     "calculate_take_profit_assessment",

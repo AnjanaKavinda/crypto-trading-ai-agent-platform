@@ -17,6 +17,8 @@ from trading_platform_api.risk import (
     ExposureValue,
     InstrumentReturnSeries,
     LeverageAssessment,
+    LeverageAssessmentRequest,
+    LinearMarginRuleEvidence,
     LiquidationAssessment,
     LiquidationAvailability,
     MarginMode,
@@ -71,6 +73,7 @@ from trading_platform_api.risk import (
     TakeProfitTargetBound,
     VersionReference,
     aggregate_portfolio_exposure,
+    calculate_leverage_assessment,
     calculate_position_size,
     calculate_stop_loss_assessment,
     calculate_take_profit_assessment,
@@ -1289,6 +1292,58 @@ def sizing_request(
     return PositionSizingRequest(**values)  # type: ignore[arg-type]
 
 
+def leverage_request(
+    *,
+    side: PositionSide = PositionSide.LONG,
+    margin_mode: MarginMode = MarginMode.ISOLATED,
+    **overrides: object,
+) -> LeverageAssessmentRequest:
+    sizing_value = sizing_request()
+    assert sizing_value.instrument is not None
+    clean_portfolio = replace(
+        sizing_value.portfolio,
+        gross_exposure=money("101"),
+    )
+    sizing_value = replace(sizing_value, portfolio=clean_portfolio)
+    if side is PositionSide.SHORT:
+        sizing_value = replace(
+            sizing_value,
+            context=replace(sizing_value.context, side=side),
+            stop=price("110"),
+        )
+    rule = LinearMarginRuleEvidence(
+        sizing_value.instrument.venue,
+        sizing_value.instrument.instrument_id,
+        sizing_value.account.account_id,
+        sizing_value.account.snapshot_id,
+        margin_mode,
+        money("0"),
+        money("100000"),
+        Decimal("0.05"),
+        Decimal("0.01"),
+        "LINEAR",
+        version("margin-rule"),
+        T[3],
+        T[13],
+    )
+    values: dict[str, object] = {
+        "result_id": UUID(int=107),
+        "evaluated_at": sizing_value.evaluated_at,
+        "sizing_request": sizing_value,
+        "requested_leverage": Decimal("5"),
+        "margin_mode": margin_mode,
+        "policy_maximum_leverage": Decimal("10"),
+        "account_maximum_leverage": Decimal("10"),
+        "venue_maximum_leverage": Decimal("10"),
+        "maximum_post_trade_gross_leverage": Decimal("1"),
+        "minimum_remaining_free_margin": money("6000"),
+        "additional_reserved_cost": money("30"),
+        "margin_rule": rule,
+    }
+    values.update(overrides)
+    return LeverageAssessmentRequest(**values)  # type: ignore[arg-type]
+
+
 def stop_assessment_request(
     side: PositionSide = PositionSide.LONG, **overrides: object
 ) -> StopLossAssessmentRequest:
@@ -2389,6 +2444,240 @@ def test_leverage_hard_limit_and_unknown_constraints_cannot_pass() -> None:
         )
     with pytest.raises(RiskContractError, match="complete data"):
         leverage(exchange_constraints=None)
+
+
+@pytest.mark.parametrize(
+    ("side", "margin_mode"),
+    [
+        (PositionSide.LONG, MarginMode.ISOLATED),
+        (PositionSide.SHORT, MarginMode.CROSS),
+    ],
+)
+def test_leverage_assessment_calculates_bounded_linear_margin(
+    side: PositionSide, margin_mode: MarginMode
+) -> None:
+    request = leverage_request(side=side, margin_mode=margin_mode)
+
+    result = calculate_leverage_assessment(request)
+
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.margin_mode is margin_mode
+    assert result.requested_leverage == Decimal("5")
+    assert result.maximum_permitted_leverage == Decimal("10")
+    assert result.effective_leverage == Decimal("5")
+    assert result.post_trade_portfolio_leverage == Decimal("0.1101")
+    assert result.initial_margin == money("200")
+    assert result.maintenance_margin == money("10")
+    assert result.proposed_margin == money("200")
+    assert result.post_trade_free_margin == money("6770")
+    assert result.exchange_constraints == request.margin_rule.version
+    assert result.content_sha256 != HASH_A
+
+
+def test_leverage_assessment_accepts_exact_caps_buffers_zero_reserve_and_tier() -> None:
+    request = leverage_request()
+    request = replace(
+        request,
+        requested_leverage=Decimal("10"),
+        maximum_post_trade_gross_leverage=Decimal("0.1101"),
+        minimum_remaining_free_margin=money("6800"),
+        additional_reserved_cost=money("0"),
+        margin_rule=replace(
+            request.margin_rule,
+            tier_lower_bound=money("1101"),
+            tier_upper_bound=money("1101"),
+            maintenance_margin_rate=Decimal("0"),
+        ),
+    )
+
+    result = calculate_leverage_assessment(request)
+
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.initial_margin == money("200")
+    assert result.maintenance_margin == money("0")
+    assert result.post_trade_free_margin == money("6800")
+    assert result.post_trade_portfolio_leverage == Decimal("0.1101")
+
+
+@pytest.mark.parametrize(
+    ("updates", "reason"),
+    [
+        ({"requested_leverage": Decimal("11")}, "REQUESTED_LEVERAGE_EXCEEDS_CAP"),
+        (
+            {"maximum_post_trade_gross_leverage": Decimal("0.11")},
+            "POST_TRADE_GROSS_LEVERAGE_EXCEEDS_CAP",
+        ),
+        (
+            {"minimum_remaining_free_margin": money("6801")},
+            "FREE_MARGIN_BUFFER_BREACHED",
+        ),
+    ],
+)
+def test_leverage_assessment_fails_hard_limits_without_recommendations(
+    updates: dict[str, object], reason: str
+) -> None:
+    result = calculate_leverage_assessment(leverage_request(**updates))
+
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert reason in result.reason_codes
+    assert result.initial_margin is None
+    assert result.effective_leverage is None
+    assert result.post_trade_portfolio_leverage is None
+
+
+def test_leverage_assessment_rejects_margin_and_funds_shortfalls() -> None:
+    too_high_rate = leverage_request()
+    too_high_rate = replace(
+        too_high_rate,
+        margin_rule=replace(
+            too_high_rate.margin_rule,
+            initial_margin_rate=Decimal("0.5"),
+        ),
+    )
+    margin_result = calculate_leverage_assessment(too_high_rate)
+    assert margin_result.outcome is RiskCheckOutcome.FAILED
+    assert "PROPOSED_MARGIN_INSUFFICIENT" in margin_result.reason_codes
+
+    request = leverage_request()
+    account_value = replace(
+        request.sizing_request.account,
+        available_balance=money("100"),
+    )
+    portfolio_value = replace(
+        request.sizing_request.portfolio,
+        account_snapshot=account_value,
+    )
+    sizing_value = replace(
+        request.sizing_request,
+        account=account_value,
+        portfolio=portfolio_value,
+    )
+    funds_result = calculate_leverage_assessment(
+        replace(request, sizing_request=sizing_value)
+    )
+    assert funds_result.outcome is RiskCheckOutcome.FAILED
+    assert "AVAILABLE_BALANCE_INSUFFICIENT" in funds_result.reason_codes
+
+
+def test_leverage_assessment_sums_gross_positions_and_supports_explicit_empty() -> None:
+    request = leverage_request()
+    opposite = replace(
+        request.sizing_request.portfolio.positions[0],
+        snapshot_id=uuid4(),
+        position_id=uuid4(),
+        side=PositionSide.SHORT,
+    )
+    portfolio_value = replace(
+        request.sizing_request.portfolio,
+        positions=(*request.sizing_request.portfolio.positions, opposite),
+        gross_exposure=money("202"),
+    )
+    gross_result = calculate_leverage_assessment(
+        replace(
+            request,
+            sizing_request=replace(request.sizing_request, portfolio=portfolio_value),
+        )
+    )
+    assert gross_result.outcome is RiskCheckOutcome.PASSED
+    assert gross_result.post_trade_portfolio_leverage == Decimal("0.1202")
+
+    empty_portfolio = replace(
+        request.sizing_request.portfolio,
+        positions=(),
+        gross_exposure=money("0"),
+    )
+    empty_result = calculate_leverage_assessment(
+        replace(
+            request,
+            sizing_request=replace(
+                request.sizing_request, portfolio=empty_portfolio
+            ),
+        )
+    )
+    assert empty_result.outcome is RiskCheckOutcome.PASSED
+    assert empty_result.post_trade_portfolio_leverage == Decimal("0.1")
+
+
+def test_leverage_assessment_requires_current_matching_rule_and_positions() -> None:
+    request = leverage_request()
+    assert calculate_leverage_assessment(
+        replace(request, margin_rule=None)
+    ).outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert calculate_leverage_assessment(
+        replace(
+            request,
+            margin_rule=replace(request.margin_rule, valid_until=T[3]),
+        )
+    ).outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert calculate_leverage_assessment(
+        replace(
+            request,
+            margin_rule=replace(request.margin_rule, model="UNKNOWN"),
+        )
+    ).outcome is RiskCheckOutcome.FAILED
+    assert calculate_leverage_assessment(
+        replace(
+            request,
+            margin_rule=replace(request.margin_rule, margin_mode=MarginMode.CROSS),
+        )
+    ).outcome is RiskCheckOutcome.FAILED
+
+    position_value = request.sizing_request.portfolio.positions[0]
+    stale = replace(position_value, valid_until=T[3])
+    stale_portfolio = replace(
+        request.sizing_request.portfolio, positions=(stale,)
+    )
+    assert calculate_leverage_assessment(
+        replace(
+            request,
+            sizing_request=replace(
+                request.sizing_request, portfolio=stale_portfolio
+            ),
+        )
+    ).outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+
+    duplicate = replace(position_value, snapshot_id=position_value.snapshot_id)
+    duplicate_portfolio = replace(
+        request.sizing_request.portfolio,
+        positions=(position_value, duplicate),
+        gross_exposure=money("202"),
+    )
+    assert calculate_leverage_assessment(
+        replace(
+            request,
+            sizing_request=replace(
+                request.sizing_request, portfolio=duplicate_portfolio
+            ),
+        )
+    ).outcome is RiskCheckOutcome.FAILED
+
+
+def test_leverage_assessment_schema_two_warnings_digest_and_decimal_context() -> None:
+    request = leverage_request()
+    context_value = request.sizing_request.context
+    schema_two = replace(
+        context_value,
+        signal=replace(context_value.signal, schema_version="2"),
+        validation=replace(context_value.validation, schema_version="2"),
+        strategy_version=replace(
+            context_value.strategy_version, schema_version="2"
+        ),
+    )
+    warning_sizing = replace(
+        request.sizing_request,
+        context=schema_two,
+        method=SizingMethod.FIXED_NOTIONAL,
+        requested_notional=money("2000"),
+    )
+    warning_request = replace(request, sizing_request=warning_sizing)
+    with localcontext(Context(prec=4, rounding=ROUND_DOWN)):
+        result = calculate_leverage_assessment(warning_request)
+    assert result.outcome is RiskCheckOutcome.WARNING
+    assert "REQUESTED_TARGET_REDUCED" in result.reason_codes
+    assert result.content_sha256 != calculate_leverage_assessment(request).content_sha256
+    assert calculate_leverage_assessment(
+        replace(request, requested_leverage=Decimal("6"))
+    ).content_sha256 != calculate_leverage_assessment(request).content_sha256
 
 
 def test_liquidation_unavailable_never_carries_or_passes_estimate() -> None:
