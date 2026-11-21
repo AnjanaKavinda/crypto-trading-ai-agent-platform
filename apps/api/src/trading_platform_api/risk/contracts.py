@@ -1710,6 +1710,186 @@ class LeverageAssessmentRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class LiquidationPriceEvidence:
+    """Caller-attested linear estimate; it is not generated or authenticated here."""
+
+    context: RiskContext
+    asset: str
+    instrument_id: str
+    venue: str
+    account_id: UUID
+    account_snapshot_id: UUID
+    portfolio_snapshot_id: UUID
+    side: PositionSide
+    margin_mode: MarginMode
+    entry_price: PriceValue
+    stop_loss: PriceValue
+    quantity: Decimal
+    liquidation_price: PriceValue
+    formula_model: str | None
+    formula_version: VersionReference | None
+    source_id: str | None
+    source_version: VersionReference | None
+    exchange_constraints: VersionReference | None
+    basis_request: LeverageAssessmentRequest
+    as_of: datetime
+    valid_until: datetime
+    cost_basis: LiquidationCostEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        for name in ("asset", "instrument_id", "venue"):
+            _text(name, getattr(self, name))
+        for name in ("formula_model", "source_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _text(name, value)
+        for name in ("account_id", "account_snapshot_id", "portfolio_snapshot_id"):
+            _uuid(name, getattr(self, name))
+        if not isinstance(self.side, PositionSide):
+            raise RiskContractError("side must be a PositionSide.")
+        if not isinstance(self.margin_mode, MarginMode):
+            raise RiskContractError("margin_mode must be a MarginMode.")
+        for name in ("entry_price", "stop_loss", "liquidation_price"):
+            if not isinstance(getattr(self, name), PriceValue):
+                raise RiskContractError(f"{name} must be a PriceValue.")
+        _positive("quantity", self.quantity)
+        for name in ("formula_version", "source_version", "exchange_constraints"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, VersionReference):
+                raise RiskContractError(f"{name} must be a VersionReference or None.")
+        if not isinstance(self.basis_request, LeverageAssessmentRequest):
+            raise RiskContractError(
+                "basis_request must be a LeverageAssessmentRequest."
+            )
+        if self.cost_basis is not None and not isinstance(
+            self.cost_basis, LiquidationCostEvidence
+        ):
+            raise RiskContractError(
+                "cost_basis must be LiquidationCostEvidence or None."
+            )
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class LiquidationDistanceThresholds:
+    """Versioned quote-price distance limits supplied by the caller."""
+
+    context: RiskContext
+    asset: str
+    instrument_id: str
+    side: PositionSide
+    minimum_entry_distance_ratio: Decimal
+    minimum_ratio_version: VersionReference
+    minimum_stop_buffer: Decimal
+    normal_adverse_displacement: Decimal
+    normal_version: VersionReference
+    stress_adverse_displacement: Decimal
+    stress_version: VersionReference
+    quote_currency: str
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.context, RiskContext):
+            raise RiskContractError("context must be a RiskContext.")
+        _text("asset", self.asset)
+        _text("instrument_id", self.instrument_id)
+        if not isinstance(self.side, PositionSide):
+            raise RiskContractError("side must be a PositionSide.")
+        ratio = _nonnegative(
+            "minimum_entry_distance_ratio", self.minimum_entry_distance_ratio
+        )
+        if ratio > 1:
+            raise RiskContractError("minimum_entry_distance_ratio must be in [0, 1].")
+        for name in (
+            "minimum_ratio_version",
+            "normal_version",
+            "stress_version",
+        ):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise RiskContractError(f"{name} must be a VersionReference.")
+        for name in (
+            "minimum_stop_buffer",
+            "normal_adverse_displacement",
+            "stress_adverse_displacement",
+        ):
+            _nonnegative(name, getattr(self, name))
+        _text("quote_currency", self.quote_currency)
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class LiquidationCostEvidence:
+    """Reserves are bound as already included; no liquidation-price adjustment."""
+
+    fee_reserve: MoneyValue
+    funding_reserve: MoneyValue
+    treatment: str | None
+    version: VersionReference | None
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        _money("fee_reserve", self.fee_reserve)
+        _money("funding_reserve", self.funding_reserve)
+        if self.treatment is not None:
+            _text("treatment", self.treatment)
+        if self.version is not None and not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be a VersionReference or None.")
+        as_of = _time("as_of", self.as_of)
+        valid_until = _time("valid_until", self.valid_until)
+        _ordered("as_of", as_of, "valid_until", valid_until)
+        object.__setattr__(self, "as_of", as_of)
+        object.__setattr__(self, "valid_until", valid_until)
+
+
+@dataclass(frozen=True, slots=True)
+class LiquidationAssessmentRequest:
+    """Nonpersisted inputs for a bounded, supplied-estimate C-077 assessment."""
+
+    result_id: UUID
+    evaluated_at: datetime
+    leverage_request: LeverageAssessmentRequest
+    stop_loss: PriceValue
+    estimate: LiquidationPriceEvidence | None
+    thresholds: LiquidationDistanceThresholds
+    costs: LiquidationCostEvidence
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        evaluated_at = _time("evaluated_at", self.evaluated_at)
+        if not isinstance(self.leverage_request, LeverageAssessmentRequest):
+            raise RiskContractError(
+                "leverage_request must be a LeverageAssessmentRequest."
+            )
+        if self.leverage_request.evaluated_at != evaluated_at:
+            raise RiskContractError("leverage request evaluation time mismatch.")
+        if not isinstance(self.stop_loss, PriceValue):
+            raise RiskContractError("stop_loss must be a PriceValue.")
+        if self.estimate is not None and not isinstance(
+            self.estimate, LiquidationPriceEvidence
+        ):
+            raise RiskContractError(
+                "estimate must be LiquidationPriceEvidence or None."
+            )
+        if not isinstance(self.thresholds, LiquidationDistanceThresholds):
+            raise RiskContractError("thresholds must be LiquidationDistanceThresholds.")
+        if not isinstance(self.costs, LiquidationCostEvidence):
+            raise RiskContractError("costs must be LiquidationCostEvidence.")
+        object.__setattr__(self, "evaluated_at", evaluated_at)
+
+
+@dataclass(frozen=True, slots=True)
 class StopLossStructuralEvidence:
     """Caller-attested priced invalidation interval and exact strategy lineage."""
 
@@ -1940,8 +2120,14 @@ def _sizing_input_failure(
         if (
             reference.entity_id != snapshot.snapshot_id
             or reference.schema_version != snapshot.schema_version
-            or reference.content_sha256 != snapshot.content_sha256
-            or reference.valid_until != snapshot.valid_until
+            or (
+                reference.content_sha256 is not None
+                and reference.content_sha256 != snapshot.content_sha256
+            )
+            or (
+                reference.valid_until is not None
+                and reference.valid_until != snapshot.valid_until
+            )
         ):
             return RiskCheckOutcome.FAILED, "SNAPSHOT_REFERENCE_MISMATCH"
     snapshots: tuple[AccountSnapshot | PortfolioSnapshot | PositionSnapshot, ...] = (
@@ -2830,6 +3016,616 @@ class LiquidationAssessment(_AssessmentBase):
             assert self.entry_to_liquidation is not None
             if self.entry_to_liquidation.value < self.minimum_distance.value:
                 raise RiskContractError("liquidation distance is below minimum.")
+
+
+def calculate_liquidation_assessment(
+    request: LiquidationAssessmentRequest,
+) -> LiquidationAssessment:
+    """Assess caller-supplied linear liquidation evidence without pricing it."""
+    if not isinstance(request, LiquidationAssessmentRequest):
+        raise RiskContractError("request must be a LiquidationAssessmentRequest.")
+    try:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as arithmetic:
+            arithmetic.traps[Inexact] = True
+            leverage_request = request.leverage_request
+            sizing_request = leverage_request.sizing_request
+            context = sizing_request.context
+            account, portfolio = sizing_request.account, sizing_request.portfolio
+            terms = sizing_request.instrument
+            thresholds, estimate = request.thresholds, request.estimate
+            leverage = calculate_leverage_assessment(leverage_request)
+            sizing = calculate_position_size(sizing_request)
+            reasons: list[str] = []
+            failed = leverage.outcome is RiskCheckOutcome.FAILED
+            insufficient = leverage.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+            warned = leverage.outcome is RiskCheckOutcome.WARNING
+
+            def record(code: str, outcome: RiskCheckOutcome) -> None:
+                nonlocal failed, insufficient, warned
+                if code not in reasons:
+                    reasons.append(code)
+                failed = failed or outcome is RiskCheckOutcome.FAILED
+                insufficient = (
+                    insufficient or outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+                )
+                warned = warned or outcome is RiskCheckOutcome.WARNING
+
+            for upstream_reason in leverage.reason_codes:
+                if upstream_reason not in reasons:
+                    reasons.append(upstream_reason)
+            expiries = [
+                leverage.valid_until,
+                sizing_request.assumptions_valid_until,
+            ]
+            expiries.extend(item.valid_until for item in portfolio.positions)
+            if estimate is None:
+                record(
+                    "LIQUIDATION_ESTIMATE_MISSING",
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                )
+
+            for reference, contract_id in (
+                (context.signal, "C-070"),
+                (context.validation, "C-028"),
+                (context.strategy_version, "C-021"),
+                (context.account_snapshot, "C-032"),
+                (context.portfolio_snapshot, "C-033"),
+            ):
+                status, code = _stop_reference_status(
+                    reference, contract_id, request.evaluated_at
+                )
+                if status is not None:
+                    record(code or "REFERENCE_PROVENANCE_INCOMPLETE", status)
+                if reference.valid_until is not None:
+                    expiries.append(reference.valid_until)
+            for reference, snapshot, contract_id in (
+                (context.account_snapshot, account, "C-032"),
+                (context.portfolio_snapshot, portfolio, "C-033"),
+            ):
+                if reference.entity_id != snapshot.snapshot_id or (
+                    reference.content_sha256 is not None
+                    and reference.content_sha256 != snapshot.content_sha256
+                ):
+                    record("SNAPSHOT_REFERENCE_MISMATCH", RiskCheckOutcome.FAILED)
+                if (
+                    reference.content_sha256 is None
+                    or reference.schema_version != "1"
+                    or snapshot.contract_id != contract_id
+                    or snapshot.schema_version != "1"
+                ):
+                    record(
+                        "SNAPSHOT_REFERENCE_PROVENANCE_INCOMPLETE",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                if snapshot.valid_until < request.evaluated_at:
+                    record("SNAPSHOT_EXPIRED", RiskCheckOutcome.INSUFFICIENT_DATA)
+                if snapshot.as_of > request.evaluated_at or (
+                    snapshot.captured_at > request.evaluated_at
+                ):
+                    record("SNAPSHOT_FUTURE_DATED", RiskCheckOutcome.INSUFFICIENT_DATA)
+                expiries.append(snapshot.valid_until)
+
+            if terms is None:
+                record("SIZING_INSTRUMENT_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+            else:
+                if (
+                    thresholds.quote_currency != terms.quote_currency
+                    or request.stop_loss.quote_currency != terms.quote_currency
+                    or request.costs.fee_reserve.currency != terms.quote_currency
+                    or request.costs.funding_reserve.currency != terms.quote_currency
+                ):
+                    record("LIQUIDATION_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
+                if (
+                    context.asset != terms.asset
+                    or context.instrument_id != terms.instrument_id
+                ):
+                    record("LIQUIDATION_INSTRUMENT_MISMATCH", RiskCheckOutcome.FAILED)
+
+            if request.costs.treatment != "ALREADY_INCLUDED_IN_SUPPLIED_ESTIMATE":
+                record(
+                    "LIQUIDATION_COST_TREATMENT_UNSUPPORTED",
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                )
+            if request.costs.version is None:
+                record(
+                    "LIQUIDATION_COST_VERSION_MISSING",
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                )
+            if (
+                request.costs.fee_reserve.currency
+                != request.costs.funding_reserve.currency
+            ):
+                record(
+                    "LIQUIDATION_COST_CURRENCY_MISMATCH",
+                    RiskCheckOutcome.FAILED,
+                )
+
+            for item, name in (
+                (thresholds, "LIQUIDATION_THRESHOLDS"),
+                (request.costs, "LIQUIDATION_COSTS"),
+            ):
+                if item.as_of < context.as_of:
+                    record(f"{name}_STALE", RiskCheckOutcome.INSUFFICIENT_DATA)
+                if item.as_of > request.evaluated_at:
+                    record(f"{name}_FUTURE_DATED", RiskCheckOutcome.INSUFFICIENT_DATA)
+                if item.valid_until < request.evaluated_at:
+                    record(f"{name}_EXPIRED", RiskCheckOutcome.INSUFFICIENT_DATA)
+                expiries.append(item.valid_until)
+            if thresholds.minimum_entry_distance_ratio > 1:
+                record(
+                    "DISTANCE_NOT_REPRESENTABLE",
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                )
+
+            expected_basis = (
+                context,
+                context.asset,
+                context.instrument_id,
+                context.side,
+            )
+            if (
+                thresholds.context != context
+                or (
+                    thresholds.asset,
+                    thresholds.instrument_id,
+                    thresholds.side,
+                )
+                != expected_basis[1:]
+            ):
+                record(
+                    "LIQUIDATION_THRESHOLD_BASIS_MISMATCH",
+                    RiskCheckOutcome.FAILED,
+                )
+
+            if estimate is not None:
+                if estimate.context != context or (
+                    estimate.asset,
+                    estimate.instrument_id,
+                    estimate.side,
+                    estimate.entry_price,
+                    estimate.stop_loss,
+                    estimate.basis_request,
+                ) != (
+                    context.asset,
+                    context.instrument_id,
+                    context.side,
+                    sizing_request.entry,
+                    request.stop_loss,
+                    leverage_request,
+                ):
+                    record(
+                        "LIQUIDATION_ESTIMATE_BASIS_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if (
+                    sizing.recommended_quantity is not None
+                    and estimate.quantity != sizing.recommended_quantity
+                ):
+                    record(
+                        "LIQUIDATION_ESTIMATE_BASIS_MISMATCH", RiskCheckOutcome.FAILED
+                    )
+                if estimate.cost_basis is None:
+                    record(
+                        "LIQUIDATION_ESTIMATE_COST_BASIS_MISSING",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                elif estimate.cost_basis != request.costs:
+                    record(
+                        "LIQUIDATION_ESTIMATE_COST_BASIS_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if estimate.margin_mode is not leverage_request.margin_mode:
+                    record("LIQUIDATION_MARGIN_MODE_MISMATCH", RiskCheckOutcome.FAILED)
+                if estimate.account_id != account.account_id:
+                    record("LIQUIDATION_ACCOUNT_MISMATCH", RiskCheckOutcome.FAILED)
+                if estimate.account_snapshot_id != account.snapshot_id:
+                    record(
+                        "LIQUIDATION_ACCOUNT_SNAPSHOT_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if estimate.portfolio_snapshot_id != portfolio.snapshot_id:
+                    record(
+                        "LIQUIDATION_PORTFOLIO_SNAPSHOT_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if terms is not None and (
+                    estimate.venue != terms.venue
+                    or estimate.instrument_id != terms.instrument_id
+                ):
+                    record(
+                        "LIQUIDATION_SOURCE_INSTRUMENT_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if estimate.formula_model != "LINEAR":
+                    record(
+                        "LIQUIDATION_FORMULA_UNSUPPORTED",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                if (
+                    estimate.formula_version is None
+                    or estimate.source_id is None
+                    or estimate.source_version is None
+                    or estimate.exchange_constraints is None
+                ):
+                    record(
+                        "LIQUIDATION_FORMULA_OR_SOURCE_DATA_MISSING",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                elif estimate.source_version.component != estimate.source_id:
+                    record(
+                        "LIQUIDATION_SOURCE_IDENTITY_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if estimate.as_of > request.evaluated_at:
+                    record(
+                        "LIQUIDATION_ESTIMATE_FUTURE_DATED",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                if estimate.as_of < context.as_of:
+                    record(
+                        "LIQUIDATION_ESTIMATE_STALE",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                if estimate.valid_until < request.evaluated_at:
+                    record(
+                        "LIQUIDATION_ESTIMATE_EXPIRED",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                expiries.append(estimate.valid_until)
+                if (
+                    estimate.entry_price.quote_currency
+                    != estimate.liquidation_price.quote_currency
+                ):
+                    record(
+                        "LIQUIDATION_PRICE_CURRENCY_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+                if estimate.entry_price != sizing_request.entry or (
+                    estimate.stop_loss != request.stop_loss
+                ):
+                    record("LIQUIDATION_PRICE_BASIS_MISMATCH", RiskCheckOutcome.FAILED)
+                if terms is not None and (
+                    estimate.entry_price.quote_currency != terms.quote_currency
+                    or estimate.stop_loss.quote_currency != terms.quote_currency
+                    or estimate.liquidation_price.quote_currency != terms.quote_currency
+                ):
+                    record(
+                        "LIQUIDATION_CURRENCY_MISMATCH",
+                        RiskCheckOutcome.FAILED,
+                    )
+
+            if request.stop_loss.quote_currency != sizing_request.entry.quote_currency:
+                record("ENTRY_STOP_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
+            if request.stop_loss != sizing_request.stop:
+                record("LIQUIDATION_STOP_BASIS_MISMATCH", RiskCheckOutcome.FAILED)
+            if (
+                context.side is PositionSide.LONG
+                and request.stop_loss.amount >= sizing_request.entry.amount
+            ) or (
+                context.side is PositionSide.SHORT
+                and request.stop_loss.amount <= sizing_request.entry.amount
+            ):
+                record("STOP_ON_WRONG_SIDE_OF_ENTRY", RiskCheckOutcome.FAILED)
+
+            entry_distance: Decimal | None = None
+            stop_clearance: Decimal | None = None
+            if estimate is not None:
+                entry = sizing_request.entry.amount
+                liquidation_price = estimate.liquidation_price.amount
+                stop = request.stop_loss.amount
+                if context.side is PositionSide.LONG:
+                    entry_distance = entry - liquidation_price
+                    stop_clearance = stop - liquidation_price
+                    if liquidation_price >= stop:
+                        record("LIQUIDATION_AT_OR_INSIDE_STOP", RiskCheckOutcome.FAILED)
+                    if liquidation_price >= entry:
+                        record(
+                            "LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY",
+                            RiskCheckOutcome.FAILED,
+                        )
+                else:
+                    entry_distance = liquidation_price - entry
+                    stop_clearance = liquidation_price - stop
+                    if liquidation_price <= stop:
+                        record("LIQUIDATION_AT_OR_INSIDE_STOP", RiskCheckOutcome.FAILED)
+                    if liquidation_price <= entry:
+                        record(
+                            "LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY",
+                            RiskCheckOutcome.FAILED,
+                        )
+                if entry_distance <= 0:
+                    record(
+                        "LIQUIDATION_ON_WRONG_SIDE_OF_ENTRY", RiskCheckOutcome.FAILED
+                    )
+                if stop_clearance <= 0:
+                    record("LIQUIDATION_AT_OR_INSIDE_STOP", RiskCheckOutcome.FAILED)
+
+            entry_ratio: Decimal | None = None
+            stop_ratio: Decimal | None = None
+            normal_minimum = Decimal(0)
+            stress_minimum = Decimal(0)
+            if (
+                entry_distance is not None
+                and stop_clearance is not None
+                and terms is not None
+            ):
+                with localcontext() as exact:
+                    exact.traps[Inexact] = True
+                    minimum_distance = (
+                        thresholds.minimum_entry_distance_ratio
+                        * sizing_request.entry.amount
+                    )
+                    normal_minimum = max(
+                        thresholds.normal_adverse_displacement, minimum_distance
+                    )
+                    stress_minimum = max(
+                        thresholds.stress_adverse_displacement, minimum_distance
+                    )
+                if not (
+                    0 < entry_distance <= sizing_request.entry.amount
+                    and 0 < stop_clearance <= sizing_request.entry.amount
+                ):
+                    record(
+                        "DISTANCE_NOT_REPRESENTABLE",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
+                if entry_distance < minimum_distance:
+                    record("MINIMUM_DISTANCE_BREACHED", RiskCheckOutcome.FAILED)
+                if entry_distance < thresholds.normal_adverse_displacement:
+                    record("NORMAL_DISPLACEMENT_BREACHED", RiskCheckOutcome.FAILED)
+                if entry_distance < thresholds.stress_adverse_displacement:
+                    record("STRESS_DISPLACEMENT_BREACHED", RiskCheckOutcome.FAILED)
+                if stop_clearance < thresholds.minimum_stop_buffer:
+                    record("STOP_BUFFER_BREACHED", RiskCheckOutcome.FAILED)
+                if (
+                    0 < entry_distance <= sizing_request.entry.amount
+                    and 0 < stop_clearance <= sizing_request.entry.amount
+                ):
+                    with localcontext(Context(prec=34, rounding=ROUND_FLOOR)):
+                        entry_ratio = entry_distance / sizing_request.entry.amount
+                        stop_ratio = stop_clearance / sizing_request.entry.amount
+                    if entry_ratio <= 0 or stop_ratio <= 0:
+                        entry_ratio = None
+                        stop_ratio = None
+                        record(
+                            "DISTANCE_NOT_REPRESENTABLE",
+                            RiskCheckOutcome.INSUFFICIENT_DATA,
+                        )
+
+            comparison_available = (
+                estimate is not None
+                and terms is not None
+                and entry_distance is not None
+                and stop_clearance is not None
+                and leverage.outcome
+                not in {
+                    RiskCheckOutcome.FAILED,
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                }
+                and estimate.as_of >= context.as_of
+                and estimate.as_of <= request.evaluated_at
+                and estimate.valid_until >= request.evaluated_at
+                and estimate.venue == terms.venue
+                and estimate.quantity == sizing.recommended_quantity
+                and estimate.cost_basis == request.costs
+                and estimate.cost_basis is not None
+                and estimate.liquidation_price.quote_currency == terms.quote_currency
+                and estimate.entry_price.quote_currency == terms.quote_currency
+                and estimate.stop_loss.quote_currency == terms.quote_currency
+                and request.stop_loss == sizing_request.stop
+                and thresholds.quote_currency == terms.quote_currency
+                and request.costs.fee_reserve.currency == terms.quote_currency
+                and request.costs.funding_reserve.currency == terms.quote_currency
+                and 0 < entry_distance <= sizing_request.entry.amount
+                and 0 < stop_clearance <= sizing_request.entry.amount
+                and estimate.context == context
+                and estimate.asset == context.asset
+                and estimate.instrument_id == context.instrument_id
+                and estimate.side is context.side
+                and estimate.margin_mode is leverage_request.margin_mode
+                and estimate.entry_price == sizing_request.entry
+                and estimate.stop_loss == request.stop_loss
+                and estimate.basis_request == leverage_request
+                and estimate.account_id == account.account_id
+                and estimate.account_snapshot_id == account.snapshot_id
+                and estimate.portfolio_snapshot_id == portfolio.snapshot_id
+                and estimate.formula_model == "LINEAR"
+                and estimate.formula_version is not None
+                and estimate.source_id is not None
+                and estimate.source_version is not None
+                and estimate.source_version.component == estimate.source_id
+                and estimate.exchange_constraints is not None
+                and thresholds.context == context
+                and thresholds.asset == context.asset
+                and thresholds.instrument_id == context.instrument_id
+                and thresholds.side is context.side
+                and thresholds.as_of >= context.as_of
+                and thresholds.as_of <= request.evaluated_at
+                and thresholds.valid_until >= request.evaluated_at
+                and request.costs.version is not None
+                and request.costs.as_of >= context.as_of
+                and request.costs.as_of <= request.evaluated_at
+                and request.costs.valid_until >= request.evaluated_at
+                and request.costs.treatment == "ALREADY_INCLUDED_IN_SUPPLIED_ESTIMATE"
+            )
+            normal_passed = (
+                comparison_available
+                and entry_distance is not None
+                and entry_distance >= normal_minimum
+            )
+            stress_passed = (
+                comparison_available
+                and entry_distance is not None
+                and entry_distance >= stress_minimum
+            )
+            volatility_relationship = (
+                "entry_distance >= max(minimum_ratio * entry, normal_displacement): "
+                f"{'PASSED' if normal_passed else 'FAILED' if comparison_available else 'UNAVAILABLE'}; "
+                + (
+                    "comparison met."
+                    if normal_passed
+                    else "comparison breached."
+                    if comparison_available
+                    else "current comparison evidence unavailable."
+                )
+            )
+            stress_relationship = (
+                "entry_distance >= max(minimum_ratio * entry, stress_displacement): "
+                f"{'PASSED' if stress_passed else 'FAILED' if comparison_available else 'UNAVAILABLE'}; "
+                + (
+                    "comparison met."
+                    if stress_passed
+                    else "comparison breached."
+                    if comparison_available
+                    else "current comparison evidence unavailable."
+                )
+            )
+            if comparison_available and stop_clearance is not None:
+                stop_relationship = (
+                    "stop_clearance >= minimum_stop_buffer: "
+                    f"{'PASSED' if stop_clearance >= thresholds.minimum_stop_buffer else 'FAILED'}; "
+                    + (
+                        "comparison met."
+                        if stop_clearance >= thresholds.minimum_stop_buffer
+                        else "comparison breached."
+                    )
+                )
+            else:
+                stop_relationship = (
+                    "stop_clearance >= minimum_stop_buffer: UNAVAILABLE; "
+                    "current comparison evidence unavailable."
+                )
+            volatility_relationship += " " + stop_relationship
+
+            outcome = (
+                RiskCheckOutcome.FAILED
+                if failed
+                else RiskCheckOutcome.INSUFFICIENT_DATA
+                if insufficient
+                else RiskCheckOutcome.WARNING
+                if warned
+                else RiskCheckOutcome.PASSED
+            )
+            unusable_codes = {
+                "LIQUIDATION_ESTIMATE_MISSING",
+                "LIQUIDATION_ESTIMATE_COST_BASIS_MISSING",
+                "LIQUIDATION_ESTIMATE_COST_BASIS_MISMATCH",
+                "REFERENCE_PROVENANCE_INCOMPLETE",
+                "REFERENCE_EXPIRED",
+                "SNAPSHOT_REFERENCE_MISMATCH",
+                "SNAPSHOT_REFERENCE_PROVENANCE_INCOMPLETE",
+                "SNAPSHOT_EXPIRED",
+                "SNAPSHOT_FUTURE_DATED",
+                "SIZING_INSTRUMENT_MISSING",
+                "LIQUIDATION_CURRENCY_MISMATCH",
+                "LIQUIDATION_INSTRUMENT_MISMATCH",
+                "LIQUIDATION_COST_TREATMENT_UNSUPPORTED",
+                "LIQUIDATION_COST_VERSION_MISSING",
+                "LIQUIDATION_COST_CURRENCY_MISMATCH",
+                "LIQUIDATION_THRESHOLDS_FUTURE_DATED",
+                "LIQUIDATION_THRESHOLDS_EXPIRED",
+                "LIQUIDATION_COSTS_FUTURE_DATED",
+                "LIQUIDATION_COSTS_EXPIRED",
+                "LIQUIDATION_THRESHOLDS_STALE",
+                "LIQUIDATION_COSTS_STALE",
+                "DISTANCE_NOT_REPRESENTABLE",
+                "LIQUIDATION_THRESHOLD_BASIS_MISMATCH",
+                "LIQUIDATION_ESTIMATE_BASIS_MISMATCH",
+                "LIQUIDATION_MARGIN_MODE_MISMATCH",
+                "LIQUIDATION_ACCOUNT_MISMATCH",
+                "LIQUIDATION_ACCOUNT_SNAPSHOT_MISMATCH",
+                "LIQUIDATION_PORTFOLIO_SNAPSHOT_MISMATCH",
+                "LIQUIDATION_SOURCE_INSTRUMENT_MISMATCH",
+                "LIQUIDATION_SOURCE_IDENTITY_MISMATCH",
+                "LIQUIDATION_FORMULA_UNSUPPORTED",
+                "LIQUIDATION_FORMULA_OR_SOURCE_DATA_MISSING",
+                "LIQUIDATION_ESTIMATE_FUTURE_DATED",
+                "LIQUIDATION_ESTIMATE_EXPIRED",
+                "LIQUIDATION_ESTIMATE_STALE",
+                "LIQUIDATION_PRICE_CURRENCY_MISMATCH",
+                "LIQUIDATION_PRICE_BASIS_MISMATCH",
+                "LIQUIDATION_STOP_BASIS_MISMATCH",
+                "ENTRY_STOP_CURRENCY_MISMATCH",
+                "STOP_ON_WRONG_SIDE_OF_ENTRY",
+            }
+            available = (
+                estimate is not None
+                and entry_ratio is not None
+                and stop_ratio is not None
+                and leverage.outcome
+                not in {
+                    RiskCheckOutcome.FAILED,
+                    RiskCheckOutcome.INSUFFICIENT_DATA,
+                }
+                and not any(code in unusable_codes for code in reasons)
+            )
+            if not reasons and outcome is not RiskCheckOutcome.PASSED:
+                reasons.append("LIQUIDATION_ASSESSMENT_NOT_PASSED")
+            model_version = sizing_request.model_version
+            valid_until = max(request.evaluated_at, min(expiries))
+            result = LiquidationAssessment(
+                result_id=request.result_id,
+                context=context,
+                outcome=outcome,
+                reason_codes=tuple(reasons),
+                model_version=model_version,
+                as_of=context.as_of,
+                evaluated_at=request.evaluated_at,
+                valid_until=valid_until,
+                content_sha256="0" * 64,
+                availability=(
+                    LiquidationAvailability.AVAILABLE
+                    if available
+                    else LiquidationAvailability.UNAVAILABLE
+                ),
+                margin_mode=leverage_request.margin_mode,
+                entry_price=sizing_request.entry,
+                stop_loss=request.stop_loss,
+                liquidation_price=(
+                    estimate.liquidation_price
+                    if available and estimate is not None
+                    else None
+                ),
+                entry_to_liquidation=(
+                    RatioValue(entry_ratio, "entry-distance/entry")
+                    if available and entry_ratio is not None
+                    else None
+                ),
+                stop_to_liquidation=(
+                    RatioValue(stop_ratio, "stop-clearance/entry")
+                    if available and stop_ratio is not None
+                    else None
+                ),
+                minimum_distance=RatioValue(
+                    thresholds.minimum_entry_distance_ratio,
+                    "minimum-entry-distance/entry",
+                ),
+                volatility_relationship=volatility_relationship,
+                stress_relationship=stress_relationship,
+                formula_version=estimate.formula_version if estimate else None,
+                exchange_constraints=estimate.exchange_constraints
+                if estimate
+                else None,
+            )
+            return replace(
+                result,
+                content_sha256=_risk_digest(
+                    "liquidation assessment",
+                    {
+                        "request": request,
+                        "leverage_assessment": leverage,
+                        "result": {
+                            item.name: getattr(result, item.name)
+                            for item in fields(result)
+                            if item.name != "content_sha256"
+                        },
+                    },
+                ),
+            )
+    except DecimalException as exc:
+        raise RiskContractError(
+            "liquidation arithmetic cannot be represented safely at precision 34."
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -5553,8 +6349,12 @@ __all__ = [
     "LeverageAssessment",
     "LeverageAssessmentRequest",
     "LinearMarginRuleEvidence",
+    "LiquidationAssessmentRequest",
     "LiquidationAssessment",
     "LiquidationAvailability",
+    "LiquidationCostEvidence",
+    "LiquidationDistanceThresholds",
+    "LiquidationPriceEvidence",
     "MarginMode",
     "MoneyValue",
     "OfflineAccountAssessment",
@@ -5610,6 +6410,7 @@ __all__ = [
     "VersionReference",
     "aggregate_portfolio_exposure",
     "calculate_leverage_assessment",
+    "calculate_liquidation_assessment",
     "calculate_position_size",
     "calculate_stop_loss_assessment",
     "calculate_take_profit_assessment",

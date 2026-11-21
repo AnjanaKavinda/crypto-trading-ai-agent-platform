@@ -97,7 +97,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-074 | RegimeValidationResult | Quant Validation | ValidationResult, Strategy, Risk | V1 regime-scope semantics remain unchanged. ADR-0026 adds observation-only Spot schema 2 binding exact C-027v3/#94 runs to decision-time C-005 contexts and explicit asset/timeframe coverage; no C-030/C-028 qualification or retention authority. |
 | C-075 | PositionSnapshot | Portfolio | Risk, Reconciliation, UX | Point-in-time position truth is attributable and reconcilable to fills/orders. |
 | C-076 | LeverageAssessment | Risk | RiskProposal, Approval | Schema 1 remains unchanged. Offline leverage/margin assessment is deterministic, fail-closed on unknown evidence, and never grants overall risk acceptance, approval, or execution authority. |
-| C-077 | LiquidationAssessment | Risk | RiskProposal, Approval, Safety | Liquidation distance assumptions are explicit, deterministic, and conservative. |
+| C-077 | LiquidationAssessment | Risk | RiskProposal, Approval, Safety | Schema 1 and its constructor/consumers remain unchanged. Issue #110 adds a pure offline assessment of caller-supplied, versioned LINEAR liquidation-price evidence; it never calculates or authenticates an exchange liquidation price. |
 | C-078 | StopLossAssessment | Risk | RiskProposal, Approval | Stop-loss validity must align with strategy logic and maximum-loss policy bounds. |
 | C-079 | TakeProfitAssessment | Risk | RiskProposal, Approval | Take-profit targets must preserve risk-reward and invalidation consistency. |
 | C-080 | PortfolioImpact | Risk Engine | Approval, Safety, UX | New proposal impact must not violate portfolio-wide exposure constraints. |
@@ -666,6 +666,67 @@ evidence, and C-076 output excluding its own digest; it proves content binding,
 not source authenticity. Validity is bounded by upstream and rule expiries;
 expiry equality is valid. C-036/C-076 passes are component observations only,
 not overall risk acceptance, human approval, or execution authority.
+
+## Issue #110 — offline supplied liquidation-estimate assessment
+
+C-077 `LiquidationAssessment` remains schema `1` with its exact constructor,
+fields, meanings, consumers, and availability constraints. The pure
+`calculate_liquidation_assessment(LiquidationAssessmentRequest)` recomputes the
+exact supplied `LeverageAssessmentRequest` through
+`calculate_leverage_assessment`. Its immutable estimate, threshold, cost, and
+request values are nonpersisted inputs, not new canonical contracts. No
+liquidation formula, API, codec, persistence, migration, external adapter, or
+runtime integration is introduced.
+
+Only current caller-attested LINEAR evidence is supported. It binds the exact
+request and C-036 sizing quantity; context, entry, stop, side, instrument,
+venue, account and portfolio snapshots, margin mode, source identity, formula
+and exchange-constraint versions; and aware as-of/expiry times. Formula and
+constraint digests bind declared content but do not authenticate the source or
+verify an exchange formula. Missing/unknown formula inputs, incomplete CROSS
+account evidence, stale/future/mismatched estimate basis or source context, and
+unsupported cost treatment are unavailable. ISOLATED and CROSS evidence are
+never substituted. The function does not infer a liquidation price.
+
+Threshold inputs are explicit, versioned quote-price assumptions: minimum
+entry-distance ratio, absolute stop buffer, and normal/stress adverse
+displacements. Fee/funding reserves are nonnegative, currency-matched,
+versioned, and accepted only when the caller explicitly attests they are
+already included in the supplied estimate. Any treatment needing a price
+adjustment is unavailable; reserves are not subtracted and zero is never
+inferred. LONG and SHORT comparisons use the adverse direction, positive
+entry-distance and stop-clearance, exact threshold comparisons, and
+entry-denominated C-077 ratios. Equality meets a threshold; liquidation at or
+inside the stop is a hard failure. If either distance is non-positive or
+outside the representable C-077 range, availability is `UNAVAILABLE` and all
+three estimated numeric fields are omitted. A known wrong-side or at/inside-
+stop hard failure takes precedence over `INSUFFICIENT_DATA`; otherwise a
+representable current estimate that breaches a distance or buffer threshold
+remains `AVAILABLE/FAILED`.
+
+Current matching C-021/C-028/C-070 references (schema 1 or 2) and exact
+C-032/C-033 schema-1 snapshot references with digests and expiries are
+required. Known hard failures dominate missing evidence, upstream FAILED or
+INSUFFICIENT_DATA is never upgraded, and upstream WARNING plus numeric evidence
+propagates. NOT_APPLICABLE is not treated as PASSED; there is no fully-funded
+Spot resolver. A representable current estimate with a distance or buffer
+threshold breach remains `AVAILABLE/FAILED`; wrong-side, at/inside-stop, or
+unrepresentable distances are `UNAVAILABLE`, with no estimated numeric
+fields, and a known hard failure takes precedence over insufficiency. The
+digest binds the complete request, recomputed C-076
+assessment, and C-077 output excluding its own digest; it proves content
+binding only. Validity is bounded by all related upstream evidence and
+assumption expiries; equality is current. No result grants overall risk
+acceptance, approval, or execution authority.
+
+The supplied estimate embeds the exact liquidation-cost evidence as its
+`cost_basis`. Missing cost binding is unavailable; changed amounts, treatment,
+version, currency or timestamps cannot reuse the old estimate. Invalid price,
+venue, quantity or unit evidence cannot produce a passing relationship label.
+The shared sizing precheck distinguishes absent snapshot digest/expiry from a
+known conflicting value: missing provenance remains insufficient, while known
+identity/schema/digest/expiry mismatches still fail. No canonical constructor
+or schema changes accompany this dependency correction.
 
 ## Issue #108 — offline take-profit / risk-reward assessment
 
