@@ -608,6 +608,66 @@ calculate leverage/liquidation, decide portfolio impact, approve risk, or
 authorize approval/execution. A sizing pass does not imply stop validity, and
 a stop pass is not overall risk approval or execution authority.
 
+## Issue #108 — offline take-profit / risk-reward assessment
+
+C-079 `TakeProfitAssessment` remains schema `1` with its exact constructor,
+fields, meanings, consumers, and authority. The pure offline
+`calculate_take_profit_assessment(TakeProfitAssessmentRequest)` reuses the
+existing C-079, C-078, C-036, `TakeProfitTarget`, `SizingCosts`,
+`SizingInstrumentTerms`, and `RiskContext` contracts. Its immutable request
+and per-target bound values are nonpersisted inputs, not new canonical
+contracts; there is no codec, API, database, migration, external lookup, or
+runtime integration.
+
+The request binds a result UUID and evaluation time; an exact
+`StopLossAssessmentRequest` that is recalculated by
+`calculate_stop_loss_assessment`; the typed current C-036 result; context and
+entry; immutable ascending-sequence targets; a current priced bound per
+target; explicit `SizingCosts` with a version per target; a positive explicit
+minimum risk-reward ratio and version; and model/assumption versions and a
+validity window. The stop must pass. C-036 must be a current schema-1
+`PositionSizingResult` in the same context and its recommended quantity,
+stop distance, and instrument/cost assumptions must match the stop inputs.
+Notional and initial margin are checked against the exact entry, multiplier,
+quantity and instrument terms, including the notional cap and available margin.
+All supplied sizing money uses the quote currency; sizing min/max/step bounds
+match the instrument and nominal loss cannot exceed the sizing risk budget.
+These checks also apply to warnings; missing bounded outputs remain unknown.
+Its nominal maximum loss plus the exact supplied adverse-gap adjustment must
+match recomputed C-078 maximum loss. A C-036 warning is retained as a C-079
+warning; missing or stale evidence is `INSUFFICIENT_DATA`, and hard failures
+take precedence over missing data and warnings.
+
+Input target `expected_profit` must be unset, including zero; this calculator
+computes it. Targets must sum to exactly one allocation. LONG targets are strictly
+ascending above entry; SHORT targets are strictly descending below entry.
+Every target price conforms to the supplied instrument tick. Each allocated
+quantity (sizing quantity times target allocation) must satisfy the
+instrument's minimum, maximum, and step bounds without adjustment. For each
+target, directional gross profit is reduced by that target's explicit
+per-unit fee, slippage, and funding from versioned `SizingCosts`; no costs or
+price data are inferred. A versioned minimum R:R is checked by exact
+cross-multiplication against the recomputed C-078 maximum loss; the displayed
+ratio is rounded downward at precision 34 and is not used as the threshold
+authority.
+
+Each target also requires current caller-supplied priced bounds with exact
+C-021 strategy, C-023 invalidation, `RiskContext`, asset, instrument, side,
+and sequence lineage. C-021/C-028/C-070 schema 1 and 2 references are
+accepted through explicit dispatch; other referenced contracts retain their
+registered schema requirements. Expiry is the earliest applicable request,
+context, stop, sizing, and target-bound expiry. The result digest canonically
+binds the complete request and all C-079 result fields except the digest.
+Callers retain the exact nonpersisted request alongside the C-079 result.
+Arithmetic uses an isolated precision-34, half-even Decimal context; exact
+operations are trapped and unrepresentable values raise
+`RiskContractError`.
+
+No sizing, portfolio-policy resolution, approval, execution, or broader risk
+decision is introduced. C-079 is an assessment only, not a trade
+authorization; all market/strategy bounds and source truth remain
+caller-supplied and unauthenticated.
+
 ## Approval scope and change control
 
 - Registry approval establishes cross-domain semantics and ownership; schemas and implementation artifacts are intentionally deferred.

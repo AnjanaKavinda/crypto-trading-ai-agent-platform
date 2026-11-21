@@ -66,11 +66,14 @@ from trading_platform_api.risk import (
     StressScenarioResult,
     StressTestResult,
     TakeProfitAssessment,
+    TakeProfitAssessmentRequest,
     TakeProfitTarget,
+    TakeProfitTargetBound,
     VersionReference,
     aggregate_portfolio_exposure,
     calculate_position_size,
     calculate_stop_loss_assessment,
+    calculate_take_profit_assessment,
     pairwise_correlation,
 )
 
@@ -1398,6 +1401,97 @@ def stop_assessment_request(
     return StopLossAssessmentRequest(**values)  # type: ignore[arg-type]
 
 
+def unpriced_target(sequence: int = 1, allocation: str = "1") -> TakeProfitTarget:
+    return replace(target(sequence, allocation), expected_profit=None)
+
+
+def take_profit_assessment_request(
+    side: PositionSide = PositionSide.LONG,
+    *,
+    targets: tuple[TakeProfitTarget, ...] | None = None,
+    target_costs: tuple[SizingCosts, ...] | None = None,
+    stop_request: StopLossAssessmentRequest | None = None,
+    minimum_risk_reward: Decimal = Decimal("1.4"),
+) -> TakeProfitAssessmentRequest:
+    stop_request = stop_request or stop_assessment_request(side)
+    ctx = stop_request.context
+    tp_targets = targets or (
+        replace(
+            unpriced_target(),
+            price=price("120") if side is PositionSide.LONG else price("80"),
+        ),
+    )
+    tp_costs = target_costs or (
+        SizingCosts(money("1"), money("0.5"), money("0.5"), version("tp-cost")),
+    ) * len(tp_targets)
+    sizing_result = PositionSizingResult(
+        result_id=UUID(int=108),
+        context=ctx,
+        outcome=RiskCheckOutcome.PASSED,
+        reason_codes=(),
+        model_version=version("sizing-model"),
+        as_of=T[3],
+        evaluated_at=T[4],
+        valid_until=T[10],
+        content_sha256=HASH_A,
+        method=SizingMethod.RISK_BASED,
+        sizing_assumptions=(
+            stop_request.instrument.version,
+            stop_request.costs.version,
+        ),
+        requested_risk=money("100"),
+        requested_notional=money("200"),
+        recommended_quantity=stop_request.quantity,
+        recommended_notional=money("200"),
+        recommended_margin=money("40"),
+        stop_distance=Decimal("10"),
+        maximum_loss=money("24"),
+        account_risk=ratio("0.01", "account-risk"),
+        minimum_quantity=Decimal("0.1"),
+        maximum_quantity=Decimal("100"),
+        quantity_step=Decimal("0.1"),
+    )
+    bound_limits = (
+        (price("100.01"), price("130"))
+        if side is PositionSide.LONG
+        else (price("70"), price("99.99"))
+    )
+    target_bounds = tuple(
+        TakeProfitTargetBound(
+            item.sequence,
+            ctx,
+            ctx.strategy_version,
+            stop_request.strategy_invalidation,
+            ctx.asset,
+            ctx.instrument_id,
+            side,
+            bound_limits[0],
+            bound_limits[1],
+            version(f"target-bound-{item.sequence}"),
+            T[3],
+            T[9],
+        )
+        for item in tp_targets
+    )
+    return TakeProfitAssessmentRequest(
+        result_id=UUID(int=109),
+        context=ctx,
+        entry_price=stop_request.entry_price,
+        stop_loss_request=stop_request,
+        sizing_result=sizing_result,
+        targets=tp_targets,
+        target_bounds=target_bounds,
+        target_costs=tp_costs,
+        minimum_risk_reward=minimum_risk_reward,
+        minimum_risk_reward_version=version("minimum-risk-reward"),
+        assumptions_version=version("take-profit-assumptions"),
+        model_version=version("take-profit-model"),
+        evaluated_at=T[4],
+        assumptions_as_of=T[2],
+        assumptions_valid_until=T[14],
+    )
+
+
 @pytest.mark.parametrize("side", [PositionSide.LONG, PositionSide.SHORT])
 def test_stop_assessment_calculates_bounded_loss_for_both_sides(
     side: PositionSide,
@@ -2329,6 +2423,397 @@ def test_take_profit_requires_exact_allocation_and_correct_side() -> None:
         take_profit(targets=(target(allocation="0.5"),))
     with pytest.raises(RiskContractError, match="wrong side"):
         take_profit(targets=(replace(target(), price=price("90")),))
+
+
+@pytest.mark.parametrize("side", [PositionSide.LONG, PositionSide.SHORT])
+def test_take_profit_calculates_after_cost_directional_profit_for_both_sides(
+    side: PositionSide,
+) -> None:
+    request = take_profit_assessment_request(side)
+    result = calculate_take_profit_assessment(request)
+
+    assert result.contract_id == "C-079"
+    assert result.schema_version == "1"
+    assert result.result_id == request.result_id
+    assert result.evaluated_at == request.evaluated_at
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.expected_profit == money("36")
+    assert result.targets[0].expected_profit == money("36")
+    assert result.risk_reward_ratio is not None
+    assert result.valid_until == T[9]
+    assert result.content_sha256 != HASH_A
+
+
+def test_take_profit_partial_targets_use_each_explicit_cost_and_exact_steps() -> None:
+    request = take_profit_assessment_request(
+        targets=(
+            replace(unpriced_target(sequence=1, allocation="0.5"), price=price("110")),
+            replace(unpriced_target(sequence=2, allocation="0.5"), price=price("120")),
+        ),
+        target_costs=(
+            SizingCosts(money("1"), money("0.5"), money("0.5"), version("cost-one")),
+            SizingCosts(money("1"), money("0.5"), money("0.5"), version("cost-two")),
+        ),
+        minimum_risk_reward=Decimal("1"),
+    )
+    result = calculate_take_profit_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert tuple(item.expected_profit for item in result.targets) == (
+        money("8"),
+        money("18"),
+    )
+    assert result.expected_profit == money("26")
+    assert version("cost-one") in result.assumptions
+    assert version("cost-two") in result.assumptions
+
+
+def test_take_profit_uses_exact_threshold_under_independent_decimal_context() -> None:
+    stop_request = stop_assessment_request(
+        costs=SizingCosts(
+            money("0"),
+            money("0"),
+            money("0"),
+            version("zero-stop-cost"),
+        ),
+        adverse_gap_displacement=Decimal("1"),
+    )
+    request = take_profit_assessment_request(
+        stop_request=stop_request,
+        targets=(replace(unpriced_target(), price=price("122")),),
+        target_costs=(
+            SizingCosts(
+                money("0"),
+                money("0"),
+                money("0"),
+                version("zero-target-cost"),
+            ),
+        ),
+        minimum_risk_reward=Decimal("2"),
+    )
+    request = replace(
+        request,
+        sizing_result=replace(request.sizing_result, maximum_loss=money("20")),
+    )
+    with localcontext(Context(prec=3, rounding=ROUND_DOWN)):
+        result = calculate_take_profit_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.expected_profit == money("44")
+    assert result.risk_reward_ratio == Decimal("2")
+    rejected = calculate_take_profit_assessment(
+        replace(request, minimum_risk_reward=Decimal("2.01"))
+    )
+    assert rejected.outcome is RiskCheckOutcome.FAILED
+    assert "MINIMUM_RISK_REWARD_NOT_MET" in rejected.reason_codes
+
+
+def test_take_profit_hard_failure_dominates_upstream_warning() -> None:
+    request = take_profit_assessment_request()
+    request = replace(
+        request,
+        sizing_result=replace(
+            request.sizing_result,
+            outcome=RiskCheckOutcome.WARNING,
+            reason_codes=("REQUESTED_TARGET_REDUCED",),
+        ),
+        stop_loss_request=replace(
+            request.stop_loss_request,
+            minimum_stop_distance=Decimal("11"),
+        ),
+    )
+    result = calculate_take_profit_assessment(request)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "STOP_ASSESSMENT_FAILED" in result.reason_codes
+    assert result.strategy_consistency is RiskCheckOutcome.FAILED
+
+
+def test_take_profit_propagates_current_sizing_warning() -> None:
+    request = take_profit_assessment_request()
+    request = replace(
+        request,
+        sizing_result=replace(
+            request.sizing_result,
+            outcome=RiskCheckOutcome.WARNING,
+            reason_codes=("REQUESTED_TARGET_REDUCED",),
+        ),
+    )
+    result = calculate_take_profit_assessment(request)
+    assert result.outcome is RiskCheckOutcome.WARNING
+    assert "REQUESTED_TARGET_REDUCED" in result.reason_codes
+    assert result.expected_profit == money("36")
+
+
+def test_take_profit_schema_two_lineage_is_supported_without_down_conversion() -> None:
+    request = take_profit_assessment_request()
+    ctx = replace(
+        request.context,
+        signal=replace(request.context.signal, schema_version="2"),
+        validation=replace(request.context.validation, schema_version="2"),
+        strategy_version=replace(request.context.strategy_version, schema_version="2"),
+    )
+    stop_request = request.stop_loss_request
+    assert stop_request.structural_evidence is not None
+    assert stop_request.volatility_evidence is not None
+    assert stop_request.liquidation_evidence is not None
+    stop_request = replace(
+        stop_request,
+        context=ctx,
+        structural_evidence=replace(
+            stop_request.structural_evidence,
+            context=ctx,
+            strategy_version=ctx.strategy_version,
+        ),
+        volatility_evidence=replace(stop_request.volatility_evidence, context=ctx),
+        liquidation_evidence=replace(stop_request.liquidation_evidence, context=ctx),
+    )
+    request = replace(
+        request,
+        context=ctx,
+        stop_loss_request=stop_request,
+        sizing_result=replace(request.sizing_result, context=ctx),
+        target_bounds=tuple(
+            replace(
+                bound,
+                context=ctx,
+                strategy_version=ctx.strategy_version,
+            )
+            for bound in request.target_bounds
+        ),
+    )
+    result = calculate_take_profit_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.context.strategy_version.schema_version == "2"
+    assert result.context.signal.schema_version == "2"
+
+
+def test_take_profit_fails_closed_for_target_tick_bound_and_partial_step() -> None:
+    request = take_profit_assessment_request()
+    unticked = replace(request.targets[0], price=price("120.005"))
+    result = calculate_take_profit_assessment(replace(request, targets=(unticked,)))
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "TARGET_PRICE_TICK_MISMATCH" in result.reason_codes
+
+    outside = replace(request.targets[0], price=price("135"))
+    result = calculate_take_profit_assessment(replace(request, targets=(outside,)))
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "TARGET_OUTSIDE_STRATEGY_BOUND" in result.reason_codes
+    assert result.invalidation_consistency is RiskCheckOutcome.FAILED
+
+    split = take_profit_assessment_request(
+        targets=(
+            replace(
+                unpriced_target(sequence=1, allocation="0.333"), price=price("110")
+            ),
+            replace(
+                unpriced_target(sequence=2, allocation="0.667"), price=price("120")
+            ),
+        ),
+        minimum_risk_reward=Decimal("0.1"),
+    )
+    result = calculate_take_profit_assessment(split)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "TARGET_QUANTITY_STEP_MISMATCH" in result.reason_codes
+
+    non_progressive = take_profit_assessment_request(
+        targets=(
+            replace(unpriced_target(sequence=1, allocation="0.5"), price=price("120")),
+            replace(unpriced_target(sequence=2, allocation="0.5"), price=price("115")),
+        ),
+        minimum_risk_reward=Decimal("0.1"),
+    )
+    result = calculate_take_profit_assessment(non_progressive)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "TARGET_PRICES_NOT_PROGRESSIVE" in result.reason_codes
+
+    below_minimum = take_profit_assessment_request(
+        targets=(
+            replace(unpriced_target(sequence=1, allocation="0.05"), price=price("110")),
+            replace(unpriced_target(sequence=2, allocation="0.95"), price=price("120")),
+        ),
+        minimum_risk_reward=Decimal("0.1"),
+    )
+    stop_request = replace(below_minimum.stop_loss_request, quantity=Decimal("1"))
+    sizing_result = replace(
+        below_minimum.sizing_result,
+        recommended_quantity=Decimal("1"),
+        maximum_loss=money("12"),
+    )
+    result = calculate_take_profit_assessment(
+        replace(
+            below_minimum,
+            stop_loss_request=stop_request,
+            sizing_result=sizing_result,
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "TARGET_QUANTITY_OUT_OF_BOUNDS" in result.reason_codes
+
+
+def test_take_profit_rejects_bad_shapes_and_unrepresentable_arithmetic() -> None:
+    request = take_profit_assessment_request()
+    with pytest.raises(RiskContractError, match="ascending sequences"):
+        replace(
+            request,
+            targets=(
+                replace(request.targets[0], sequence=2),
+                replace(unpriced_target(sequence=1, allocation="0.5")),
+            ),
+        )
+    with pytest.raises(RiskContractError, match="allocations must sum exactly"):
+        replace(
+            request,
+            targets=(replace(request.targets[0], allocation=ratio("0.9")),),
+        )
+
+    huge = price("12345678901234567890123456789012345")
+    huge_request = replace(
+        request,
+        targets=(replace(request.targets[0], price=huge),),
+        target_bounds=(
+            replace(
+                request.target_bounds[0],
+                upper_price=huge,
+            ),
+        ),
+    )
+    with pytest.raises(RiskContractError, match="precision 34"):
+        calculate_take_profit_assessment(huge_request)
+
+
+@pytest.mark.parametrize("amount", ["0", "999"])
+def test_take_profit_rejects_caller_populated_target_profit(amount: str) -> None:
+    request = take_profit_assessment_request()
+    with pytest.raises(RiskContractError, match="expected_profit must be unset"):
+        replace(
+            request,
+            targets=(replace(request.targets[0], expected_profit=money(amount)),),
+        )
+
+
+def test_take_profit_reports_conservative_nonterminating_ratio() -> None:
+    request = take_profit_assessment_request()
+    with localcontext(Context(prec=80)):
+        exact_ratio = Decimal("36") / Decimal("24.5")
+    with localcontext(Context(prec=2, rounding=ROUND_UP)) as caller:
+        caller.traps[Inexact] = True
+        result = calculate_take_profit_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.risk_reward_ratio == Decimal("1.469387755102040816326530612244897")
+    assert result.risk_reward_ratio <= exact_ratio
+
+
+@pytest.mark.parametrize(
+    ("updates", "reason"),
+    [
+        ({"recommended_notional": money("201")}, "SIZING_NOTIONAL_MISMATCH"),
+        ({"recommended_margin": money("41")}, "SIZING_MARGIN_MISMATCH"),
+        (
+            {"recommended_notional": MoneyValue(Decimal("200"), "OTHER")},
+            "SIZING_CURRENCY_MISMATCH",
+        ),
+        (
+            {"recommended_margin": MoneyValue(Decimal("40"), "OTHER")},
+            "SIZING_CURRENCY_MISMATCH",
+        ),
+        (
+            {"maximum_loss": MoneyValue(Decimal("24"), "OTHER")},
+            "SIZING_CURRENCY_MISMATCH",
+        ),
+        (
+            {"requested_risk": MoneyValue(Decimal("100"), "OTHER")},
+            "SIZING_CURRENCY_MISMATCH",
+        ),
+        (
+            {"requested_notional": MoneyValue(Decimal("200"), "OTHER")},
+            "SIZING_CURRENCY_MISMATCH",
+        ),
+        ({"minimum_quantity": Decimal("0.2")}, "SIZING_BOUNDS_MISMATCH"),
+        ({"maximum_quantity": Decimal("90")}, "SIZING_BOUNDS_MISMATCH"),
+        ({"quantity_step": Decimal("0.2")}, "SIZING_BOUNDS_MISMATCH"),
+        ({"requested_risk": money("23")}, "SIZING_RISK_BUDGET_EXCEEDED"),
+    ],
+)
+@pytest.mark.parametrize("warning", [False, True])
+def test_take_profit_rejects_inconsistent_sizing_outputs(
+    updates: dict[str, object], reason: str, warning: bool
+) -> None:
+    request = take_profit_assessment_request()
+    sizing = replace(
+        request.sizing_result,
+        **updates,
+        outcome=RiskCheckOutcome.WARNING if warning else RiskCheckOutcome.PASSED,
+        reason_codes=("REQUESTED_TARGET_REDUCED",) if warning else (),
+    )
+    result = calculate_take_profit_assessment(replace(request, sizing_result=sizing))
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert reason in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "recommended_notional",
+        "recommended_margin",
+        "minimum_quantity",
+        "maximum_quantity",
+        "quantity_step",
+    ],
+)
+def test_take_profit_warning_cannot_hide_missing_sizing_outputs(field: str) -> None:
+    request = take_profit_assessment_request()
+    sizing = replace(
+        request.sizing_result,
+        **{field: None},
+        outcome=RiskCheckOutcome.WARNING,
+        reason_codes=("REQUESTED_TARGET_REDUCED",),
+    )
+    result = calculate_take_profit_assessment(replace(request, sizing_result=sizing))
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.expected_profit is None
+    assert result.risk_reward_ratio is None
+
+
+def test_take_profit_binds_all_inputs_and_uses_earliest_expiry() -> None:
+    request = take_profit_assessment_request()
+    result = calculate_take_profit_assessment(request)
+    changed = replace(
+        request,
+        target_costs=(
+            replace(
+                request.target_costs[0],
+                version=version("different-cost-version"),
+            ),
+        ),
+        target_bounds=(replace(request.target_bounds[0], valid_until=T[8]),),
+    )
+    changed_result = calculate_take_profit_assessment(changed)
+    assert changed_result.content_sha256 != result.content_sha256
+    assert changed_result.valid_until == T[8]
+
+
+def test_take_profit_missing_lineage_is_insufficient_but_hard_mismatch_fails() -> None:
+    request = take_profit_assessment_request()
+    stale = replace(
+        request,
+        target_bounds=(replace(request.target_bounds[0], valid_until=T[3]),),
+    )
+    result = calculate_take_profit_assessment(stale)
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.valid_until == T[4]
+    assert result.expected_profit is None
+
+    mismatched = replace(
+        request,
+        target_bounds=(
+            replace(
+                request.target_bounds[0],
+                strategy_invalidation=ref("C-023"),
+            ),
+        ),
+    )
+    result = calculate_take_profit_assessment(mismatched)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "TARGET_BOUND_INVALIDATION_MISMATCH" in result.reason_codes
+    assert result.invalidation_consistency is RiskCheckOutcome.FAILED
 
 
 def test_portfolio_impact_hard_breach_or_missing_evidence_cannot_pass() -> None:
