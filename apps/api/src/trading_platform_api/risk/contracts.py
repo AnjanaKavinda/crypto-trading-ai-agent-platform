@@ -1636,16 +1636,23 @@ class LinearMarginRuleEvidence:
         lower = _money("tier_lower_bound", self.tier_lower_bound)
         upper = _money("tier_upper_bound", self.tier_upper_bound, positive=True)
         if lower.currency != upper.currency or lower.amount > upper.amount:
-            raise RiskContractError("margin tier bounds must be ordered in one currency.")
+            raise RiskContractError(
+                "margin tier bounds must be ordered in one currency."
+            )
         _decimal("initial_margin_rate", self.initial_margin_rate)
         _decimal("maintenance_margin_rate", self.maintenance_margin_rate)
-        if not (
-            Decimal(0)
-            <= self.maintenance_margin_rate
-            <= self.initial_margin_rate
-            <= Decimal(1)
-        ) or self.initial_margin_rate <= 0:
-            raise RiskContractError("margin rates must satisfy 0 <= maintenance <= initial <= 1.")
+        if (
+            not (
+                Decimal(0)
+                <= self.maintenance_margin_rate
+                <= self.initial_margin_rate
+                <= Decimal(1)
+            )
+            or self.initial_margin_rate <= 0
+        ):
+            raise RiskContractError(
+                "margin rates must satisfy 0 <= maintenance <= initial <= 1."
+            )
         if not isinstance(self.version, VersionReference):
             raise RiskContractError("version must be a VersionReference.")
         as_of = _time("as_of", self.as_of)
@@ -2315,9 +2322,7 @@ def calculate_leverage_assessment(
             insufficient = sizing.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
             warned = sizing.outcome is RiskCheckOutcome.WARNING
 
-            def record(
-                code: str, outcome: RiskCheckOutcome, *, hard: bool = True
-            ) -> None:
+            def record(code: str, outcome: RiskCheckOutcome) -> None:
                 nonlocal failed, insufficient, warned
                 if code not in reasons:
                     reasons.append(code)
@@ -2326,11 +2331,6 @@ def calculate_leverage_assessment(
                     insufficient or outcome is RiskCheckOutcome.INSUFFICIENT_DATA
                 )
                 warned = warned or outcome is RiskCheckOutcome.WARNING
-                if hard and outcome in {
-                    RiskCheckOutcome.FAILED,
-                    RiskCheckOutcome.INSUFFICIENT_DATA,
-                }:
-                    failed = failed or outcome is RiskCheckOutcome.FAILED
 
             def check(
                 limit_id: str,
@@ -2340,9 +2340,7 @@ def calculate_leverage_assessment(
                 passed: bool,
                 reason: str,
             ) -> None:
-                outcome = (
-                    RiskCheckOutcome.PASSED if passed else RiskCheckOutcome.FAILED
-                )
+                outcome = RiskCheckOutcome.PASSED if passed else RiskCheckOutcome.FAILED
                 limits.append(
                     RiskLimitResult(
                         limit_id,
@@ -2395,18 +2393,15 @@ def calculate_leverage_assessment(
                 or portfolio.equity != account.equity
             ):
                 record("POSITIVE_MATCHING_EQUITY_REQUIRED", RiskCheckOutcome.FAILED)
-            if (
-                terms is not None
-                and (
-                    account.currency != terms.quote_currency
-                    or portfolio.currency != terms.quote_currency
-                    or request.minimum_remaining_free_margin.currency
-                    != terms.quote_currency
-                    or request.additional_reserved_cost.currency != terms.quote_currency
-                    or (
-                        rule is not None
-                        and rule.tier_lower_bound.currency != terms.quote_currency
-                    )
+            if terms is not None and (
+                account.currency != terms.quote_currency
+                or portfolio.currency != terms.quote_currency
+                or request.minimum_remaining_free_margin.currency
+                != terms.quote_currency
+                or request.additional_reserved_cost.currency != terms.quote_currency
+                or (
+                    rule is not None
+                    and rule.tier_lower_bound.currency != terms.quote_currency
                 )
             ):
                 record("LEVERAGE_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
@@ -2442,17 +2437,26 @@ def calculate_leverage_assessment(
                 {item.position_id for item in positions}
             ) != len(positions):
                 record("DUPLICATE_POSITION_IDENTITY", RiskCheckOutcome.FAILED)
-            if len(
-                {
-                    account.snapshot_id,
-                    portfolio.snapshot_id,
-                    *(item.snapshot_id for item in positions),
-                }
-            ) != len(positions) + 2:
+            if (
+                len(
+                    {
+                        account.snapshot_id,
+                        portfolio.snapshot_id,
+                        *(item.snapshot_id for item in positions),
+                    }
+                )
+                != len(positions) + 2
+            ):
                 record("DUPLICATE_SNAPSHOT_IDENTITY", RiskCheckOutcome.FAILED)
             for item in positions:
                 if item.account_id != account.account_id:
                     record("POSITION_ACCOUNT_MISMATCH", RiskCheckOutcome.FAILED)
+                if (
+                    terms is not None
+                    and item.instrument_id == terms.instrument_id
+                    and item.asset != terms.asset
+                ):
+                    record("POSITION_INSTRUMENT_MISMATCH", RiskCheckOutcome.FAILED)
                 if item.state is not SnapshotState.VALID:
                     record(
                         "POSITION_SNAPSHOT_NOT_VALID",
@@ -2463,12 +2467,22 @@ def calculate_leverage_assessment(
                     or item.captured_at > request.evaluated_at
                     or item.valid_until < request.evaluated_at
                 ):
-                    record("POSITION_SNAPSHOT_NOT_CURRENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+                    record(
+                        "POSITION_SNAPSHOT_NOT_CURRENT",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
                 if not isinstance(item.source_version, VersionReference):
-                    record("POSITION_PROVENANCE_INCOMPLETE", RiskCheckOutcome.INSUFFICIENT_DATA)
+                    record(
+                        "POSITION_PROVENANCE_INCOMPLETE",
+                        RiskCheckOutcome.INSUFFICIENT_DATA,
+                    )
                 if item.notional is None:
-                    record("POSITION_NOTIONAL_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
-                elif terms is not None and item.notional.currency != terms.quote_currency:
+                    record(
+                        "POSITION_NOTIONAL_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA
+                    )
+                elif (
+                    terms is not None and item.notional.currency != terms.quote_currency
+                ):
                     record("POSITION_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
 
             if sizing.outcome in {
@@ -2491,7 +2505,9 @@ def calculate_leverage_assessment(
 
             if failed or insufficient:
                 outcome = (
-                    RiskCheckOutcome.FAILED if failed else RiskCheckOutcome.INSUFFICIENT_DATA
+                    RiskCheckOutcome.FAILED
+                    if failed
+                    else RiskCheckOutcome.INSUFFICIENT_DATA
                 )
                 return _leverage_assessment_result(
                     request, sizing, outcome, tuple(reasons), tuple(limits)
@@ -2510,8 +2526,7 @@ def calculate_leverage_assessment(
             notional = sizing.recommended_notional.amount
             proposed_margin = sizing.recommended_margin.amount
             currency = terms.quote_currency
-            exact = localcontext()
-            with exact as arithmetic:
+            with localcontext() as arithmetic:
                 arithmetic.prec = 34
                 arithmetic.rounding = ROUND_HALF_EVEN
                 arithmetic.traps[Inexact] = True
@@ -2520,7 +2535,11 @@ def calculate_leverage_assessment(
                 )
                 expected_margin = quantity * terms.initial_margin_per_unit.amount
                 gross_exposure = sum(
-                    (item.notional.amount for item in positions if item.notional is not None),
+                    (
+                        item.notional.amount
+                        for item in positions
+                        if item.notional is not None
+                    ),
                     Decimal(0),
                 )
                 instrument_gross = sum(
@@ -2528,6 +2547,7 @@ def calculate_leverage_assessment(
                         item.notional.amount
                         for item in positions
                         if item.instrument_id == terms.instrument_id
+                        and item.asset == terms.asset
                         and item.notional is not None
                     ),
                     Decimal(0),
@@ -2600,7 +2620,9 @@ def calculate_leverage_assessment(
                     proposed_margin >= required_margin,
                     "PROPOSED_MARGIN_INSUFFICIENT",
                 )
-                consumed_funds = proposed_margin + request.additional_reserved_cost.amount
+                consumed_funds = (
+                    proposed_margin + request.additional_reserved_cost.amount
+                )
                 check(
                     "available-balance",
                     consumed_funds,
@@ -2608,6 +2630,14 @@ def calculate_leverage_assessment(
                     currency,
                     consumed_funds <= account.available_balance.amount,
                     "AVAILABLE_BALANCE_INSUFFICIENT",
+                )
+                check(
+                    "free-margin-available",
+                    consumed_funds,
+                    account.free_margin.amount,
+                    currency,
+                    consumed_funds <= account.free_margin.amount,
+                    "FREE_MARGIN_INSUFFICIENT",
                 )
                 post_free_margin = account.free_margin.amount - consumed_funds
                 check(

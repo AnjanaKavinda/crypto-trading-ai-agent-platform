@@ -655,8 +655,8 @@ effective leverage is `N / M`. Post-trade gross leverage uses absolute
 existing gross exposure plus `N`, divided by matching equity. Leverage caps
 are checked by exact cross multiplication. `M` plus the explicit incremental
 reserve must fit available balance and leave the minimum free-margin buffer.
-Only ratios are rounded upward; unrepresentable arithmetic raises
-`RiskContractError`.
+Only the required-margin division and reported ratios are rounded upward;
+unrepresentable arithmetic raises `RiskContractError`.
 
 Hard breaches yield `FAILED`; missing, stale, future, or unknown required
 evidence yields `INSUFFICIENT_DATA`; upstream sizing warnings propagate, and a

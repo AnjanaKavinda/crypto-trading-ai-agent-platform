@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+import trading_platform_api.risk.contracts as risk_contracts
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.risk import (
     AccountEvidenceContext,
@@ -2500,6 +2501,27 @@ def test_leverage_assessment_accepts_exact_caps_buffers_zero_reserve_and_tier() 
 
 
 @pytest.mark.parametrize(
+    "cap_name",
+    [
+        "policy_maximum_leverage",
+        "account_maximum_leverage",
+        "venue_maximum_leverage",
+    ],
+)
+def test_leverage_assessment_enforces_each_explicit_leverage_cap(
+    cap_name: str,
+) -> None:
+    request = leverage_request(**{cap_name: Decimal("5")})
+    assert calculate_leverage_assessment(request).outcome is RiskCheckOutcome.PASSED
+
+    failed = calculate_leverage_assessment(
+        replace(request, **{cap_name: Decimal("4.99")})
+    )
+    assert failed.outcome is RiskCheckOutcome.FAILED
+    assert "REQUESTED_LEVERAGE_EXCEEDS_CAP" in failed.reason_codes
+
+
+@pytest.mark.parametrize(
     ("updates", "reason"),
     [
         ({"requested_leverage": Decimal("11")}, "REQUESTED_LEVERAGE_EXCEEDS_CAP"),
@@ -2558,6 +2580,46 @@ def test_leverage_assessment_rejects_margin_and_funds_shortfalls() -> None:
     assert funds_result.outcome is RiskCheckOutcome.FAILED
     assert "AVAILABLE_BALANCE_INSUFFICIENT" in funds_result.reason_codes
 
+    free_margin_result = calculate_leverage_assessment(
+        leverage_request(additional_reserved_cost=money("7000"))
+    )
+    assert free_margin_result.outcome is RiskCheckOutcome.FAILED
+    assert "FREE_MARGIN_INSUFFICIENT" in free_margin_result.reason_codes
+
+
+def test_leverage_assessment_propagates_upstream_sizing_failure() -> None:
+    request = leverage_request()
+    failed_sizing = replace(
+        request.sizing_request,
+        effective_risk=money("1"),
+    )
+
+    result = calculate_leverage_assessment(
+        replace(request, sizing_request=failed_sizing)
+    )
+
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "NO_TRADE_BELOW_MINIMUM" in result.reason_codes
+    assert result.proposed_margin is None
+
+
+def test_leverage_assessment_rejects_inconsistent_recomputed_sizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = leverage_request()
+    recomputed = calculate_position_size(request.sizing_request)
+    inconsistent = replace(recomputed, recommended_notional=money("999"))
+    monkeypatch.setattr(
+        risk_contracts,
+        "calculate_position_size",
+        lambda _: inconsistent,
+    )
+
+    result = calculate_leverage_assessment(request)
+
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "SIZING_AMOUNT_INCONSISTENT" in result.reason_codes
+
 
 def test_leverage_assessment_sums_gross_positions_and_supports_explicit_empty() -> None:
     request = leverage_request()
@@ -2589,9 +2651,7 @@ def test_leverage_assessment_sums_gross_positions_and_supports_explicit_empty() 
     empty_result = calculate_leverage_assessment(
         replace(
             request,
-            sizing_request=replace(
-                request.sizing_request, portfolio=empty_portfolio
-            ),
+            sizing_request=replace(request.sizing_request, portfolio=empty_portfolio),
         )
     )
     assert empty_result.outcome is RiskCheckOutcome.PASSED
@@ -2600,56 +2660,135 @@ def test_leverage_assessment_sums_gross_positions_and_supports_explicit_empty() 
 
 def test_leverage_assessment_requires_current_matching_rule_and_positions() -> None:
     request = leverage_request()
-    assert calculate_leverage_assessment(
-        replace(request, margin_rule=None)
-    ).outcome is RiskCheckOutcome.INSUFFICIENT_DATA
-    assert calculate_leverage_assessment(
-        replace(
-            request,
-            margin_rule=replace(request.margin_rule, valid_until=T[3]),
-        )
-    ).outcome is RiskCheckOutcome.INSUFFICIENT_DATA
-    assert calculate_leverage_assessment(
-        replace(
-            request,
-            margin_rule=replace(request.margin_rule, model="UNKNOWN"),
-        )
-    ).outcome is RiskCheckOutcome.FAILED
-    assert calculate_leverage_assessment(
-        replace(
-            request,
-            margin_rule=replace(request.margin_rule, margin_mode=MarginMode.CROSS),
-        )
-    ).outcome is RiskCheckOutcome.FAILED
+    assert (
+        calculate_leverage_assessment(replace(request, margin_rule=None)).outcome
+        is RiskCheckOutcome.INSUFFICIENT_DATA
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(request.margin_rule, valid_until=T[3]),
+            )
+        ).outcome
+        is RiskCheckOutcome.INSUFFICIENT_DATA
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(request.margin_rule, valid_until=T[4]),
+            )
+        ).outcome
+        is RiskCheckOutcome.PASSED
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(request.margin_rule, model="UNKNOWN"),
+            )
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(request.margin_rule, margin_mode=MarginMode.CROSS),
+            )
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(
+                    request.margin_rule,
+                    account_id=uuid4(),
+                ),
+            )
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(
+                    request.margin_rule,
+                    tier_lower_bound=money("1102"),
+                ),
+            )
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                margin_rule=replace(
+                    request.margin_rule,
+                    tier_lower_bound=MoneyValue(Decimal("0"), "OTHER-USD"),
+                    tier_upper_bound=MoneyValue(Decimal("100000"), "OTHER-USD"),
+                ),
+            )
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
 
     position_value = request.sizing_request.portfolio.positions[0]
     stale = replace(position_value, valid_until=T[3])
-    stale_portfolio = replace(
-        request.sizing_request.portfolio, positions=(stale,)
+    stale_portfolio = replace(request.sizing_request.portfolio, positions=(stale,))
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                sizing_request=replace(
+                    request.sizing_request, portfolio=stale_portfolio
+                ),
+            )
+        ).outcome
+        is RiskCheckOutcome.INSUFFICIENT_DATA
     )
-    assert calculate_leverage_assessment(
+    foreign_position = replace(position_value, account_id=uuid4())
+    foreign_portfolio = replace(
+        request.sizing_request.portfolio,
+        state=SnapshotState.INCOMPLETE,
+        reason_codes=("INCOMPLETE",),
+        positions=(foreign_position,),
+    )
+    foreign_result = calculate_leverage_assessment(
         replace(
             request,
-            sizing_request=replace(
-                request.sizing_request, portfolio=stale_portfolio
-            ),
+            sizing_request=replace(request.sizing_request, portfolio=foreign_portfolio),
         )
-    ).outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    )
+    assert foreign_result.outcome is RiskCheckOutcome.FAILED
+    assert "POSITION_ACCOUNT_MISMATCH" in foreign_result.reason_codes
 
-    duplicate = replace(position_value, snapshot_id=position_value.snapshot_id)
+    duplicate = replace(
+        position_value,
+        snapshot_id=position_value.snapshot_id,
+        position_id=uuid4(),
+    )
     duplicate_portfolio = replace(
         request.sizing_request.portfolio,
         positions=(position_value, duplicate),
         gross_exposure=money("202"),
     )
-    assert calculate_leverage_assessment(
-        replace(
-            request,
-            sizing_request=replace(
-                request.sizing_request, portfolio=duplicate_portfolio
-            ),
-        )
-    ).outcome is RiskCheckOutcome.FAILED
+    assert (
+        calculate_leverage_assessment(
+            replace(
+                request,
+                sizing_request=replace(
+                    request.sizing_request, portfolio=duplicate_portfolio
+                ),
+            )
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
 
 
 def test_leverage_assessment_schema_two_warnings_digest_and_decimal_context() -> None:
@@ -2659,9 +2798,7 @@ def test_leverage_assessment_schema_two_warnings_digest_and_decimal_context() ->
         context_value,
         signal=replace(context_value.signal, schema_version="2"),
         validation=replace(context_value.validation, schema_version="2"),
-        strategy_version=replace(
-            context_value.strategy_version, schema_version="2"
-        ),
+        strategy_version=replace(context_value.strategy_version, schema_version="2"),
     )
     warning_sizing = replace(
         request.sizing_request,
@@ -2674,10 +2811,30 @@ def test_leverage_assessment_schema_two_warnings_digest_and_decimal_context() ->
         result = calculate_leverage_assessment(warning_request)
     assert result.outcome is RiskCheckOutcome.WARNING
     assert "REQUESTED_TARGET_REDUCED" in result.reason_codes
-    assert result.content_sha256 != calculate_leverage_assessment(request).content_sha256
-    assert calculate_leverage_assessment(
-        replace(request, requested_leverage=Decimal("6"))
-    ).content_sha256 != calculate_leverage_assessment(request).content_sha256
+    assert (
+        result.content_sha256 != calculate_leverage_assessment(request).content_sha256
+    )
+    assert (
+        calculate_leverage_assessment(
+            replace(request, requested_leverage=Decimal("6"))
+        ).content_sha256
+        != calculate_leverage_assessment(request).content_sha256
+    )
+    expiry_boundary = replace(
+        request,
+        sizing_request=replace(
+            request.sizing_request,
+            assumptions_valid_until=request.evaluated_at,
+        ),
+        margin_rule=replace(
+            request.margin_rule,
+            valid_until=request.evaluated_at,
+        ),
+    )
+    assert (
+        calculate_leverage_assessment(expiry_boundary).outcome
+        is RiskCheckOutcome.PASSED
+    )
 
 
 def test_liquidation_unavailable_never_carries_or_passes_estimate() -> None:
