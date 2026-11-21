@@ -985,6 +985,58 @@ evidence, context/snapshot/position references, and supplied margin rule;
 equality at expiry is valid. Hash binding does not authenticate data-source
 truth, completeness, or exchange-rule authenticity.
 
+## Issue #110 — offline supplied liquidation-estimate assessment
+
+C-077 `LiquidationAssessment` remains schema 1 with unchanged constructor,
+fields, meanings, consumers, and availability constraints. The pure
+`calculate_liquidation_assessment(LiquidationAssessmentRequest)` recomputes the
+exact supplied `LeverageAssessmentRequest` through
+`calculate_leverage_assessment`. Its immutable estimate, threshold, cost, and
+request dataclasses are nonpersisted inputs only. No liquidation-price formula
+calculator, API, codec, persistence, migration, external adapter, or runtime
+integration is added.
+
+The only supported estimate is caller-attested LINEAR evidence binding the
+exact leverage request, recomputed sizing quantity, context, entry/stop/side,
+instrument and venue, account/portfolio snapshot identities, margin mode,
+source identity, formula and exchange-constraint versions, and aware as-of and
+expiry. The declared formula/source versions and content digest do not prove
+authenticity or formula correctness. Missing/unknown/unsupported formula data,
+incomplete CROSS evidence, mismatched/stale/future estimates, and unsupported
+cost treatment are unavailable. Margin modes are never substituted and no
+exchange liquidation price is calculated or inferred.
+
+Minimum entry-distance ratio, absolute stop buffer, and normal/stress adverse
+displacement are explicit current versioned quote-price assumptions. Fee and
+funding reserves are nonnegative, versioned, currency-matched inputs. The sole
+supported cost treatment attests that both reserves are already included in
+the supplied estimate. An unknown treatment or any case requiring adjustment
+of the supplied price is unavailable; the calculator neither subtracts
+reserves nor infers zero. LONG/SHORT adverse-direction entry and stop
+clearances are compared exactly in quote-price units; entry distances are
+cross-multiplied against the ratio threshold. Equality passes, but liquidation
+at or inside the stop is a hard failure. Reported C-077 ratios are entry
+denominated, rounded down, and never clamped. Non-positive or unrepresentable
+distances are `UNAVAILABLE` with no estimated numeric fields; an independently
+known hard failure yields `FAILED` despite the `DISTANCE_NOT_REPRESENTABLE`
+reason. Other unrepresentable distances yield `INSUFFICIENT_DATA`.
+
+The evaluator requires current matching C-021/C-028/C-070 refs in supported
+schema 1/2 and C-032/C-033 schema-1 snapshot references with exact content
+digests and expiry. It propagates upstream WARNING and numeric evidence and
+never upgrades upstream FAILED/INSUFFICIENT_DATA. Known hard failures dominate
+missing evidence. `NOT_APPLICABLE` is not a pass and no fully-funded Spot
+resolver exists. A representable current estimate with a distance or buffer
+threshold breach remains `AVAILABLE/FAILED`; wrong-side, at/inside-stop, or
+unrepresentable distances are `UNAVAILABLE`, with no estimated numeric
+fields, and a known hard failure takes precedence over insufficiency. The
+canonical digest binds the complete request, recomputed C-076
+assessment, and C-077 output excluding its own digest; it is content binding,
+not source authentication. Validity is bounded by all related context,
+reference, snapshot, rule, estimate, and threshold expiries; equality is valid.
+C-077 is a component observation, not overall risk acceptance, approval, or
+execution authority.
+
 ## Issue #108 — C-079 offline take-profit assessment
 
 C-079 `TakeProfitAssessment` remains schema `1`; its constructor, fields,
