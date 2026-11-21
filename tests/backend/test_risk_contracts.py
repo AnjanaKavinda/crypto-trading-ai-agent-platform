@@ -4277,3 +4277,111 @@ def test_new_risk_values_are_immutable_and_do_not_change_c033_or_c075() -> None:
         result.input_digest = HASH_A  # type: ignore[misc]
     assert portfolio(account_value).contract_id == "C-033"
     assert position(account_value.account_id).contract_id == "C-075"
+
+
+def test_leverage_known_cap_breach_dominates_missing_rule() -> None:
+    request = leverage_request(requested_leverage=Decimal("11"), margin_rule=None)
+    result = calculate_leverage_assessment(request)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "REQUESTED_LEVERAGE_EXCEEDS_CAP" in result.reason_codes
+    assert "MARGIN_RULE_MISSING" in result.reason_codes
+
+
+def test_leverage_warning_retains_bounded_computed_evidence() -> None:
+    request = leverage_request()
+    request = replace(
+        request,
+        sizing_request=replace(
+            request.sizing_request,
+            method=SizingMethod.FIXED_NOTIONAL,
+            requested_notional=money("2000"),
+        ),
+    )
+    result = calculate_leverage_assessment(request)
+    assert result.outcome is RiskCheckOutcome.WARNING
+    assert result.proposed_margin == money("200")
+    assert result.initial_margin == money("200")
+    assert result.effective_leverage == Decimal("5")
+    assert result.post_trade_free_margin == money("6770")
+
+
+def test_leverage_missing_equity_is_insufficient_not_known_breach() -> None:
+    request = leverage_request()
+    account_value = replace(
+        request.sizing_request.account,
+        equity=None,
+        state=SnapshotState.INCOMPLETE,
+        reason_codes=("EQUITY_UNKNOWN",),
+    )
+    portfolio_value = replace(
+        request.sizing_request.portfolio,
+        account_snapshot=account_value,
+        equity=None,
+        state=SnapshotState.INCOMPLETE,
+        reason_codes=("EQUITY_UNKNOWN",),
+    )
+    result = calculate_leverage_assessment(
+        replace(
+            request,
+            sizing_request=replace(
+                request.sizing_request, account=account_value, portfolio=portfolio_value
+            ),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.proposed_margin is None
+
+
+def test_leverage_rounds_reported_exposure_up_and_uses_exact_cap() -> None:
+    request = leverage_request(requested_leverage=Decimal("6"))
+    sizing_value = request.sizing_request
+    assert sizing_value.instrument is not None
+    request = replace(
+        request,
+        sizing_request=replace(
+            sizing_value,
+            instrument=replace(
+                sizing_value.instrument, initial_margin_per_unit=money("17")
+            ),
+        ),
+    )
+    result = calculate_leverage_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    with localcontext(Context(prec=80)):
+        exact_ratio = Decimal("1000") / Decimal("170")
+    assert result.effective_leverage is not None
+    assert result.effective_leverage > exact_ratio
+    assert result.effective_leverage == Decimal("5.882352941176470588235294117647059")
+    capped = calculate_leverage_assessment(
+        replace(
+            request,
+            requested_leverage=Decimal("5"),
+            policy_maximum_leverage=Decimal("5"),
+        )
+    )
+    assert capped.outcome is RiskCheckOutcome.FAILED
+    assert "EFFECTIVE_LEVERAGE_EXCEEDS_CAP" in capped.reason_codes
+
+
+def test_leverage_rejects_inexact_reserve_addition() -> None:
+    request = leverage_request(additional_reserved_cost=money("1e-40"))
+    with pytest.raises(RiskContractError, match="precision 34"):
+        calculate_leverage_assessment(request)
+
+
+def test_leverage_validity_includes_earliest_position() -> None:
+    request = leverage_request()
+    position_value = replace(
+        request.sizing_request.portfolio.positions[0], valid_until=T[5]
+    )
+    portfolio_value = replace(
+        request.sizing_request.portfolio, positions=(position_value,)
+    )
+    result = calculate_leverage_assessment(
+        replace(
+            request,
+            sizing_request=replace(request.sizing_request, portfolio=portfolio_value),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.valid_until == T[5]

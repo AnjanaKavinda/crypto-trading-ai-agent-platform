@@ -2385,10 +2385,10 @@ def calculate_leverage_assessment(
                 record("PORTFOLIO_ACCOUNT_MISMATCH", RiskCheckOutcome.FAILED)
             if account.currency != portfolio.currency:
                 record("PORTFOLIO_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED)
-            if (
-                account.equity is None
-                or account.equity.amount <= 0
-                or portfolio.equity is None
+            if account.equity is None or portfolio.equity is None:
+                record("EQUITY_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+            elif (
+                account.equity.amount <= 0
                 or portfolio.equity.amount <= 0
                 or portfolio.equity != account.equity
             ):
@@ -2503,6 +2503,21 @@ def calculate_leverage_assessment(
             ):
                 record("SIZING_OUTPUT_INCOMPLETE", RiskCheckOutcome.INSUFFICIENT_DATA)
 
+            # A known request/policy breach is conclusive even when venue
+            # evidence is missing; do not let an unknown hide a hard failure.
+            maximum_leverage = min(
+                request.policy_maximum_leverage,
+                request.account_maximum_leverage,
+                request.venue_maximum_leverage,
+            )
+            check(
+                "requested-leverage-cap",
+                request.requested_leverage,
+                maximum_leverage,
+                "leverage",
+                request.requested_leverage <= maximum_leverage,
+                "REQUESTED_LEVERAGE_EXCEEDS_CAP",
+            )
             if failed or insufficient:
                 outcome = (
                     RiskCheckOutcome.FAILED
@@ -2565,19 +2580,6 @@ def calculate_leverage_assessment(
                 post_trade_gross = gross_exposure + notional
                 instrument_post_gross = instrument_gross + notional
                 equity = account.equity.amount
-                maximum_leverage = min(
-                    request.policy_maximum_leverage,
-                    request.account_maximum_leverage,
-                    request.venue_maximum_leverage,
-                )
-                check(
-                    "requested-leverage-cap",
-                    request.requested_leverage,
-                    maximum_leverage,
-                    "leverage",
-                    request.requested_leverage <= maximum_leverage,
-                    "REQUESTED_LEVERAGE_EXCEEDS_CAP",
-                )
                 check(
                     "margin-tier-lower",
                     instrument_post_gross,
@@ -2666,7 +2668,10 @@ def calculate_leverage_assessment(
                 outcome = RiskCheckOutcome.WARNING
             else:
                 outcome = RiskCheckOutcome.PASSED
-            if outcome is not RiskCheckOutcome.PASSED:
+            if outcome in {
+                RiskCheckOutcome.FAILED,
+                RiskCheckOutcome.INSUFFICIENT_DATA,
+            }:
                 return _leverage_assessment_result(
                     request, sizing, outcome, tuple(reasons), tuple(limits)
                 )

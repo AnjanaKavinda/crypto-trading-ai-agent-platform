@@ -972,7 +972,10 @@ isolated at precision 34; exact sums/products and threshold comparisons fail
 closed when unrepresentable, while division and reported ratios round upward.
 Hard breaches are FAILED and dominate unknown evidence/warnings. Missing,
 stale, future, or unknown required evidence is INSUFFICIENT_DATA. Upstream
-sizing warnings propagate. Failed/insufficient assessments omit numeric
+sizing warnings propagate and retain their calculated margin/leverage evidence.
+A known requested-leverage cap breach remains FAILED even when rule evidence
+is missing; absent equity is INSUFFICIENT_DATA, not a proven numeric breach.
+Failed/insufficient assessments omit numeric
 recommendations; C-036/C-076 passes do not constitute overall risk acceptance,
 approval, or execution authority.
 
