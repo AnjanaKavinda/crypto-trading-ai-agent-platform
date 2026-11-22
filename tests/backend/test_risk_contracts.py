@@ -5990,3 +5990,46 @@ def test_stress_assessment_rejects_untyped_paths_and_preserves_c081_schema() -> 
     assert stress().schema_version == "1"
     assert StressTestResult.__dataclass_fields__["schema_version"].default == "1"
     assert "ruin_probability" not in StressTestResult.__dataclass_fields__
+
+
+@pytest.mark.parametrize("kind", ["projection", "ruin"])
+def test_stress_assessment_source_version_mismatch_cannot_supply_numbers(
+    kind: str,
+) -> None:
+    request = stress_assessment_request()
+    if kind == "projection":
+        first = replace(
+            request.projections[0], source_version=version("foreign-source")
+        )
+        request = replace(request, projections=(first, *request.projections[1:]))
+        identity = first.scenario_id
+    else:
+        evidence = replace(request.ruin_paths, source_version=version("foreign-source"))
+        evidence = replace(evidence, content_sha256=evidence.identity_digest())
+        observation = calculate_ruin_observation(evidence, request.policy, T[4])
+        assert observation.outcome is RiskCheckOutcome.FAILED
+        assert observation.hit_count is None and observation.hit_frequency is None
+        request = replace(request, ruin_paths=evidence)
+        identity = "ruin/observation"
+    result = calculate_stress_assessment(request)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "STRESS_SOURCE_VERSION_MISMATCH" in result.reason_codes
+    scenario = next(x for x in result.scenarios if x.scenario_id == identity)
+    assert scenario.projected_loss is None and scenario.projected_margin is None
+    assert scenario.projected_drawdown is None
+
+
+@pytest.mark.parametrize(
+    "field", ["projected_loss", "projected_margin", "included_cost_reserve"]
+)
+def test_stress_assessment_negative_projection_money_is_rejected(field: str) -> None:
+    request = stress_assessment_request()
+    with pytest.raises(RiskContractError, match="non-negative"):
+        replace(request.projections[0], **{field: money("-1")})
+
+
+@pytest.mark.parametrize("field", ["maximum_loss", "ruin_equity_floor"])
+def test_stress_assessment_negative_policy_money_is_rejected(field: str) -> None:
+    request = stress_assessment_request()
+    with pytest.raises(RiskContractError, match="non-negative"):
+        replace(request.policy, **{field: money("-1")})

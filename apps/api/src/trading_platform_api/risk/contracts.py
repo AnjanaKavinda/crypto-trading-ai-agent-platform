@@ -5848,6 +5848,7 @@ class StressProjectionEvidence(_StressEvidence):
         shocks = _typed_tuple("shocks", self.shocks, StressShock)
         _unique("shock identities", tuple((x.instrument_id, x.name) for x in shocks))
         _typed_tuple("assumptions", self.assumptions, VersionReference, empty=False)
+        # _money rejects negative amounts; only path increments may be signed.
         for name in ("projected_loss", "projected_margin", "included_cost_reserve"):
             value = getattr(self, name)
             if value is not None:
@@ -5995,6 +5996,8 @@ def _stress_evidence_reasons(
     reasons: list[tuple[str, RiskCheckOutcome]] = []
     if evidence.portfolio_request != policy.portfolio_request:
         reasons.append(("STRESS_BASIS_MISMATCH", RiskCheckOutcome.FAILED))
+    if evidence.source_version != policy.source_version:
+        reasons.append(("STRESS_SOURCE_VERSION_MISMATCH", RiskCheckOutcome.FAILED))
     if (
         evidence.scenario_model_version != policy.scenario_model_version
         or evidence.cost_model_version != policy.cost_model_version
