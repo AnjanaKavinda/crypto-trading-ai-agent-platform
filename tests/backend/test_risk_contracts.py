@@ -68,6 +68,7 @@ from trading_platform_api.risk import (
     RiskRevalidationResult,
     RiskState,
     RiskVerdict,
+    RuinPathEvidence,
     SizingCosts,
     SizingInstrumentTerms,
     SizingMethod,
@@ -77,7 +78,11 @@ from trading_platform_api.risk import (
     StopLossLiquidationEvidence,
     StopLossStructuralEvidence,
     StopLossVolatilityEvidence,
+    StressAssessmentPolicy,
+    StressAssessmentRequest,
+    StressProjectionEvidence,
     StressScenarioResult,
+    StressShock,
     StressTestResult,
     TakeProfitAssessment,
     TakeProfitAssessmentRequest,
@@ -89,7 +94,9 @@ from trading_platform_api.risk import (
     calculate_liquidation_assessment,
     calculate_portfolio_impact,
     calculate_position_size,
+    calculate_ruin_observation,
     calculate_stop_loss_assessment,
+    calculate_stress_assessment,
     calculate_take_profit_assessment,
     pairwise_correlation,
     portfolio_group_key,
@@ -5539,3 +5546,447 @@ def test_portfolio_no_unknown_correlation_can_imply_independence() -> None:
     )
     assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
     assert "CORRELATION_MEMBERSHIP_UNKNOWN" in result.reason_codes
+
+
+def stress_assessment_request(
+    *,
+    paths: tuple[tuple[str, ...], ...] | None = None,
+    warning: bool = False,
+) -> StressAssessmentRequest:
+    portfolio_value = portfolio_impact_request(warning=warning)
+    common = dict(
+        portfolio_request=portfolio_value,
+        scenario_model_version=version("synthetic-stress-model"),
+        cost_model_version=version("synthetic-stress-costs"),
+        source_version=version("synthetic-stress-source"),
+        as_of=T[3],
+        valid_until=T[12],
+    )
+    kinds = ("VOLATILITY", "GAP", "LIQUIDITY", "FUNDING", "CORRELATION", "RISK_OF_RUIN")
+    policy = StressAssessmentPolicy(
+        **common,
+        required_scenario_types=kinds,
+        maximum_loss=money("1000"),
+        maximum_drawdown=Decimal("0.2"),
+        maximum_margin_utilization=Decimal("0.5"),
+        minimum_liquidation_distance=Decimal("0.05"),
+        ruin_equity_floor=money("5000"),
+        maximum_ruin_frequency=Decimal("0"),
+        minimum_path_count=3,
+    )
+    instrument = (
+        portfolio_value.basis.leverage_request.sizing_request.context.instrument_id
+    )
+    projections = tuple(
+        StressProjectionEvidence(
+            **common,
+            scenario_id="synthetic/" + kind,
+            scenario_type=kind,
+            shocks=(
+                StressShock(instrument, kind, Decimal("-0.05"), "model-defined-ratio"),
+            ),
+            projected_loss=money("500"),
+            projected_margin=money("1500"),
+            minimum_liquidation_distance=Decimal("0.1"),
+            included_cost_reserve=money("10"),
+            cost_treatment="INCLUDED_IN_PROJECTED_LOSS",
+            assumptions=(version("synthetic-scenario-assumptions"),),
+        )
+        for kind in kinds[:-1]
+    )
+    raw_paths = paths if paths is not None else (("-100", "-100"),) * 3
+    evidence = RuinPathEvidence.build(
+        **common,
+        horizon_steps=2,
+        paths=tuple(tuple(money(x) for x in path) for path in raw_paths),
+        assumptions=(version("synthetic-net-pnl-path-assumptions"),),
+    )
+    return StressAssessmentRequest(
+        UUID(int=112), T[4], portfolio_value, policy, projections, evidence
+    )
+
+
+def test_stress_assessment_hand_calculated_aggregates_and_no_cost_double_count() -> (
+    None
+):
+    request = stress_assessment_request()
+    result = calculate_stress_assessment(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.contract_id == "C-081" and result.schema_version == "1"
+    assert result.worst_loss == money("500")
+    assert result.worst_drawdown == ratio(
+        "0.0595", "worst-fixed-high-water-mark-drawdown"
+    )
+    assert result.worst_margin == money("1500")
+    assert len(result.scenarios) == 6
+    assert result.valid_until == T[10]
+    assert "PATH_LIQUIDATION_NOT_MODELED" in result.worst_liquidation_impact
+    assert not result.breached_limit_ids
+    assert (
+        next(
+            x for x in result.scenarios if x.scenario_type == "RISK_OF_RUIN"
+        ).liquidation_impact
+        == "NOT_MODELED_FOR_PNL_PATHS"
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("maximum_loss", money("499"), "loss"),
+        ("maximum_drawdown", Decimal("0.0594"), "drawdown"),
+        ("maximum_margin_utilization", Decimal("0.15"), "margin"),
+        ("minimum_liquidation_distance", Decimal("0.1001"), "liquidation_distance"),
+    ],
+)
+def test_stress_assessment_each_hard_limit_vetoes(
+    field: str, value: object, reason: str
+) -> None:
+    request = stress_assessment_request()
+    result = calculate_stress_assessment(
+        replace(request, policy=replace(request.policy, **{field: value}))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert any(x.endswith("/" + reason) for x in result.breached_limit_ids)
+
+
+def test_stress_assessment_exact_limit_boundaries_pass() -> None:
+    request = stress_assessment_request()
+    policy = replace(
+        request.policy,
+        maximum_loss=money("500"),
+        maximum_drawdown=Decimal("0.0595"),
+        maximum_margin_utilization=Decimal("0.2"),
+        minimum_liquidation_distance=Decimal("0.1"),
+    )
+    assert (
+        calculate_stress_assessment(replace(request, policy=policy)).outcome
+        is RiskCheckOutcome.PASSED
+    )
+
+
+@pytest.mark.parametrize(
+    "missing", ["projection", "ruin", "liquidation", "margin", "costs", "shocks"]
+)
+def test_stress_assessment_missing_evidence_never_becomes_zero_or_pass(
+    missing: str,
+) -> None:
+    request = stress_assessment_request()
+    if missing == "ruin":
+        request = replace(request, ruin_paths=None)
+    elif missing == "projection":
+        request = replace(request, projections=request.projections[1:])
+    else:
+        names = {
+            "liquidation": "minimum_liquidation_distance",
+            "margin": "projected_margin",
+            "costs": "included_cost_reserve",
+            "shocks": "shocks",
+        }
+        first = replace(
+            request.projections[0],
+            **{names[missing]: () if missing == "shocks" else None},
+        )
+        request = replace(request, projections=(first, *request.projections[1:]))
+    result = calculate_stress_assessment(request)
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert any(
+        x.outcome is RiskCheckOutcome.INSUFFICIENT_DATA for x in result.scenarios
+    )
+    assert result.worst_liquidation_impact is None or missing in {
+        "projection",
+        "ruin",
+        "margin",
+    }
+
+
+def test_stress_assessment_known_breach_dominates_missing_liquidation() -> None:
+    request = stress_assessment_request()
+    first = replace(
+        request.projections[0],
+        projected_loss=money("2000"),
+        minimum_liquidation_distance=None,
+    )
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert any(x.endswith("/loss") for x in result.breached_limit_ids)
+
+
+@pytest.mark.parametrize("field,value", [("as_of", T[5]), ("valid_until", T[3])])
+def test_stress_assessment_noncurrent_projection_is_explicitly_unavailable(
+    field: str, value: datetime
+) -> None:
+    request = stress_assessment_request()
+    first = replace(request.projections[0], **{field: value})
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    observed = next(x for x in result.scenarios if x.scenario_id == first.scenario_id)
+    assert observed.projected_loss is None
+    assert result.worst_loss is None
+
+
+def test_stress_assessment_basis_and_cost_edits_cannot_reuse_source() -> None:
+    request = stress_assessment_request()
+    first = replace(
+        request.projections[0], cost_model_version=version("different-costs")
+    )
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "STRESS_MODEL_OR_COST_VERSION_MISMATCH" in result.reason_codes
+    other_basis = replace(request.portfolio_request, result_id=uuid4())
+    first = replace(request.projections[0], portfolio_request=other_basis)
+    assert (
+        calculate_stress_assessment(
+            replace(request, projections=(first, *request.projections[1:]))
+        ).outcome
+        is RiskCheckOutcome.FAILED
+    )
+
+
+@pytest.mark.parametrize(
+    "field", ["projected_loss", "projected_margin", "included_cost_reserve"]
+)
+def test_stress_assessment_foreign_currency_cannot_pass(field: str) -> None:
+    request = stress_assessment_request()
+    first = replace(
+        request.projections[0], **{field: MoneyValue(Decimal("100"), "OTHER-USD")}
+    )
+    if field == "included_cost_reserve":
+        result = calculate_stress_assessment(
+            replace(request, projections=(first, *request.projections[1:]))
+        )
+        assert result.outcome is RiskCheckOutcome.FAILED
+    else:
+        with pytest.raises(RiskContractError, match="CURRENCY_MISMATCH"):
+            calculate_stress_assessment(
+                replace(request, projections=(first, *request.projections[1:]))
+            )
+
+
+@pytest.mark.parametrize(
+    "paths,expected_hits",
+    [
+        ((("-100", "-100"),) * 3, 0),
+        ((("-5000", "100"),) * 3, 3),
+        ((("-5000", "100"), ("-100", "-100"), ("0", "0")), 1),
+    ],
+)
+def test_ruin_observation_counts_touch_and_recovery(
+    paths: tuple[tuple[str, ...], ...], expected_hits: int
+) -> None:
+    request = stress_assessment_request(paths=paths)
+    policy = replace(request.policy, maximum_ruin_frequency=Decimal("1"))
+    result = calculate_ruin_observation(request.ruin_paths, policy, T[4])
+    assert result.path_count == 3 and result.hit_count == expected_hits
+    assert result.outcome is RiskCheckOutcome.PASSED
+    if expected_hits == 1:
+        assert result.hit_frequency == Decimal("0.3333333333333333333333333333333334")
+    else:
+        assert result.hit_frequency == Decimal(expected_hits) / Decimal(3)
+
+
+def test_ruin_observation_frequency_policy_uses_counts_not_rounded_probability() -> (
+    None
+):
+    request = stress_assessment_request(
+        paths=(("-5000", "100"), ("0", "0"), ("0", "0"))
+    )
+    passed = calculate_ruin_observation(
+        request.ruin_paths,
+        replace(request.policy, maximum_ruin_frequency=Decimal("0.34")),
+        T[4],
+    )
+    failed = calculate_ruin_observation(
+        request.ruin_paths,
+        replace(request.policy, maximum_ruin_frequency=Decimal("0.33")),
+        T[4],
+    )
+    assert passed.outcome is RiskCheckOutcome.PASSED
+    assert failed.outcome is RiskCheckOutcome.FAILED
+    assert failed.hit_count == 1 and failed.hit_frequency is not None
+    integrated = calculate_stress_assessment(
+        replace(
+            request,
+            policy=replace(request.policy, maximum_ruin_frequency=Decimal("0.33")),
+        )
+    )
+    assert integrated.outcome is RiskCheckOutcome.FAILED
+    assert "ruin/observation/ruin_frequency" in integrated.breached_limit_ids
+
+
+@pytest.mark.parametrize("paths", [(), (("0", "0"),)])
+def test_ruin_observation_insufficient_samples_are_unknown(
+    paths: tuple[tuple[str, ...], ...],
+) -> None:
+    request = stress_assessment_request(paths=paths)
+    result = calculate_ruin_observation(request.ruin_paths, request.policy, T[4])
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.hit_frequency is None and result.hit_count is None
+    assert (
+        calculate_stress_assessment(request).outcome
+        is RiskCheckOutcome.INSUFFICIENT_DATA
+    )
+
+
+def test_ruin_observation_rejects_tampering_horizons_currency_and_work_bounds() -> None:
+    request = stress_assessment_request()
+    evidence = request.ruin_paths
+    assert evidence is not None
+    with pytest.raises(RiskContractError, match="DIGEST_MISMATCH"):
+        calculate_ruin_observation(
+            replace(evidence, paths=((money("0"), money("0")),) * 3),
+            request.policy,
+            T[4],
+        )
+    with pytest.raises(RiskContractError, match="horizon"):
+        replace(evidence, horizon_steps=3)
+    with pytest.raises(RiskContractError, match="bound"):
+        replace(evidence, horizon_steps=1000001)
+    foreign = RuinPathEvidence.build(
+        portfolio_request=request.portfolio_request,
+        scenario_model_version=evidence.scenario_model_version,
+        cost_model_version=evidence.cost_model_version,
+        source_version=evidence.source_version,
+        as_of=T[3],
+        valid_until=T[12],
+        horizon_steps=2,
+        paths=((MoneyValue(Decimal("0"), "OTHER-USD"), money("0")),) * 3,
+        assumptions=evidence.assumptions,
+    )
+    with pytest.raises(RiskContractError, match="CURRENCY_MISMATCH"):
+        calculate_ruin_observation(foreign, request.policy, T[4])
+
+
+def test_stress_assessment_no_equity_or_drawdown_clamping() -> None:
+    request = stress_assessment_request()
+    first = replace(request.projections[0], projected_loss=money("20000"))
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    observed = next(x for x in result.scenarios if x.scenario_id == first.scenario_id)
+    assert observed.projected_loss == money("20000")
+    assert observed.projected_drawdown is None
+    assert result.worst_loss == money("20000")
+    assert result.worst_drawdown is None
+
+
+def test_stress_assessment_warning_digest_and_decimal_context() -> None:
+    request = stress_assessment_request(warning=True)
+    expected = calculate_stress_assessment(request)
+    assert expected.outcome is RiskCheckOutcome.WARNING
+    with localcontext(Context(prec=3, rounding=ROUND_DOWN)):
+        actual = calculate_stress_assessment(request)
+    assert actual == expected
+    first = replace(request.projections[0], projected_loss=money("600"))
+    assert (
+        calculate_stress_assessment(
+            replace(request, projections=(first, *request.projections[1:]))
+        ).content_sha256
+        != expected.content_sha256
+    )
+    tiny = replace(request.projections[0], projected_loss=money("1e-40"))
+    with pytest.raises(RiskContractError, match="precision 34"):
+        calculate_stress_assessment(
+            replace(request, projections=(tiny, *request.projections[1:]))
+        )
+
+
+def test_stress_assessment_expiry_boundary_and_duplicate_ids() -> None:
+    request = stress_assessment_request()
+    first = replace(request.projections[0], valid_until=T[4])
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.PASSED and result.valid_until == T[4]
+    with pytest.raises(RiskContractError, match="duplicate"):
+        replace(request, projections=(request.projections[0], request.projections[0]))
+    with pytest.raises(RiskContractError, match="require ruin"):
+        replace(request.policy, required_scenario_types=("RISK_OF_RUIN",))
+
+
+def test_ruin_observation_validity_cannot_outlive_exact_portfolio_basis() -> None:
+    request = stress_assessment_request()
+    result = calculate_ruin_observation(request.ruin_paths, request.policy, T[4])
+    assert result.valid_until == T[10]
+
+
+def test_stress_assessment_zero_liquidation_distance_is_a_breach_even_at_zero_cap() -> (
+    None
+):
+    request = stress_assessment_request()
+    first = replace(request.projections[0], minimum_liquidation_distance=Decimal("0"))
+    result = calculate_stress_assessment(
+        replace(
+            request,
+            policy=replace(request.policy, minimum_liquidation_distance=Decimal("0")),
+            projections=(first, *request.projections[1:]),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert any(x.endswith("/liquidation_distance") for x in result.breached_limit_ids)
+
+
+def test_ruin_observation_exact_frequency_equality_passes() -> None:
+    request = stress_assessment_request(
+        paths=(("-5000", "100"), ("-5000", "100"), ("0", "0"), ("0", "0"))
+    )
+    result = calculate_ruin_observation(
+        request.ruin_paths,
+        replace(request.policy, maximum_ruin_frequency=Decimal("0.5")),
+        T[4],
+    )
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.hit_count == 2 and result.path_count == 4
+    assert result.hit_frequency == Decimal("0.5")
+
+
+@pytest.mark.parametrize("field,value", [("as_of", T[5]), ("valid_until", T[3])])
+def test_ruin_observation_noncurrent_evidence_cannot_report_zero_risk(
+    field: str, value: datetime
+) -> None:
+    request = stress_assessment_request()
+    evidence = replace(request.ruin_paths, **{field: value})
+    evidence = replace(evidence, content_sha256=evidence.identity_digest())
+    result = calculate_ruin_observation(evidence, request.policy, T[4])
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.hit_frequency is None
+
+
+def test_stress_assessment_upstream_portfolio_veto_cannot_be_overridden() -> None:
+    request = stress_assessment_request()
+    portfolio_value = replace(
+        request.portfolio_request,
+        policy=replace(request.portfolio_request.policy, total_risk_budget=money("1")),
+    )
+    evidence = replace(request.ruin_paths, portfolio_request=portfolio_value)
+    evidence = replace(evidence, content_sha256=evidence.identity_digest())
+    request = replace(
+        request,
+        portfolio_request=portfolio_value,
+        policy=replace(request.policy, portfolio_request=portfolio_value),
+        projections=tuple(
+            replace(x, portfolio_request=portfolio_value) for x in request.projections
+        ),
+        ruin_paths=evidence,
+    )
+    assert calculate_stress_assessment(request).outcome is RiskCheckOutcome.FAILED
+    assert (
+        calculate_ruin_observation(evidence, request.policy, T[4]).outcome
+        is RiskCheckOutcome.FAILED
+    )
+
+
+def test_stress_assessment_rejects_untyped_paths_and_preserves_c081_schema() -> None:
+    request = stress_assessment_request()
+    with pytest.raises(RiskContractError, match="C-072 is not accepted"):
+        replace(request, ruin_paths=object())
+    assert stress().schema_version == "1"
+    assert StressTestResult.__dataclass_fields__["schema_version"].default == "1"
+    assert "ruin_probability" not in StressTestResult.__dataclass_fields__

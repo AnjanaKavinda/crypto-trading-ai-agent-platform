@@ -5783,6 +5783,729 @@ class StressTestResult(_AssessmentBase):
                 raise RiskContractError("passed stress result cannot contain breaches.")
 
 
+_STRESS_TYPES = frozenset(
+    {"VOLATILITY", "GAP", "LIQUIDITY", "FUNDING", "CORRELATION", "RISK_OF_RUIN"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _StressEvidence:
+    portfolio_request: PortfolioImpactRequest
+    scenario_model_version: VersionReference
+    cost_model_version: VersionReference
+    source_version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.portfolio_request, PortfolioImpactRequest):
+            raise RiskContractError("portfolio_request must be PortfolioImpactRequest.")
+        for name in ("scenario_model_version", "cost_model_version", "source_version"):
+            if not isinstance(getattr(self, name), VersionReference):
+                raise RiskContractError(f"{name} must be VersionReference.")
+        start, end = _time("as_of", self.as_of), _time("valid_until", self.valid_until)
+        _ordered("as_of", start, "valid_until", end)
+        object.__setattr__(self, "as_of", start)
+        object.__setattr__(self, "valid_until", end)
+
+
+@dataclass(frozen=True, slots=True)
+class StressShock:
+    instrument_id: str
+    name: str
+    value: Decimal
+    unit: str
+
+    def __post_init__(self) -> None:
+        _text("instrument_id", self.instrument_id)
+        _text("name", self.name)
+        _decimal("value", self.value)
+        _text("unit", self.unit)
+
+
+@dataclass(frozen=True, slots=True)
+class StressProjectionEvidence(_StressEvidence):
+    scenario_id: str
+    scenario_type: str
+    shocks: tuple[StressShock, ...]
+    projected_loss: MoneyValue | None
+    projected_margin: MoneyValue | None
+    minimum_liquidation_distance: Decimal | None
+    included_cost_reserve: MoneyValue | None
+    cost_treatment: str | None
+    assumptions: tuple[VersionReference, ...]
+
+    def __post_init__(self) -> None:
+        _StressEvidence.__post_init__(self)
+        _text("scenario_id", self.scenario_id)
+        if (
+            self.scenario_id.startswith("missing/")
+            or self.scenario_id == "ruin/observation"
+        ):
+            raise RiskContractError("reserved scenario identity.")
+        if self.scenario_type not in _STRESS_TYPES - {"RISK_OF_RUIN"}:
+            raise RiskContractError("unsupported stress projection type.")
+        shocks = _typed_tuple("shocks", self.shocks, StressShock)
+        _unique("shock identities", tuple((x.instrument_id, x.name) for x in shocks))
+        _typed_tuple("assumptions", self.assumptions, VersionReference, empty=False)
+        for name in ("projected_loss", "projected_margin", "included_cost_reserve"):
+            value = getattr(self, name)
+            if value is not None:
+                _money(name, value)
+        if self.minimum_liquidation_distance is not None:
+            _nonnegative(
+                "minimum_liquidation_distance", self.minimum_liquidation_distance
+            )
+            if self.minimum_liquidation_distance > 1:
+                raise RiskContractError(
+                    "minimum liquidation distance must be in [0, 1]."
+                )
+        if self.cost_treatment is not None:
+            _text("cost_treatment", self.cost_treatment)
+
+
+@dataclass(frozen=True, slots=True)
+class StressAssessmentPolicy(_StressEvidence):
+    required_scenario_types: tuple[str, ...]
+    maximum_loss: MoneyValue
+    maximum_drawdown: Decimal
+    maximum_margin_utilization: Decimal
+    minimum_liquidation_distance: Decimal
+    ruin_equity_floor: MoneyValue
+    maximum_ruin_frequency: Decimal
+    minimum_path_count: int
+
+    def __post_init__(self) -> None:
+        _StressEvidence.__post_init__(self)
+        kinds = _text_tuple(
+            "required_scenario_types", self.required_scenario_types, empty=False
+        )
+        _unique("required scenario types", kinds)
+        if (
+            not set(kinds).issubset(_STRESS_TYPES)
+            or "RISK_OF_RUIN" not in kinds
+            or len(kinds) < 2
+        ):
+            raise RiskContractError(
+                "require ruin and at least one supported stress type."
+            )
+        for name in ("maximum_loss", "ruin_equity_floor"):
+            _money(name, getattr(self, name))
+        if self.maximum_loss.currency != self.ruin_equity_floor.currency:
+            raise RiskContractError("stress policy money currencies must match.")
+        for name in (
+            "maximum_drawdown",
+            "maximum_margin_utilization",
+            "minimum_liquidation_distance",
+            "maximum_ruin_frequency",
+        ):
+            _nonnegative(name, getattr(self, name))
+            if getattr(self, name) > 1:
+                raise RiskContractError(f"{name} must be in [0, 1].")
+        _positive_int("minimum_path_count", self.minimum_path_count)
+        if self.minimum_path_count > 10000:
+            raise RiskContractError("minimum_path_count exceeds the 10000-path bound.")
+
+
+@dataclass(frozen=True, slots=True)
+class RuinPathEvidence(_StressEvidence):
+    horizon_steps: int
+    paths: tuple[tuple[MoneyValue, ...], ...]
+    assumptions: tuple[VersionReference, ...]
+    content_sha256: str
+    method_version: str = field(default="finite-net-quote-pnl-paths-v1", init=False)
+
+    def __post_init__(self) -> None:
+        _StressEvidence.__post_init__(self)
+        _positive_int("horizon_steps", self.horizon_steps)
+        if not isinstance(self.paths, tuple) or len(self.paths) > 10000:
+            raise RiskContractError(
+                "paths must be an immutable tuple of at most 10000 paths."
+            )
+        if (
+            self.horizon_steps > 1000000
+            or len(self.paths) * self.horizon_steps > 1000000
+        ):
+            raise RiskContractError("ruin paths exceed the 1000000-increment bound.")
+        for path in self.paths:
+            values = _typed_tuple("path", path, MoneyValue)
+            if len(values) != self.horizon_steps:
+                raise RiskContractError(
+                    "every path must have the exact declared horizon."
+                )
+        _typed_tuple("assumptions", self.assumptions, VersionReference, empty=False)
+        _digest("content_sha256", self.content_sha256)
+
+    def identity_digest(self) -> str:
+        return _risk_digest(
+            "ruin paths",
+            {
+                item.name: getattr(self, item.name)
+                for item in fields(self)
+                if item.name != "content_sha256"
+            },
+        )
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        portfolio_request: PortfolioImpactRequest,
+        scenario_model_version: VersionReference,
+        cost_model_version: VersionReference,
+        source_version: VersionReference,
+        as_of: datetime,
+        valid_until: datetime,
+        horizon_steps: int,
+        paths: tuple[tuple[MoneyValue, ...], ...],
+        assumptions: tuple[VersionReference, ...],
+    ) -> RuinPathEvidence:
+        value = cls(
+            portfolio_request,
+            scenario_model_version,
+            cost_model_version,
+            source_version,
+            as_of,
+            valid_until,
+            horizon_steps,
+            paths,
+            assumptions,
+            "0" * 64,
+        )
+        return replace(value, content_sha256=value.identity_digest())
+
+
+@dataclass(frozen=True, slots=True)
+class RuinObservation:
+    path_count: int
+    hit_count: int | None
+    horizon_steps: int
+    hit_frequency: Decimal | None
+    maximum_loss: MoneyValue | None
+    outcome: RiskCheckOutcome
+    reason_codes: tuple[str, ...]
+    valid_until: datetime
+    content_sha256: str
+    method_version: str = field(default="finite-net-quote-pnl-paths-v1", init=False)
+
+
+def _stress_evidence_reasons(
+    evidence: _StressEvidence, policy: StressAssessmentPolicy, evaluated_at: datetime
+) -> tuple[tuple[str, RiskCheckOutcome], ...]:
+    reasons: list[tuple[str, RiskCheckOutcome]] = []
+    if evidence.portfolio_request != policy.portfolio_request:
+        reasons.append(("STRESS_BASIS_MISMATCH", RiskCheckOutcome.FAILED))
+    if (
+        evidence.scenario_model_version != policy.scenario_model_version
+        or evidence.cost_model_version != policy.cost_model_version
+    ):
+        reasons.append(
+            ("STRESS_MODEL_OR_COST_VERSION_MISMATCH", RiskCheckOutcome.FAILED)
+        )
+    if evidence.as_of > evaluated_at or evidence.valid_until < evaluated_at:
+        reasons.append(
+            ("STRESS_EVIDENCE_NOT_CURRENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+        )
+    if policy.as_of > evaluated_at or policy.valid_until < evaluated_at:
+        reasons.append(
+            ("STRESS_POLICY_NOT_CURRENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+        )
+    return tuple(reasons)
+
+
+def calculate_ruin_observation(
+    evidence: RuinPathEvidence, policy: StressAssessmentPolicy, evaluated_at: datetime
+) -> RuinObservation:
+    """Conditional finite-path hit counts; no fitted or calibrated probability."""
+    if not isinstance(evidence, RuinPathEvidence) or not isinstance(
+        policy, StressAssessmentPolicy
+    ):
+        raise RiskContractError("typed ruin evidence and stress policy are required.")
+    when = _time("evaluated_at", evaluated_at)
+    if when != policy.portfolio_request.evaluated_at:
+        raise RiskContractError("ruin evaluation time differs from the bound basis.")
+    if evidence.identity_digest() != evidence.content_sha256:
+        raise RiskContractError("RUIN_PATH_DIGEST_MISMATCH")
+    try:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as arithmetic:
+            arithmetic.traps[Inexact] = True
+            account = (
+                policy.portfolio_request.basis.leverage_request.sizing_request.account
+            )
+            if account.equity is None or account.equity.amount <= 0:
+                raise RiskContractError("RUIN_POSITIVE_EQUITY_REQUIRED")
+            currency, equity = account.currency, account.equity.amount
+            if (
+                policy.ruin_equity_floor.currency != currency
+                or policy.ruin_equity_floor.amount > equity
+            ):
+                raise RiskContractError("RUIN_FLOOR_CURRENCY_OR_RANGE_INVALID")
+            portfolio_basis = calculate_portfolio_impact(policy.portfolio_request)
+            reasons = list(_stress_evidence_reasons(evidence, policy, when))
+            if portfolio_basis.outcome in {
+                RiskCheckOutcome.FAILED,
+                RiskCheckOutcome.INSUFFICIENT_DATA,
+            }:
+                reasons.append(
+                    ("RUIN_PORTFOLIO_EVIDENCE_NOT_PASSED", portfolio_basis.outcome)
+                )
+            if (
+                account.state is not SnapshotState.VALID
+                or account.as_of > when
+                or account.captured_at > when
+                or account.valid_until < when
+            ):
+                reasons.append(
+                    ("RUIN_ACCOUNT_NOT_CURRENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+                )
+            for path in evidence.paths:
+                if any(value.currency != currency for value in path):
+                    raise RiskContractError("RUIN_PATH_CURRENCY_MISMATCH")
+            if len(evidence.paths) < policy.minimum_path_count:
+                reasons.append(
+                    ("RUIN_SAMPLE_INSUFFICIENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+                )
+            hits: int | None = None
+            frequency: Decimal | None = None
+            worst: MoneyValue | None = None
+            if not reasons:
+                hits = 0
+                maximum_loss = Decimal(0)
+                for path in evidence.paths:
+                    capital = equity
+                    hit = capital <= policy.ruin_equity_floor.amount
+                    for increment in path:
+                        capital += increment.amount
+                        hit |= capital <= policy.ruin_equity_floor.amount
+                        maximum_loss = max(maximum_loss, equity - capital)
+                    hits += int(hit)
+                worst = MoneyValue(maximum_loss, currency)
+                if Decimal(hits) > policy.maximum_ruin_frequency * Decimal(
+                    len(evidence.paths)
+                ):
+                    reasons.append(("RUIN_FREQUENCY_BREACHED", RiskCheckOutcome.FAILED))
+                with localcontext(Context(prec=34, rounding=ROUND_CEILING)):
+                    frequency = Decimal(hits) / Decimal(len(evidence.paths))
+            outcome = (
+                RiskCheckOutcome.FAILED
+                if any(x[1] is RiskCheckOutcome.FAILED for x in reasons)
+                else RiskCheckOutcome.INSUFFICIENT_DATA
+                if reasons
+                else RiskCheckOutcome.PASSED
+            )
+            result = RuinObservation(
+                len(evidence.paths),
+                hits,
+                evidence.horizon_steps,
+                frequency,
+                worst,
+                outcome,
+                tuple(dict.fromkeys(x[0] for x in reasons)),
+                max(
+                    when,
+                    min(
+                        evidence.valid_until,
+                        policy.valid_until,
+                        account.valid_until,
+                        portfolio_basis.valid_until,
+                    ),
+                ),
+                "0" * 64,
+            )
+            return replace(
+                result,
+                content_sha256=_risk_digest(
+                    "ruin observation",
+                    {
+                        "evidence": evidence,
+                        "policy": policy,
+                        "evaluated_at": when,
+                        "result": {
+                            x.name: getattr(result, x.name)
+                            for x in fields(result)
+                            if x.name != "content_sha256"
+                        },
+                    },
+                ),
+            )
+    except DecimalException as exc:
+        raise RiskContractError(
+            "ruin arithmetic cannot be represented exactly at precision 34."
+        ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class StressAssessmentRequest:
+    result_id: UUID
+    evaluated_at: datetime
+    portfolio_request: PortfolioImpactRequest
+    policy: StressAssessmentPolicy
+    projections: tuple[StressProjectionEvidence, ...]
+    ruin_paths: RuinPathEvidence | None
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        when = _time("evaluated_at", self.evaluated_at)
+        if not isinstance(
+            self.portfolio_request, PortfolioImpactRequest
+        ) or not isinstance(self.policy, StressAssessmentPolicy):
+            raise RiskContractError(
+                "typed portfolio request and stress policy are required."
+            )
+        if when != self.portfolio_request.evaluated_at:
+            raise RiskContractError("stress evaluation times must match.")
+        if self.policy.portfolio_request != self.portfolio_request:
+            raise RiskContractError("STRESS_POLICY_BASIS_MISMATCH")
+        values = _typed_tuple("projections", self.projections, StressProjectionEvidence)
+        if len(values) > 128:
+            raise RiskContractError("stress projections exceed the 128-scenario bound.")
+        _unique("scenario identities", tuple(x.scenario_id for x in values))
+        if any(
+            x.scenario_type not in self.policy.required_scenario_types for x in values
+        ):
+            raise RiskContractError("unrequested stress projection type.")
+        if self.ruin_paths is not None and not isinstance(
+            self.ruin_paths, RuinPathEvidence
+        ):
+            raise RiskContractError(
+                "ruin_paths must be RuinPathEvidence or None; C-072 is not accepted."
+            )
+        object.__setattr__(self, "evaluated_at", when)
+
+
+def calculate_stress_assessment(request: StressAssessmentRequest) -> StressTestResult:
+    """Assess supplied projections and finite paths; never generate source evidence."""
+    if not isinstance(request, StressAssessmentRequest):
+        raise RiskContractError("request must be StressAssessmentRequest.")
+    try:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as arithmetic:
+            arithmetic.traps[Inexact] = True
+            return _calculate_stress_assessment(request)
+    except DecimalException as exc:
+        raise RiskContractError(
+            "stress arithmetic cannot be represented exactly at precision 34."
+        ) from exc
+
+
+def _calculate_stress_assessment(request: StressAssessmentRequest) -> StressTestResult:
+    policy = request.policy
+    portfolio = calculate_portfolio_impact(request.portfolio_request)
+    basis = request.portfolio_request.basis
+    sizing = basis.leverage_request.sizing_request
+    account = sizing.account
+    assert account.equity is not None
+    assert account.used_margin is not None
+    assert sizing.portfolio.drawdown is not None
+    equity, currency, current_drawdown = (
+        account.equity.amount,
+        account.currency,
+        sizing.portfolio.drawdown.value,
+    )
+    if policy.maximum_loss.currency != currency:
+        raise RiskContractError("STRESS_POLICY_CURRENCY_MISMATCH")
+    reasons = list(portfolio.reason_codes)
+    failed = portfolio.outcome is RiskCheckOutcome.FAILED
+    insufficient = portfolio.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    warned = portfolio.outcome is RiskCheckOutcome.WARNING
+    expiries = [portfolio.valid_until, policy.valid_until]
+    breaches: set[str] = set()
+    scenarios: list[StressScenarioResult] = []
+    required_instruments = {p.instrument_id for p in sizing.portfolio.positions} | {
+        sizing.context.instrument_id
+    }
+    policy_reasons = _stress_evidence_reasons(policy, policy, request.evaluated_at)
+    for reason, state in policy_reasons:
+        if reason not in reasons:
+            reasons.append(reason)
+        failed |= state is RiskCheckOutcome.FAILED
+        insufficient |= state is RiskCheckOutcome.INSUFFICIENT_DATA
+
+    def scenario(
+        identity: str,
+        kind: str,
+        assumptions: tuple[VersionReference, ...],
+        shocks: tuple[str, ...],
+        loss: MoneyValue | None,
+        margin: MoneyValue | None,
+        liquidation_distance: Decimal | None,
+        errors: tuple[tuple[str, RiskCheckOutcome], ...],
+        *,
+        ruin: RuinObservation | None = None,
+    ) -> None:
+        nonlocal failed, insufficient
+        local_reasons = list(errors)
+        local_breaches: list[str] = []
+        drawdown: RatioValue | None = None
+        impact = (
+            "NOT_MODELED_FOR_PNL_PATHS" if kind == "RISK_OF_RUIN" else "UNAVAILABLE"
+        )
+
+        def breach(name: str) -> None:
+            local_breaches.append(identity + "/" + name)
+            local_reasons.append(
+                ("STRESS_" + name.upper() + "_BREACHED", RiskCheckOutcome.FAILED)
+            )
+
+        # Only current, matching source projections support numerical comparisons.
+        source_available = not local_reasons or (
+            ruin is not None
+            and ruin.maximum_loss is not None
+            and local_reasons == [("RUIN_FREQUENCY_BREACHED", RiskCheckOutcome.FAILED)]
+        )
+        if source_available:
+            if (
+                loss is None
+                or margin is None
+                or (kind != "RISK_OF_RUIN" and liquidation_distance is None)
+            ):
+                local_reasons.append(
+                    ("STRESS_PROJECTION_INCOMPLETE", RiskCheckOutcome.INSUFFICIENT_DATA)
+                )
+            if loss is not None:
+                if loss.currency != currency:
+                    raise RiskContractError("STRESS_LOSS_CURRENCY_MISMATCH")
+                if loss.amount > policy.maximum_loss.amount:
+                    breach("loss")
+                numerator = (
+                    current_drawdown * equity
+                    + (Decimal(1) - current_drawdown) * loss.amount
+                )
+                if numerator > policy.maximum_drawdown * equity:
+                    breach("drawdown")
+                if loss.amount >= equity:
+                    breach("equity_exhausted")
+                    if kind != "RISK_OF_RUIN":
+                        impact = "EQUITY_EXHAUSTED"
+                if numerator <= equity:
+                    with localcontext(Context(prec=34, rounding=ROUND_CEILING)):
+                        drawdown = RatioValue(
+                            numerator / equity, "fixed-high-water-mark-drawdown"
+                        )
+                else:
+                    local_reasons.append(
+                        ("STRESS_DRAWDOWN_NOT_REPRESENTABLE", RiskCheckOutcome.FAILED)
+                    )
+                if margin is not None:
+                    if margin.currency != currency:
+                        raise RiskContractError("STRESS_MARGIN_CURRENCY_MISMATCH")
+                    projected_equity = equity - loss.amount
+                    if (
+                        projected_equity <= 0
+                        or margin.amount
+                        > projected_equity * policy.maximum_margin_utilization
+                    ):
+                        breach("margin")
+            if kind != "RISK_OF_RUIN" and liquidation_distance is not None:
+                if impact != "EQUITY_EXHAUSTED":
+                    impact = "WITHIN_SUPPLIED_DISTANCE_LIMIT"
+                if (
+                    liquidation_distance <= 0
+                    or liquidation_distance < policy.minimum_liquidation_distance
+                ):
+                    if impact != "EQUITY_EXHAUSTED":
+                        impact = "DISTANCE_BREACHED"
+                    breach("liquidation_distance")
+        else:
+            loss = None
+            margin = None
+        if ruin is not None and "RUIN_FREQUENCY_BREACHED" in ruin.reason_codes:
+            local_breaches.append(identity + "/ruin_frequency")
+        state = (
+            RiskCheckOutcome.FAILED
+            if any(x[1] is RiskCheckOutcome.FAILED for x in local_reasons)
+            else RiskCheckOutcome.INSUFFICIENT_DATA
+            if local_reasons
+            else RiskCheckOutcome.PASSED
+        )
+        for reason, _ in local_reasons:
+            if reason not in reasons:
+                reasons.append(reason)
+        failed |= state is RiskCheckOutcome.FAILED
+        insufficient |= state is RiskCheckOutcome.INSUFFICIENT_DATA
+        breaches.update(local_breaches)
+        scenarios.append(
+            StressScenarioResult(
+                identity,
+                kind,
+                assumptions,
+                shocks,
+                loss,
+                drawdown,
+                margin,
+                impact,
+                tuple(sorted(set(local_breaches))),
+                state,
+            )
+        )
+
+    for projection in sorted(request.projections, key=lambda x: x.scenario_id):
+        expiries.append(projection.valid_until)
+        errors = list(
+            _stress_evidence_reasons(projection, policy, request.evaluated_at)
+        )
+        shock_instruments = {x.instrument_id for x in projection.shocks}
+        if shock_instruments != required_instruments:
+            errors.append(
+                (
+                    "STRESS_SHOCK_COVERAGE_INCOMPLETE",
+                    RiskCheckOutcome.INSUFFICIENT_DATA
+                    if shock_instruments.issubset(required_instruments)
+                    else RiskCheckOutcome.FAILED,
+                )
+            )
+        if (
+            projection.cost_treatment != "INCLUDED_IN_PROJECTED_LOSS"
+            or projection.included_cost_reserve is None
+        ):
+            errors.append(
+                ("STRESS_COST_ASSUMPTIONS_UNKNOWN", RiskCheckOutcome.INSUFFICIENT_DATA)
+            )
+        elif projection.included_cost_reserve.currency != currency:
+            errors.append(("STRESS_COST_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED))
+        scenario(
+            projection.scenario_id,
+            projection.scenario_type,
+            (
+                *projection.assumptions,
+                projection.source_version,
+                projection.scenario_model_version,
+                projection.cost_model_version,
+            ),
+            tuple(
+                f"{x.instrument_id}:{x.name}={x.value} {x.unit}"
+                for x in projection.shocks
+            )
+            or ("SHOCK_INPUTS_UNAVAILABLE",),
+            projection.projected_loss,
+            projection.projected_margin,
+            projection.minimum_liquidation_distance,
+            tuple(errors),
+        )
+    observation: RuinObservation | None = None
+    if request.ruin_paths is not None:
+        observation = calculate_ruin_observation(
+            request.ruin_paths, policy, request.evaluated_at
+        )
+        expiries.append(observation.valid_until)
+        assert sizing.instrument is not None
+        planned_margin = (
+            account.used_margin.amount
+            + basis.stop_request.quantity
+            * sizing.instrument.initial_margin_per_unit.amount
+        )
+        scenario(
+            "ruin/observation",
+            "RISK_OF_RUIN",
+            (
+                request.ruin_paths.source_version,
+                policy.scenario_model_version,
+                policy.cost_model_version,
+                *request.ruin_paths.assumptions,
+            ),
+            (
+                f"finite net-PnL paths={observation.path_count}; hits={observation.hit_count}; horizon={observation.horizon_steps}; observed_frequency={observation.hit_frequency}; not calibrated probability",
+                "STATIC_PLANNED_MARGIN; PATH_LIQUIDATION_NOT_MODELED",
+            ),
+            observation.maximum_loss,
+            MoneyValue(planned_margin, currency),
+            None,
+            tuple((x, observation.outcome) for x in observation.reason_codes),
+            ruin=observation,
+        )
+    present = {x.scenario_type for x in scenarios}
+    for kind in sorted(set(policy.required_scenario_types) - present):
+        scenario(
+            "missing/" + kind,
+            kind,
+            (
+                policy.scenario_model_version,
+                policy.cost_model_version,
+                policy.source_version,
+            ),
+            ("REQUIRED_EVIDENCE_UNAVAILABLE",),
+            None,
+            None,
+            None,
+            (("REQUIRED_STRESS_SCENARIO_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA),),
+        )
+    scenarios.sort(key=lambda x: x.scenario_id)
+    loss_values = [
+        x.projected_loss.amount for x in scenarios if x.projected_loss is not None
+    ]
+    margin_values = [
+        x.projected_margin.amount for x in scenarios if x.projected_margin is not None
+    ]
+    drawdowns = [
+        x.projected_drawdown.value
+        for x in scenarios
+        if x.projected_drawdown is not None
+    ]
+    impacts = [
+        x.liquidation_impact for x in scenarios if x.scenario_type != "RISK_OF_RUIN"
+    ]
+    outcome = (
+        RiskCheckOutcome.FAILED
+        if failed
+        else RiskCheckOutcome.INSUFFICIENT_DATA
+        if insufficient
+        else RiskCheckOutcome.WARNING
+        if warned
+        else RiskCheckOutcome.PASSED
+    )
+    result = StressTestResult(
+        result_id=request.result_id,
+        context=sizing.context,
+        outcome=outcome,
+        reason_codes=tuple(reasons),
+        model_version=policy.scenario_model_version,
+        as_of=sizing.context.as_of,
+        evaluated_at=request.evaluated_at,
+        valid_until=max(request.evaluated_at, min(expiries)),
+        content_sha256="0" * 64,
+        scenarios=tuple(scenarios),
+        required_scenario_types=policy.required_scenario_types,
+        scenario_model_version=policy.scenario_model_version,
+        cost_model_version=policy.cost_model_version,
+        worst_loss=MoneyValue(max(loss_values), currency)
+        if len(loss_values) == len(scenarios)
+        else None,
+        worst_drawdown=RatioValue(
+            max(drawdowns), "worst-fixed-high-water-mark-drawdown"
+        )
+        if len(drawdowns) == len(scenarios)
+        else None,
+        worst_margin=MoneyValue(max(margin_values), currency)
+        if len(margin_values) == len(scenarios)
+        else None,
+        worst_liquidation_impact=(
+            "EQUITY_EXHAUSTED"
+            if "EQUITY_EXHAUSTED" in impacts
+            else "DISTANCE_BREACHED"
+            if "DISTANCE_BREACHED" in impacts
+            else "WITHIN_SUPPLIED_DISTANCE_LIMITS; PATH_LIQUIDATION_NOT_MODELED"
+        )
+        if "UNAVAILABLE" not in impacts
+        else None,
+        breached_limit_ids=tuple(sorted(breaches)),
+    )
+    return replace(
+        result,
+        content_sha256=_risk_digest(
+            "stress assessment",
+            {
+                "request": request,
+                "portfolio_impact": portfolio,
+                "ruin_observation": observation,
+                "result": {
+                    x.name: getattr(result, x.name)
+                    for x in fields(result)
+                    if x.name != "content_sha256"
+                },
+            },
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RiskAssessment:
     assessment_id: UUID
@@ -7118,6 +7841,14 @@ __all__ = [
     "StopLossLiquidationEvidence",
     "StressScenarioResult",
     "StressTestResult",
+    "StressShock",
+    "StressProjectionEvidence",
+    "StressAssessmentPolicy",
+    "RuinPathEvidence",
+    "RuinObservation",
+    "StressAssessmentRequest",
+    "calculate_ruin_observation",
+    "calculate_stress_assessment",
     "TakeProfitAssessment",
     "TakeProfitAssessmentRequest",
     "TakeProfitTarget",

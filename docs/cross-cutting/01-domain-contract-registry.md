@@ -101,7 +101,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-078 | StopLossAssessment | Risk | RiskProposal, Approval | Stop-loss validity must align with strategy logic and maximum-loss policy bounds. |
 | C-079 | TakeProfitAssessment | Risk | RiskProposal, Approval | Take-profit targets must preserve risk-reward and invalidation consistency. |
 | C-080 | PortfolioImpact | Risk Engine | Approval, Safety, UX | Schema 1 remains unchanged. Issue #111 adds bounded offline before/after exposure, concentration, liquidity, margin and total-risk checks; a single-trade pass cannot bypass a portfolio veto. |
-| C-081 | StressTestResult | Risk Engine | Risk, Governance, Safety | Stress scenarios and resulting breaches must be explicit and auditable. |
+| C-081 | StressTestResult | Risk Engine | Risk, Governance, Safety | Schema 1 remains unchanged. Issue #112 assesses supplied offline stress projections and finite net-PnL paths; conditional ruin frequency is a typed helper observation, not a calibrated probability or C-072 Risk consumer. |
 | C-082 | RiskDecision | Risk | Approval, Execution, Audit | Deterministic risk verdict is authoritative for risk gating and cannot independently authorize execution outside approved/revalidated `ExecutionIntent` flow. |
 | C-083 | RiskRevalidationResult | Risk | Approval, Execution, Safety | Material changes or stale context require revalidation before any execution path. |
 | C-084 | OrderRequest | Execution Gateway | Exchange Adapter, Audit | Exchange submission request must derive from approved intent and enforce idempotency binding. |
@@ -881,3 +881,53 @@ No optimizer, empirical correlation/beta estimator, FX/collateral conversion,
 close/reduce/netting model, source authentication, order/approval/risk-proposal
 workflow or execution authority is introduced. C-080 is a bounded offline
 component assessment, not overall trading readiness or live portfolio integration.
+
+## Issue #112 — offline supplied stress and finite-path ruin assessment
+
+`calculate_stress_assessment(StressAssessmentRequest)` recomputes the exact
+#111 portfolio request and produces unchanged C-081 schema 1. Its immutable
+policy, projection and net-PnL path inputs are nonpersisted helper types, not
+new canonical contracts. All inputs bind the complete portfolio basis, source,
+scenario/cost versions and aware validity windows. Known upstream failures,
+insufficiency and warnings cannot become an overall pass.
+
+Required scenario types are explicit: RISK_OF_RUIN plus at least one of
+VOLATILITY, GAP, LIQUIDITY, FUNDING or CORRELATION. Supplied materialized
+projections must cover every existing/proposed instrument with numeric shocks
+and units, explicit included-cost assumptions, loss, margin and minimum
+liquidation distance. This assessor does not derive valuations from shocks or
+authenticate caller-supplied assumptions. Missing/currentness/lineage evidence
+prevents a pass; missing required types appear as unavailable scenarios with
+unset numeric values. Zero liquidation distance is always a hard breach.
+
+For current equity E, current drawdown d and projected loss L, fixed-high-water
+mark drawdown is d + (1-d)*L/E. Exact cross-products check loss, drawdown,
+margin utilization against E-L and liquidation-distance limits before display
+rounding. Exhausted equity fails; unrepresentable drawdown stays unset rather
+than being clamped. Worst loss, drawdown and margin are independently available
+only when every required scenario supplies that metric.
+
+`calculate_ruin_observation` reports typed finite-sample path/hit counts and a
+conditional observed frequency, not calibrated probability or trading
+confidence. Immutable equal-horizon paths contain signed net quote-PnL
+increments, including caller-declared costs. Any prefix reaching the explicit
+capital floor counts as a hit even if capital later recovers. Empty,
+undersized, expired or invalid evidence never supplies a zero-risk frequency.
+Hit thresholds use exact counts; reported frequency rounds upward. Maximum
+path loss is measured against initial equity, not a dynamically rising peak.
+The C-081 digest binds the typed observation; human-readable diagnostics are
+not an authoritative probability field. C-081 gains no probability field.
+
+Ruin paths retain static planned margin and explicitly report path liquidation
+as NOT_MODELED_FOR_PNL_PATHS. Separately required stress projections supply
+liquidation-distance evidence. C-072 schema 2 remains observation-only under
+ADR-0024 and is not accepted or wired into Risk. No Monte Carlo generator,
+market-price simulator, source authenticity guarantee, exchange liquidation
+formula, policy resolver, API, execution or approval authority is introduced.
+
+Arithmetic uses isolated Decimal precision 34 with exact sums/products or an
+explicit RiskContractError; reported drawdown/frequency round conservatively.
+Bounds are 128 supplied projections, 10,000 paths and 1,000,000 increments.
+Canonical digests bind full input/output content without authenticating sources.
+All upstream and supplied evidence expiries constrain results. Focused tests
+cover these component semantics; this does not claim live integrated readiness.
