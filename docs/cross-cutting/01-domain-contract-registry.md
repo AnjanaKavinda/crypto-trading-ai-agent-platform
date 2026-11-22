@@ -899,6 +899,9 @@ liquidation distance. This assessor does not derive valuations from shocks or
 authenticate caller-supplied assumptions. Missing/currentness/lineage evidence
 prevents a pass; missing required types appear as unavailable scenarios with
 unset numeric values. Zero liquidation distance is always a hard breach.
+For these non-ruin adverse projections, included cost reserve cannot exceed total
+projected loss; favorable PnL cannot offset the declared included reserve. Signed
+net-PnL ruin paths retain their separately declared semantics.
 
 For current equity E, current drawdown d and projected loss L, fixed-high-water
 mark drawdown is d + (1-d)*L/E. Exact cross-products check loss, drawdown,

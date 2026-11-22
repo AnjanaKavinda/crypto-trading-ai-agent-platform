@@ -5863,6 +5863,13 @@ class StressProjectionEvidence(_StressEvidence):
                 )
         if self.cost_treatment is not None:
             _text("cost_treatment", self.cost_treatment)
+        if (
+            self.projected_loss is not None
+            and self.included_cost_reserve is not None
+            and self.projected_loss.currency == self.included_cost_reserve.currency
+            and self.included_cost_reserve.amount > self.projected_loss.amount
+        ):
+            raise RiskContractError("STRESS_INCLUDED_COST_EXCEEDS_TOTAL_LOSS")
 
 
 @dataclass(frozen=True, slots=True)

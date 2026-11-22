@@ -5885,7 +5885,11 @@ def test_stress_assessment_warning_digest_and_decimal_context() -> None:
         ).content_sha256
         != expected.content_sha256
     )
-    tiny = replace(request.projections[0], projected_loss=money("1e-40"))
+    tiny = replace(
+        request.projections[0],
+        projected_loss=money("1e-40"),
+        included_cost_reserve=money("0"),
+    )
     with pytest.raises(RiskContractError, match="precision 34"):
         calculate_stress_assessment(
             replace(request, projections=(tiny, *request.projections[1:]))
@@ -6095,3 +6099,38 @@ def test_stress_assessment_known_margin_veto_survives_missing_loss() -> None:
     assert result.outcome is RiskCheckOutcome.FAILED
     assert first.scenario_id + "/margin" in result.breached_limit_ids
     assert result.worst_loss is None
+
+
+@pytest.mark.parametrize(
+    "loss,reserve,valid",
+    [
+        ("500", "499", True),
+        ("500", "500", True),
+        ("500", "501", False),
+        ("0", "10", False),
+        ("0", "0", True),
+    ],
+)
+def test_stress_assessment_included_cost_cannot_exceed_total_loss(
+    loss: str, reserve: str, valid: bool
+) -> None:
+    request = stress_assessment_request()
+    if not valid:
+        with pytest.raises(RiskContractError, match="INCLUDED_COST_EXCEEDS_TOTAL_LOSS"):
+            replace(
+                request.projections[0],
+                projected_loss=money(loss),
+                included_cost_reserve=money(reserve),
+            )
+        return
+    first = replace(
+        request.projections[0],
+        projected_loss=money(loss),
+        included_cost_reserve=money(reserve),
+    )
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.PASSED
+    observed = next(x for x in result.scenarios if x.scenario_id == first.scenario_id)
+    assert observed.projected_loss == money(loss)
