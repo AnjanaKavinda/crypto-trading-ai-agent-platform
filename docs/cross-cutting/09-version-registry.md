@@ -1211,5 +1211,7 @@ Arithmetic uses isolated Decimal precision 34 with exact sums/products or an
 explicit RiskContractError; reported drawdown/frequency round conservatively.
 Bounds are 128 supplied projections, 10,000 paths and 1,000,000 increments.
 Canonical digests bind full input/output content without authenticating sources.
-All upstream and supplied evidence expiries constrain results. Focused tests
+Missing cost/shock metadata permits rejection from known breaches only; numeric
+outputs remain unavailable. Foreign money is rejected even with other incomplete
+evidence. All upstream and supplied evidence expiries constrain results. Focused tests
 cover these component semantics; this does not claim live integrated readiness.

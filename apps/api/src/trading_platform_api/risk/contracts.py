@@ -6249,12 +6249,29 @@ def _calculate_stress_assessment(request: StressAssessmentRequest) -> StressTest
                 ("STRESS_" + name.upper() + "_BREACHED", RiskCheckOutcome.FAILED)
             )
 
-        # Only current, matching source projections support numerical comparisons.
-        source_available = not local_reasons or (
+        # Malformed money is invalid even when other evidence is unavailable.
+        for label, value in (("LOSS", loss), ("MARGIN", margin)):
+            if value is not None and value.currency != currency:
+                raise RiskContractError(f"STRESS_{label}_CURRENCY_MISMATCH")
+        # Missing costs/descriptors cannot hide a known veto. Their metrics are
+        # usable only for rejection; incomplete evidence cannot grant authority.
+        incomplete_metadata = {
+            "STRESS_COST_ASSUMPTIONS_UNKNOWN",
+            "STRESS_SHOCK_COVERAGE_INCOMPLETE",
+        }
+        integrity_errors = [
+            (code, state)
+            for code, state in local_reasons
+            if code not in incomplete_metadata
+            or state is not RiskCheckOutcome.INSUFFICIENT_DATA
+        ]
+        source_available = not integrity_errors or (
             ruin is not None
             and ruin.maximum_loss is not None
-            and local_reasons == [("RUIN_FREQUENCY_BREACHED", RiskCheckOutcome.FAILED)]
+            and integrity_errors
+            == [("RUIN_FREQUENCY_BREACHED", RiskCheckOutcome.FAILED)]
         )
+        rejection_only = bool(local_reasons) and not integrity_errors
         if source_available:
             if (
                 loss is None
@@ -6265,8 +6282,6 @@ def _calculate_stress_assessment(request: StressAssessmentRequest) -> StressTest
                     ("STRESS_PROJECTION_INCOMPLETE", RiskCheckOutcome.INSUFFICIENT_DATA)
                 )
             if loss is not None:
-                if loss.currency != currency:
-                    raise RiskContractError("STRESS_LOSS_CURRENCY_MISMATCH")
                 if loss.amount > policy.maximum_loss.amount:
                     breach("loss")
                 numerator = (
@@ -6288,16 +6303,16 @@ def _calculate_stress_assessment(request: StressAssessmentRequest) -> StressTest
                     local_reasons.append(
                         ("STRESS_DRAWDOWN_NOT_REPRESENTABLE", RiskCheckOutcome.FAILED)
                     )
-                if margin is not None:
-                    if margin.currency != currency:
-                        raise RiskContractError("STRESS_MARGIN_CURRENCY_MISMATCH")
-                    projected_equity = equity - loss.amount
-                    if (
-                        projected_equity <= 0
-                        or margin.amount
-                        > projected_equity * policy.maximum_margin_utilization
-                    ):
-                        breach("margin")
+            if margin is not None:
+                # With unknown nonnegative loss, current equity is an upper
+                # bound: an already excessive margin still proves a breach.
+                projected_equity = equity - (loss.amount if loss is not None else 0)
+                if (
+                    projected_equity <= 0
+                    or margin.amount
+                    > projected_equity * policy.maximum_margin_utilization
+                ):
+                    breach("margin")
             if kind != "RISK_OF_RUIN" and liquidation_distance is not None:
                 if impact != "EQUITY_EXHAUSTED":
                     impact = "WITHIN_SUPPLIED_DISTANCE_LIMIT"
@@ -6308,9 +6323,16 @@ def _calculate_stress_assessment(request: StressAssessmentRequest) -> StressTest
                     if impact != "EQUITY_EXHAUSTED":
                         impact = "DISTANCE_BREACHED"
                     breach("liquidation_distance")
-        else:
+        if not source_available or rejection_only:
             loss = None
             margin = None
+            drawdown = None
+            if impact not in {"EQUITY_EXHAUSTED", "DISTANCE_BREACHED"}:
+                impact = (
+                    "NOT_MODELED_FOR_PNL_PATHS"
+                    if kind == "RISK_OF_RUIN"
+                    else "UNAVAILABLE"
+                )
         if ruin is not None and "RUIN_FREQUENCY_BREACHED" in ruin.reason_codes:
             local_breaches.append(identity + "/ruin_frequency")
         state = (
@@ -6357,14 +6379,17 @@ def _calculate_stress_assessment(request: StressAssessmentRequest) -> StressTest
                 )
             )
         if (
+            projection.included_cost_reserve is not None
+            and projection.included_cost_reserve.currency != currency
+        ):
+            raise RiskContractError("STRESS_COST_CURRENCY_MISMATCH")
+        if (
             projection.cost_treatment != "INCLUDED_IN_PROJECTED_LOSS"
             or projection.included_cost_reserve is None
         ):
             errors.append(
                 ("STRESS_COST_ASSUMPTIONS_UNKNOWN", RiskCheckOutcome.INSUFFICIENT_DATA)
             )
-        elif projection.included_cost_reserve.currency != currency:
-            errors.append(("STRESS_COST_CURRENCY_MISMATCH", RiskCheckOutcome.FAILED))
         scenario(
             projection.scenario_id,
             projection.scenario_type,

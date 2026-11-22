@@ -5757,16 +5757,10 @@ def test_stress_assessment_foreign_currency_cannot_pass(field: str) -> None:
     first = replace(
         request.projections[0], **{field: MoneyValue(Decimal("100"), "OTHER-USD")}
     )
-    if field == "included_cost_reserve":
-        result = calculate_stress_assessment(
+    with pytest.raises(RiskContractError, match="CURRENCY_MISMATCH"):
+        calculate_stress_assessment(
             replace(request, projections=(first, *request.projections[1:]))
         )
-        assert result.outcome is RiskCheckOutcome.FAILED
-    else:
-        with pytest.raises(RiskContractError, match="CURRENCY_MISMATCH"):
-            calculate_stress_assessment(
-                replace(request, projections=(first, *request.projections[1:]))
-            )
 
 
 @pytest.mark.parametrize(
@@ -6033,3 +6027,71 @@ def test_stress_assessment_negative_policy_money_is_rejected(field: str) -> None
     request = stress_assessment_request()
     with pytest.raises(RiskContractError, match="non-negative"):
         replace(request.policy, **{field: money("-1")})
+
+
+@pytest.mark.parametrize("loss", ["2000", "10000"])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "included_cost_reserve",
+        "shocks",
+        "projected_margin",
+        "minimum_liquidation_distance",
+    ],
+)
+def test_stress_assessment_known_loss_veto_survives_incomplete_evidence(
+    loss: str, missing: str
+) -> None:
+    request = stress_assessment_request()
+    first = replace(
+        request.projections[0],
+        projected_loss=money(loss),
+        **{missing: () if missing == "shocks" else None},
+    )
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert first.scenario_id + "/loss" in result.breached_limit_ids
+    if loss == "10000":
+        assert first.scenario_id + "/equity_exhausted" in result.breached_limit_ids
+    if missing in {"included_cost_reserve", "shocks"}:
+        assert result.worst_loss is None  # partial metadata grants no numeric authority
+
+
+@pytest.mark.parametrize(
+    "field,other",
+    [
+        ("projected_margin", {"projected_loss": None}),
+        ("projected_loss", {"included_cost_reserve": None}),
+        ("included_cost_reserve", {"cost_treatment": None}),
+        ("projected_margin", {"as_of": T[5]}),
+        ("projected_loss", {"source_version": version("foreign-source")}),
+        ("included_cost_reserve", {"shocks": ()}),
+    ],
+)
+def test_stress_assessment_foreign_currency_rejected_even_with_other_missing_evidence(
+    field: str, other: dict[str, object]
+) -> None:
+    request = stress_assessment_request()
+    first = replace(
+        request.projections[0],
+        **{**other, field: MoneyValue(Decimal("100"), "OTHER-USD")},
+    )
+    with pytest.raises(RiskContractError, match="CURRENCY_MISMATCH"):
+        calculate_stress_assessment(
+            replace(request, projections=(first, *request.projections[1:]))
+        )
+
+
+def test_stress_assessment_known_margin_veto_survives_missing_loss() -> None:
+    request = stress_assessment_request()
+    first = replace(
+        request.projections[0], projected_loss=None, projected_margin=money("6000")
+    )
+    result = calculate_stress_assessment(
+        replace(request, projections=(first, *request.projections[1:]))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert first.scenario_id + "/margin" in result.breached_limit_ids
+    assert result.worst_loss is None
