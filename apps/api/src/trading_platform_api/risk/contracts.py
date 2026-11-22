@@ -5018,6 +5018,712 @@ class PortfolioImpact(_AssessmentBase):
 
 
 @dataclass(frozen=True, slots=True)
+class PortfolioImpactBasis:
+    leverage_request: LeverageAssessmentRequest
+    stop_request: StopLossAssessmentRequest
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.leverage_request, LeverageAssessmentRequest):
+            raise RiskContractError(
+                "leverage_request must be LeverageAssessmentRequest."
+            )
+        if not isinstance(self.stop_request, StopLossAssessmentRequest):
+            raise RiskContractError("stop_request must be StopLossAssessmentRequest.")
+
+
+@dataclass(frozen=True, slots=True)
+class _PortfolioEvidence:
+    basis: PortfolioImpactBasis
+    version: VersionReference
+    as_of: datetime
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.basis, PortfolioImpactBasis):
+            raise RiskContractError("basis must be PortfolioImpactBasis.")
+        if not isinstance(self.version, VersionReference):
+            raise RiskContractError("version must be VersionReference.")
+        start, end = _time("as_of", self.as_of), _time("valid_until", self.valid_until)
+        _ordered("as_of", start, "valid_until", end)
+        object.__setattr__(self, "as_of", start)
+        object.__setattr__(self, "valid_until", end)
+
+
+def portfolio_group_key(value: ContractReference | VersionReference) -> str:
+    """Version-qualified group identity; reference expiry is not strategy identity."""
+    if isinstance(value, ContractReference):
+        return _risk_digest(
+            "portfolio group",
+            {
+                "contract_id": value.contract_id,
+                "entity_id": value.entity_id,
+                "schema_version": value.schema_version,
+                "content_sha256": value.content_sha256,
+            },
+        )
+    if isinstance(value, VersionReference):
+        return _risk_digest("portfolio group", value)
+    raise RiskContractError("group identity requires a version-qualified reference.")
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioPositionEvidence(_PortfolioEvidence):
+    position: PositionSnapshot | None
+    venue: str
+    strategy_version: ContractReference
+    regime: VersionReference
+    correlation_groups: tuple[str, ...]
+    open_risk: MoneyValue
+
+    def __post_init__(self) -> None:
+        _PortfolioEvidence.__post_init__(self)
+        if self.position is not None and not isinstance(
+            self.position, PositionSnapshot
+        ):
+            raise RiskContractError(
+                "position must be PositionSnapshot or None for proposal."
+            )
+        _text("venue", self.venue)
+        if not isinstance(self.strategy_version, ContractReference):
+            raise RiskContractError("strategy_version must be ContractReference.")
+        if self.strategy_version.contract_id != "C-021":
+            raise RiskContractError("strategy_version must reference C-021.")
+        if not isinstance(self.regime, VersionReference):
+            raise RiskContractError("regime must be VersionReference.")
+        groups = _text_tuple("correlation_groups", self.correlation_groups)
+        _unique("correlation groups", groups)
+        _money("open_risk", self.open_risk)
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioCorrelationScenario(_PortfolioEvidence):
+    group_id: str
+    instruments: tuple[str, ...]
+    methodology: str
+
+    def __post_init__(self) -> None:
+        _PortfolioEvidence.__post_init__(self)
+        _text("group_id", self.group_id)
+        values = _text_tuple("instruments", self.instruments)
+        if not values:
+            raise RiskContractError("scenario instruments must not be empty.")
+        _unique("scenario instruments", values)
+        _text("methodology", self.methodology)
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioLiquidityEvidence(_PortfolioEvidence):
+    venue: str
+    instrument_id: str
+    capacity: MoneyValue
+    assumptions: str
+
+    def __post_init__(self) -> None:
+        _PortfolioEvidence.__post_init__(self)
+        _text("venue", self.venue)
+        _text("instrument_id", self.instrument_id)
+        _money("capacity", self.capacity)
+        _text("assumptions", self.assumptions)
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioConcentrationLimit:
+    dimension: str
+    key: str
+    maximum: Decimal
+
+    def __post_init__(self) -> None:
+        if self.dimension not in {"asset", "strategy", "regime", "correlation"}:
+            raise RiskContractError("unsupported concentration dimension.")
+        _text("key", self.key)
+        _nonnegative("maximum", self.maximum)
+        if self.maximum > 1:
+            raise RiskContractError("concentration cap must be in [0, 1].")
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioImpactPolicy(_PortfolioEvidence):
+    configuration_version: VersionReference
+    maximum_gross: MoneyValue
+    maximum_absolute_net: MoneyValue
+    maximum_gross_leverage: Decimal
+    maximum_drawdown: Decimal
+    maximum_margin_utilization: Decimal
+    minimum_free_margin: MoneyValue
+    total_risk_budget: MoneyValue
+    concentration_limits: tuple[PortfolioConcentrationLimit, ...]
+
+    def __post_init__(self) -> None:
+        _PortfolioEvidence.__post_init__(self)
+        if not isinstance(self.configuration_version, VersionReference):
+            raise RiskContractError("configuration_version must be VersionReference.")
+        for name in (
+            "maximum_gross",
+            "maximum_absolute_net",
+            "minimum_free_margin",
+            "total_risk_budget",
+        ):
+            _money(name, getattr(self, name))
+        _positive("maximum_gross_leverage", self.maximum_gross_leverage)
+        for name in ("maximum_drawdown", "maximum_margin_utilization"):
+            _nonnegative(name, getattr(self, name))
+            if getattr(self, name) > 1:
+                raise RiskContractError(f"{name} must be in [0, 1].")
+        caps = _typed_tuple(
+            "concentration_limits",
+            self.concentration_limits,
+            PortfolioConcentrationLimit,
+        )
+        _unique(
+            "concentration limit identities", tuple((x.dimension, x.key) for x in caps)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioImpactRequest:
+    result_id: UUID
+    evaluated_at: datetime
+    basis: PortfolioImpactBasis
+    positions: tuple[PortfolioPositionEvidence, ...]
+    proposal: PortfolioPositionEvidence
+    scenarios: tuple[PortfolioCorrelationScenario, ...]
+    liquidity: tuple[PortfolioLiquidityEvidence, ...]
+    policy: PortfolioImpactPolicy | None
+
+    def __post_init__(self) -> None:
+        _uuid("result_id", self.result_id)
+        when = _time("evaluated_at", self.evaluated_at)
+        if not isinstance(self.basis, PortfolioImpactBasis):
+            raise RiskContractError("basis must be PortfolioImpactBasis.")
+        if (
+            when != self.basis.leverage_request.evaluated_at
+            or when != self.basis.stop_request.evaluated_at
+        ):
+            raise RiskContractError("portfolio evaluation times must match.")
+        _typed_tuple("positions", self.positions, PortfolioPositionEvidence)
+        if (
+            not isinstance(self.proposal, PortfolioPositionEvidence)
+            or self.proposal.position is not None
+        ):
+            raise RiskContractError(
+                "proposal requires position-free PortfolioPositionEvidence."
+            )
+        _typed_tuple("scenarios", self.scenarios, PortfolioCorrelationScenario)
+        _typed_tuple("liquidity", self.liquidity, PortfolioLiquidityEvidence)
+        _unique("scenario identities", tuple(x.group_id for x in self.scenarios))
+        _unique(
+            "liquidity identities",
+            tuple((x.venue, x.instrument_id) for x in self.liquidity),
+        )
+        if self.policy is not None and not isinstance(
+            self.policy, PortfolioImpactPolicy
+        ):
+            raise RiskContractError("policy must be PortfolioImpactPolicy or None.")
+        object.__setattr__(self, "evaluated_at", when)
+
+
+def calculate_portfolio_impact(request: PortfolioImpactRequest) -> PortfolioImpact:
+    """Static offline opening-position projection; no source or trading authority."""
+    if not isinstance(request, PortfolioImpactRequest):
+        raise RiskContractError("request must be PortfolioImpactRequest.")
+    try:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)) as arithmetic:
+            arithmetic.traps[Inexact] = True
+            return _calculate_portfolio_impact(request)
+    except DecimalException as exc:
+        raise RiskContractError(
+            "portfolio arithmetic cannot be represented exactly at precision 34."
+        ) from exc
+
+
+def _calculate_portfolio_impact(request: PortfolioImpactRequest) -> PortfolioImpact:
+    basis = request.basis
+    leverage_request, stop_request = basis.leverage_request, basis.stop_request
+    sizing_request = leverage_request.sizing_request
+    account, portfolio, context = (
+        sizing_request.account,
+        sizing_request.portfolio,
+        sizing_request.context,
+    )
+    terms = sizing_request.instrument
+    sizing = calculate_position_size(sizing_request)
+    leverage = calculate_leverage_assessment(leverage_request)
+    stop = calculate_stop_loss_assessment(stop_request)
+    if terms is None or any(
+        x is None
+        for x in (
+            sizing.recommended_quantity,
+            sizing.recommended_notional,
+            sizing.recommended_margin,
+            stop.maximum_loss,
+            account.equity,
+            account.used_margin,
+            account.free_margin,
+            portfolio.pending_risk,
+            portfolio.drawdown,
+        )
+    ):
+        raise RiskContractError(
+            "PORTFOLIO_ESSENTIAL_EVIDENCE_MISSING: cannot form truthful C-080 buckets."
+        )
+    if (
+        stop_request.context != context
+        or stop_request.account != account
+        or stop_request.portfolio != portfolio
+        or stop_request.entry_price != sizing_request.entry
+        or stop_request.stop_loss != sizing_request.stop
+        or stop_request.quantity != sizing.recommended_quantity
+        or stop_request.instrument != terms
+        or stop_request.costs != sizing_request.costs
+        or stop_request.policy_version != sizing_request.policy_version
+        or stop_request.configuration_version != sizing_request.configuration_version
+    ):
+        raise RiskContractError("PORTFOLIO_UPSTREAM_BASIS_MISMATCH")
+    assert (
+        account.equity is not None
+        and account.used_margin is not None
+        and account.free_margin is not None
+    )
+    assert portfolio.pending_risk is not None and portfolio.drawdown is not None
+    assert (
+        sizing.recommended_notional is not None
+        and sizing.recommended_margin is not None
+    )
+    assert stop.maximum_loss is not None
+    equity, currency = account.equity.amount, account.currency
+    if equity <= 0:
+        raise RiskContractError("PORTFOLIO_POSITIVE_EQUITY_REQUIRED")
+    if (
+        portfolio.account_snapshot != account
+        or portfolio.currency != currency
+        or portfolio.equity != account.equity
+    ):
+        raise RiskContractError("PORTFOLIO_ACCOUNT_BASIS_MISMATCH")
+    if (
+        account.state is not SnapshotState.VALID
+        or portfolio.state is not SnapshotState.VALID
+    ):
+        raise RiskContractError("PORTFOLIO_CURRENT_SNAPSHOTS_REQUIRED")
+    reasons: list[str] = []
+    limits: list[RiskLimitResult] = []
+    failed = False
+    insufficient = False
+    warned = False
+    expiries = [sizing.valid_until, leverage.valid_until, stop.valid_until]
+
+    def record(code: str, outcome: RiskCheckOutcome) -> None:
+        nonlocal failed, insufficient, warned
+        if code not in reasons:
+            reasons.append(code)
+        failed |= outcome is RiskCheckOutcome.FAILED
+        insufficient |= outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+        warned |= outcome is RiskCheckOutcome.WARNING
+
+    for upstream_result in (sizing, leverage, stop):
+        for code in upstream_result.reason_codes:
+            record(code, upstream_result.outcome)
+        if (
+            upstream_result.outcome is not RiskCheckOutcome.PASSED
+            and not upstream_result.reason_codes
+        ):
+            record("UPSTREAM_NOT_PASSED", upstream_result.outcome)
+
+    def current(evidence: _PortfolioEvidence, name: str) -> bool:
+        expiries.append(evidence.valid_until)
+        if evidence.basis != basis:
+            record(name + "_BASIS_MISMATCH", RiskCheckOutcome.FAILED)
+            return False
+        if (
+            evidence.as_of > request.evaluated_at
+            or evidence.valid_until < request.evaluated_at
+        ):
+            record(name + "_NOT_CURRENT", RiskCheckOutcome.INSUFFICIENT_DATA)
+            return False
+        return True
+
+    def money(value: MoneyValue) -> Decimal:
+        if value.currency != currency:
+            raise RiskContractError("PORTFOLIO_CURRENCY_MISMATCH")
+        return value.amount
+
+    def ratio(value: Decimal, label: str, *, lower: bool = False) -> RatioValue:
+        if value < 0 or value > equity:
+            raise RiskContractError("PORTFOLIO_RATIO_NOT_REPRESENTABLE: " + label)
+        with localcontext(
+            Context(prec=34, rounding=ROUND_FLOOR if lower else ROUND_CEILING)
+        ):
+            return RatioValue(value / equity, label)
+
+    def check(
+        identity: str, observed: Decimal, boundary: Decimal, passed: bool, unit: str
+    ) -> None:
+        outcome = RiskCheckOutcome.PASSED if passed else RiskCheckOutcome.FAILED
+        reason = identity.upper().replace("/", "_") + "_BREACHED"
+        limits.append(
+            RiskLimitResult(
+                identity,
+                RiskLimitSeverity.HARD,
+                observed,
+                boundary,
+                unit,
+                outcome,
+                reason if not passed else "WITHIN_LIMIT",
+            )
+        )
+        if not passed:
+            record(reason, outcome)
+
+    supplied: dict[UUID, PortfolioPositionEvidence] = {}
+    for item in request.positions:
+        if item.position is None or item.position.snapshot_id in supplied:
+            raise RiskContractError("PORTFOLIO_POSITION_COVERAGE_INVALID")
+        supplied[item.position.snapshot_id] = item
+    if set(supplied) != {p.snapshot_id for p in portfolio.positions}:
+        raise RiskContractError("PORTFOLIO_POSITION_COVERAGE_INCOMPLETE")
+    if len({p.snapshot_id for p in portfolio.positions}) != len(
+        portfolio.positions
+    ) or len({p.position_id for p in portfolio.positions}) != len(portfolio.positions):
+        raise RiskContractError("PORTFOLIO_DUPLICATE_POSITION")
+    for position in portfolio.positions:
+        evidence = supplied[position.snapshot_id]
+        if evidence.position != position or position.account_id != account.account_id:
+            raise RiskContractError("PORTFOLIO_POSITION_BASIS_MISMATCH")
+        if not current(evidence, "POSITION"):
+            raise RiskContractError("PORTFOLIO_POSITION_EVIDENCE_UNUSABLE")
+        money(evidence.open_risk)
+    if not current(request.proposal, "PROPOSAL"):
+        raise RiskContractError("PORTFOLIO_PROPOSAL_EVIDENCE_UNUSABLE")
+    if (
+        request.proposal.venue != terms.venue
+        or request.proposal.strategy_version != context.strategy_version
+    ):
+        raise RiskContractError("PORTFOLIO_PROPOSAL_BASIS_MISMATCH")
+    if money(request.proposal.open_risk) != money(stop.maximum_loss):
+        raise RiskContractError("PORTFOLIO_PROPOSAL_LOSS_MISMATCH")
+    aggregation = None
+    if portfolio.positions:
+        with localcontext(Context(prec=34, rounding=ROUND_HALF_EVEN)):
+            aggregation = aggregate_portfolio_exposure(
+                account,
+                tuple(
+                    PositionExposureInput(p, supplied[p.snapshot_id].venue)
+                    for p in portfolio.positions
+                ),
+                request.evaluated_at,
+            )
+    else:
+        for snapshot in (account, portfolio):
+            if (
+                snapshot.as_of > request.evaluated_at
+                or snapshot.captured_at > request.evaluated_at
+                or snapshot.valid_until < request.evaluated_at
+            ):
+                raise RiskContractError("PORTFOLIO_SNAPSHOT_NOT_CURRENT")
+    # Per-bucket nonnegative gross notional and risk; signed net stays in limit observations.
+    before: dict[tuple[str, str], tuple[Decimal, Decimal]] = {
+        ("total", "gross"): (Decimal(0), money(portfolio.pending_risk))
+    }
+    after: dict[tuple[str, str], tuple[Decimal, Decimal]]
+    long_before = Decimal(0)
+    short_before = Decimal(0)
+    scenario_members: dict[str, set[str]] = {}
+    instrument_gross: dict[tuple[str, str], list[Decimal]] = {}
+
+    def add(
+        buckets: dict[tuple[str, str], tuple[Decimal, Decimal]],
+        item: PortfolioPositionEvidence,
+        asset: str,
+        instrument: str,
+        side: PositionSide,
+        notional: Decimal,
+        risk: Decimal,
+    ) -> None:
+        status, code = _stop_reference_status(
+            item.strategy_version, "C-021", request.evaluated_at
+        )
+        if status is not None:
+            record(code or "STRATEGY_PROVENANCE_MISSING", status)
+        if item.strategy_version.valid_until is not None:
+            expiries.append(item.strategy_version.valid_until)
+        if not item.correlation_groups:
+            record("CORRELATION_MEMBERSHIP_UNKNOWN", RiskCheckOutcome.INSUFFICIENT_DATA)
+        keys = [
+            ("total", "gross"),
+            ("asset", asset),
+            ("strategy", portfolio_group_key(item.strategy_version)),
+            ("regime", portfolio_group_key(item.regime)),
+            ("instrument", _risk_digest("venue instrument", (item.venue, instrument))),
+            ("direction", side.value),
+        ]
+        for group in item.correlation_groups:
+            scenario_members.setdefault(group, set()).add(instrument)
+            keys.append(("correlation", group))
+        for key in keys:
+            old_notional, old_risk = buckets.get(key, (Decimal(0), Decimal(0)))
+            buckets[key] = (old_notional + notional, old_risk + risk)
+
+    for position in portfolio.positions:
+        assert position.notional is not None
+        item = supplied[position.snapshot_id]
+        notional = money(position.notional)
+        add(
+            before,
+            item,
+            position.asset,
+            position.instrument_id,
+            position.side,
+            notional,
+            money(item.open_risk),
+        )
+        if position.side is PositionSide.LONG:
+            long_before += notional
+        else:
+            short_before += notional
+        instrument_gross.setdefault(
+            (item.venue, position.instrument_id), [Decimal(0), Decimal(0)]
+        )[0] += notional
+    gross_before = long_before + short_before
+    net_before = long_before - short_before
+    if (
+        portfolio.gross_exposure is None
+        or portfolio.net_exposure is None
+        or money(portfolio.gross_exposure) != gross_before
+        or money(portfolio.net_exposure) != net_before
+    ):
+        raise RiskContractError("PORTFOLIO_EXPOSURE_SNAPSHOT_MISMATCH")
+    after = dict(before)
+    proposal_notional = money(sizing.recommended_notional)
+    proposal_margin = money(sizing.recommended_margin)
+    proposal_loss = money(stop.maximum_loss)
+    add(
+        after,
+        request.proposal,
+        context.asset,
+        context.instrument_id,
+        context.side,
+        proposal_notional,
+        proposal_loss,
+    )
+    gross_after = gross_before + proposal_notional
+    net_after = net_before + (
+        proposal_notional if context.side is PositionSide.LONG else -proposal_notional
+    )
+    liquidity_key = (terms.venue, terms.instrument_id)
+    instrument_gross.setdefault(liquidity_key, [Decimal(0), Decimal(0)])
+    for values in instrument_gross.values():
+        values[1] = values[0]
+    instrument_gross[liquidity_key][1] += proposal_notional
+    if portfolio.pending_risk.amount != 0:
+        record(
+            "PENDING_EXPOSURE_ATTRIBUTION_UNKNOWN", RiskCheckOutcome.INSUFFICIENT_DATA
+        )
+    scenarios = {x.group_id: x for x in request.scenarios}
+    for group, instruments in sorted(scenario_members.items()):
+        scenario = scenarios.get(group)
+        if scenario is None:
+            record("CORRELATION_SCENARIO_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+        elif current(scenario, "CORRELATION_SCENARIO") and not instruments.issubset(
+            scenario.instruments
+        ):
+            record("CORRELATION_INSTRUMENT_COVERAGE_MISMATCH", RiskCheckOutcome.FAILED)
+    for scenario in request.scenarios:
+        if scenario.group_id not in scenario_members:
+            raise RiskContractError("UNRELATED_CORRELATION_SCENARIO")
+    capacities = {(x.venue, x.instrument_id): x for x in request.liquidity}
+    if set(capacities) - set(instrument_gross):
+        raise RiskContractError("UNRELATED_LIQUIDITY_EVIDENCE")
+    for key, values in sorted(instrument_gross.items()):
+        capacity = capacities.get(key)
+        if capacity is None:
+            record("LIQUIDITY_EVIDENCE_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+        elif current(capacity, "LIQUIDITY"):
+            boundary = money(capacity.capacity)
+            for phase, amount in zip(("before", "after"), values, strict=True):
+                check(
+                    phase + "/liquidity/" + _risk_digest("capacity key", key),
+                    amount,
+                    boundary,
+                    amount <= boundary,
+                    currency,
+                )
+    margin_before = money(account.used_margin)
+    margin_after = margin_before + proposal_margin
+    free_before = money(account.free_margin)
+    free_after = (
+        free_before - proposal_margin - money(leverage_request.additional_reserved_cost)
+    )
+    risk_after = after[("total", "gross")][1]
+    policy = request.policy
+    remaining: MoneyValue | None = None
+    if policy is None:
+        record("PORTFOLIO_POLICY_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA)
+    elif current(policy, "PORTFOLIO_POLICY"):
+        if (
+            policy.version != sizing_request.policy_version
+            or policy.configuration_version != sizing_request.configuration_version
+        ):
+            record("PORTFOLIO_POLICY_VERSION_MISMATCH", RiskCheckOutcome.FAILED)
+        caps = {(x.dimension, x.key): x.maximum for x in policy.concentration_limits}
+        expected_caps = {
+            key
+            for key in after
+            if key[0] in {"asset", "strategy", "regime", "correlation"}
+        }
+        if set(caps) - expected_caps:
+            raise RiskContractError("UNRELATED_CONCENTRATION_LIMIT")
+        for key in sorted(expected_caps):
+            if key not in caps:
+                record(
+                    "CONCENTRATION_LIMIT_MISSING", RiskCheckOutcome.INSUFFICIENT_DATA
+                )
+                continue
+            boundary = equity * caps[key]
+            for phase, buckets in (("before", before), ("after", after)):
+                value = buckets.get(key, (Decimal(0), Decimal(0)))[0]
+                check(
+                    phase + "/concentration/" + _risk_digest("cap key", key),
+                    value,
+                    boundary,
+                    value <= boundary,
+                    currency,
+                )
+        for phase, gross, net, margin, free in (
+            ("before", gross_before, net_before, margin_before, free_before),
+            ("after", gross_after, net_after, margin_after, free_after),
+        ):
+            check(
+                phase + "/gross",
+                gross,
+                money(policy.maximum_gross),
+                gross <= money(policy.maximum_gross),
+                currency,
+            )
+            check(
+                phase + "/net",
+                net,
+                money(policy.maximum_absolute_net),
+                abs(net) <= money(policy.maximum_absolute_net),
+                currency + "-signed-net",
+            )
+            check(
+                phase + "/leverage",
+                gross,
+                equity * policy.maximum_gross_leverage,
+                gross <= equity * policy.maximum_gross_leverage,
+                currency + "-cross-multiplied",
+            )
+            check(
+                phase + "/margin",
+                margin,
+                equity * policy.maximum_margin_utilization,
+                margin <= equity * policy.maximum_margin_utilization,
+                currency + "-cross-multiplied",
+            )
+            check(
+                phase + "/free",
+                free,
+                money(policy.minimum_free_margin),
+                free >= money(policy.minimum_free_margin),
+                currency,
+            )
+            check(
+                phase + "/drawdown",
+                portfolio.drawdown.value,
+                policy.maximum_drawdown,
+                portfolio.drawdown.value <= policy.maximum_drawdown,
+                "drawdown-ratio",
+            )
+            observed_risk = (
+                before[("total", "gross")][1] if phase == "before" else risk_after
+            )
+            check(
+                phase + "/risk",
+                observed_risk,
+                money(policy.total_risk_budget),
+                observed_risk <= money(policy.total_risk_budget),
+                currency,
+            )
+        remainder = money(policy.total_risk_budget) - risk_after
+        if remainder >= 0:
+            remaining = MoneyValue(remainder, currency)
+
+    def exposure_values(
+        buckets: dict[tuple[str, str], tuple[Decimal, Decimal]],
+    ) -> tuple[ExposureValue, ...]:
+        return tuple(
+            ExposureValue(
+                dimension,
+                key,
+                MoneyValue(n, currency),
+                MoneyValue(r, currency),
+                ratio(n, "gross-notional/equity"),
+            )
+            for (dimension, key), (n, r) in sorted(buckets.items())
+        )
+
+    before_values, after_values = exposure_values(before), exposure_values(after)
+    outcome = (
+        RiskCheckOutcome.FAILED
+        if failed
+        else RiskCheckOutcome.INSUFFICIENT_DATA
+        if insufficient
+        else RiskCheckOutcome.WARNING
+        if warned
+        else RiskCheckOutcome.PASSED
+    )
+    with localcontext(Context(prec=34, rounding=ROUND_CEILING)):
+        before_leverage, after_leverage = gross_before / equity, gross_after / equity
+    result = PortfolioImpact(
+        result_id=request.result_id,
+        context=context,
+        outcome=outcome,
+        reason_codes=tuple(reasons),
+        model_version=sizing_request.model_version,
+        as_of=context.as_of,
+        evaluated_at=request.evaluated_at,
+        valid_until=max(request.evaluated_at, min(expiries)),
+        content_sha256="0" * 64,
+        sizing_result_id=sizing.result_id,
+        before_exposures=before_values,
+        after_exposures=after_values,
+        before_margin_utilization=ratio(margin_before, "used-margin/equity"),
+        after_margin_utilization=ratio(margin_after, "used-margin/equity"),
+        before_free_margin_buffer=ratio(free_before, "free-margin/equity", lower=True),
+        after_free_margin_buffer=ratio(free_after, "free-margin/equity", lower=True)
+        if free_after >= 0
+        else None,
+        before_gross_leverage=before_leverage,
+        after_gross_leverage=after_leverage,
+        before_drawdown=portfolio.drawdown,
+        after_drawdown=portfolio.drawdown,
+        post_trade_risk=ratio(
+            risk_after, "open-plus-pending-plus-proposal-risk/equity"
+        ),
+        remaining_risk_budget=remaining,
+        limits=tuple(limits),
+        policy_version=sizing_request.policy_version,
+    )
+    return replace(
+        result,
+        content_sha256=_risk_digest(
+            "portfolio impact",
+            {
+                "request": request,
+                "sizing": sizing,
+                "leverage": leverage,
+                "stop": stop,
+                "exposure_aggregation": aggregation,
+                "result": {
+                    item.name: getattr(result, item.name)
+                    for item in fields(result)
+                    if item.name != "content_sha256"
+                },
+            },
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class StressTestResult(_AssessmentBase):
     scenarios: tuple[StressScenarioResult, ...]
     required_scenario_types: tuple[str, ...]
@@ -6362,6 +7068,15 @@ __all__ = [
     "PairwiseCorrelation",
     "PairwiseCorrelationResult",
     "PortfolioImpact",
+    "PortfolioImpactBasis",
+    "PortfolioPositionEvidence",
+    "PortfolioCorrelationScenario",
+    "PortfolioLiquidityEvidence",
+    "PortfolioConcentrationLimit",
+    "PortfolioImpactPolicy",
+    "PortfolioImpactRequest",
+    "portfolio_group_key",
+    "calculate_portfolio_impact",
     "PortfolioExposureAggregation",
     "PortfolioSnapshot",
     "PositionSide",

@@ -31,8 +31,15 @@ from trading_platform_api.risk import (
     OfflineAccountAssessment,
     OfflineAccountEvidence,
     PairwiseCorrelationResult,
+    PortfolioConcentrationLimit,
+    PortfolioCorrelationScenario,
     PortfolioExposureAggregation,
     PortfolioImpact,
+    PortfolioImpactBasis,
+    PortfolioImpactPolicy,
+    PortfolioImpactRequest,
+    PortfolioLiquidityEvidence,
+    PortfolioPositionEvidence,
     PortfolioSnapshot,
     PositionExposureInput,
     PositionSide,
@@ -80,10 +87,12 @@ from trading_platform_api.risk import (
     aggregate_portfolio_exposure,
     calculate_leverage_assessment,
     calculate_liquidation_assessment,
+    calculate_portfolio_impact,
     calculate_position_size,
     calculate_stop_loss_assessment,
     calculate_take_profit_assessment,
     pairwise_correlation,
+    portfolio_group_key,
 )
 
 T = tuple(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=i) for i in range(20))
@@ -4954,3 +4963,579 @@ def test_sizing_known_snapshot_provenance_conflict_still_fails(
     )
     assert result.outcome is RiskCheckOutcome.FAILED
     assert "SNAPSHOT_REFERENCE_MISMATCH" in result.reason_codes
+
+
+def portfolio_impact_request(
+    *,
+    side: PositionSide = PositionSide.LONG,
+    empty: bool = False,
+    opposite: bool = False,
+    pending: str = "0",
+    warning: bool = False,
+    schema_two: bool = False,
+    equity: str = "10000",
+) -> PortfolioImpactRequest:
+    leverage_value = leverage_request(side=side)
+    sizing_value = leverage_value.sizing_request
+    account_value = replace(sizing_value.account, equity=money(equity))
+    sizing_value = replace(
+        sizing_value,
+        account=account_value,
+        portfolio=replace(
+            sizing_value.portfolio, account_snapshot=account_value, equity=money(equity)
+        ),
+    )
+    positions = () if empty else sizing_value.portfolio.positions
+    if opposite:
+        positions = (
+            *positions,
+            replace(
+                positions[0],
+                snapshot_id=uuid4(),
+                position_id=uuid4(),
+                side=PositionSide.SHORT,
+            ),
+        )
+    gross = sum((p.notional.amount for p in positions if p.notional), Decimal(0))
+    net = sum(
+        (
+            p.notional.amount * (1 if p.side is PositionSide.LONG else -1)
+            for p in positions
+            if p.notional
+        ),
+        Decimal(0),
+    )
+    portfolio_value = replace(
+        sizing_value.portfolio,
+        positions=positions,
+        gross_exposure=MoneyValue(gross, USD),
+        net_exposure=MoneyValue(net, USD),
+        pending_risk=money(pending),
+    )
+    ctx = sizing_value.context
+    if schema_two:
+        ctx = replace(
+            ctx,
+            signal=replace(ctx.signal, schema_version="2"),
+            validation=replace(ctx.validation, schema_version="2"),
+            strategy_version=replace(ctx.strategy_version, schema_version="2"),
+        )
+    sizing_value = replace(sizing_value, portfolio=portfolio_value, context=ctx)
+    if warning:
+        sizing_value = replace(
+            sizing_value,
+            method=SizingMethod.FIXED_NOTIONAL,
+            requested_notional=money("2000"),
+        )
+    leverage_value = replace(leverage_value, sizing_request=sizing_value)
+    sized = calculate_position_size(sizing_value)
+    assert sized.recommended_quantity is not None
+    stop_value = stop_assessment_request(side)
+    assert stop_value.structural_evidence is not None
+    assert stop_value.volatility_evidence is not None
+    assert stop_value.liquidation_evidence is not None
+    stop_value = replace(
+        stop_value,
+        context=ctx,
+        account=sizing_value.account,
+        portfolio=portfolio_value,
+        entry_price=sizing_value.entry,
+        stop_loss=sizing_value.stop,
+        quantity=sized.recommended_quantity,
+        effective_maximum_loss=money("150"),
+        instrument=sizing_value.instrument,
+        costs=sizing_value.costs,
+        account_source_version=sizing_value.account.source_version,
+        portfolio_source_version=portfolio_value.source_version,
+        structural_evidence=replace(
+            stop_value.structural_evidence,
+            context=ctx,
+            strategy_version=ctx.strategy_version,
+        ),
+        volatility_evidence=replace(stop_value.volatility_evidence, context=ctx),
+        liquidation_evidence=replace(stop_value.liquidation_evidence, context=ctx),
+    )
+    stopped = calculate_stop_loss_assessment(stop_value)
+    assert stopped.outcome is RiskCheckOutcome.PASSED
+    assert stopped.maximum_loss is not None
+    basis = PortfolioImpactBasis(leverage_value, stop_value)
+    common = dict(
+        basis=basis,
+        version=version("portfolio-evidence"),
+        as_of=T[3],
+        valid_until=T[12],
+    )
+    groups = tuple(
+        PortfolioPositionEvidence(
+            **common,
+            position=p,
+            venue="synthetic-venue",
+            strategy_version=ctx.strategy_version,
+            regime=version("synthetic-regime"),
+            correlation_groups=("shared-market",),
+            open_risk=money("10"),
+        )
+        for p in positions
+    )
+    proposal = PortfolioPositionEvidence(
+        **common,
+        position=None,
+        venue="synthetic-venue",
+        strategy_version=ctx.strategy_version,
+        regime=version("synthetic-regime"),
+        correlation_groups=("shared-market",),
+        open_risk=stopped.maximum_loss,
+    )
+    caps = (
+        PortfolioConcentrationLimit("asset", ctx.asset, Decimal("0.5")),
+        PortfolioConcentrationLimit(
+            "strategy", portfolio_group_key(ctx.strategy_version), Decimal("0.5")
+        ),
+        PortfolioConcentrationLimit(
+            "regime", portfolio_group_key(proposal.regime), Decimal("0.5")
+        ),
+        PortfolioConcentrationLimit("correlation", "shared-market", Decimal("0.5")),
+    )
+    policy = PortfolioImpactPolicy(
+        **{**common, "version": sizing_value.policy_version},
+        configuration_version=sizing_value.configuration_version,
+        maximum_gross=money("10000"),
+        maximum_absolute_net=money("10000"),
+        maximum_gross_leverage=Decimal("1"),
+        maximum_drawdown=Decimal("0.2"),
+        maximum_margin_utilization=Decimal("0.5"),
+        minimum_free_margin=money("6000"),
+        total_risk_budget=money("500"),
+        concentration_limits=caps,
+    )
+    scenarios = (
+        PortfolioCorrelationScenario(
+            **common,
+            group_id="shared-market",
+            instruments=(ctx.instrument_id,),
+            methodology="Caller-supplied conservative shared-market scenario, not measured correlation.",
+        ),
+    )
+    liquidity = (
+        PortfolioLiquidityEvidence(
+            **common,
+            venue="synthetic-venue",
+            instrument_id=ctx.instrument_id,
+            capacity=money("5000"),
+            assumptions="Explicit synthetic gross-exposure capacity at the bound snapshot marks and entry.",
+        ),
+    )
+    return PortfolioImpactRequest(
+        UUID(int=111), T[4], basis, groups, proposal, scenarios, liquidity, policy
+    )
+
+
+@pytest.mark.parametrize("side", list(PositionSide))
+def test_portfolio_impact_hand_calculated_opening_projection(
+    side: PositionSide,
+) -> None:
+    request = portfolio_impact_request(side=side)
+    result = calculate_portfolio_impact(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.contract_id == "C-080" and result.schema_version == "1"
+    before = {(x.dimension, x.key): x for x in result.before_exposures}
+    after = {(x.dimension, x.key): x for x in result.after_exposures}
+    assert before[("total", "gross")].notional == money("101")
+    assert after[("total", "gross")].notional == money("1101")
+    assert after[("total", "gross")].risk_amount == money("132.5")
+    assert result.remaining_risk_budget == money("367.5")
+    assert result.before_gross_leverage == Decimal("0.0101")
+    assert result.after_gross_leverage == Decimal("0.1101")
+    assert result.post_trade_risk.value == Decimal("0.01325")
+    assert result.before_margin_utilization.value == Decimal("0.1")
+    assert result.after_margin_utilization.value == Decimal("0.12")
+    assert result.before_free_margin_buffer.value == Decimal("0.7")
+    assert result.after_free_margin_buffer.value == Decimal("0.677")
+    assert (
+        result.before_drawdown
+        == result.after_drawdown
+        == request.basis.leverage_request.sizing_request.portfolio.drawdown
+    )
+    net_limit = next(x for x in result.limits if x.limit_id == "after/net")
+    assert net_limit.observed == Decimal(
+        "1101" if side is PositionSide.LONG else "-899"
+    )
+    assert result.valid_until == T[10]
+
+
+def test_portfolio_opposite_positions_keep_gross_and_risk() -> None:
+    result = calculate_portfolio_impact(portfolio_impact_request(opposite=True))
+    assert result.outcome is RiskCheckOutcome.PASSED
+    total = next(x for x in result.after_exposures if x.dimension == "total")
+    assert total.notional == money("1202")
+    assert total.risk_amount == money("142.5")
+    assert next(x for x in result.limits if x.limit_id == "before/net").observed == 0
+
+
+def test_portfolio_explicit_empty_is_not_missing_positions() -> None:
+    request = portfolio_impact_request(empty=True)
+    result = calculate_portfolio_impact(request)
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert len(result.before_exposures) == 1
+    assert result.before_exposures[0].notional == money("0")
+    assert result.before_exposures[0].risk_amount == money("0")
+    assert result.after_gross_leverage == Decimal("0.1")
+    with pytest.raises(RiskContractError, match="COVERAGE_INCOMPLETE"):
+        calculate_portfolio_impact(replace(portfolio_impact_request(), positions=()))
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("maximum_gross", money("1100")),
+        ("maximum_absolute_net", money("1100")),
+        ("maximum_gross_leverage", Decimal("0.11")),
+        ("maximum_drawdown", Decimal("0")),
+        ("maximum_margin_utilization", Decimal("0.1")),
+        ("minimum_free_margin", money("6771")),
+        ("total_risk_budget", money("130")),
+    ],
+)
+def test_portfolio_each_aggregate_veto_dominates_single_trade_pass(
+    field: str, value: object
+) -> None:
+    request = portfolio_impact_request()
+    assert (
+        calculate_leverage_assessment(request.basis.leverage_request).outcome
+        is RiskCheckOutcome.PASSED
+    )
+    assert (
+        calculate_stop_loss_assessment(request.basis.stop_request).outcome
+        is RiskCheckOutcome.PASSED
+    )
+    result = calculate_portfolio_impact(
+        replace(request, policy=replace(request.policy, **{field: value}))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert any(x.outcome is RiskCheckOutcome.FAILED for x in result.limits)
+    if field == "total_risk_budget":
+        assert result.remaining_risk_budget is None
+
+
+@pytest.mark.parametrize("dimension", ["asset", "strategy", "regime", "correlation"])
+def test_portfolio_each_concentration_cap_is_enforced(dimension: str) -> None:
+    request = portfolio_impact_request()
+    caps = tuple(
+        replace(x, maximum=Decimal("0.11")) if x.dimension == dimension else x
+        for x in request.policy.concentration_limits
+    )
+    result = calculate_portfolio_impact(
+        replace(request, policy=replace(request.policy, concentration_limits=caps))
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert any(
+        "concentration" in x.limit_id and x.outcome is RiskCheckOutcome.FAILED
+        for x in result.limits
+    )
+
+
+def test_portfolio_exact_boundaries_pass() -> None:
+    request = portfolio_impact_request()
+    policy = replace(
+        request.policy,
+        maximum_gross=money("1101"),
+        maximum_absolute_net=money("1101"),
+        maximum_gross_leverage=Decimal("0.1101"),
+        maximum_drawdown=Decimal("0.01"),
+        minimum_free_margin=money("6770"),
+        total_risk_budget=money("132.5"),
+        concentration_limits=tuple(
+            replace(x, maximum=Decimal("0.1101"))
+            for x in request.policy.concentration_limits
+        ),
+    )
+    result = calculate_portfolio_impact(
+        replace(
+            request,
+            policy=policy,
+            liquidity=(replace(request.liquidity[0], capacity=money("1101")),),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.PASSED
+    assert result.remaining_risk_budget == money("0")
+
+
+@pytest.mark.parametrize("missing", ["policy", "scenarios", "liquidity", "cap"])
+def test_portfolio_missing_policy_or_evidence_never_passes(missing: str) -> None:
+    request = portfolio_impact_request()
+    if missing == "cap":
+        request = replace(
+            request,
+            policy=replace(
+                request.policy,
+                concentration_limits=request.policy.concentration_limits[:-1],
+            ),
+        )
+    else:
+        request = replace(request, **{missing: None if missing == "policy" else ()})
+    result = calculate_portfolio_impact(request)
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+
+
+def test_portfolio_liquidity_shortfall_is_not_hidden_by_missing_cap() -> None:
+    request = portfolio_impact_request()
+    result = calculate_portfolio_impact(
+        replace(
+            request,
+            policy=None,
+            liquidity=(replace(request.liquidity[0], capacity=money("1000")),),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert "PORTFOLIO_POLICY_MISSING" in result.reason_codes
+
+
+def test_portfolio_pending_risk_counts_but_unattributed_exposure_blocks_pass() -> None:
+    request = portfolio_impact_request(pending="50")
+    result = calculate_portfolio_impact(request)
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert result.post_trade_risk.value == Decimal("0.01825")
+    assert result.remaining_risk_budget == money("317.5")
+    breached = calculate_portfolio_impact(
+        replace(request, policy=replace(request.policy, total_risk_budget=money("150")))
+    )
+    assert breached.outcome is RiskCheckOutcome.FAILED
+
+
+def test_portfolio_overlapping_scenarios_count_total_risk_once() -> None:
+    request = portfolio_impact_request()
+    proposal = replace(request.proposal, correlation_groups=("shared-market", "second"))
+    positions = tuple(
+        replace(x, correlation_groups=("shared-market", "second"))
+        for x in request.positions
+    )
+    second = replace(request.scenarios[0], group_id="second")
+    caps = (
+        *request.policy.concentration_limits,
+        PortfolioConcentrationLimit("correlation", "second", Decimal("0.5")),
+    )
+    result = calculate_portfolio_impact(
+        replace(
+            request,
+            proposal=proposal,
+            positions=positions,
+            scenarios=(*request.scenarios, second),
+            policy=replace(request.policy, concentration_limits=caps),
+        )
+    )
+    assert result.outcome is RiskCheckOutcome.PASSED
+    totals = {
+        x.key: x.risk_amount
+        for x in result.after_exposures
+        if x.dimension in {"total", "correlation"}
+    }
+    assert set(totals.values()) == {money("132.5")}
+    assert result.post_trade_risk.value == Decimal("0.01325")
+
+
+@pytest.mark.parametrize("field", ["policy", "liquidity", "scenarios"])
+def test_portfolio_evidence_expiry_and_basis_are_bound(field: str) -> None:
+    request = portfolio_impact_request()
+    value = request.policy if field == "policy" else getattr(request, field)[0]
+
+    def with_value(replacement: object) -> PortfolioImpactRequest:
+        return replace(
+            request, **{field: replacement if field == "policy" else (replacement,)}
+        )
+
+    expired = calculate_portfolio_impact(with_value(replace(value, valid_until=T[3])))
+    assert expired.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert expired.valid_until == T[4]
+    boundary = calculate_portfolio_impact(with_value(replace(value, valid_until=T[4])))
+    assert boundary.outcome is RiskCheckOutcome.PASSED and boundary.valid_until == T[4]
+    foreign_basis = replace(
+        request.basis,
+        leverage_request=replace(
+            request.basis.leverage_request, requested_leverage=Decimal("6")
+        ),
+    )
+    mismatched = calculate_portfolio_impact(
+        with_value(replace(value, basis=foreign_basis))
+    )
+    assert mismatched.outcome is RiskCheckOutcome.FAILED
+
+
+@pytest.mark.parametrize("schema_two,warning", [(True, False), (False, True)])
+def test_portfolio_preserves_schema_two_and_upstream_warnings(
+    schema_two: bool, warning: bool
+) -> None:
+    result = calculate_portfolio_impact(
+        portfolio_impact_request(schema_two=schema_two, warning=warning)
+    )
+    assert result.outcome is (
+        RiskCheckOutcome.WARNING if warning else RiskCheckOutcome.PASSED
+    )
+    assert result.after_exposures and result.after_free_margin_buffer is not None
+
+
+def test_portfolio_digest_and_arithmetic_are_caller_context_independent() -> None:
+    request = portfolio_impact_request()
+    expected = calculate_portfolio_impact(request)
+    with localcontext(Context(prec=3, rounding=ROUND_DOWN)):
+        observed = calculate_portfolio_impact(request)
+    assert observed == expected
+    edited = replace(
+        request, liquidity=(replace(request.liquidity[0], capacity=money("4900")),)
+    )
+    assert calculate_portfolio_impact(edited).content_sha256 != expected.content_sha256
+    tiny_risk = replace(request.positions[0], open_risk=money("1e-40"))
+    with pytest.raises(RiskContractError, match="precision 34"):
+        calculate_portfolio_impact(replace(request, positions=(tiny_risk,)))
+
+
+def test_portfolio_refuses_unrepresentable_ratio_without_clamping() -> None:
+    request = portfolio_impact_request()
+    large = replace(request.positions[0].position, notional=money("10000"))
+    sized = request.basis.leverage_request.sizing_request
+    portfolio_value = replace(
+        sized.portfolio,
+        positions=(large,),
+        gross_exposure=money("10000"),
+        net_exposure=money("10000"),
+    )
+    sizing_value = replace(sized, portfolio=portfolio_value)
+    leverage_value = replace(
+        request.basis.leverage_request, sizing_request=sizing_value
+    )
+    stop_value = replace(request.basis.stop_request, portfolio=portfolio_value)
+    basis = PortfolioImpactBasis(leverage_value, stop_value)
+    request = replace(
+        request,
+        basis=basis,
+        positions=(replace(request.positions[0], basis=basis, position=large),),
+        proposal=replace(request.proposal, basis=basis),
+        scenarios=tuple(replace(x, basis=basis) for x in request.scenarios),
+        liquidity=tuple(replace(x, basis=basis) for x in request.liquidity),
+        policy=replace(request.policy, basis=basis),
+    )
+    with pytest.raises(RiskContractError, match="RATIO_NOT_REPRESENTABLE"):
+        calculate_portfolio_impact(request)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["duplicate", "foreign", "stale", "currency", "proposal-loss", "scenario-coverage"],
+)
+def test_portfolio_rejects_unsafe_position_or_proposal_evidence(problem: str) -> None:
+    request = portfolio_impact_request()
+    if problem == "duplicate":
+        request = replace(
+            request, positions=(request.positions[0], request.positions[0])
+        )
+    elif problem == "foreign":
+        p = replace(request.positions[0].position, account_id=uuid4())
+        request = replace(
+            request, positions=(replace(request.positions[0], position=p),)
+        )
+    elif problem == "stale":
+        request = replace(
+            request, positions=(replace(request.positions[0], valid_until=T[3]),)
+        )
+    elif problem == "currency":
+        request = replace(
+            request,
+            positions=(
+                replace(
+                    request.positions[0],
+                    open_risk=MoneyValue(Decimal("10"), "OTHER-USD"),
+                ),
+            ),
+        )
+    elif problem == "proposal-loss":
+        request = replace(
+            request, proposal=replace(request.proposal, open_risk=money("1"))
+        )
+    else:
+        request = replace(
+            request,
+            scenarios=(
+                replace(request.scenarios[0], instruments=("different-instrument",)),
+            ),
+        )
+        result = calculate_portfolio_impact(request)
+        assert result.outcome is RiskCheckOutcome.FAILED
+        return
+    with pytest.raises(RiskContractError):
+        calculate_portfolio_impact(request)
+
+
+def test_portfolio_nonterminating_observations_round_conservatively() -> None:
+    result = calculate_portfolio_impact(portfolio_impact_request(equity="30000"))
+    assert result.outcome is RiskCheckOutcome.PASSED
+    total = next(x for x in result.before_exposures if x.dimension == "total")
+    with localcontext(Context(prec=80)):
+        exact_exposure = Decimal("101") / Decimal("30000")
+        exact_free = Decimal("6770") / Decimal("30000")
+    assert total.equity_ratio.value > exact_exposure
+    assert result.after_free_margin_buffer.value < exact_free
+
+
+def test_portfolio_known_upstream_failure_cannot_be_upgraded() -> None:
+    request = portfolio_impact_request()
+    basis = replace(
+        request.basis,
+        stop_request=replace(
+            request.basis.stop_request, effective_maximum_loss=money("1")
+        ),
+    )
+    assert (
+        calculate_stop_loss_assessment(basis.stop_request).outcome
+        is RiskCheckOutcome.FAILED
+    )
+    request = replace(
+        request,
+        basis=basis,
+        positions=tuple(replace(x, basis=basis) for x in request.positions),
+        proposal=replace(request.proposal, basis=basis),
+        scenarios=tuple(replace(x, basis=basis) for x in request.scenarios),
+        liquidity=tuple(replace(x, basis=basis) for x in request.liquidity),
+        policy=replace(request.policy, basis=basis),
+    )
+    result = calculate_portfolio_impact(request)
+    assert result.outcome is RiskCheckOutcome.FAILED
+    assert set(
+        calculate_stop_loss_assessment(basis.stop_request).reason_codes
+    ).issubset(result.reason_codes)
+
+
+@pytest.mark.parametrize("mode", ["missing", "conflicting"])
+def test_portfolio_incomplete_or_conflicting_upstream_provenance_never_passes(
+    mode: str,
+) -> None:
+    request = portfolio_impact_request()
+    sizing_value = request.basis.leverage_request.sizing_request
+    ctx = replace(
+        sizing_value.context,
+        account_snapshot=replace(
+            sizing_value.context.account_snapshot,
+            content_sha256=None if mode == "missing" else "b" * 64,
+        ),
+    )
+    sizing_value = replace(sizing_value, context=ctx)
+    assert calculate_position_size(sizing_value).outcome is (
+        RiskCheckOutcome.INSUFFICIENT_DATA
+        if mode == "missing"
+        else RiskCheckOutcome.FAILED
+    )
+    basis = replace(
+        request.basis,
+        leverage_request=replace(
+            request.basis.leverage_request, sizing_request=sizing_value
+        ),
+    )
+    with pytest.raises(RiskContractError):
+        calculate_portfolio_impact(replace(request, basis=basis))
+
+
+def test_portfolio_no_unknown_correlation_can_imply_independence() -> None:
+    request = portfolio_impact_request()
+    result = calculate_portfolio_impact(
+        replace(request, proposal=replace(request.proposal, correlation_groups=()))
+    )
+    assert result.outcome is RiskCheckOutcome.INSUFFICIENT_DATA
+    assert "CORRELATION_MEMBERSHIP_UNKNOWN" in result.reason_codes

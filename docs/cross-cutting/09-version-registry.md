@@ -1091,3 +1091,75 @@ applicable context, upstream, assumption, and target-bound expiry. Callers
 retain the exact nonpersisted request alongside its C-079 result. This
 observation grants no sizing, policy, portfolio, approval, execution, or
 authorization authority.
+
+## Issue #111 — offline portfolio impact and concentration limits
+
+`calculate_portfolio_impact(PortfolioImpactRequest)` produces existing C-080
+schema 1 without changing its fields, constructor, consumers or authority.
+Immutable internal basis, policy, position/classification, correlation-scenario
+and liquidity evidence values are nonpersisted inputs, not new C-### contracts.
+Every evidence value binds the exact leverage/stop request basis, an explicit
+version and an aware validity window. No service, API, codec, database,
+migration, provider access or runtime integration is added.
+
+The calculator recomputes C-036, C-076 and C-078 and checks their common account,
+portfolio, context, entry, stop, quantity, instrument, costs and policy/configuration
+basis. Proposed notional/margin come from sizing; proposed risk comes from the
+passed or explicitly failed stop observation's calculated cost/gap-inclusive
+loss. Any upstream failure/insufficiency cannot become a pass; warnings retain
+numeric observations. If essential evidence is absent, the function raises a
+specific RiskContractError rather than fabricating required C-080 buckets.
+
+Existing positions require exact one-to-one snapshot coverage, current matching
+account/source/unit data, explicit venue, version-qualified strategy and regime,
+correlation scenario memberships and explicit nonnegative open-risk amounts.
+Existing nonempty exposure aggregation reuses #105; genuine empty portfolios
+have an explicit zero total bucket without a synthetic position. Recomputed
+gross and signed net must agree with C-033. Before/after buckets retain gross
+notional and risk by total, asset, strategy, regime, scenario, venue/instrument
+and direction. Short exposure does not cancel gross risk. Strategy group keys
+bind C-021 entity/schema/content identity, excluding reference expiry; regime
+keys bind the full supplied VersionReference.
+
+Correlation scenarios are caller-attested assumptions with instrument coverage,
+methodology, version and validity, not evidence of empirical independence or
+stable correlation. Overlapping scenario buckets count each position once per
+group and once in total. Missing membership, scenario coverage or group cap
+cannot grant a pass. Liquidity capacity is explicitly a versioned gross-exposure
+capacity under supplied assumptions at the fully bound snapshot/entry basis;
+it is not raw order-book depth, measured execution quality or an execution guarantee.
+
+The explicit effective policy applies HARD before/after gross, absolute-net,
+gross-leverage, margin-utilization, free-margin, current-drawdown, total-risk
+and asset/strategy/regime/scenario concentration checks. Group notional is
+compared with equity times its cap before division; no default cap, netting
+benefit or policy hierarchy resolver is supplied. Position open-risk sums plus
+C-033 pending risk plus C-078 proposal loss consume the total budget. A breached
+budget leaves remaining_risk_budget unset, never zero-clamped. Nonzero pending
+risk remains in total observations but its unknown notional/group attribution
+prevents PASSED; the positive profile requires explicit zero pending risk.
+
+Margin utilization uses C-032 used margin, adding C-036 proposed margin after.
+Remaining free margin subtracts proposed margin and the exact C-076 incremental
+reserve once. Current marks/equity are static: before/after drawdown retains
+C-033 current drawdown without claiming simulated fills, future PnL or stress
+projection. Stress modeling remains #112. Recomputed upstream values and all
+supplied evidence/output bind the canonical result digest; the digest proves
+content binding, not source authenticity, complete accounts, classifications,
+liquidity or guaranteed losses.
+
+Arithmetic uses isolated Decimal precision 34. Monetary sums/products and
+threshold cross-products must be exact or raise RiskContractError. Descriptive
+#105 aggregation retains its own rounding context; the policy calculator never
+uses rounded concentrations for acceptance. Reported notional/risk/margin ratios
+round upward and free-buffer ratios downward. C-080 RatioValue remains [0,1]:
+unrepresentable genuine values or missing mandatory exposure information raise
+explicit errors, without schema changes, placeholders, omission or clamping.
+Known HARD breaches dominate missing evidence and warnings; otherwise missing
+policy/cap/scenario/liquidity evidence yields INSUFFICIENT_DATA. All relevant
+expiry boundaries constrain the result; equality at expiry is current.
+
+No optimizer, empirical correlation/beta estimator, FX/collateral conversion,
+close/reduce/netting model, source authentication, order/approval/risk-proposal
+workflow or execution authority is introduced. C-080 is a bounded offline
+component assessment, not overall trading readiness or live portfolio integration.
