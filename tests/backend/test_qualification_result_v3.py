@@ -428,3 +428,37 @@ def test_normalized_r_expectancy_roundtrip_rejects_quote_currency():
     )
     with pytest.raises(ValueError, match="UNIT_OR_CURRENCY"):
         Result.build(**(v | {"expectancy_quote_currency": "USDT"}))
+
+
+@pytest.mark.parametrize("boundary", ["holdout", "candidate", "package"])
+def test_gate_assessment_cannot_predate_its_bound_inputs(boundary):
+    v = values()
+    if boundary == "holdout":
+        v["first_holdout_access_at"] = v["as_of"]
+    when = {
+        "holdout": v["first_holdout_access_at"],
+        "candidate": v["candidate"].created_at,
+        "package": v["evidence_package"].created_at,
+    }[boundary] - timedelta(microseconds=1)
+    with pytest.raises(ValueError, match="TIME_OR_VALIDITY"):
+        Result.build(**change_gate(v, Gate.OOS, as_of=when))
+
+
+def test_uncertainty_requires_the_observed_metric_it_describes():
+    v = change_gate(values(), Gate.THRESHOLD, outcome=Outcome.INSUFFICIENT_VALIDATION)
+    with pytest.raises(ValueError, match="UNCERTAINTY"):
+        Result.build(**(v | {"observed_conditional_win_rate": None}))
+
+
+def test_interval_shape_does_not_claim_method_validity_or_authority():
+    v = values()
+    # Method-specific intervals need not universally contain the point estimate.
+    # This synthetic shape is not replay verification or statistical support.
+    v["uncertainty"] = replace(
+        v["uncertainty"], lower_bound=Decimal("0.1"), upper_bound=Decimal("0.2")
+    )
+    result = Result.build(**v)
+    assert (
+        decode_qualification_result_v3(encode_qualification_result_v3(result)) == result
+    )
+    assert not result.qualification_authorized

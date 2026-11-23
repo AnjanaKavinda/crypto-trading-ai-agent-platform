@@ -352,7 +352,12 @@ class QualificationValidationResultV3:
             )
             or c.created_at > self.as_of
             or e.created_at > self.as_of
-            or any(x.as_of > self.as_of for x in self.gates)
+            or any(
+                not max(self.first_holdout_access_at, c.created_at, e.created_at)
+                <= x.as_of
+                <= self.as_of
+                for x in self.gates
+            )
         ):
             raise ValidationContractError("RESULT_SOURCE_TIME_OR_VALIDITY_MISMATCH")
         self._validate_metrics()
@@ -402,9 +407,13 @@ class QualificationValidationResultV3:
         if self.maximum_drawdown_fraction is not None:
             _ratio("maximum_drawdown_fraction", self.maximum_drawdown_fraction)
         if self.uncertainty is not None:
+            # Bounds describe the pinned method's interval for this observed metric.
+            # Requiring it to contain the point estimate is not method-independent;
+            # authenticated replay and support criteria belong to the future issuer.
             u = self.uncertainty
             if (
                 type(u) is not QualificationUncertaintyV3
+                or self.observed_conditional_win_rate is None
                 or u.method != p.uncertainty_method
                 or u.dependence_policy != p.dependence_policy
                 or u.confidence_level != p.confidence_level
