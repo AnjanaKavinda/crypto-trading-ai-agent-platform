@@ -1256,3 +1256,42 @@ qualification/robustness integration, policy resolver, human approval or executi
 is added. #114 owns material-change triggers, invalidation and revalidation.
 Only proposal-focused tests and changed-file checks are run locally; required
 Product/Governance CI remains unchanged.
+
+
+## Canonical issue 112 / GitHub #114 — offline risk revalidation
+
+`risk.revalidation.revalidate_risk_proposal(RiskRevalidationRequest)` detects
+material changes to an immutable #113 snapshot and rebuilds all risk components
+through `build_risk_proposal` exactly once. C-083 `RiskRevalidationResult` stays at
+schema 1 with its existing constructor and trigger vocabulary. Account and trade
+identity must remain the same; the replacement must explicitly link the original
+proposal and supply distinct proposal/assessment/decision identities. Backdated
+evaluation is rejected. Material source changes and expired original proposals
+require a new revision; unchanged inputs raise `RISK_REVALIDATION_NOT_REQUIRED`
+before any rebuild. Expiry equality remains current.
+
+Detection retains economic values, source identities/hashes/versions, evidence
+windows, policy/configuration/assumptions and trade parameters. Calculation IDs,
+previous linkage and evaluation clocks are omitted from material comparison.
+Derived C-036 and ruin-request binding hashes are normalized so clock-only
+refreshes do not manufacture material changes; ruin binding hashes are verified
+before normalization and the full path payload remains compared. Unclassified
+material configuration/evidence edits conservatively trigger POLICY and are
+reported as calculation_assumptions. Full original inputs and replacement outputs
+remain bound by the result digest; normalization does not alter replay evidence.
+
+`RiskRevalidationSnapshot` is an immutable, nonpersisted source/result/replacement
+bundle. It explicitly invalidates prior risk progression without mutating the
+historical snapshot. REJECT maps to FAILED, PASS/PASS_WITH_WARNING to PASSED
+(with warnings retained), and other verdicts to INSUFFICIENT_DATA. Validity comes
+from the rebuilt proposal; missing mandatory evidence and incompatible common
+loss bases retain #113's explicit contract errors. Risk acceptance supplies no
+human approval or execution authority: approved, executable and execution_authorized
+remain false. No persistence, API, provider access or new dependency is added.
+
+This slice handles supplied research risk inputs, not live readiness or approval
+state. Existing human approvals are never transferred to a replacement revision.
+Approval-context integration belongs to GitHub #115–#119 and readiness/safety to
+#129–#130; C-083 schema 1 is not reinterpreted to claim those capabilities. Local
+validation is limited to revalidation-focused tests and changed-file checks;
+required Product/Governance CI remains unchanged.
