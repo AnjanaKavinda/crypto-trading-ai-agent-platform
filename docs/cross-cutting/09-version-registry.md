@@ -1218,3 +1218,41 @@ Missing cost/shock metadata permits rejection from known breaches only; numeric
 outputs remain unavailable. Foreign money is rejected even with other incomplete
 evidence. All upstream and supplied evidence expiries constrain results. Focused tests
 cover these component semantics; this does not claim live integrated readiness.
+
+## Issue #113 — offline risk proposals and immutable replay snapshots
+
+`risk.proposals.build_risk_proposal(RiskProposalRequest)` reuses the existing
+C-036/C-076/C-077/C-078/C-079/C-080/C-081 calculators and emits unchanged C-034,
+C-035 and C-082 schema 1 objects. It accepts no supplied aggregate PASS or
+assessment/decision. Exact request bases, evaluation time and recomputed sizing
+must agree. Caller-supplied references bind signal, validation, strategy,
+account/portfolio, C-024 v1/v2 evidence and C-002 market identity/content/expiry;
+they are not authenticated source resolution or a qualification decision.
+
+The nonpersisted frozen RiskProposalSnapshot bundles source inputs and proposal.
+Its account/portfolio views reuse existing C-032/C-033 values; its trade view
+retains the exact immutable requests, parameters, policy/configuration/model
+versions, assumptions and evidence. Canonical digests bind these inputs and the
+nested assessment/decision/output. Replay is deterministic; hashes bind content,
+not source authenticity or profitability. Initial revision is 1; explicit rebuilds
+supersede a supplied prior proposal at revision + 1 with new proposal, assessment
+and decision identities. No historical object is mutated; persistent identity
+uniqueness and source retrieval are outside this offline component.
+
+Hard vetoes dominate insufficiency, then warnings; required references cannot
+silently expire or lack provenance while passing. Checks retain prefixed unique
+limit identities and reasons. Proposal lifetime is bounded by all component and
+reference expiries and requested TTL. Missing mandatory canonical amounts retain
+explicit contract-error behavior; no placeholders or schema reinterpretation.
+In particular, C-034 requires its maximum_loss to match C-036, so a differing
+C-078 gap/cost-inclusive loss is explicitly rejected rather than understated.
+Supply a coherent conservative common loss basis before constructing a proposal.
+
+This is research-only assembly. Risk-state labels are explicit versioned policy
+metadata, not inferred probabilities. Mandatory constraints and a trade-parameter
+edit whitelist preserve approved=False, executable=False and
+execution_authorized=False. No persistence/codec/API/UI, provider access,
+qualification/robustness integration, policy resolver, human approval or execution
+is added. #114 owns material-change triggers, invalidation and revalidation.
+Only proposal-focused tests and changed-file checks are run locally; required
+Product/Governance CI remains unchanged.
