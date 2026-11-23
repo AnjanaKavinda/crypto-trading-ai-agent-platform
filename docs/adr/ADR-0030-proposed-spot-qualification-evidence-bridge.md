@@ -1,14 +1,14 @@
-# ADR-0030: Proposed Spot qualification evidence bridge
+# ADR-0030: Spot qualification evidence bridge
 
 ## Metadata
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-11-23 |
 | Decision owner | Platform Architect |
-| Human approver | Pending |
-| GitHub issue / PR | #86; coordination #299; decision PR pending |
+| Human approver | AnjanaKavinda; explicit conversation approval, 2026-11-23 |
+| GitHub issue / PR | #86 / #506; coordination #299 |
 | Open decision ID | — (bounded continuation of #86; no existing decision resolved) |
 | Related ADRs | ADR-0015, ADR-0019, ADR-0020, ADR-0022–ADR-0029 |
 | Supersedes / superseded by | None; additive bridge only |
@@ -48,10 +48,10 @@ not source authenticity or complete research history.
 3. Add a bounded, versioned qualification bridge under #86. Recommended, subject
    to owner acceptance of this decision and the implementation contract review.
 
-## Proposed decision
+## Decision
 
-Authorize design and implementation of option 3 for PERSONAL_SPOT_RESEARCH
-only. Keep observation contracts and all historical artifacts unchanged. The
+The owner accepted option 3 on 2026-11-23: design and implement the bounded
+bridge for PERSONAL_SPOT_RESEARCH only. Keep observation contracts and all historical artifacts unchanged. The
 bridge is the explicit issuer of a new qualification-validation result, derived
 from verified evidence and a precommitted method; it does not upgrade observation
 objects or reinterpret their own success statuses.
@@ -97,6 +97,33 @@ Chat 8 work after signal qualification. The implementation contract must give
 the historical gate an approved evidence source without inventing a prior
 qualified signal or changing current C-035/C-082/C-083 semantics. If this cannot
 be represented by the additive boundary, return for a focused contract decision.
+
+## Exact first-stage contract checklist
+
+The first implementation freezes the study policy and versioned evidence/result
+boundaries; production wiring follows after these types and their compatibility
+checks are reviewed. No second architecture-direction approval is required for
+routine implementation within this accepted decision.
+
+| Boundary | Required typed fields and checks |
+|---|---|
+| Common identity | UUID artifact ID, explicit contract/schema discriminator, lowercase SHA-256 of canonical content, exact strategy ID/semantic version/digest and configuration digest. Native C-092 dataset ID/version remain strings with the exact C-103 manifest digest; no UUID substitution. |
+| Scope/time | Spot market type; explicit asset, venue, instrument, timeframe and declared regime; timezone-aware study start/end, freeze time, holdout access boundary, evaluation/as-of and validity times. Ordered nonempty intervals; no future evidence or post-access policy change. |
+| Study protocol | Conditional event and win/loss/breakeven semantics; raw/effective minimum samples; declared dependence/overlap method; uncertainty method/version and confidence level; support criterion; historical win-rate threshold; after-cost expectancy criterion; maximum drawdown limit/basis; robustness and selection/multiple-testing rules. Version all units and criteria; reject missing/nonfinite/out-of-range or contradictory values. No automatic threshold defaults. |
+| Metric units | Counts are nonnegative integers; rates/proportional drawdown are Decimal fractions 0..1, not percentages; effective sample size is Decimal with declared method and cannot exceed the corresponding raw sample; expectancy is Decimal in an explicit quote currency per resolved trade or a declared normalized-R unit. No mixing currencies, denominators, samples or return horizons. |
+| Evidence closure | Typed source/result ID/version/digest, dataset/manifest, strategy/configuration, protocol/journal receipts, costs, method/build, regime and validity pins. Bind the complete verified objects and replay closure; reference syntax or a caller PASS is insufficient. Missing resolution remains insufficient. |
+| C-028v3 gate/result | Exact candidate and C-024v2 package IDs/digests; protocol and source closure; one of PASS/FAIL/INSUFFICIENT_VALIDATION per required gate; reason and criterion plus observed metric/unit and exact evidence where assessed; bounded validity; deterministic result ID/digest. Preserve known failures and all missing-evidence reasons. Overall FAIL dominates insufficiency; PASS requires every mandatory gate passed. |
+| Statistical/historical risk | Confidence output must carry actual method, sample/dependence basis, interval bounds and confidence level. Missing producer/unsupported assumptions block support. The historical-risk gate consumes pinned historical drawdown/loss/stress evidence, not a fabricated current-trade C-035 or an assumed C-070. Current trade risk remains separately mandatory later. |
+| Consumers | C-025v3 and C-070v3 explicitly bind typed C-028v3 and the unchanged candidate/C-024v2 source closure. Preserve C-070v2's parameter_set, configuration, conflict_ids, uncertainty_ids and proved regime identity. Existing lifecycle, NO_TRADE, freshness, codec and API consumers must explicitly reject unsupported new versions until their own bounded wiring is delivered. |
+| Authority | Source observations retain observation-only semantics. Validation PASS is research qualification evidence, not current trade risk acceptance, human approval, production promotion or execution. No authority flags become true. |
+
+Focus first-stage tests on exact identity/digest sensitivity, policy freeze/order,
+units/ranges and sample bounds, missing or mismatched source closure, terminal
+gate aggregation and explicit old/new compatibility. Unsupported producers are
+recorded gaps, never synthetic authority. Numerical study-policy settings remain
+pre-study owner configuration; neither policy configuration nor fixture PASS is
+evidence that a strategy is profitable. Do not run unrelated risk, orchestration
+or full application suites locally.
 
 ## Bounded delivery sequence and focused acceptance checklist
 
@@ -146,7 +173,10 @@ and independent technical review remain separate evidence from code inspection.
 
 ## Approval record
 
-Proposed for owner review. No runtime, schema, persistence or authority change
-has been implemented by this decision-only PR. The owner accepts or rejects
-through the normal human review/merge flow; update this status only with actual
-approval evidence. Historical accepted ADRs remain unchanged.
+Accepted by AnjanaKavinda on 2026-11-23 through the explicit instruction,
+"I agreed with your recommendation. Continue", following the recommendation
+to approve ADR-0030 option 3 and proceed in bounded stages. This records
+architecture approval, not a GitHub review or PR merge. No runtime, schema,
+persistence or trading authority change is implemented by this decision PR.
+The owner retains final manual merge authority. Historical accepted ADRs remain
+unchanged. Exact contract and implementation reviews remain required as below.
