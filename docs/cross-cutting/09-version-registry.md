@@ -1295,3 +1295,40 @@ Approval-context integration belongs to GitHub #115–#119 and readiness/safety 
 #129–#130; C-083 schema 1 is not reinterpreted to claim those capabilities. Local
 validation is limited to revalidation-focused tests and changed-file checks;
 required Product/Governance CI remains unchanged.
+
+
+## GitHub #86 / canonical 084 — ADR-0030 study-policy foundation
+
+`validation.qualification_study_v3` adds frozen dataset pins, study-policy values
+and `QualificationStudyProtocolV3`, an internal supporting value for the future
+C-028v3 bridge. This does not register or issue a C-028v3 result. C-028v2,
+C-025v2, C-070v2 and all observation contracts remain unchanged.
+
+The protocol binds exact strategy schema/semantic version/content, parameters,
+configuration, method/build, costs, native string dataset IDs/versions and
+manifest digests, Spot scope, evaluation window, declared freeze/access/expiry
+boundaries and every statistical-policy field. Pure structural checks reject
+ambiguous/nonfinite units, malformed references, invalid windows, duplicate or
+unordered dataset pins and noncanonical content identity. Dataset pins are
+bounded to 16; this is a metadata resource bound, not a statistical sample limit.
+Canonical SHA-256 and deterministic UUIDv5 bind all values; changed policy or
+source pins require a new identity. No numerical policy defaults are supplied.
+
+Quote-currency expectancy per resolved trade and normalized-R expectancy are
+separate units. Drawdown is an equity-peak fraction; rates are fractions rather
+than percentages. Effective-sample/dependence/uncertainty, risk, robustness,
+selection and return-basis methods are explicit versioned references. Naming a
+method does not implement or validate it. The issuer must later resolve the
+actual data/manifests, strategy/configuration, cost objects and method outputs.
+
+Declared freeze/access timestamps are caller claims, not trusted journal
+receipts or proof of precommitment. Structural validity, content hashes and a
+reference confer no source authenticity, gate PASS, qualification or trading
+authority. Qualification/execution flags stay false. Existing lineage encoding
+and qualification allowlists reject this internal protocol as authoritative
+input. No codec, persistence/retention, API, provider, dependency or migration
+change is included. Verified result issuance, compatible result/consumer types,
+trusted freeze/access verification and production wiring remain under #86.
+
+Validation is limited to study-focused tests and changed-file quality checks.
+This foundation does not close #86/#299 or pass the Spot operational gate.
