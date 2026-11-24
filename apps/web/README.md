@@ -159,3 +159,31 @@ node --test tests/frontend/evidence-report.browser.test.mjs
 The browser check uses the repository's declared Playwright installation. A
 local system Chromium can be selected for this focused check through
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`; the product does not read that setting.
+
+## Recorded research board
+
+Open `signals.html` from the workspace, market overview or evidence page. It
+reads existing candidate (C-023v1), NO_TRADE (C-026v2) and signal (C-070v2)
+artifact metadata. Record kind and recorded lifecycle projection are separate:
+a candidate record can have a later NO_TRADE, expired or superseded projection.
+There is no inference from an empty list and no promotion into a trade.
+
+Reads are bounded to 20 records, with explicit state/kind selection, manual
+pagination and exact UUID/schema/digest detail links. Source/lifecycle references
+are shown as returned by the server. Only returned C-024v2 references link to
+the evidence page; a NO_TRADE record need not have an evidence package.
+Unsupported WATCH/state, missing reason/as-of/validity and API errors stay
+explicit. The current metadata API does not expose asset/timeframe or full
+validation metrics, so this page does not invent those details.
+
+Display-time validity hints use the browser clock and an explicit check time.
+They never overwrite backend projection state and can become old while the
+page stays open. All reads use the existing native loopback or Docker-local
+proxy API target, omit credentials and use no-store. There is no polling,
+evaluation/provider POST, browser persistence, risk editing, approval,
+execution or manual-outcome writing. Returned text is inserted as text only.
+
+Focused tests are `tests/frontend/signal-board.test.mjs` and
+`tests/frontend/signal-board.browser.test.mjs` (the latter uses the existing
+Playwright/Chromium test setup). These are separate from the #148 evidence
+report checks. No new dependency or backend/domain/schema change is needed.
