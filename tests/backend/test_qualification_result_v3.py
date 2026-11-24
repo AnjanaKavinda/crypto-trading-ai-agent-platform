@@ -462,3 +462,38 @@ def test_interval_shape_does_not_claim_method_validity_or_authority():
         decode_qualification_result_v3(encode_qualification_result_v3(result)) == result
     )
     assert not result.qualification_authorized
+
+
+@pytest.mark.parametrize("role", ["gate_source", "freeze", "journal"])
+def test_encoder_rejects_bypassed_nested_reference_invariants(role):
+    result = Result.build(**values())
+    target = {
+        "gate_source": next(g for g in result.gates if g.gate is Gate.OOS).sources[0],
+        "freeze": result.freeze_receipt,
+        "journal": result.research_journal,
+    }[role]
+    object.__setattr__(target, "content_sha256", "not-a-sha256")
+    # Recomputed outer identity must not conceal malformed nested fields.
+    digest = canonical_sha256(result.identity_payload())
+    namespace = uuid5(
+        NAMESPACE_URL, "trading-platform:C-028:3:qualification-result-identity-v1"
+    )
+    object.__setattr__(result, "content_sha256", digest)
+    object.__setattr__(result, "result_id", uuid5(namespace, digest))
+    with pytest.raises(ValueError):
+        encode_qualification_result_v3(result)
+
+
+def test_low_sample_is_insufficient_and_negative_effective_sample_is_invalid():
+    v = change_gate(
+        values(), Gate.SAMPLE_SUFFICIENCY, outcome=Outcome.INSUFFICIENT_VALIDATION
+    )
+    v = change_gate(
+        v, Gate.STATISTICAL_SUPPORT, outcome=Outcome.INSUFFICIENT_VALIDATION, sources=()
+    )
+    v.update(sample_size=50, effective_sample_size=Decimal("40"), uncertainty=None)
+    result = Result.build(**v)
+    assert result.outcome is Outcome.INSUFFICIENT_VALIDATION
+    assert not result.qualification_authorized
+    with pytest.raises(ValueError, match="finite nonnegative Decimal"):
+        Result.build(**(v | {"effective_sample_size": Decimal("-1")}))

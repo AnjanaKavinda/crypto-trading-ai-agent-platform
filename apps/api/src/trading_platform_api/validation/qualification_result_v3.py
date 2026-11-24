@@ -90,6 +90,8 @@ def _references(name: str, values: object, *, empty: bool = False) -> None:
         raise ValidationContractError(f"{name} requires bounded immutable references.")
     if any(type(x) is not ValidationArtifactReferenceV2 for x in values):
         raise ValidationContractError(f"{name} requires typed references.")
+    for reference in values:
+        reference.__post_init__()
     keys = [
         (x.artifact_type, str(x.artifact_id), x.version, x.content_sha256)
         for x in values
