@@ -121,3 +121,41 @@ stale quality, and invalid/non-valid quality are visibly distinct. Backend
 reason codes and nested point reasons are retained; unavailable values are not
 replaced with zero or a browser-derived estimate. These read-only observations
 are not signals, recommendations, probabilities, or trading instructions.
+# Stored evidence reports
+
+Open `evidence.html` from the workspace or market overview. It reads existing
+PERSONAL_SPOT_RESEARCH C-024 schema-2 packages, 20 at a time with explicit
+pagination, through the existing local Strategy/Signal API. Exact report links
+pin package UUID, schema and digest. Native development uses the existing
+loopback API origin; Docker uses its existing authenticated same-origin proxy.
+No new service, credential, browser storage, provider collection or deployment
+mode is needed.
+
+The additive GET `/api/research/strategy-signals/C-024/{id}/evidence` requires
+`schema_version=2` and `content_sha256`. It resolves the exact immutable package
+and existing lineage/lifecycle projection, returning `artifact` metadata and
+the typed `evidence` package. Existing list/detail responses stay unchanged.
+Graphs over 256 nodes or 512 relationships are unavailable, not truncated.
+Missing, unsupported and integrity-failed evidence remains explicit.
+
+The page displays all recorded package references, supporting/contradicting
+evidence, conflicts/uncertainties, adversarial availability and the complete
+stored node/relationship graph. It preserves original reference versions;
+the C-021 reference version is a strategy semantic version, not a contract
+schema number. Full upstream source payloads and statistical validation are
+not exposed by this report. No confidence, win rate or qualification is
+inferred. Validity labels are browser-clock display information, not backend
+revalidation. There is no background polling, evaluation POST, approval or
+execution action. Report reads fail closed and clear prior selected content.
+
+Focused checks:
+
+```sh
+python -m pytest -q tests/backend/test_evidence_report_api.py
+node --test tests/frontend/evidence-report.test.mjs
+node --test tests/frontend/evidence-report.browser.test.mjs
+```
+
+The browser check uses the repository's declared Playwright installation. A
+local system Chromium can be selected for this focused check through
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`; the product does not read that setting.
