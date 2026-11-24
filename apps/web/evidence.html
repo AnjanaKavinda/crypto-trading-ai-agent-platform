@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Spot Evidence Report</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./src/evidence-page.mjs"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">LOCAL RESEARCH — READ ONLY</p>
+        <h1>Evidence report</h1>
+        <p class="muted">Inspect recorded evidence and its limitations before making a research decision.</p>
+      </div>
+      <nav class="header-navigation" aria-label="Research navigation">
+        <a class="mode-pill" href="./index.html">Asset workspace</a>
+        <a class="mode-pill" href="./watchlist.html">Market overview</a>
+      </nav>
+    </header>
+    <main>
+      <section class="panel" aria-labelledby="packages-heading">
+        <h2 id="packages-heading">Stored evidence packages</h2>
+        <p class="muted">These reads do not evaluate strategies, collect data or create signals. No polling or automatic refresh.</p>
+        <p id="package-status" role="status" aria-live="polite">Loading stored packages…</p>
+        <div id="package-list" class="source-list"></div>
+        <div class="button-row">
+          <button id="reload-packages" type="button">Read first page</button>
+          <button id="next-packages" type="button" disabled>Read next page</button>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="report-heading">
+        <h2 id="report-heading">Selected report</h2>
+        <p class="education-note"><strong>Statistical qualification is not established by this report.</strong> Supporting evidence is not a probability forecast. This page does not assess current trade risk, approve or execute trades.</p>
+        <p id="report-status" role="status" aria-live="polite">Select a stored package. No report is displayed.</p>
+        <div id="evidence-report"></div>
+      </section>
+    </main>
+    <footer><strong>LOCAL RESEARCH — READ ONLY</strong><span>Decision logging and signal-board actions are separate work. Trading and execution remain unavailable.</span></footer>
+  </body>
+</html>
