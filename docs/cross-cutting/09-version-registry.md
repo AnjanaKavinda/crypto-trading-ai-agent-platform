@@ -1332,3 +1332,44 @@ trusted freeze/access verification and production wiring remain under #86.
 
 Validation is limited to study-focused tests and changed-file quality checks.
 This foundation does not close #86/#299 or pass the Spot operational gate.
+
+
+## GitHub #86 / canonical 084 — C-028v3 result and closed codec
+
+ADR-0030 adds `QualificationValidationResultV3` in
+`validation/qualification_result_v3.py` and a standalone closed codec in
+`validation/qualification_result_codec_v3.py`. This is the structural result
+boundary, not a verified statistical issuer or production qualification path.
+
+The frozen result embeds the exact C-023 candidate, C-024v2 package and
+content-addressed study protocol. Strategy schema and semantic versions remain
+separate; candidate/package scope, IDs and digests must agree with the protocol.
+Declared freeze/journal references and holdout-access, as-of, creation and expiry
+times are explicit. Result validity is bounded by the protocol, candidate,
+package and all gate windows. Canonical SHA-256 and UUIDv5 bind the content.
+
+Each mandatory gate appears once in canonical order with explicit typed source
+and method pins, criterion, reasons, outcome and validity. Research-selection
+is mandatory; calibration is included only when the frozen policy requires it.
+FAIL dominates INSUFFICIENT_VALIDATION. Structural PASS requires every declared
+mandatory gate PASS and coherent nonmissing policy metrics. Known rate,
+expectancy and drawdown breaches must retain FAIL. Raw sample is an integer;
+effective sample cannot exceed it. Rates/drawdown are Decimal fractions;
+expectancy has an explicit quote-per-resolved-trade or normalized-R unit bound
+to policy. Uncertainty binds interval, confidence, effective sample, dependence
+and method/source identities. Historical risk uses historical evidence; no
+current-trade C-070/C-035 dependency is introduced.
+
+The codec uses canonical-json-v1 / wire-1 with C-028 schema 3 and rejects
+unknown fields/versions, altered fixed metadata/content, noncanonical scalars
+and legacy coercion. Existing C-028v1/v2, observation contracts, central lineage
+allowlists, retention and qualification consumers are unchanged. Legacy
+qualification rejects the new result as unsupported, yielding no qualification.
+
+Source references and declared outcomes are not authenticated evidence. Even a
+coherent synthetic PASS grants no qualification, approval or execution authority;
+all three flags are false. Real source resolution/replay, trusted freeze/access
+receipts, statistical issuance, compatible C-025/C-070 consumers, persistence
+and API wiring remain required under #86. No provider, dependency, migration or
+execution change is included. Focused result/codec tests cover the new boundary;
+#86 and #299 remain open and the Spot operational milestone is not complete.
