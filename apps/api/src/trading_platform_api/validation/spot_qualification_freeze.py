@@ -161,8 +161,9 @@ def resolve_spot_qualification_freeze(
         and study.frozen_at <= receipt.recorded_at < study.valid_until,
         "QUALIFICATION_FREEZE_RECEIPT_MISMATCH",
     )
+    now = utc(journal._clock())
     require(
-        receipt.recorded_at <= utc(journal._clock()) < study.valid_until,
+        journal.snapshot.events[-1].recorded_at <= now < study.valid_until,
         "QUALIFICATION_STUDY_EXPIRED_OR_CLOCK_REVERSED",
     )
     for event in journal.snapshot.events:
