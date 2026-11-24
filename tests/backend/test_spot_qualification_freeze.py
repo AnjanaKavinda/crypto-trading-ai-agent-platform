@@ -141,6 +141,24 @@ def test_changed_policy_cannot_replace_registration_before_or_after_access():
         journal.record_access(protocol.window)
 
 
+def test_clock_reversal_after_access_cannot_resolve_or_retry_registration():
+    _, _, journal, protocol, values = setup()
+    study = QualificationStudyProtocolV3.build(**values)
+    receipt = register(journal, protocol, study)
+    accessed_at = study.frozen_at + timedelta(seconds=10)
+    journal._clock = lambda: accessed_at
+    journal.record_access(protocol.window)
+    assert resolve(journal, protocol, study) == receipt
+    # The clock remains after registration but before an event it now verifies.
+    journal._clock = lambda: study.frozen_at + timedelta(seconds=5)
+    before = journal.snapshot
+    with pytest.raises(ValueError, match="CLOCK_REVERSED"):
+        resolve(journal, protocol, study)
+    with pytest.raises(ValueError, match="CLOCK_REVERSED"):
+        register(journal, protocol, study)
+    assert journal.snapshot == before
+
+
 def test_copied_valid_history_does_not_restore_trusted_registration():
     _, _, journal, protocol, values = setup()
     study = QualificationStudyProtocolV3.build(**values)
