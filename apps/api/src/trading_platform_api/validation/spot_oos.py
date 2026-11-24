@@ -47,6 +47,9 @@ from trading_platform_api.validation.oos_contracts_v2 import (
     result_receipt_purpose,
     utc,
 )
+from trading_platform_api.validation.qualification_study_v3 import (
+    QualificationStudyProtocolV3,
+)
 from trading_platform_api.validation.spot_backtest import (
     SpotBacktestBundle,
     SpotBacktestOutcome,
@@ -192,6 +195,9 @@ class OOSResearchJournal:
         self._inflight: set[str] = set()
         self._issued: dict[str, OOSResultV2] = {}
         self._multiple_testing_plans: dict[str, SpotMultipleTestingPlanV1] = {}
+        self._qualification_studies: dict[
+            str, tuple[QualificationStudyProtocolV3, OOSJournalEvent]
+        ] = {}
         self._reservations: dict[object, int] = {}
         self._run_lock = asyncio.Lock()
         self._trial_lock = asyncio.Lock()
