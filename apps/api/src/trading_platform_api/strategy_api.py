@@ -12,13 +12,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trading_platform_api.config import DeploymentEnvironment, OperatingMode
 from trading_platform_api.contracts.serialization import canonical_sha256
 from trading_platform_api.strategy.contracts import VersionReference
+from trading_platform_api.strategy.contracts_v2 import SignalEvidencePackageV2
 from trading_platform_api.strategy.lifecycle import SqlAlchemySignalLifecycleStore
 
 PROFILE = "PERSONAL_SPOT_RESEARCH"
@@ -108,6 +109,32 @@ class StrategyArtifactPage(BaseModel):
     watch_status: str = "UNAVAILABLE_NOT_PRODUCED"
 
 
+class StrategyEvidenceReportView(BaseModel):
+    """Read-only projection of one verified, already persisted C-024v2."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    artifact: StrategyArtifactView
+    evidence: SignalEvidencePackageV2
+
+    @model_validator(mode="after")
+    def bind_exact_package(self) -> StrategyEvidenceReportView:
+        reference = self.artifact.reference
+        package = self.evidence
+        if (
+            reference.contract_id != "C-024"
+            or reference.schema_version != "2"
+            or reference.artifact_id != package.package_id
+            or reference.content_sha256 != package.content_sha256
+            or self.artifact.occurred_at != package.created_at
+            or self.artifact.valid_until != package.expires_at
+        ):
+            raise ValueError("Evidence report does not match its exact artifact.")
+        if len(package.graph.nodes) > 256 or len(package.graph.edges) > 512:
+            raise ValueError("Evidence report exceeds the bounded graph size.")
+        return self
+
+
 class StrategyEvaluationRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -163,6 +190,10 @@ class ArtifactListQuery:
 
 
 class StrategySignalApiService(Protocol):
+    async def get_evidence_report(
+        self, *, artifact_id: UUID, content_sha256: str
+    ) -> StrategyEvidenceReportView | None: ...
+
     async def list_artifacts(
         self, query: ArtifactListQuery
     ) -> StrategyArtifactPage: ...
@@ -198,6 +229,12 @@ class UnavailableStrategySignalApiService:
 
     async def list_artifacts(self, query: ArtifactListQuery) -> StrategyArtifactPage:
         del query
+        raise self._unavailable()
+
+    async def get_evidence_report(
+        self, *, artifact_id: UUID, content_sha256: str
+    ) -> StrategyEvidenceReportView | None:
+        del artifact_id, content_sha256
         raise self._unavailable()
 
     async def get_artifact(
@@ -396,6 +433,38 @@ class SqlAlchemyStrategySignalApiService:
                     detail="The exact artifact has no valid occurrence timestamp.",
                 )
             return await _artifact_view(store, key, record, occurred_at)
+
+    async def get_evidence_report(
+        self, *, artifact_id: UUID, content_sha256: str
+    ) -> StrategyEvidenceReportView | None:
+        # Reuse the same complete lineage and lifecycle verification as exact
+        # artifact detail reads. Immutable identities cannot change between reads.
+        artifact = await self.get_artifact(
+            contract_id="C-024",
+            artifact_id=artifact_id,
+            schema_version="2",
+            content_sha256=content_sha256,
+        )
+        if artifact is None:
+            return None
+        from trading_platform_api.lineage.codec import LineageKey
+        from trading_platform_api.lineage.store import SqlAlchemyLineageStore
+
+        try:
+            async with self._session_factory() as session:
+                package = await SqlAlchemyLineageStore(session).get(
+                    LineageKey("C-024", str(artifact_id), "2")
+                )
+                if type(package) is not SignalEvidencePackageV2:
+                    raise ValueError("Exact C-024v2 package required.")
+                return StrategyEvidenceReportView(artifact=artifact, evidence=package)
+        except (ValueError, TypeError) as exc:
+            raise StrategySignalApiError(
+                status=503,
+                code="EVIDENCE_REPORT_UNAVAILABLE",
+                title="Evidence report could not be verified",
+                detail="The exact package is unresolved, invalid or exceeds report bounds.",
+            ) from exc
 
     @classmethod
     def _supported_schemas(cls, contract_id: str | None) -> frozenset[str]:
@@ -1323,6 +1392,45 @@ def create_strategy_signal_router() -> APIRouter:
         prefix="/api/research/strategy-signals",
         tags=["strategy-signal-research"],
     )
+
+    @router.get("/C-024/{artifact_id}/evidence")
+    async def get_evidence_report(
+        artifact_id: UUID,
+        request: Request,
+        schema_version: str = Query(min_length=1, max_length=128),
+        content_sha256: str = Query(min_length=64, max_length=64),
+    ) -> JSONResponse:
+        if schema_version != "2" or any(
+            ch not in "0123456789abcdef" for ch in content_sha256
+        ):
+            raise StrategySignalApiError(
+                status=422,
+                code="UNSUPPORTED_EVIDENCE_REFERENCE",
+                title="Unsupported evidence reference",
+                detail="An exact C-024 schema 2 reference and lowercase SHA-256 are required.",
+            )
+        service: StrategySignalApiService = request.app.state.strategy_signal_service
+        report = await service.get_evidence_report(
+            artifact_id=artifact_id, content_sha256=content_sha256
+        )
+        if report is None:
+            raise StrategySignalApiError(
+                status=404,
+                code="STRATEGY_ARTIFACT_NOT_FOUND",
+                title="Evidence report not found",
+                detail="No persisted evidence package matches the exact reference.",
+            )
+        if (
+            report.artifact.reference.artifact_id != artifact_id
+            or report.artifact.reference.content_sha256 != content_sha256
+        ):
+            raise StrategySignalApiError(
+                status=503,
+                code="EVIDENCE_REPORT_IDENTITY_MISMATCH",
+                title="Evidence report identity mismatch",
+                detail="The resolved package does not match the requested identity.",
+            )
+        return _success(report, correlation_id=request.state.correlation_id)
 
     @router.get("")
     async def list_artifacts(
