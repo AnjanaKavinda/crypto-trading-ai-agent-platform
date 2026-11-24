@@ -45,7 +45,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-022 | StrategyEligibility | Strategy | Signal | Eligibility by asset/timeframe/regime/data state. |
 | C-023 | SignalCandidate | Signal | Qualification | Candidate setup; never an order. |
 | C-024 | SignalEvidencePackage | Signal | Validation, Risk, Approval, UX | v1 retained; v2 is pre-qualification evidence ending at the exact C-023 candidate. |
-| C-025 | SignalQualification | Signal/Validation | Risk, UX | v1 retained; v2 requires exact C-024v2 and authoritative C-028v2; historical conditional qualification, not probability. |
+| C-025 | SignalQualification | Signal/Validation | Risk, UX | v1/v2 retained; ADR-0030 adds the C-028v3-bound schema-3 structural consumer; verified issuance/runtime integration remain pending. |
 | C-026 | NoTradeDecision | Signal | UX, Risk, Safety, Learning | Schema 1 reason vocabulary is frozen; schema 2 adds only typed `INVALID_PROVENANCE` while preserving first-class abstention semantics. |
 | C-027 | BacktestResult | Quant Validation | Validation, Research | v1 retained; v2 cost-assumption value objects express APPLICABLE / NOT_APPLICABLE / UNKNOWN explicitly; ADR-0019 v3 binds exact dataset/manifest, typed costs and simulation provenance. |
 | C-028 | ValidationResult | Quant Validation | Risk, Approval | v1 retained; v2 binds qualification rules and authoritative results. ADR-0030 adds the schema-3 structural result/codec; verified issuance and consumer integration remain pending. |
@@ -90,7 +90,7 @@ IDs `C-001`–`C-060` are preserved unchanged. New IDs are appended sequentially
 | C-067 | ModelRoutingDecision | Model Governance | Runtime Agent Router, Audit, Safety | Model/provider choice must be explicit, attributable, and policy-compliant. |
 | C-068 | FibonacciAssessment | Technical Analysis | MarketContext, Strategy | Fibonacci findings are reproducible from deterministic inputs and include invalidation context. |
 | C-069 | AnalyticalUncertainty | Analysis | Strategy, UX, Safety | Uncertainty must be explicit and cannot be converted into trade authority. |
-| C-070 | Signal | Signal Engine | Risk, Approval, UX | Schema 1 remains frozen; schema 2 binds exact candidate/strategy/evidence/qualification/validation lineage. Qualified signal only; never executable authority and never a substitute for `ExecutionIntent`. |
+| C-070 | Signal | Signal Engine | Risk, Approval, UX | Schemas 1/2 remain frozen. ADR-0030 adds schema-3 structural lineage and exact context/regime binding; no verified issuer/runtime integration or execution authority is enabled. Never a substitute for `ExecutionIntent`. |
 | C-071 | OOSResult | Quant Validation | ValidationResult, Governance, Risk | Out-of-sample evidence is explicitly partitioned from in-sample optimization. ADR-0022 adds observation-only schema 2 for exact Spot C-027v3/dataset/metrics/protocol/journal closure and zero/inconclusive samples; v1 unchanged. No schema-2 qualification or retained storage approval. |
 | C-072 | MonteCarloResult | Quant Validation | RobustnessResult, Risk, Governance | V1 remains unchanged. ADR-0024 adds observation-only Spot schema 2 binding exact C-027v3/#94 provenance and deterministic block-bootstrap assumptions, units, seed, source-return digest, and terminal state; no C-030/qualification integration or retention. |
 | C-073 | SensitivityResult | Quant Validation | RobustnessResult, Risk | V1 remains unchanged. ADR-0025 adds observation-only Spot schema 2 bound to exact C-027v3/#94 scenarios, policy, parameter/cost assumptions, metrics, and provenance; no qualification integration or retention. |
@@ -1091,3 +1091,52 @@ receipts, statistical issuance, compatible C-025/C-070 consumers, persistence
 and API wiring remain required under #86. No provider, dependency, migration or
 execution change is included. Focused result/codec tests cover the new boundary;
 #86 and #299 remain open and the Spot operational milestone is not complete.
+
+
+## GitHub #86 / canonical 084 — C-025v3 / C-070v3 structural consumers
+
+Accepted ADR-0030 adds `SignalQualificationV3`, `SignalLineageV3` and `SignalV3`
+in `strategy/qualification_consumers_v3.py`, with a standalone closed codec in
+`strategy/qualification_consumer_codec_v3.py`. These are the remaining
+first-stage consumer formats, not verified issuance or production wiring.
+
+C-025v3 embeds the exact C-028v3 and derives its candidate, C-024v2 package and
+C-021 semantic-version/content references. It maps PASS to QUALIFIED, FAIL to
+REJECTED and INSUFFICIENT_VALIDATION to INSUFFICIENT_EVIDENCE; it invents no
+WATCH or HIGH_EVIDENCE promotion. Reasons remain in the full validation result.
+Evaluation and expiry are explicit UTC times bounded by the exact upstream
+candidate/package/protocol/result validity. Canonical SHA-256 and deterministic
+UUIDv5 bind every field; status and references cannot be caller overrides.
+
+C-070v3 requires that declared qualification PASS, exact StrategyVersionV2 and
+package-bound MarketContextV5. Its scope, direction, evidence/quality IDs,
+lineage, regime, conflict and uncertainty IDs are derived from those objects.
+The actual strategy schema 2, semantic version/digest and supported scope must
+match. Expiry cannot outlive qualification, validation, candidate, package,
+context or regime; source/assessment times cannot be future-dated.
+
+The preserved `parameter_set` surface is the C-021 semantic-version reference,
+as in C-070v2. For schema 3, `configuration` references the full frozen study
+protocol, including its rule policy and separate backtest parameter/configuration
+pins. No historical artifact or reference is relabelled. `regime_id` is proved
+from the exact context's typed C-005, never supplied as an unrelated UUID. The
+protocol's declared regime string remains a separate method-policy input; this
+slice does not invent an authoritative C-005 label/mapping.
+
+`market_context_document` stores the existing canonical C-006v5 lineage-codec
+envelope, retaining assessment discriminators needed by its closed reader. The
+typed `market_context` property decodes that exact document. This reuses C-006's
+approved codec rather than weakening its discriminator rules or introducing
+dynamic deserialization. Source identity still matches the package's existing
+canonical context digest. The outer codec is canonical-json-v1 / wire-1 with
+explicit C-025 or C-070 schema 3, closed fields and bounded document size.
+
+These are immutable structural values. Synthetic QUALIFIED/PASS fixtures confer
+no qualification, approval or execution authority; all three flags remain false.
+Verified source/journal replay, gate/statistical issuance and research-selection
+completeness remain required before real qualification. Existing strategy,
+lineage/retention, lifecycle, NO_TRADE, freshness, API and risk readers retain
+their schemas and reject these unsupported versions. No provider, dependency,
+migration, persistence or execution change is included. #86/#299 remain open
+for the issuer, approved retention, runtime integration and operational evidence.
+Local validation is limited to consumer-focused tests and changed-file checks.
