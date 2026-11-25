@@ -2,6 +2,9 @@ import {
   axisTimeLabel,
   chartIndexAtPointer,
   candleInspectorText,
+  candleReadoutText,
+  displayDecimals,
+  formatDisplayNumber,
   lastPriceTag,
   moveChartSelection,
   normaliseChartWindow,
@@ -119,6 +122,9 @@ const EDUCATION = Object.freeze({
 });
 
 const TIMEFRAMES = Object.keys(TIMEFRAME_SECONDS);
+const PRICE_UNIT_INDICATORS = new Set([
+  "ema-20", "ema-50", "ema-500", "bollinger-bands-20", "atr-14", "macd-12-26-9",
+]);
 const HISTORY_LIMITS = new Set([50, 90, 100, 250, 501]);
 const SPOT_ANALYSIS_LABELS = Object.freeze({
   vwap: "Spot VWAP",
@@ -866,7 +872,8 @@ function renderChart(snapshot, preferences) {
   description.textContent = `${candles.length} returned finalized candles. Hover over a candle or focus the chart and use the arrow keys to inspect exact returned values.`;
   svg.append(description);
   const priceUnit = candles.at(-1).values.close.unit;
-  const formatPrice = (value) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(value);
+  const priceDecimals = displayDecimals(allCandles.at(-1).values.close.exact);
+  const formatPrice = (value) => formatDisplayNumber(value, priceDecimals);
   const priceY = (value) => {
     const fraction = scale.fractionOf(value);
     return fraction === null ? null : priceTop + fraction * priceHeight;
@@ -961,7 +968,10 @@ function renderChart(snapshot, preferences) {
       svgNode("rect", { x: width - right + 2, y: y - 10, width: right - 6, height: 20, rx: 3, class: "last-price-box" }),
     );
     const text = svgNode("text", { x: width - right + 8, y: y + 4, class: "last-price-text" });
-    text.textContent = tag.text;
+    text.textContent = formatDisplayNumber(tag.text, priceDecimals);
+    const exactTitle = svgNode("title");
+    exactTitle.textContent = `Exact returned close: ${tag.text} ${priceUnit}`;
+    group.append(exactTitle);
     group.setAttribute("role", "img");
     group.setAttribute("aria-label", `Last returned close: ${tag.text} ${priceUnit}${tagY !== y ? " (outside the visible range)" : ""}`);
     group.append(text);
@@ -990,6 +1000,7 @@ function renderChart(snapshot, preferences) {
     marker.setAttribute("cy", String(priceY(candle.values.close.numeric)));
     marker.setAttribute("visibility", "visible");
     const indicatorReadouts = [];
+    const indicatorDisplay = [];
     const candleEnd = Date.parse(candle.source.close_time);
     for (const id of enabled) {
       const indicator = snapshot.indicators?.[id];
@@ -999,12 +1010,21 @@ function renderChart(snapshot, preferences) {
       for (const [label, field] of fieldsByIndicator[id] ?? []) {
         const point = plotValues(indicator.result, field)
           .find((item) => Date.parse(item.candleEnd) === candleEnd);
-        if (point) indicatorReadouts.push(`${label}: ${point.value}`);
+        if (point) {
+          indicatorReadouts.push(`${label}: ${point.value}`);
+          indicatorDisplay.push({ label, value: point.value, priceUnit: PRICE_UNIT_INDICATORS.has(id) });
+        }
       }
     }
     const vwapPoint = vwapPoints.find((point) => Date.parse(point.candleEnd) === candleEnd);
-    if (vwapPoint) indicatorReadouts.push(`Spot VWAP: ${vwapPoint.value}`);
-    inspector.textContent = candleInspectorText(candle, indicatorReadouts);
+    if (vwapPoint) {
+      indicatorReadouts.push(`Spot VWAP: ${vwapPoint.value}`);
+      indicatorDisplay.push({ label: "Spot VWAP", value: vwapPoint.value, priceUnit: true });
+    }
+    const exact = candleInspectorText(candle, indicatorReadouts);
+    inspector.textContent = candleReadoutText(candle, indicatorDisplay, priceDecimals);
+    inspector.title = `Exact returned values: ${exact}`;
+    inspector.dataset.exact = exact;
     svg.dataset.inspectedIndex = String(index);
   };
   const indexAtPointer = (event) => {

@@ -84,6 +84,11 @@
         <div id="chart-container" class="chart-container">
           <p class="empty-state">Waiting for a local Spot research snapshot.</p>
         </div>
+        <p class="muted">Prices are shown at display precision for the instrument; hover the readout or last-price tag, or open the table below, for the exact returned values.</p>
+        <section id="market-trades" class="unavailable-panel" aria-labelledby="market-trades-heading">
+          <h3 id="market-trades-heading">Market trades — unavailable</h3>
+          <p id="market-trades-reason">This API stores OHLCV candles only; no trade-by-trade feed is connected. A trade-history data source is an open decision (#355). Individual trades are never inferred from candles.</p>
+        </section>
         <details class="data-table">
           <summary>Inspect exact OHLCV values returned by the API</summary>
           <div class="table-scroll">
