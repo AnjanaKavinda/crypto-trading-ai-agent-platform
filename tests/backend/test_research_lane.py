@@ -315,3 +315,14 @@ def test_cli_run_fails_closed_without_data(tmp_path: Path, capsys):
     )
     assert code == 2
     assert "fail closed" in capsys.readouterr().err
+
+
+def test_single_coin_drawdown_fails_even_when_portfolio_is_fine():
+    protocol = EvaluationProtocol(bootstrap_resamples=200)
+    returns = ["0.04", "-0.01"] * 20
+    calm = _segment(returns, ["1", "1.5", "1.6", "1.8"], ["1", "1.1", "1.0", "1.1"])
+    deep = _segment(returns, ["1", "1.2", "0.6", "1.3"], ["1", "1.1", "1.0", "1.1"])
+    verdict, _ = decide(protocol, [calm, deep], ["BTCUSDT", "SOLUSDT"])
+    assert verdict.status == "FAIL"
+    assert "SYMBOL_DRAWDOWN_LIMIT_EXCEEDED: SOLUSDT 50.00%" in verdict.reasons
+    assert not any(r.startswith("PORTFOLIO_DRAWDOWN") for r in verdict.reasons)
