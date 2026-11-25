@@ -19,10 +19,16 @@ owner's actual results.
 ## Work selection
 
 - Take work only from the open issue labelled `claude-queue`, in its listed
-  order. One active implementation at a time: if a `claude/*` PR is open and
-  unmerged, do not start another item — check its CI and fix genuine failures
-  instead.
-- Base: current `origin/dev`. Branch: `claude/<issue>-<slug>`. PR target: `dev`.
+  order within each lane. Two lanes (owner-approved 2026-11-25):
+  - **Lane E (evidence):** backend and docs — `apps/api/**`, `tests/backend/**`, `docs/**`.
+  - **Lane U (UI):** `apps/web/**` and `tests/frontend/**` only. Starts only
+    after the owner approves the trading-desk design (queue item O3).
+- At most one open PR per lane. If a lane's PR is open, do not start another
+  item in that lane — check its CI and fix genuine failures instead. A lane-U
+  PR must not touch lane-E paths and vice versa; if an item needs both, split
+  it and land the backend part in lane E first.
+- Base: current `origin/dev`. Branch: `claude/<lane>-<issue>-<slug>`
+  (e.g. `claude/e-157-trade-outcomes`). PR target: `dev`.
 - If an item needs a real owner decision (scope, architecture, money, data on
   the owner's machine), stop and ask once, briefly.
 
