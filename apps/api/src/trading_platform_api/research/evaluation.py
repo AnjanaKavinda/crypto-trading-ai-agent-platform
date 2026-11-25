@@ -190,8 +190,7 @@ def decide(
         symbol_drawdown = curve_stats(segment.equity).max_drawdown
         if symbol_drawdown > protocol.max_symbol_drawdown:
             failures.append(
-                f"SYMBOL_DRAWDOWN_LIMIT_EXCEEDED: {name} "
-                f"{(symbol_drawdown * 100):.2f}%"
+                f"SYMBOL_DRAWDOWN_LIMIT_EXCEEDED: {name} {(symbol_drawdown * 100):.2f}%"
             )
     if holding.return_to_drawdown is not None and (
         strategy.return_to_drawdown is None
