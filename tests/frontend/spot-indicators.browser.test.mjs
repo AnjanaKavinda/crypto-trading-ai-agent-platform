@@ -1194,3 +1194,38 @@ for (const delayedAction of ["read", "refresh"]) {
     }
   });
 }
+
+test("chart workspace zooms, pans, switches scale and shows the exact last close", async () => {
+  const fixture = createSnapshot({ count: 50 });
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+  try {
+    await waitForLoadedSnapshot(page);
+    const wicks = () => page.locator("#chart-container line.candle-wick").count();
+    const range = page.locator("#chart-view-range");
+    assert.equal(await wicks(), 50);
+    assert.match(await range.innerText(), /Showing candles 1–50 of 50 · scale: Auto/);
+    assert.equal(
+      await page.locator("#chart-container .last-price-tag").getAttribute("data-last-price"),
+      fixture.candles.at(-1).metrics.close.value,
+    );
+    const requestsBefore = apiRequests.length;
+    await page.locator('[data-chart-action="zoom-in"]').click();
+    assert.equal(await wicks(), 25);
+    assert.match(await range.innerText(), /Showing candles 26–50 of 50/);
+    await page.locator('[data-chart-action="pan-left"]').click();
+    assert.match(await range.innerText(), /Showing candles 20–44 of 50/);
+    await page.locator('[data-chart-action="scale-percent"]').click();
+    assert.equal(await page.locator('[data-chart-action="scale-percent"]').getAttribute("aria-pressed"), "true");
+    assert.match(await page.locator("#chart-container .price-axis-tick").first().textContent(), /%$/);
+    await page.locator('[data-chart-action="scale-log"]').click();
+    assert.match(await range.innerText(), /scale: Log/);
+    await page.locator("#chart-container svg").focus();
+    await page.keyboard.press("-");
+    assert.equal(await wicks(), 50);
+    await page.locator('[data-chart-action="reset"]').click();
+    assert.match(await range.innerText(), /Showing candles 1–50 of 50 · scale: Auto/);
+    assert.equal(apiRequests.length, requestsBefore, "view controls must not issue API requests");
+  } finally {
+    await page.close();
+  }
+});
