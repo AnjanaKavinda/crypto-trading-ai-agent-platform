@@ -10,7 +10,7 @@ qualification, approval or execution authority, and no order path.
 python -m venv .venv
 .venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
 pip install -e .
-python -m trading_platform_api.research fetch --start 2019-01-01
+python -m trading_platform_api.research fetch --start 2021-09-30
 python -m trading_platform_api.research run
 ```
 
@@ -40,3 +40,13 @@ A candle file is rejected if it has a gap, a misaligned or unclosed candle,
 inconsistent OHLC values, an unapproved symbol or a missing provenance header.
 Nothing is repaired or interpolated. If a symbol's history has a gap, choose a
 later `--start`.
+
+**Known Binance outage candles.** Binance 4h Spot history contains outage
+candles that end early (their `close_time_ms` is before the regular 4h close)
+up to 2021-09-29 04:00 UTC. They are rejected with a
+`close_time_ms does not match` error naming the symbol and the candle's UTC
+open time. Use `--start 2021-09-30` to begin after them:
+
+```powershell
+python -m trading_platform_api.research fetch --start 2021-09-30
+```
