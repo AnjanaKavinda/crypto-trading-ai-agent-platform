@@ -278,7 +278,7 @@ class TradeOutcomeService:
                     tuple_(records.c.occurred_at, records.c.record_id)
                     < tuple_(anchor.recorded_at, str(anchor.outcome_id))
                 )
-            ids = list(
+            ids: list[str] = list(
                 (
                     await session.execute(
                         query.order_by(
