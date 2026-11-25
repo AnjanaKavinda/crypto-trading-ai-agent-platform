@@ -171,3 +171,16 @@ footer strong { color: #ccecff; }
   .section-heading .button-row { justify-content: flex-start; }
   .mode-pill { white-space: normal; }
 }
+
+/* Trading-desk shell (U1) */
+.desk-status { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end; }
+.desk-live-off { border-color: var(--negative); color: #ffd6d6; }
+#desk-freshness { white-space: normal; }
+#desk-freshness[data-state="valid"] { border-color: var(--positive); }
+#desk-freshness[data-state="warning"] { border-color: var(--warning); }
+#desk-freshness[data-state="error"] { border-color: var(--negative); }
+.desk-tabs-wrap { width: min(1440px, 100% - 2rem); margin: 0 auto 1rem; }
+.desk-tabs { display: flex; flex-wrap: wrap; gap: .4rem; border-bottom: 1px solid var(--border); }
+.desk-tabs [role="tab"] { border-radius: .45rem .45rem 0 0; border-bottom: 0; }
+.desk-tabs [role="tab"][aria-selected="true"] { background: var(--surface-raised); border-color: var(--accent); color: #ccecff; }
+.desk-frame { display: block; width: 100%; min-height: 480px; border: 0; background: transparent; }
