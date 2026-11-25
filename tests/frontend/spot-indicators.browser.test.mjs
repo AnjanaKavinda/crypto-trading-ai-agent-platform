@@ -1229,3 +1229,41 @@ test("chart workspace zooms, pans, switches scale and shows the exact last close
     await page.close();
   }
 });
+
+test("chart workspace timeframe pills, markets list, volume average and market-trades notice", async () => {
+  const fixture = createSnapshot({ count: 50 });
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
+  try {
+    await waitForLoadedSnapshot(page);
+    // Backend prior-20 trailing volume average is drawn from candle 21 onward.
+    const line = page.locator("#chart-container polyline.volume-average-line");
+    assert.equal(await line.count(), 1);
+    const points = (await line.getAttribute("points")).trim().split(/\s+/);
+    assert.equal(points.length, 30);
+    assert.match(await page.locator("#chart-container .legend-volume-average-line").textContent(), /Prior-20 average volume · backend/);
+    // Markets list comes from the API allowlist and marks the selection.
+    const market = page.locator(`#markets-list [data-instrument-id="${instrumentId}"]`);
+    assert.equal(await market.textContent(), symbol);
+    assert.equal(await market.getAttribute("aria-pressed"), "true");
+    assert.match(await page.locator("#markets-list-count").textContent(), /Markets \(1\)/);
+    // Market trades are unavailable, never inferred.
+    assert.match(await page.locator("#market-trades-panel").innerText(), /unavailable[\s\S]*#355/);
+    // Weekly/monthly pills are disabled with a reason; live pills load that timeframe.
+    for (const value of ["1w", "1M"]) {
+      const pill = page.locator(`#timeframe-pills [data-timeframe="${value}"]`);
+      assert.equal(await pill.isDisabled(), true);
+      assert.match(await pill.getAttribute("title"), /not served by the local research API/);
+    }
+    assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "false");
+    const before = apiRequests.length;
+    await page.locator('#timeframe-pills [data-timeframe="4h"]').click();
+    await page.waitForFunction(() => document.querySelector("#timeframe-select").value === "4h");
+    assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "true");
+    const loads4h = () => apiRequests.slice(before).some((item) => item.pathname.endsWith("/candles") && item.timeframe === "4h");
+    for (let attempt = 0; attempt < 50 && !loads4h(); attempt += 1) await page.waitForTimeout(100);
+    assert.ok(loads4h());
+    assert.ok(apiRequests.every((item) => item.method === "GET"), "pills and markets must only read");
+  } finally {
+    await page.close();
+  }
+});

@@ -1,5 +1,6 @@
 import {
   axisTimeLabel,
+  CHART_TIMEFRAME_PILLS,
   chartIndexAtPointer,
   candleInspectorText,
   lastPriceTag,
@@ -8,6 +9,7 @@ import {
   panChartWindow,
   priceScale,
   timeAxisIndexes,
+  volumeReferenceLine,
   zoomChartWindow,
 } from "./chart-interaction.mjs";
 import {
@@ -767,6 +769,12 @@ function renderChart(snapshot, preferences) {
         : [],
     )
     : [];
+  const volumeAnalysis = snapshot.spot_analysis?.["volume-confirmation"];
+  const volumeReference = snapshot.data_quality?.status === "VALID" &&
+      snapshot.data_quality?.report_status === "VALID" &&
+      !spotAnalysisBindingError(snapshot, "volume-confirmation", volumeAnalysis)
+    ? volumeReferenceLine(volumeAnalysis)
+    : null;
   const width = 1000;
   const left = 150;
   const right = 125;
@@ -951,6 +959,16 @@ function renderChart(snapshot, preferences) {
     label.setAttribute("class", `legend-text legend-${item.className}`);
   });
   svgText(svg, left, volumeTop - 6, "Volume · backend values", "legend-text");
+  const volumeLine = volumeReference && volumeMax > 0
+    ? makeLine(volumeReference.points, candleIndexes,
+      (value) => volumeTop + volumeHeight - (value / volumeMax) * volumeHeight, left, plotWidth)
+    : "";
+  if (volumeLine) {
+    svg.append(svgNode("polyline", { points: volumeLine, class: "volume-average-line" }));
+    const label = svgText(svg, left + 220, volumeTop - 6,
+      `Prior-${volumeReference.lookback} average volume · backend`, "legend-text");
+    label.setAttribute("class", "legend-text legend-volume-average-line");
+  }
   const tag = lastPriceTag(allCandles.at(-1), allCandles.at(-2));
   const tagY = tag ? priceY(tag.value) : null;
   if (tag && tagY !== null) {
@@ -1159,6 +1177,43 @@ function renderMetadata(snapshot) {
   }
 }
 
+function renderTimeframePills(onChoose) {
+  const target = $("#timeframe-pills");
+  if (!target) return;
+  target.replaceChildren();
+  for (const pill of CHART_TIMEFRAME_PILLS) {
+    const button = element("button", pill.label, "timeframe-pill");
+    button.type = "button";
+    button.dataset.timeframe = pill.value;
+    if (pill.live) {
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", () => onChoose(pill.value));
+    } else {
+      button.disabled = true;
+      button.title = pill.reason;
+      button.setAttribute("aria-label", `${pill.label} unavailable: ${pill.reason}`);
+    }
+    target.append(button);
+  }
+}
+
+function renderMarketsList(symbols, onChoose) {
+  const list = $("#markets-list-items");
+  if (!list) return;
+  list.replaceChildren();
+  for (const item of symbols) {
+    const button = element("button", item.symbol, "market-item");
+    button.type = "button";
+    button.dataset.instrumentId = item.instrument_id;
+    button.title = `${item.symbol} · ${item.instrument_id}`;
+    button.addEventListener("click", () => onChoose(item.instrument_id));
+    const row = element("li");
+    row.append(button);
+    list.append(row);
+  }
+  $("#markets-list-count").textContent = `Markets (${symbols.length})`;
+}
+
 async function bootstrap() {
   const instrument = $("#instrument-select");
   const timeframe = $("#timeframe-select");
@@ -1313,6 +1368,8 @@ async function bootstrap() {
       const selection = workspaceSelection(window.location.search, symbols, TIMEFRAMES);
       instrument.value = selection.instrumentId;
       timeframe.value = selection.timeframe;
+      renderMarketsList(symbols, (value) => choose(instrument, value));
+      syncSelectionLists();
       updateRefreshAvailability();
       loadSelectedPreferences();
       await loadSnapshot();
@@ -1326,8 +1383,22 @@ async function bootstrap() {
     }
   };
 
-  instrument.addEventListener("change", () => { snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
-  timeframe.addEventListener("change", () => { snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
+  const syncSelectionLists = () => {
+    for (const button of document.querySelectorAll("#markets-list [data-instrument-id]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.instrumentId === instrument.value));
+    }
+    for (const button of document.querySelectorAll("#timeframe-pills [data-timeframe]")) {
+      if (!button.disabled) button.setAttribute("aria-pressed", String(button.dataset.timeframe === timeframe.value));
+    }
+  };
+  const choose = (select, value) => {
+    if (select.disabled || select.value === value) return;
+    select.value = value;
+    select.dispatchEvent(new Event("change"));
+  };
+  renderTimeframePills((value) => choose(timeframe, value));
+  instrument.addEventListener("change", () => { syncSelectionLists(); snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
+  timeframe.addEventListener("change", () => { syncSelectionLists(); snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });
   $("#beginner-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "beginner" }));

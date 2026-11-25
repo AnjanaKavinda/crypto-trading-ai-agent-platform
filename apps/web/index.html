@@ -64,6 +64,10 @@
           </label>
         </div>
         <p id="instrument-note" class="muted">Instrument options come only from the local research API allowlist.</p>
+        <details id="markets-list" class="markets-list" open>
+          <summary id="markets-list-count">Markets</summary>
+          <ul id="markets-list-items" class="markets-list-items" aria-label="Supported markets"></ul>
+        </details>
         <p id="control-error" class="error-text" role="alert" hidden></p>
       </section>
 
@@ -78,12 +82,17 @@
             <p class="eyebrow">EXACT API CANDLES</p>
             <h2 id="chart-heading">Price and volume</h2>
           </div>
+          <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
           <div id="view-mode" class="mode-pill">Beginner view</div>
         </div>
         <p id="chart-note" class="muted">Chart geometry is display-only. Values and indicators come from the exact response.</p>
         <div id="chart-container" class="chart-container">
           <p class="empty-state">Waiting for a local Spot research snapshot.</p>
         </div>
+        <section id="market-trades-panel" class="unavailable-panel" aria-labelledby="market-trades-heading">
+          <h3 id="market-trades-heading">Market trades — unavailable</h3>
+          <p>Recent trade prints are not collected yet; the trade-history data decision is pending (#355). Nothing is shown or inferred from candles.</p>
+        </section>
         <details class="data-table">
           <summary>Inspect exact OHLCV values returned by the API</summary>
           <div class="table-scroll">

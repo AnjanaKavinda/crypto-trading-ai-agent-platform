@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   axisTimeLabel,
+  CHART_TIMEFRAME_PILLS,
   lastPriceTag,
   normaliseChartWindow,
   panChartWindow,
   priceScale,
   timeAxisIndexes,
+  volumeReferenceLine,
   zoomChartWindow,
 } from "../../apps/web/src/chart-interaction.mjs";
 
@@ -67,4 +69,34 @@ test("last-price tag uses the exact returned close and its direction", () => {
   assert.deepEqual(lastPriceTag(candle("10", "9.50"), candle("9", "10.00")), { text: "9.50", value: 9.5, direction: "down" });
   assert.deepEqual(lastPriceTag(candle("9", "9.50")), { text: "9.50", value: 9.5, direction: "up" });
   assert.equal(lastPriceTag({ values: { close: { numeric: 1 } } }), null);
+});
+
+test("timeframe pills keep only 1h/4h/1d live and give reasons for the rest", () => {
+  assert.deepEqual(CHART_TIMEFRAME_PILLS.filter((pill) => pill.live).map((pill) => pill.value), ["1h", "4h", "1d"]);
+  for (const pill of CHART_TIMEFRAME_PILLS.filter((item) => !item.live)) assert.match(pill.reason, /not served/);
+});
+
+test("volume reference line uses only READY backend trailing averages (synthetic values)", () => {
+  const analysis = {
+    status: "PARTIAL",
+    result: {
+      lookback: 20,
+      points: [
+        { candle_end: "2026-01-01T00:01:00Z", status: "UNAVAILABLE", trailing_average: null },
+        { candle_end: "2026-01-01T00:02:00Z", status: "READY", trailing_average: "1.5000" },
+        { candle_end: "2026-01-01T00:03:00Z", status: "READY", trailing_average: "2.25" },
+        { candle_end: "2026-01-01T00:04:00Z", status: "READY", trailing_average: "NaN" },
+      ],
+    },
+  };
+  assert.deepEqual(volumeReferenceLine(analysis), {
+    lookback: 20,
+    points: [
+      { candleEnd: "2026-01-01T00:02:00Z", value: "1.5000" },
+      { candleEnd: "2026-01-01T00:03:00Z", value: "2.25" },
+    ],
+  });
+  assert.equal(volumeReferenceLine({ ...analysis, status: "UNAVAILABLE" }), null);
+  assert.equal(volumeReferenceLine({ status: "AVAILABLE", result: { lookback: "20", points: analysis.result.points } }), null);
+  assert.equal(volumeReferenceLine(undefined), null);
 });

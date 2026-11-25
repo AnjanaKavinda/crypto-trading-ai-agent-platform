@@ -182,3 +182,30 @@ export function axisTimeLabel(isoTime, timeframe) {
   const text = instant.toISOString();
   return timeframe === "1d" ? text.slice(0, 10) : `${text.slice(5, 10)} ${text.slice(11, 16)}`;
 }
+
+// Timeframe pills on the chart. Only timeframes the research protocol uses are
+// live; the others are shown disabled with the reason, never simulated.
+export const CHART_TIMEFRAME_PILLS = Object.freeze([
+  Object.freeze({ value: "1h", label: "1h", live: true }),
+  Object.freeze({ value: "4h", label: "4h", live: true }),
+  Object.freeze({ value: "1d", label: "1D", live: true }),
+  Object.freeze({ value: "1w", label: "1W", live: false, reason: "Weekly candles are not served by the local research API." }),
+  Object.freeze({ value: "1M", label: "1M", live: false, reason: "Monthly candles are not served by the local research API." }),
+]);
+
+const DECIMAL_TEXT = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+
+// Backend trailing volume average from the volume-confirmation analysis. It is
+// the average of the `lookback` candles before each candle (current excluded),
+// exactly as returned; nothing is recalculated in the browser.
+export function volumeReferenceLine(analysis) {
+  const result = analysis?.result;
+  if (!["AVAILABLE", "PARTIAL"].includes(analysis?.status) || !Number.isInteger(result?.lookback) ||
+      result.lookback < 1 || !Array.isArray(result.points)) return null;
+  const points = result.points.flatMap((point) =>
+    point?.status === "READY" && typeof point.candle_end === "string" &&
+      typeof point.trailing_average === "string" && DECIMAL_TEXT.test(point.trailing_average)
+      ? [{ candleEnd: point.candle_end, value: point.trailing_average }]
+      : []);
+  return points.length > 1 ? { lookback: result.lookback, points } : null;
+}
