@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Trading Desk — Local Research</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./src/desk-shell.mjs"></script>
+  </head>
+  <body class="desk">
+    <header class="app-header desk-header">
+      <div>
+        <p class="eyebrow">LOCAL RESEARCH — TRADING DESK</p>
+        <h1>Trading desk</h1>
+      </div>
+      <div class="desk-status" role="group" aria-label="Desk status">
+        <span id="desk-mode" class="mode-pill">Mode: RESEARCH</span>
+        <span id="desk-live" class="mode-pill desk-live-off" title="This interface has no order, approval or execution path.">Live trading: OFF</span>
+        <span id="desk-freshness" class="mode-pill" role="status" aria-live="polite" data-state="pending">Data freshness (1h): reading stored snapshots…</span>
+      </div>
+    </header>
+    <nav class="desk-tabs-wrap" aria-label="Desk sections">
+      <div id="desk-tabs" class="desk-tabs" role="tablist" aria-label="Desk sections"></div>
+    </nav>
+    <main id="desk-panels"></main>
+    <footer>
+      <strong>LOCAL RESEARCH — READ ONLY</strong>
+      <span>Each tab shows an existing research page with all of its features. Values come only from the local research API; nothing here places, approves or executes trades.</span>
+    </footer>
+  </body>
+</html>
