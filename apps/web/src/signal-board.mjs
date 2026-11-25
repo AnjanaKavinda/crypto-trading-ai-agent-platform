@@ -1,3 +1,4 @@
+import { mountJournal } from "./decision-journal.mjs";
 import { API_ORIGIN } from "./runtime-config.mjs";
 import { evidenceLink, validityLabel } from "./evidence-report.mjs";
 
@@ -213,7 +214,7 @@ export async function bootstrapBoard({ document, fetcher = globalThis.fetch, sea
   let cursor = null; let pageSequence = 0;
   const loader = createSelectionLoader({ fetcher,
     clear(loading) { detail.replaceChildren(); detailStatus.textContent = loading ? "Reading the exact stored record…" : "Select a record. No detail is displayed."; },
-    show(record) { renderRecord(document, detail, record); detailStatus.textContent = "Stored research record loaded. This is not a trade instruction."; },
+    show(record) { renderRecord(document, detail, record); mountJournal(document, detail, record.reference, fetcher); detailStatus.textContent = "Stored research record loaded. This is not a trade instruction."; },
     fail(error) { detail.replaceChildren(); detailStatus.textContent = error.message; },
   });
   async function page(requestedCursor) {

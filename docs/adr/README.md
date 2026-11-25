@@ -40,7 +40,7 @@ contradict an approved contract or cross-cutting artifact.
 | ADR-0028 | [Spot multiple-testing observation boundary](ADR-0028-spot-multiple-testing-observation-boundary.md) | Accepted | 2026-11-15 | AnjanaKavinda (owner Execution Packet for #101) | — | Additive C-105 schema 1; observation-only; no qualification or retention | — | — |
 | ADR-0029 | [Validation freshness assessment boundary](ADR-0029-validation-freshness-assessment-boundary.md) | Accepted | 2026-11-15 | AnjanaKavinda (owner Execution Packet for #102) | — | Additive C-106 schema 1; observation-only; no qualification or retention | — | — |
 | ADR-0030 | [Spot qualification evidence bridge](ADR-0030-proposed-spot-qualification-evidence-bridge.md) | Accepted | 2026-11-23 | AnjanaKavinda (explicit conversation approval) | — | Additive C-028/C-025/C-070 schema 3 direction; exact contract review before runtime wiring | — | — |
-| ADR-0031 | [Personal Spot research decision journal](ADR-0031-personal-spot-research-decision-journal.md) | Proposed | 2026-11-25 | Platform Architect / owner approval pending | #157 / #299 bounded journal decision | Proposed C-107v1; existing C-044/C-045 unchanged; local retention/write approval pending | — | — |
+| ADR-0031 | [Personal Spot research decision journal](ADR-0031-personal-spot-research-decision-journal.md) | Accepted | 2026-11-25 | AnjanaKavinda / PR #513 merged | #157 / #299 bounded journal decision | C-107v1 first slice; C-044/C-045 unchanged; retained database operations separately gated | — | — |
 
 ## Creating an ADR
 

@@ -41,6 +41,7 @@ from trading_platform_api.analysis.versioned_contracts_v5 import (
 from trading_platform_api.contracts.serialization import (
     canonical_sha256,
 )
+from trading_platform_api.learning.decision_journal import ResearchDecisionJournalEntry
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
 from trading_platform_api.lineage.codec import (
     LineageError,
@@ -125,6 +126,8 @@ class Reference:
 
 
 def _reference_content_sha256(record: object) -> str:
+    if type(record) is ResearchDecisionJournalEntry:
+        return record.content_sha256
     if type(record) is AnalysisSnapshotV4:
         return record.content_sha256
     if type(record) is StrategyVersion or type(record) is StrategyVersionV2:
@@ -194,6 +197,8 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 
 
 def references(record: object) -> tuple[Reference, ...]:
+    if type(record) is ResearchDecisionJournalEntry:
+        return _typed_contract_references(record)
     if type(record) is ValidationFreshnessAssessmentV1:
         raise LineageError(
             "C-106v1 retention is not authorized by the observation boundary."
@@ -634,6 +639,7 @@ def _where(key: LineageKey, table=records):
 
 def _occurred_at(record: object) -> datetime | None:
     for attribute in (
+        "recorded_at",
         "occurred_at",
         "created_at",
         "evaluated_at",

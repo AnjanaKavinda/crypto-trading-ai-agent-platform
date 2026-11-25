@@ -24,6 +24,7 @@ from trading_platform_api.docker_local import (
     load_docker_local_settings,
 )
 from trading_platform_api.health import create_router as create_health_router
+from trading_platform_api.journal_api import JournalService, create_journal_router
 from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
 from trading_platform_api.persistence import (
     create_async_engine_instance,
@@ -241,6 +242,9 @@ def create_app(
         if strategy_signal_service is not None
         else default_strategy_service
     )
+    app.state.journal_service = (
+        JournalService(session_factory) if session_factory is not None else None
+    )
     if docker_settings is not None:
         allowed_origin = docker_settings.origin
     elif allowed_origin is None:
@@ -265,6 +269,7 @@ def create_app(
     app.include_router(create_health_router())
     app.include_router(create_research_router())
     app.include_router(create_strategy_signal_router())
+    app.include_router(create_journal_router())
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(
