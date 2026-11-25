@@ -53,6 +53,54 @@ export function priceAxisTicks(minimum, maximum, divisions = 4) {
   });
 }
 
+// Display precision only. It is chosen from a reference value's magnitude
+// (for prices: the latest returned close), e.g. 2 for BTC, 4 for XRP. The
+// exact returned string is never rounded or replaced; it stays on hover.
+export function displayDecimals(reference) {
+  const magnitude = Math.abs(Number(reference));
+  if (!Number.isFinite(magnitude) || magnitude === 0) return 8;
+  if (magnitude >= 100) return 2;
+  if (magnitude >= 1) return 4;
+  if (magnitude >= 0.01) return 6;
+  return 8;
+}
+
+export function formatDisplayNumber(value, decimals) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if ((typeof value !== "number" && typeof value !== "string") || value === "" || !Number.isFinite(numeric)) {
+    return typeof value === "string" ? value : "—";
+  }
+  const digits = Number.isInteger(decimals) ? Math.max(0, Math.min(8, decimals)) : 2;
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(numeric);
+}
+
+// Crosshair readout at display precision. Prices and price-unit indicators
+// (EMA, Bollinger, ATR, VWAP, MACD) use the instrument price decimals;
+// other indicator values (RSI, Stochastic, CCI, volatility) use 2.
+export function candleReadoutText(candle, indicatorValues = [], priceDecimals = 2) {
+  const values = candle?.values;
+  const source = candle?.source;
+  if (!source || typeof source.open_time !== "string" || !values) return "Candle values are unavailable.";
+  const prices = [["O", values.open], ["H", values.high], ["L", values.low], ["C", values.close]];
+  if ([...prices, ["V", values.volume]].some(([, metric]) =>
+    typeof metric?.exact !== "string" || typeof metric?.unit !== "string")) {
+    return "Candle values are unavailable.";
+  }
+  const indicators = Array.isArray(indicatorValues)
+    ? indicatorValues.filter((item) => typeof item?.label === "string" && typeof item?.value === "string")
+    : [];
+  return [
+    source.open_time,
+    `${prices.map(([label, metric]) => `${label} ${formatDisplayNumber(metric.exact, priceDecimals)}`).join(" ")} ${values.close.unit}`,
+    `Vol ${formatDisplayNumber(values.volume.exact, displayDecimals(values.volume.exact))} ${values.volume.unit}`,
+    ...indicators.map(({ label, value, priceUnit }) =>
+      `${label}: ${formatDisplayNumber(value, priceUnit ? priceDecimals : 2)}`),
+  ].join(" · ");
+}
+
 export function candleInspectorText(candle, indicatorValues = []) {
   const values = candle?.values;
   const source = candle?.source;

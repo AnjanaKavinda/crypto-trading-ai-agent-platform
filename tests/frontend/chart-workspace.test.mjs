@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   axisTimeLabel,
+  candleReadoutText,
+  displayDecimals,
+  formatDisplayNumber,
   lastPriceTag,
   normaliseChartWindow,
   panChartWindow,
@@ -67,4 +70,43 @@ test("last-price tag uses the exact returned close and its direction", () => {
   assert.deepEqual(lastPriceTag(candle("10", "9.50"), candle("9", "10.00")), { text: "9.50", value: 9.5, direction: "down" });
   assert.deepEqual(lastPriceTag(candle("9", "9.50")), { text: "9.50", value: 9.5, direction: "up" });
   assert.equal(lastPriceTag({ values: { close: { numeric: 1 } } }), null);
+});
+
+test("display decimals follow instrument price magnitude", () => {
+  assert.equal(displayDecimals("87123.45000000"), 2);
+  assert.equal(displayDecimals("612.30000000"), 2);
+  assert.equal(displayDecimals("2.18340000"), 4);
+  assert.equal(displayDecimals("0.05123000"), 6);
+  assert.equal(displayDecimals("0.00001234"), 8);
+  assert.equal(displayDecimals("not a number"), 8);
+});
+
+test("display formatting rounds for display only and keeps unparseable strings", () => {
+  assert.equal(formatDisplayNumber("87123.45678901", 2), "87,123.46");
+  assert.equal(formatDisplayNumber("2.18345000", 4), "2.1835");
+  assert.equal(formatDisplayNumber(-0.5, 2), "-0.50");
+  assert.equal(formatDisplayNumber("UNDEFINED", 2), "UNDEFINED");
+  assert.equal(formatDisplayNumber(null, 2), "—");
+});
+
+test("crosshair readout formats prices by instrument and other indicators at 2 dp", () => {
+  // Synthetic values for formatting only.
+  const candle = {
+    source: { open_time: "2026-11-25T04:00:00Z" },
+    values: {
+      open: { exact: "2.18340000", unit: "USDT" },
+      high: { exact: "2.20119000", unit: "USDT" },
+      low: { exact: "2.17000000", unit: "USDT" },
+      close: { exact: "2.19876500", unit: "USDT" },
+      volume: { exact: "1234567.80000000", unit: "XRP" },
+    },
+  };
+  assert.equal(
+    candleReadoutText(candle, [
+      { label: "EMA 20", value: "2.191234567", priceUnit: true },
+      { label: "RSI 14", value: "55.12345", priceUnit: false },
+    ], displayDecimals(candle.values.close.exact)),
+    "2026-11-25T04:00:00Z · O 2.1834 H 2.2012 L 2.1700 C 2.1988 USDT · Vol 1,234,567.80 XRP · EMA 20: 2.1912 · RSI 14: 55.12",
+  );
+  assert.equal(candleReadoutText({ source: {}, values: {} }), "Candle values are unavailable.");
 });
