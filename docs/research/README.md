@@ -34,6 +34,38 @@ The report records the dataset, strategy, protocol and cost digests. Changing
 any rule or threshold needs a new strategy or protocol version — never edit
 them after seeing a result.
 
+## Protocol v2 rule: the v1 holdout is now seen
+
+The first real-data study (2026-11-26, `ema-trend-atr-stop` v1, verdict FAIL)
+judged the holdout **2025-05-12T12:00Z → 2026-11-25T12:00Z**. That period is
+now **seen**: it informed the owner's view of the strategy and can no longer
+give an unbiased verdict.
+
+From protocol v2 onwards:
+
+- A new strategy version (or changed rule, parameter, cost or threshold) is
+  developed and tuned only on data **before 2025-05-12T12:00Z**.
+- It is judged only on data it has never seen: either a **walk-forward**
+  split inside the pre-holdout history fixed before running, or a
+  **prospective** period starting after the version is frozen (candles after
+  2026-11-25T12:00Z).
+- A verdict computed on the seen v1 holdout is reported as **in-sample /
+  exploratory**, never as PASS evidence.
+- The protocol version, the development cut-off and the judged period are
+  written down before the study runs.
+
+## Calculation verification (E2d)
+
+`tests/backend/test_research_calculation_verification.py` (synthetic candles):
+
+- **Parity:** `research.indicators` EMA20/EMA50 and Wilder ATR14 equal the
+  registered platform calculators (`analysis/moving_averages.py`,
+  `analysis/volatility.py`) exactly on the same candles.
+- **Golden backtest:** three hand-computed trades — entry at next open plus
+  5 bps slippage, 2×ATR stop, a signal exit, a gap-through stop filled at the
+  open, a stop hit on the entry bar, 10 bps fees on both sides, net return,
+  R multiple and final equity.
+
 ## Data integrity
 
 A candle file is rejected if it has a gap, a misaligned or unclosed candle,
