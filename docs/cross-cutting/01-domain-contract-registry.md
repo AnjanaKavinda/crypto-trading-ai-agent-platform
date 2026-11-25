@@ -1140,3 +1140,34 @@ their schemas and reject these unsupported versions. No provider, dependency,
 migration, persistence or execution change is included. #86/#299 remain open
 for the issuer, approved retention, runtime integration and operational evidence.
 Local validation is limited to consumer-focused tests and changed-file checks.
+
+## C-107 — Personal Spot research decision journal (ADR-0031)
+
+C-107 schema 1 `ResearchDecisionJournalEntry` is an append-only local user
+declaration tied to an exact retained C-026v2, C-023v1 or C-070v2 and its
+C-006v5 Spot context. UUIDv5/content identity uses canonical-json-v1 and the
+explicit journal namespace; every changed fact produces a different identity.
+Source observation preserves recorded projection, reasons, times and the
+complete typed lifecycle event digest when present. Historical/expired sources
+remain historical. `declared_at` and server `recorded_at` are separate; a
+backdated claim never establishes prospective recording.
+
+The only declared actions are ABSTAIN and EXTERNAL_TRADE_INTENT. Identity is
+LOCAL_SESSION_UNAUTHENTICATED; trade facts are unverified and all qualification,
+approval and execution flags are false. This is not C-044 TradeOutcome or
+C-045 Experience. It has no trading, learning-promotion or statistical authority.
+
+The existing PostgreSQL lineage store retains closed C-107v1 payloads and their
+exact references, plus an immutable unique profile/request-ID index. Identical
+retry returns the original; changed content under that key conflicts. Corrections
+append exact parent references and reasons. No update, delete, automatic purge
+or destructive migration is provided. Database backups include journal tables
+and sources; retained-owner-database migration still needs its existing backup
+gate. Migration 0012 was exercised only on a disposable database.
+
+The local research API is `/api/research/decision-journal`: POST saves, GET lists
+(default 20/max 100), GET `/requests/{request_id}` recovers an uncertain save,
+and GET `/{entry_id}?schema_version=1&content_sha256=...` reads an exact entry.
+Writes require configured allowed Origin and bounded JSON (16 KiB). The research
+records page offers an explicit action/save and read-only history; safe text
+notes remain unverified claims. No manual result/cost schema is introduced.

@@ -40,6 +40,7 @@ from trading_platform_api.contracts.serialization import (
     canonical_sha256,
     serialize_contract,
 )
+from trading_platform_api.learning.decision_journal import ResearchDecisionJournalEntry
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
     DataQualityReportV2,
@@ -119,6 +120,7 @@ MODELS = {
     "C-094": SpotBiasAuditResultV2,
     "C-105": SpotMultipleTestingResultV1,
     "C-106": ValidationFreshnessAssessmentV1,
+    "C-107": ResearchDecisionJournalEntry,
     "C-072": MonteCarloResultV2,
     "C-073": SensitivityResultV2,
     "C-074": SpotRegimeValidationResultV2,
@@ -165,6 +167,8 @@ class LineageKey:
 
 
 def key_for(record: object) -> LineageKey:
+    if type(record) is ResearchDecisionJournalEntry:
+        return LineageKey("C-107", str(record.entry_id), "1")
     if type(record) is MarketData:
         return LineageKey("C-001", str(record.market_data_id))
     if type(record) is MarketSnapshot:
@@ -514,6 +518,7 @@ def decode(document: str) -> object:
                 "C-094": schema_version,
                 "C-105": "1",
                 "C-106": "1",
+                "C-107": "1",
                 "C-071": schema_version,
                 "C-029": "2",
                 "C-028": "2",

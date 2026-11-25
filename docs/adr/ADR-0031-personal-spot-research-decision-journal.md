@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-11-25 |
 | Decision owner | Platform Architect |
-| Human approver | Pending exact contract, storage and local write-boundary approval |
+| Human approver | AnjanaKavinda: owner merge of PR #513, confirmed in project conversation 2026-11-25 |
 | Issue | #157; operational coordination #299 |
 | Related decisions | Accepted ADR-0017, ADR-0020, ADR-0009; ADR-0030 unchanged |
 | Contract proposal | Additive C-107 schema 1, ResearchDecisionJournalEntry; identifier unused at verified base |
@@ -150,15 +150,17 @@ journal and must distinguish reported trading from platform readiness,
 backtests, paper/testnet evidence and reconciled execution. This proposal does
 not select their schema or make the full #157/#158 learning engines ready.
 
-No contract implementation, storage/migration, HTTP/UI write, credential,
-qualification, risk, approval, exchange or execution change is authorized by
-this Proposed document. Approval of this exact boundary permits the listed
+While Proposed, this document did not authorize implementation. Owner acceptance
+now permits only the listed contract, storage/migration and HTTP/UI first-slice
+work; no credential, qualification, risk, approval, exchange or execution authority
+is granted. Approval of this exact boundary permits the listed
 first-slice implementation without another routine direction approval;
 concrete contract/storage/security contradictions still return for review.
 Futures follows the actual Spot operational gate, not profitability evidence.
 
 ## Approval record
 
-Pending. The owner's instruction to analyze, refine and execute authorizes
-preparing this concrete missing-boundary proposal; it is not recorded as
-acceptance of an unspecified new contract or write/retention expansion.
+Accepted by owner merge of PR #513 (`b56e55effa096a65c4bb4b7b4ff3f4bf56ec8e48`),
+confirmed by the owner on 2026-11-25. This accepts the exact first-slice contract,
+storage and local write boundary above; it does not approve operations on the
+owner's retained database or enable trading execution.

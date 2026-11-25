@@ -29,7 +29,7 @@ records = Table(
         "contract_id IN ('C-001','C-002','C-003','C-005','C-006','C-007','C-008',"
         "'C-009','C-010','C-012','C-019','C-020','C-021','C-022','C-023','C-024',"
         "'C-025','C-026','C-027','C-028','C-062','C-066','C-067','C-069','C-070','C-091','C-092',"
-        "'C-093','C-101','C-102','C-103')",
+        "'C-093','C-101','C-102','C-103','C-107')",
         name="ck_lineage_contract",
     ),
     CheckConstraint(
@@ -370,5 +370,33 @@ spot_producer_request_reservations = Table(
         "context_record_id IS NULL AND context_version IS NULL AND "
         "context_sha256 IS NULL AND completed_at IS NULL)",
         name="ck_spot_producer_reservation_completion",
+    ),
+)
+
+# Immutable idempotency index; payloads remain in the existing lineage store.
+research_journal_requests = Table(
+    "research_journal_requests",
+    metadata,
+    Column("profile", String(64), primary_key=True),
+    Column("request_id", String(36), primary_key=True),
+    Column("request_sha256", String(64), nullable=False),
+    Column("contract_id", String(5), nullable=False),
+    Column("record_id", String(512), nullable=False),
+    Column("version", String(512), nullable=False),
+    CheckConstraint(
+        "profile = 'PERSONAL_SPOT_RESEARCH' AND contract_id = 'C-107' AND version = '1'",
+        name="ck_journal_request_scope",
+    ),
+    CheckConstraint(
+        "request_sha256 ~ '^[0-9a-f]{64}$'", name="ck_journal_request_digest"
+    ),
+    ForeignKeyConstraint(
+        ["contract_id", "record_id", "version"],
+        [
+            "lineage_records.contract_id",
+            "lineage_records.record_id",
+            "lineage_records.version",
+        ],
+        ondelete="RESTRICT",
     ),
 )
