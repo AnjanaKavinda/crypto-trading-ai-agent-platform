@@ -41,6 +41,7 @@ from trading_platform_api.contracts.serialization import (
     serialize_contract,
 )
 from trading_platform_api.learning.decision_journal import ResearchDecisionJournalEntry
+from trading_platform_api.learning.trade_outcome import OwnerTradeOutcome
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
     DataQualityReportV2,
@@ -121,6 +122,7 @@ MODELS = {
     "C-105": SpotMultipleTestingResultV1,
     "C-106": ValidationFreshnessAssessmentV1,
     "C-107": ResearchDecisionJournalEntry,
+    "C-108": OwnerTradeOutcome,
     "C-072": MonteCarloResultV2,
     "C-073": SensitivityResultV2,
     "C-074": SpotRegimeValidationResultV2,
@@ -169,6 +171,8 @@ class LineageKey:
 def key_for(record: object) -> LineageKey:
     if type(record) is ResearchDecisionJournalEntry:
         return LineageKey("C-107", str(record.entry_id), "1")
+    if type(record) is OwnerTradeOutcome:
+        return LineageKey("C-108", str(record.outcome_id), "1")
     if type(record) is MarketData:
         return LineageKey("C-001", str(record.market_data_id))
     if type(record) is MarketSnapshot:
@@ -519,6 +523,7 @@ def decode(document: str) -> object:
                 "C-105": "1",
                 "C-106": "1",
                 "C-107": "1",
+                "C-108": "1",
                 "C-071": schema_version,
                 "C-029": "2",
                 "C-028": "2",

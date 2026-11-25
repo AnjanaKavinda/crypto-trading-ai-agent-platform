@@ -79,7 +79,7 @@ def test_signal_lifecycle_migration_is_head_and_append_only() -> None:
     assert revision is not None
     assert revision.down_revision == "0008_spot_analysis_lineage"
     assert script_directory.get_revision("0010_strategy_signal_artifacts") is not None
-    assert script_directory.get_heads() == ["0012_research_decision_journal"]
+    assert script_directory.get_heads() == ["0013_owner_trade_outcomes"]
     migration_path = VERSIONS_DIR / "0009_signal_lifecycle.py"
     spec = importlib.util.spec_from_file_location(
         "signal_lifecycle_migration", migration_path
