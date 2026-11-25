@@ -130,7 +130,7 @@ def run_study(
             "holdout_trades": holdout.trades,
         }
 
-    verdict, evidence = decide(protocol, holdout_segments)
+    verdict, evidence = decide(protocol, holdout_segments, symbols)
     development_pooled = trade_stats(
         [trade for segment in development_segments for trade in segment.trades]
     )
