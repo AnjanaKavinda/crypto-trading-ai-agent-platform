@@ -50,3 +50,14 @@ open time. Use `--start 2021-09-30` to begin after them:
 ```powershell
 python -m trading_platform_api.research fetch --start 2021-09-30
 ```
+
+## Strategy markers on the chart (E3)
+
+`GET /api/research/spot/{instrument}/strategy-markers?timeframe=4h&limit=500`
+replays `ema-trend-atr-stop` v1 over the latest persisted snapshot and returns
+BUY/SELL markers with their conditions, EMA20/EMA50/ATR14 values and labelled
+fields (`VERIFIED_FACT`, `RESEARCH_PROPOSAL`, `NOT_APPLICABLE`, `UNAVAILABLE`).
+Add `account_size` (USDT) and `risk_pct` for a position size:
+(account × risk%) ÷ (entry − stop), capped at account ÷ entry (Spot, no
+leverage). Stale or invalid data, or any indicator mismatch, returns no
+markers. Markers cover one snapshot only and are not a strategy verdict.

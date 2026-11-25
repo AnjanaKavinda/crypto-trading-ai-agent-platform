@@ -45,7 +45,9 @@ class DockerLocalSettings:
         path = request.url.path
         return request.method == "GET" and (
             path in {"/health", "/health/live", "/api/research/spot/symbols"}
-            or re.fullmatch(r"/api/research/spot/[A-Za-z0-9._:-]+/candles", path)
+            or re.fullmatch(
+                r"/api/research/spot/[A-Za-z0-9._:-]+/(candles|strategy-markers)", path
+            )
             is not None
         )
 
