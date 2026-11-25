@@ -2953,3 +2953,80 @@ def test_indicator_envelope_distinguishes_undefined_from_warmup() -> None:
 
     assert envelope["status"] == "UNAVAILABLE"
     assert envelope["reason_code"] == "INDICATOR_VALUE_UNDEFINED"
+
+
+class WaveProvider(FakeProvider):
+    """SYNTHETIC alternating-leg prices so the EMA20/EMA50 cross both ways."""
+
+    async def fetch(self, request: MarketDataRequest) -> ProviderBatch:
+        batch = await super().fetch(request)
+        observations = []
+        price = previous = Decimal("100")
+        for index, item in enumerate(batch.market_data):
+            price += Decimal("0.5") if (index // 60) % 2 == 0 else Decimal("-0.5")
+            observations.append(
+                replace(
+                    item,
+                    metrics=(
+                        MetricValue("open", previous, "USDT"),
+                        MetricValue("high", max(previous, price) + 1, "USDT"),
+                        MetricValue("low", min(previous, price) - 1, "USDT"),
+                        MetricValue("close", price, "USDT"),
+                        MetricValue("volume", Decimal("2"), "BTC"),
+                    ),
+                )
+            )
+            previous = price
+        return replace(batch, market_data=tuple(observations))
+
+
+def test_strategy_markers_use_the_persisted_snapshot_and_fail_closed_when_stale() -> (
+    None
+):
+    research, calls, _ = service(quality_policy=policy_template())
+    research.provider_factory = lambda settings: WaveProvider(settings, calls)
+    params = {"timeframe": "1m", "limit": 400}
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=400),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        served = client.get(f"/api/research/spot/{INSTRUMENT}/candles", params=params)
+        markers = client.get(
+            f"/api/research/spot/{INSTRUMENT}/strategy-markers",
+            params={**params, "account_size": "1000", "risk_pct": "1"},
+        )
+        invalid = client.get(
+            f"/api/research/spot/{INSTRUMENT}/strategy-markers",
+            params={**params, "risk_pct": "0"},
+        )
+        research.clock = lambda: NOW + timedelta(minutes=2)
+        stale = client.get(
+            f"/api/research/spot/{INSTRUMENT}/strategy-markers", params=params
+        )
+
+    assert markers.status_code == 200, markers.text
+    payload = markers.json()
+    candles = served.json()
+    assert payload["status"] == "AVAILABLE"
+    assert payload["snapshot_id"] == candles["snapshot_id"]
+    assert payload["markers"], "synthetic wave must produce markers"
+    open_times = [item["open_time"] for item in candles["candles"]]
+    for marker in payload["markers"]:
+        index = open_times.index(marker["time"]["value"])
+        for key, name in (
+            ("ema_20", "ema-20"),
+            ("ema_50", "ema-50"),
+            ("atr_14", "atr-14"),
+        ):
+            point = candles["indicators"][name]["result"]["points"][index]
+            assert marker["indicators"][key]["value"] == point["value"]
+    buy = next(item for item in payload["markers"] if item["side"] == "BUY")
+    if buy["status"] == "FILLED":
+        assert buy["position_size"]["quantity"]["label"] == "RESEARCH_PROPOSAL"
+    assert invalid.status_code == 422
+    assert stale.status_code == 200
+    assert stale.json()["status"] == "UNAVAILABLE"
+    assert stale.json()["reason_code"] == "DATA_QUALITY_STALE"
+    assert stale.json()["markers"] == []

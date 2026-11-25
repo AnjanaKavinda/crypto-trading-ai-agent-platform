@@ -91,6 +91,8 @@ from trading_platform_api.orchestration.spot_request_handoff import (
     SpotRequestAnalysisUnavailable,
     run_spot_analysis_request_handoff,
 )
+from trading_platform_api.research.candles import Candle as ResearchCandle
+from trading_platform_api.research.markers import build_strategy_markers
 from trading_platform_api.spot_research_store import (
     MAX_READ_CANDLES,
     SpotResearchSnapshotNotFound,
@@ -1976,7 +1978,74 @@ def create_research_router() -> APIRouter:
             correlation_id=request.state.correlation_id,
         )
 
+    @router.get("/{instrument_id}/strategy-markers")
+    async def read_strategy_markers(
+        instrument_id: Instrument,
+        request: Request,
+        timeframe: Timeframe,
+        limit: int = Query(ge=2, le=MAX_READ_CANDLES),
+        as_of: datetime | None = None,
+        account_size: Decimal | None = Query(default=None, gt=0),
+        risk_pct: Decimal | None = Query(default=None, gt=0, le=100),
+    ) -> dict[str, Any]:
+        service: SpotResearchService = request.app.state.spot_research_service
+        served = await service.read(
+            instrument_id=instrument_id,
+            timeframe=timeframe,
+            as_of=as_of,
+            limit=limit,
+            correlation_id=request.state.correlation_id,
+        )
+        return strategy_markers_response(
+            served, account_size=account_size, risk_pct=risk_pct
+        )
+
     return router
+
+
+def strategy_markers_response(
+    served: Mapping[str, Any],
+    *,
+    account_size: Decimal | None,
+    risk_pct: Decimal | None,
+) -> dict[str, Any]:
+    """Replay ema-trend-atr-stop v1 over one served, verified snapshot."""
+    candles = tuple(
+        ResearchCandle(
+            open_time=datetime.fromisoformat(item["open_time"].replace("Z", "+00:00")),
+            open=Decimal(item["metrics"]["open"]["value"]),
+            high=Decimal(item["metrics"]["high"]["value"]),
+            low=Decimal(item["metrics"]["low"]["value"]),
+            close=Decimal(item["metrics"]["close"]["value"]),
+            volume=Decimal(item["metrics"]["volume"]["value"]),
+        )
+        for item in served["candles"]
+    )
+    try:
+        markers = build_strategy_markers(
+            candles=candles,
+            data_quality_status=served["data_quality"]["status"],
+            indicators=served["indicators"],
+            account_size=account_size,
+            risk_pct=risk_pct,
+        )
+    except (ArithmeticError, ValueError) as exc:
+        raise SpotResearchError(
+            status=422,
+            code="STRATEGY_MARKERS_INVALID_INPUT",
+            title="Strategy markers unavailable",
+            detail=str(exc),
+        ) from exc
+    return {
+        "instrument_id": served["instrument_id"],
+        "symbol": served["symbol"],
+        "timeframe": served["timeframe"],
+        "as_of": served["as_of"],
+        "snapshot_id": served["snapshot_id"],
+        "data_quality_status": served["data_quality"]["status"],
+        "quality_report_id": served["data_quality"]["report_id"],
+        **markers,
+    }
 
 
 def install_research_routes(app: FastAPI) -> None:
