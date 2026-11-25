@@ -8,7 +8,8 @@ Verdict rules (holdout segment, all symbols pooled):
 
 - INCONCLUSIVE when fewer than ``min_holdout_trades`` trades exist.
 - FAIL when pooled expectancy <= 0, the equal-weight portfolio return <= 0
-  (does not beat cash), portfolio max drawdown exceeds the limit, or the
+  (does not beat cash), portfolio max drawdown exceeds its limit, any single
+  symbol's max drawdown (whole equity in that coin) exceeds its limit, or the
   portfolio return/drawdown ratio is below buy-and-hold's.
 - PASS only when none of the above apply, the profit factor reaches
   ``min_profit_factor`` and the bootstrap lower bound of the mean trade
@@ -38,6 +39,7 @@ class EvaluationProtocol:
     holdout_fraction: Decimal = Decimal("0.30")
     min_holdout_trades: int = 30
     max_portfolio_drawdown: Decimal = Decimal("0.30")
+    max_symbol_drawdown: Decimal = Decimal("0.40")
     min_profit_factor: Decimal = Decimal("1.20")
     bootstrap_resamples: int = 5000
     bootstrap_lower_quantile: Decimal = Decimal("0.05")
@@ -143,7 +145,15 @@ def bootstrap_lower_bound(
 def decide(
     protocol: EvaluationProtocol,
     holdout: Sequence[SegmentResult],
+    symbols: Sequence[str] | None = None,
 ) -> tuple[Verdict, dict[str, object]]:
+    names = (
+        list(symbols)
+        if symbols is not None
+        else [f"SYMBOL_{index + 1}" for index in range(len(holdout))]
+    )
+    if len(names) != len(holdout):
+        raise ValueError("One symbol name is required per holdout segment.")
     pooled = [trade for segment in holdout for trade in segment.trades]
     stats = trade_stats(pooled)
     strategy = curve_stats(portfolio_curve([item.equity for item in holdout]))
@@ -175,7 +185,13 @@ def decide(
     if strategy.total_return <= 0:
         failures.append("DOES_NOT_BEAT_CASH")
     if strategy.max_drawdown > protocol.max_portfolio_drawdown:
-        failures.append("DRAWDOWN_LIMIT_EXCEEDED")
+        failures.append("PORTFOLIO_DRAWDOWN_LIMIT_EXCEEDED")
+    for name, segment in zip(names, holdout):
+        symbol_drawdown = curve_stats(segment.equity).max_drawdown
+        if symbol_drawdown > protocol.max_symbol_drawdown:
+            failures.append(
+                f"SYMBOL_DRAWDOWN_LIMIT_EXCEEDED: {name} {(symbol_drawdown * 100):.2f}%"
+            )
     if holding.return_to_drawdown is not None and (
         strategy.return_to_drawdown is None
         and strategy.total_return <= holding.total_return
