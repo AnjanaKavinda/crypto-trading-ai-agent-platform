@@ -18,6 +18,27 @@ from trading_platform_api.config import AppSettings, load_app_settings
 PROXY_HEADER = "x-local-proxy-secret"
 IMAGE_MARKER = Path("/usr/local/share/trading-platform/docker-local")
 
+# Read-only endpoints the same-origin web app fetches without an Origin header.
+ORIGINLESS_GET_PATHS = frozenset(
+    {
+        "/health",
+        "/health/live",
+        "/api/research/spot/symbols",
+        "/api/research/strategy-signals",
+        "/api/research/decision-journal",
+        "/api/research/owner-outcomes",
+    }
+)
+_UUID = r"[0-9A-Fa-f-]{32,36}"
+ORIGINLESS_GET_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"/api/research/spot/[A-Za-z0-9._:-]+/(candles|strategy-markers)",
+        rf"/api/research/strategy-signals/C-[0-9]{{3}}/{_UUID}(/evidence)?",
+        rf"/api/research/(decision-journal|owner-outcomes)/(requests/)?{_UUID}",
+    )
+)
+
 
 @dataclass(frozen=True)
 class DockerLocalSettings:
@@ -44,11 +65,8 @@ class DockerLocalSettings:
         # endpoints may use that exception.
         path = request.url.path
         return request.method == "GET" and (
-            path in {"/health", "/health/live", "/api/research/spot/symbols"}
-            or re.fullmatch(
-                r"/api/research/spot/[A-Za-z0-9._:-]+/(candles|strategy-markers)", path
-            )
-            is not None
+            path in ORIGINLESS_GET_PATHS
+            or any(pattern.fullmatch(path) for pattern in ORIGINLESS_GET_PATTERNS)
         )
 
 
