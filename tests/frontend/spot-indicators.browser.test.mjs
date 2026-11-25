@@ -1187,7 +1187,7 @@ for (const delayedAction of ["read", "refresh"]) {
         requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
       assert.equal(await page.locator("#timeframe-select").inputValue(), "5m");
       assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Timeframe\n5m"));
-      assert.match(await page.locator("#chart-container svg title").textContent(), /5m/);
+      assert.match(await page.locator("#chart-container svg > title").textContent(), /5m/);
     } finally {
       releaseResponse();
       await page.close();
@@ -1208,6 +1208,17 @@ test("chart workspace zooms, pans, switches scale and shows the exact last close
       await page.locator("#chart-container .last-price-tag").getAttribute("data-last-price"),
       fixture.candles.at(-1).metrics.close.value,
     );
+    // Synthetic fixture: last close "100.7400" is shown at 2 dp, exact on hover.
+    assert.equal(await page.locator("#chart-container .last-price-text").textContent(), "100.74");
+    assert.match(await page.locator("#chart-container .last-price-tag title").textContent(), /100\.7400 USDT/);
+    await page.locator("#chart-container svg").focus();
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowLeft");
+    const inspector = page.locator("#chart-inspector");
+    assert.match(await inspector.textContent(), / C 100\.73 USDT/);
+    assert.match(await inspector.getAttribute("data-exact"), /Close: 100\.7300 USDT/);
+    assert.match(await inspector.getAttribute("title"), /^Exact returned values: /);
+    assert.match(await page.locator("#market-trades").innerText(), /Market trades — unavailable[\s\S]*#355/);
     const requestsBefore = apiRequests.length;
     await page.locator('[data-chart-action="zoom-in"]').click();
     assert.equal(await wicks(), 25);
@@ -1247,7 +1258,7 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
     assert.equal(await market.getAttribute("aria-pressed"), "true");
     assert.match(await page.locator("#markets-list-count").textContent(), /Markets \(1\)/);
     // Market trades are unavailable, never inferred.
-    assert.match(await page.locator("#market-trades-panel").innerText(), /unavailable[\s\S]*#355/);
+    assert.match(await page.locator("#market-trades").innerText(), /unavailable[\s\S]*#355/);
     // Weekly/monthly pills are disabled with a reason; live pills load that timeframe.
     for (const value of ["1w", "1M"]) {
       const pill = page.locator(`#timeframe-pills [data-timeframe="${value}"]`);
