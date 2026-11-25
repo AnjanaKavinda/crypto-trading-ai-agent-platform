@@ -76,3 +76,109 @@ export function candleInspectorText(candle, indicatorValues = []) {
     ...returnedIndicators,
   ].join(" · ");
 }
+
+// ---- Chart workspace view (U2): display geometry only, never new values. ----
+
+export const CHART_SCALE_MODES = Object.freeze(["auto", "log", "percent"]);
+export const MIN_VISIBLE_CANDLES = 10;
+
+// The visible window is a contiguous slice of the returned candles. The
+// default (null) view shows every returned candle.
+export function normaliseChartWindow(view, candleCount) {
+  if (!Number.isInteger(candleCount) || candleCount < 1) return null;
+  const minimum = Math.min(MIN_VISIBLE_CANDLES, candleCount);
+  const count = Number.isInteger(view?.count)
+    ? Math.max(minimum, Math.min(candleCount, view.count))
+    : candleCount;
+  const start = Number.isInteger(view?.start)
+    ? Math.max(0, Math.min(candleCount - count, view.start))
+    : candleCount - count;
+  return { start, count };
+}
+
+// factor < 1 zooms in, > 1 zooms out. anchor (0..1) keeps that point of the
+// visible window fixed, e.g. the pointer position.
+export function zoomChartWindow(view, factor, candleCount, anchor = 1) {
+  const current = normaliseChartWindow(view, candleCount);
+  if (!current || !Number.isFinite(factor) || factor <= 0) return current;
+  const fraction = Number.isFinite(anchor) ? Math.max(0, Math.min(1, anchor)) : 1;
+  let count = Math.round(current.count * factor);
+  if (count === current.count) count += factor < 1 ? -1 : factor > 1 ? 1 : 0;
+  const pivot = current.start + fraction * (current.count - 1);
+  const next = normaliseChartWindow({ count, start: 0 }, candleCount);
+  return normaliseChartWindow(
+    { count: next.count, start: Math.round(pivot - fraction * (next.count - 1)) },
+    candleCount,
+  );
+}
+
+export function panChartWindow(view, deltaCandles, candleCount) {
+  const current = normaliseChartWindow(view, candleCount);
+  if (!current || !Number.isFinite(deltaCandles)) return current;
+  return normaliseChartWindow(
+    { count: current.count, start: current.start + Math.round(deltaCandles) },
+    candleCount,
+  );
+}
+
+// Returns a projection for the price pane. "auto" is linear in price, "log"
+// is linear in log10(price) and "percent" is linear in change from the first
+// visible close (base). Log falls back to auto when any value is not > 0.
+export function priceScale({ minimum, maximum, mode = "auto", base, divisions = 4 }) {
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum <= minimum) return null;
+  let effective = CHART_SCALE_MODES.includes(mode) ? mode : "auto";
+  let reason = null;
+  if (effective === "log" && minimum <= 0) {
+    effective = "auto";
+    reason = "Log scale needs every plotted value above zero; showing Auto.";
+  }
+  if (effective === "percent" && !(Number.isFinite(base) && base > 0)) {
+    effective = "auto";
+    reason = "Percent scale needs a positive first visible close; showing Auto.";
+  }
+  const transform = effective === "log"
+    ? (value) => Math.log10(value)
+    : (value) => value;
+  const low = transform(minimum);
+  const high = transform(maximum);
+  const fractionOf = (value) => {
+    if (!Number.isFinite(value) || (effective === "log" && value <= 0)) return null;
+    return (high - transform(value)) / (high - low);
+  };
+  const ticks = Array.from({ length: divisions + 1 }, (_, index) => {
+    const fraction = index / divisions;
+    const scaled = high - fraction * (high - low);
+    const value = effective === "log" ? 10 ** scaled : scaled;
+    const label = effective === "percent"
+      ? `${value / base >= 1 ? "+" : ""}${((value / base - 1) * 100).toFixed(2)}%`
+      : null;
+    return { fraction, value, label };
+  });
+  return { mode: effective, reason, fractionOf, ticks };
+}
+
+// Evenly spaced candle indexes for the date axis and vertical grid lines.
+export function timeAxisIndexes(visibleCount, divisions = 4) {
+  if (!Number.isInteger(visibleCount) || visibleCount < 1) return [];
+  if (visibleCount === 1) return [0];
+  const steps = Math.max(1, Math.min(divisions, visibleCount - 1));
+  return [...new Set(Array.from({ length: steps + 1 }, (_, index) =>
+    Math.round(index * (visibleCount - 1) / steps)))];
+}
+
+// The last-price tag shows the exact returned close of the latest candle.
+export function lastPriceTag(candle, previousCandle) {
+  const close = candle?.values?.close;
+  if (typeof close?.exact !== "string" || !Number.isFinite(close.numeric)) return null;
+  const reference = previousCandle?.values?.close?.numeric ?? candle.values.open?.numeric;
+  const direction = Number.isFinite(reference) && close.numeric < reference ? "down" : "up";
+  return { text: close.exact, value: close.numeric, direction };
+}
+
+// UTC date-axis label: date only for daily candles, date and time otherwise.
+export function axisTimeLabel(isoTime, timeframe) {
+  const instant = typeof isoTime === "string" ? new Date(isoTime) : null;
+  if (!instant || Number.isNaN(instant.valueOf())) return "";
+  const text = instant.toISOString();
+  return timeframe === "1d" ? text.slice(0, 10) : `${text.slice(5, 10)} ${text.slice(11, 16)}`;
+}

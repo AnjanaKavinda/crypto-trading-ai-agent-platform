@@ -1,8 +1,14 @@
 import {
+  axisTimeLabel,
   chartIndexAtPointer,
   candleInspectorText,
+  lastPriceTag,
   moveChartSelection,
-  priceAxisTicks,
+  normaliseChartWindow,
+  panChartWindow,
+  priceScale,
+  timeAxisIndexes,
+  zoomChartWindow,
 } from "./chart-interaction.mjs";
 import {
   listSupportedSymbols,
@@ -638,18 +644,97 @@ function numberForPlot(exact) {
   return Number.isFinite(value) ? value : null;
 }
 
-function makeLine(values, candleIndexes, min, max, top, height, left, width) {
-  const positions = [];
+function linearY(min, max, top, height) {
   const span = max === min ? Math.max(Math.abs(max) * 0.02, 1) : max - min;
+  return (value) => top + height - ((value - min) / span) * height;
+}
+
+function makeLine(values, candleIndexes, yOf, left, width) {
+  const positions = [];
   for (const item of values) {
     const index = candleIndexes.get(Date.parse(item.candleEnd));
     const value = numberForPlot(item.value);
     if (index === undefined || value === null) continue;
+    const y = yOf(value);
+    if (y === null || !Number.isFinite(y)) continue;
     const x = left + (candleIndexes.size <= 1 ? width / 2 : index * width / (candleIndexes.size - 1));
-    const y = top + height - ((value - min) / span) * height;
     positions.push(`${x},${y}`);
   }
   return positions.length > 1 ? positions.join(" ") : "";
+}
+
+// Display-only chart view state (visible window and price scale). It never
+// changes which values are returned; it resets when the snapshot changes.
+const chartView = { key: null, window: null, scale: "auto" };
+
+function syncChartView(snapshot, candleCount) {
+  const key = `${snapshot.snapshot_id}|${snapshot.instrument_id}|${snapshot.timeframe}|${candleCount}`;
+  if (chartView.key !== key) {
+    chartView.key = key;
+    chartView.window = null;
+  }
+  return normaliseChartWindow(chartView.window, candleCount);
+}
+
+function renderChartToolbar(snapshot, preferences, view, candleCount, scale) {
+  const toolbar = element("div", undefined, "chart-toolbar");
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", "Chart view controls (display only)");
+  const rerender = (action) => {
+    renderChart(snapshot, preferences);
+    $(`#chart-container [data-chart-action="${action}"]`)?.focus();
+  };
+  const button = (action, label, title, onClick, pressed) => {
+    const node = element("button", label, "chart-tool");
+    node.type = "button";
+    node.dataset.chartAction = action;
+    node.title = title;
+    if (pressed !== undefined) node.setAttribute("aria-pressed", String(pressed));
+    node.addEventListener("click", () => { onClick(); rerender(action); });
+    return node;
+  };
+  const scaleGroup = element("span", undefined, "chart-tool-group");
+  scaleGroup.setAttribute("role", "group");
+  scaleGroup.setAttribute("aria-label", "Price scale");
+  for (const [mode, label, title] of [
+    ["auto", "Auto", "Linear price scale fitted to the visible candles"],
+    ["log", "Log", "Logarithmic price scale"],
+    ["percent", "%", "Percent change from the first visible close"],
+  ]) {
+    scaleGroup.append(button(`scale-${mode}`, label, title, () => { chartView.scale = mode; }, chartView.scale === mode));
+  }
+  const zoomGroup = element("span", undefined, "chart-tool-group");
+  zoomGroup.setAttribute("role", "group");
+  zoomGroup.setAttribute("aria-label", "Zoom and pan");
+  const step = Math.max(1, Math.round(view.count / 4));
+  zoomGroup.append(
+    button("zoom-in", "+", "Zoom in (also mouse wheel or + key on the chart)", () => {
+      chartView.window = zoomChartWindow(view, 0.5, candleCount);
+    }),
+    button("zoom-out", "−", "Zoom out (also mouse wheel or - key on the chart)", () => {
+      chartView.window = zoomChartWindow(view, 2, candleCount);
+    }),
+    button("pan-left", "◀", "Show earlier candles (also drag the chart)", () => {
+      chartView.window = panChartWindow(view, -step, candleCount);
+    }),
+    button("pan-right", "▶", "Show later candles (also drag the chart)", () => {
+      chartView.window = panChartWindow(view, step, candleCount);
+    }),
+    button("reset", "Reset", "Show every returned candle with the Auto scale", () => {
+      chartView.window = null;
+      chartView.scale = "auto";
+    }),
+  );
+  const range = element(
+    "span",
+    `Showing candles ${view.start + 1}–${view.start + view.count} of ${candleCount} · scale: ${scale.mode === "percent" ? "%" : scale.mode === "log" ? "Log" : "Auto"}`,
+    "chart-view-range",
+  );
+  range.id = "chart-view-range";
+  range.setAttribute("role", "status");
+  toolbar.append(scaleGroup, zoomGroup, range);
+  if (scale.reason) toolbar.append(element("span", scale.reason, "chart-view-note"));
+  return toolbar;
 }
 
 function renderChart(snapshot, preferences) {
@@ -660,7 +745,11 @@ function renderChart(snapshot, preferences) {
     target.append(element("p", response.error, "empty-state"));
     return;
   }
-  const candles = response.candles;
+  const allCandles = response.candles;
+  const view = syncChartView(snapshot, allCandles.length);
+  const candles = allCandles.slice(view.start, view.start + view.count);
+  const candleIndexes = new Map(candles.map(({ source }, index) => [Date.parse(source.close_time), index]));
+  const inView = (point) => candleIndexes.has(Date.parse(point.candleEnd));
   const vwapAnalysis = snapshot.spot_analysis?.vwap;
   const vwapBindingError = spotAnalysisBindingError(snapshot, "vwap", vwapAnalysis);
   const vwapPoints = snapshot.data_quality?.status === "VALID" &&
@@ -737,30 +826,36 @@ function renderChart(snapshot, preferences) {
   const volumeTop = panelsTop + separatePanels.length * (panelHeight + panelGap) + 5;
   const height = volumeTop + volumeHeight + 20;
   const visiblePriceValues = [...lows, ...highs];
-  for (const point of vwapPoints) {
+  for (const point of vwapPoints.filter(inView)) {
     const number = numberForPlot(point.value);
     if (number !== null) visiblePriceValues.push(number);
   }
-  for (const [, points] of emaSeries) for (const point of points) {
+  for (const [, points] of emaSeries) for (const point of points.filter(inView)) {
     const number = numberForPlot(point.value);
     if (number !== null) visiblePriceValues.push(number);
   }
-  for (const [, points] of bands) for (const point of points) {
+  for (const [, points] of bands) for (const point of points.filter(inView)) {
     const number = numberForPlot(point.value);
     if (number !== null) visiblePriceValues.push(number);
   }
   let priceMin = Math.min(...visiblePriceValues);
   let priceMax = Math.max(...visiblePriceValues);
   const padding = priceMax === priceMin ? Math.max(Math.abs(priceMax) * 0.02, 1) : (priceMax - priceMin) * 0.06;
-  priceMin -= padding;
+  const logScaleUsable = chartView.scale !== "log" || priceMin - padding > 0;
+  priceMin = logScaleUsable ? priceMin - padding : priceMin;
   priceMax += padding;
-  const candleIndexes = new Map(candles.map(({ source }, index) => [Date.parse(source.close_time), index]));
+  const scale = priceScale({
+    minimum: priceMin,
+    maximum: priceMax,
+    mode: chartView.scale,
+    base: candles[0].values.close.numeric,
+  });
   const svg = svgNode("svg", {
     viewBox: `0 0 ${width} ${height}`,
     role: "group",
     "aria-labelledby": "chart-svg-title chart-svg-desc",
     "aria-describedby": "chart-inspector",
-    "aria-label": `${snapshot.symbol} ${snapshot.timeframe} candle chart. Use left and right arrow keys to inspect candles.`,
+    "aria-label": `${snapshot.symbol} ${snapshot.timeframe} candle chart. Use left and right arrow keys to inspect candles, plus and minus to zoom.`,
     tabindex: "0",
     focusable: "true",
   });
@@ -770,21 +865,32 @@ function renderChart(snapshot, preferences) {
   const description = svgNode("desc", { id: "chart-svg-desc" });
   description.textContent = `${candles.length} returned finalized candles. Hover over a candle or focus the chart and use the arrow keys to inspect exact returned values.`;
   svg.append(description);
-  const priceSpan = priceMax - priceMin;
   const priceUnit = candles.at(-1).values.close.unit;
   const formatPrice = (value) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(value);
-  const priceY = (value) => priceTop + priceHeight - ((value - priceMin) / priceSpan) * priceHeight;
-  for (const { fraction, value } of priceAxisTicks(priceMin, priceMax, 4)) {
+  const priceY = (value) => {
+    const fraction = scale.fractionOf(value);
+    return fraction === null ? null : priceTop + fraction * priceHeight;
+  };
+  for (const { fraction, value, label } of scale.ticks) {
     const y = priceTop + fraction * priceHeight;
     svg.append(svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "gridline" }));
-    const tick = svgText(svg, width - right + 8, y + 4, formatPrice(value), "axis-label price-axis-tick");
+    const tick = svgText(svg, width - right + 8, y + 4, label ?? formatPrice(value), "axis-label price-axis-tick");
     tick.setAttribute("text-anchor", "start");
   }
-  svgText(svg, 8, 16, `PRICE · ${priceUnit}`);
+  const xOf = (index) => left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
+  for (const index of timeAxisIndexes(candles.length, 5)) {
+    const x = xOf(index);
+    svg.append(svgNode("line", {
+      x1: x, x2: x, y1: priceTop, y2: volumeTop + volumeHeight, class: "gridline gridline-time",
+    }));
+    const label = svgText(svg, x, height - 4, axisTimeLabel(candles[index].source.open_time, snapshot.timeframe), "axis-label time-axis-tick");
+    label.setAttribute("text-anchor", index === 0 ? "start" : index === candles.length - 1 ? "end" : "middle");
+  }
+  svgText(svg, 8, 16, `PRICE · ${priceUnit}${scale.mode === "log" ? " · log" : scale.mode === "percent" ? " · % from first visible close" : ""}`);
   svgText(svg, 8, volumeTop - 6, "VOLUME");
   const candleWidth = Math.max(1, Math.min(8, plotWidth / candles.length * 0.62));
-  candles.forEach(({ source, values }, index) => {
-    const x = left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
+  candles.forEach(({ values }, index) => {
+    const x = xOf(index);
     const y = priceY;
     const up = values.close.numeric >= values.open.numeric;
     svg.append(svgNode("line", {
@@ -806,24 +912,20 @@ function renderChart(snapshot, preferences) {
       height: volumeBarHeight,
       class: "volume-bar",
     }));
-    if (index === 0 || index === candles.length - 1 || index === Math.floor(candles.length / 2)) {
-      const label = svgText(svg, x, height - 4, isoText(source.open_time).split(" · ")[0], "axis-label");
-      label.setAttribute("text-anchor", index === 0 ? "start" : index === candles.length - 1 ? "end" : "middle");
-    }
   });
   for (const [id, points] of [...emaSeries, ...bands]) {
-    const polyline = makeLine(points, candleIndexes, priceMin, priceMax, priceTop, priceHeight, left, plotWidth);
+    const polyline = makeLine(points, candleIndexes, priceY, left, plotWidth);
     const lineClass = ["upper", "middle", "lower"].includes(id) ? `bollinger-${id}` : id;
     if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${lineClass}` }));
   }
-  const vwapLine = makeLine(vwapPoints, candleIndexes, priceMin, priceMax, priceTop, priceHeight, left, plotWidth);
+  const vwapLine = makeLine(vwapPoints, candleIndexes, priceY, left, plotWidth);
   if (vwapLine) {
     svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line" }));
   }
   for (const [panelIndex, panel] of separatePanels.entries()) {
     const top = panelsTop + panelIndex * (panelHeight + panelGap);
     const numbers = panel.series.flatMap(([, points]) =>
-      points.map((point) => numberForPlot(point.value)),
+      points.filter(inView).map((point) => numberForPlot(point.value)),
     ).filter((value) => value !== null);
     if (!numbers.length) continue;
     let min = Math.min(...numbers);
@@ -833,7 +935,7 @@ function renderChart(snapshot, preferences) {
     if (min === max) max = min + Math.max(Math.abs(min) * 0.02, 1);
     svgText(svg, 8, top - 6, panel.label);
     panel.series.forEach(([className, points], seriesIndex) => {
-      const polyline = makeLine(points, candleIndexes, min, max, top, panelHeight, left, plotWidth);
+      const polyline = makeLine(points, candleIndexes, linearY(min, max, top, panelHeight), left, plotWidth);
       if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${className}` }));
       svgText(svg, left + seriesIndex * 150, top - 6, className.replaceAll("-", " "), "legend-text");
     });
@@ -849,6 +951,22 @@ function renderChart(snapshot, preferences) {
     label.setAttribute("class", `legend-text legend-${item.className}`);
   });
   svgText(svg, left, volumeTop - 6, "Volume · backend values", "legend-text");
+  const tag = lastPriceTag(allCandles.at(-1), allCandles.at(-2));
+  const tagY = tag ? priceY(tag.value) : null;
+  if (tag && tagY !== null) {
+    const y = Math.max(priceTop, Math.min(priceTop + priceHeight, tagY));
+    const group = svgNode("g", { class: `last-price-tag last-price-${tag.direction}`, "data-last-price": tag.text });
+    group.append(
+      svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "last-price-line" }),
+      svgNode("rect", { x: width - right + 2, y: y - 10, width: right - 6, height: 20, rx: 3, class: "last-price-box" }),
+    );
+    const text = svgNode("text", { x: width - right + 8, y: y + 4, class: "last-price-text" });
+    text.textContent = tag.text;
+    group.setAttribute("role", "img");
+    group.setAttribute("aria-label", `Last returned close: ${tag.text} ${priceUnit}${tagY !== y ? " (outside the visible range)" : ""}`);
+    group.append(text);
+    svg.append(group);
+  }
 
   const crosshair = svgNode("line", {
     x1: 0, x2: 0, y1: priceTop, y2: volumeTop + volumeHeight,
@@ -864,7 +982,7 @@ function renderChart(snapshot, preferences) {
   const inspectCandle = (requestedIndex) => {
     const index = Math.max(0, Math.min(candles.length - 1, requestedIndex));
     const candle = candles[index];
-    const x = left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
+    const x = xOf(index);
     crosshair.setAttribute("x1", String(x));
     crosshair.setAttribute("x2", String(x));
     crosshair.setAttribute("visibility", "visible");
@@ -901,8 +1019,40 @@ function renderChart(snapshot, preferences) {
       candleCount: candles.length,
     });
   };
-  svg.addEventListener("pointermove", (event) => inspectCandle(indexAtPointer(event)));
+  let drag = null;
+  svg.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    drag = { clientX: event.clientX, width: svg.getBoundingClientRect().width };
+  });
+  svg.addEventListener("pointerup", (event) => {
+    const started = drag;
+    drag = null;
+    if (!started || started.width <= 0) return;
+    const viewDx = ((event.clientX - started.clientX) / started.width) * width;
+    const delta = -Math.round((viewDx / plotWidth) * Math.max(1, candles.length - 1));
+    if (delta === 0) return;
+    chartView.window = panChartWindow(view, delta, allCandles.length);
+    renderChart(snapshot, preferences);
+  });
+  svg.addEventListener("pointermove", (event) => {
+    if (!drag) inspectCandle(indexAtPointer(event));
+  });
+  svg.addEventListener("wheel", (event) => {
+    if (!event.deltaY) return;
+    event.preventDefault();
+    const index = indexAtPointer(event);
+    const anchor = index === null || candles.length <= 1 ? 1 : index / (candles.length - 1);
+    chartView.window = zoomChartWindow(view, event.deltaY < 0 ? 0.8 : 1.25, allCandles.length, anchor);
+    renderChart(snapshot, preferences);
+  }, { passive: false });
   svg.addEventListener("keydown", (event) => {
+    if (["+", "=", "-", "_"].includes(event.key)) {
+      event.preventDefault();
+      chartView.window = zoomChartWindow(view, ["+", "="].includes(event.key) ? 0.5 : 2, allCandles.length);
+      renderChart(snapshot, preferences);
+      $("#chart-container svg")?.focus();
+      return;
+    }
     const current = Number(svg.dataset.inspectedIndex ?? candles.length - 1);
     const next = moveChartSelection(current, event.key, candles.length);
     if (next !== null) {
@@ -911,7 +1061,7 @@ function renderChart(snapshot, preferences) {
     }
   });
   inspectCandle(candles.length - 1);
-  target.append(svg, inspector);
+  target.append(renderChartToolbar(snapshot, preferences, view, allCandles.length, scale), svg, inspector);
 }
 
 function renderCandles(snapshot) {
