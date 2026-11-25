@@ -199,3 +199,13 @@ footer strong { color: #ccecff; }
 .chart-container .last-price-up .last-price-box { fill: #0e8c67; }
 .chart-container .last-price-down .last-price-box { fill: #b44855; }
 .chart-container .last-price-text { fill: #ffffff; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.timeframe-pills { display: flex; gap: .3rem; flex-wrap: wrap; }
+.timeframe-pill { padding: .25rem .6rem; border-radius: 999px; }
+.timeframe-pill[aria-pressed="true"], .market-item[aria-pressed="true"] { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+.timeframe-pill:disabled { opacity: .45; cursor: not-allowed; }
+.markets-list { margin-top: .6rem; }
+.markets-list summary { cursor: pointer; color: var(--muted); }
+.markets-list-items { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: .5rem 0 0; }
+.volume-average-line { stroke: #f1d48e; stroke-width: 1.5; fill: none; }
+.legend-volume-average-line { fill: #f1d48e; }

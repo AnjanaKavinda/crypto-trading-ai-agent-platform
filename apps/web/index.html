@@ -64,6 +64,10 @@
           </label>
         </div>
         <p id="instrument-note" class="muted">Instrument options come only from the local research API allowlist.</p>
+        <details id="markets-list" class="markets-list" open>
+          <summary id="markets-list-count">Markets</summary>
+          <ul id="markets-list-items" class="markets-list-items" aria-label="Supported markets"></ul>
+        </details>
         <p id="control-error" class="error-text" role="alert" hidden></p>
       </section>
 
@@ -78,6 +82,7 @@
             <p class="eyebrow">EXACT API CANDLES</p>
             <h2 id="chart-heading">Price and volume</h2>
           </div>
+          <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
           <div id="view-mode" class="mode-pill">Beginner view</div>
         </div>
         <p id="chart-note" class="muted">Chart geometry is display-only. Values and indicators come from the exact response.</p>
