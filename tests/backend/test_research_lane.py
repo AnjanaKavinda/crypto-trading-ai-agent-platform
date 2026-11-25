@@ -124,6 +124,14 @@ def test_csv_round_trip_and_fail_closed_cases():
         parse_candle_csv("\n".join(lines[1:]))
     with pytest.raises(CandleDataError, match="approved Spot symbol"):
         parse_candle_csv(document.replace("symbol=BTCUSDT", "symbol=DOGEUSDT"))
+    early = lines[4].split(",")
+    early[6] = str(int(early[6]) - 3600 * 1000)  # SYNTHETIC candle ending early
+    with pytest.raises(CandleDataError) as early_error:
+        parse_candle_csv("\n".join(lines[:4] + [",".join(early)] + lines[5:]))
+    message = str(early_error.value)
+    assert "close_time_ms does not match" in message
+    assert "BTCUSDT" in message
+    assert (START + STEP * 2).isoformat() in message
     bad = lines[2].split(",")
     bad[2] = "1"  # high below open/close
     with pytest.raises(CandleDataError, match="inconsistent"):
