@@ -21,6 +21,12 @@ In a second terminal, serve this directory on loopback:
 python -m http.server 5173 --bind 127.0.0.1 --directory apps/web
 ```
 
+Open `http://127.0.0.1:5173/desk.html` for the trading desk: one page with
+tabs Today (market overview), Charts (asset workspace), Strategy lab (evidence
+reports) and My results (research records and decision journal), under a
+status header showing RESEARCH mode, live trading OFF and 1h data freshness
+from the stored snapshots. Each tab loads its existing page on first view.
+
 Open `http://127.0.0.1:5173` for the read-only asset workspace, or
 `http://127.0.0.1:5173/watchlist.html` for the Spot market overview. The
 overview reads the API-supported approved instruments and their stored
