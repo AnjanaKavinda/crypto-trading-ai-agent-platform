@@ -1,5 +1,13 @@
 # AGENTS.md — Four Copilot Agent Operating Model
 
+> **Phase 1 process note (ADR-0032, accepted 2026-11-25).** For the personal
+> Phase 1 research phase, the owner approved an evidence-first priority order
+> and a right-sized process: short design notes instead of a contract plus ADR
+> per feature, focused tests with hosted CI for the broad suite, short issue/PR
+> updates, and no new development-governance automation. All safety rules in
+> this file are unchanged. See
+> `docs/adr/ADR-0032-phase-1-evidence-first-reprioritisation.md` and `CLAUDE.md`.
+
 This repository uses a controlled, supervised four-agent software-development model for the Enterprise-Grade Supervised Autonomous Crypto Trading Platform.
 
 The purpose of this operating model is to allow GitHub Copilot agents to contribute productively while preserving architecture, safety, auditability, contract integrity, and explicit human control.
@@ -1402,3 +1410,8 @@ The platform is designed to be supervised and autonomous, but never uncontrolled
 - If a governed PR is accidentally opened by `AnjanaKavinda`, it must be recreated through the approved bot/agent path rather than bypassing review.
 - No AI agent, GitHub Action, or controller may approve or merge on behalf of `AnjanaKavinda`.
 - Manual merge by `AnjanaKavinda` remains mandatory after all technical and review gates pass.
+- Owner-approved exception (ADR-0032, 2026-11-25): Claude may open PRs into `dev`
+  through the owner's GitHub connection under the truthful `DIRECT_OWNER` route,
+  on `claude/*` branches, stating in the PR body that Claude prepared the change.
+  The owner's manual merge is the approval. Claude never approves, merges,
+  enables auto-merge or pushes to `main`/`dev`.
