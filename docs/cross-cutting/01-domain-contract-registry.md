@@ -1171,3 +1171,34 @@ and GET `/{entry_id}?schema_version=1&content_sha256=...` reads an exact entry.
 Writes require configured allowed Origin and bounded JSON (16 KiB). The research
 records page offers an explicit action/save and read-only history; safe text
 notes remain unverified claims. No manual result/cost schema is introduced.
+
+## C-108 — Owner-reported Spot trade outcome (#157, ADR-0032 queue E2)
+
+C-108 schema 1 `OwnerTradeOutcome` records what the owner says happened after
+an exact C-107v1 `EXTERNAL_TRADE_INTENT` entry: ordered fills (side, quantity,
+USDT price, execution time) and, per fill, a fee in USDT with its source —
+`STATEMENT` (copied from the exchange statement), `ESTIMATE` (e.g. a BNB or
+base-asset fee converted by the owner) or `UNKNOWN` (no amount). Instrument is
+taken from the journal entry's C-006v5 Spot context, never from the request.
+
+The platform derives, with exact `Decimal` arithmetic: position status
+(`CLOSED`/`OPEN`; long-only, sells can never exceed bought quantity), gross
+result, total fees, net result and its basis (`STATEMENT_FEES`,
+`INCLUDES_ESTIMATED_FEES`, or `UNAVAILABLE` with `POSITION_OPEN` /
+`FEE_UNKNOWN`). `decision_recorded_before_first_fill` states whether the linked
+decision was recorded prospectively. Facts are owner-reported:
+`trade_facts_verified`, approval and execution flags are fixed false. This is
+not C-044 TradeOutcome (execution-path outcome) and grants no learning,
+qualification or trading authority.
+
+Identity is UUIDv5 of the owner's request ID, so an identical retry returns the
+original and changed content under that key conflicts (409); the content digest
+covers every fact. Corrections append a new record with the exact C-108 parent
+and a reason. Records live in the existing immutable lineage store (migration
+0013 only extends its contract allowlist and adds a time index).
+
+API (local research mode only): `/api/research/owner-outcomes` — POST saves
+(allowed Origin, JSON ≤ 64 KiB, amounts as decimal strings), GET lists
+(default 20/max 100), GET `/requests/{request_id}` recovers an uncertain save,
+GET `/{outcome_id}?schema_version=1&content_sha256=...` reads an exact record.
+The UI for this is queue item U8.
