@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
+from starlette.requests import Request
 from trading_platform_api.config import load_app_settings
 from trading_platform_api.docker_local import (
     IMAGE_MARKER,
@@ -66,6 +67,54 @@ def test_authenticated_proxy_reads_without_origin(docker_environment):
     assert response.status_code == 200
     assert docker_environment["LOCAL_PROXY_SECRET"] not in response.text
     assert response.headers["cache-control"] == "no-store"
+
+
+READ_ID = "00000000-0000-4000-8000-000000000001"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/research/strategy-signals",
+        f"/api/research/strategy-signals/C-024/{READ_ID}",
+        f"/api/research/strategy-signals/C-024/{READ_ID}/evidence",
+        "/api/research/decision-journal",
+        f"/api/research/decision-journal/{READ_ID}",
+        f"/api/research/decision-journal/requests/{READ_ID}",
+        "/api/research/owner-outcomes",
+        f"/api/research/owner-outcomes/{READ_ID}",
+        f"/api/research/owner-outcomes/requests/{READ_ID}",
+    ],
+)
+def test_research_record_reads_pass_without_origin(docker_environment, path):
+    secret = docker_environment["LOCAL_PROXY_SECRET"]
+    settings = load_docker_local_settings(load_app_settings())
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [
+            (b"host", HOST.encode()),
+            (PROXY_HEADER.encode(), secret.encode()),
+        ],
+    }
+    assert settings.accepts(Request(scope))
+    for scope_change in (
+        {"method": "POST"},
+        {"headers": [(PROXY_HEADER.encode(), secret.encode())]},
+        {"headers": [(b"host", HOST.encode())]},
+        {"path": path + "/extra"},
+    ):
+        assert not settings.accepts(Request(scope | scope_change))
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/research/decision-journal", "/api/research/owner-outcomes"]
+)
+def test_record_writes_without_origin_stay_rejected(docker_environment, path):
+    headers = {PROXY_HEADER: docker_environment["LOCAL_PROXY_SECRET"]}
+    with client() as api:
+        assert api.post(path, headers=headers, json={}).status_code == 421
 
 
 def test_default_http_port_uses_browser_canonical_authority(
