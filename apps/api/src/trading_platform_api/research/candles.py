@@ -142,10 +142,14 @@ def parse_candle_csv(text: str) -> CandleSeries:
                 f"line {line}: candles are not contiguous; first missing candle "
                 f"opens at {gap_start.isoformat()}. Choose a period without gaps."
             )
+        open_time = _utc_from_ms(row[0], "open_time_ms", line)
         close_ms = row[6]
         if close_ms != str(open_ms + step_ms - 1):
-            raise CandleDataError(f"line {line}: close_time_ms does not match.")
-        open_time = _utc_from_ms(row[0], "open_time_ms", line)
+            raise CandleDataError(
+                f"line {line}: {symbol} candle opening at {open_time.isoformat()} "
+                f"has close_time_ms {close_ms}, expected {open_ms + step_ms - 1}; "
+                "close_time_ms does not match. Choose a later start."
+            )
         if _utc_from_ms(close_ms, "close_time_ms", line) >= fetched_at:
             raise CandleDataError(f"line {line}: candle was not closed when fetched.")
         values = [
