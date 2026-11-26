@@ -6,7 +6,10 @@ is checked against each held bar's low, including the entry bar, and fills at
 the stop price or at the bar's open if the bar opens through the stop. When
 the signals carry a trailing distance, the stop is raised after each held
 bar's close to ``highest close since entry - distance`` and is never lowered;
-``Trade.stop_price`` and the R multiple keep the initial stop.
+``Trade.stop_price`` and the R multiple keep the initial stop. When the
+signals carry ``max_bars_held``, a position held that many bars (entry bar
+included) at a close exits at the next open with reason ``TIME_EXIT``; a
+signal exit on the same close keeps reason ``SIGNAL_EXIT``.
 
 Sizing: the whole strategy equity is invested per trade (no leverage), so
 results are growth of 1 unit of equity. Costs are applied on both sides:
@@ -107,7 +110,7 @@ def run_segment(
     units = Decimal(0)
     entry: tuple[int, Decimal, Decimal, Decimal] | None = None  # idx, px, stop, cost
     pending_entry = False
-    pending_exit = False
+    pending_exit: str | None = None
     stop_now = Decimal(0)
     highest_close = Decimal(0)
     trades: list[Trade] = []
@@ -150,9 +153,10 @@ def run_segment(
                 entry = (index, fill, stop, basis)
                 stop_now, highest_close = stop, Decimal(0)
                 cash = Decimal(0)
-        elif pending_exit and entry is not None:
-            close_position(index, bar.open, "SIGNAL_EXIT")
-        pending_entry = pending_exit = False
+        elif pending_exit is not None and entry is not None:
+            close_position(index, bar.open, pending_exit)
+        pending_entry = False
+        pending_exit = None
 
         if entry is not None and bar.low <= stop_now:
             close_position(index, min(bar.open, stop_now), "STOP")
@@ -171,8 +175,14 @@ def run_segment(
         has_next = index + 1 < end
         if entry is None and has_next and signals.enter_long[index]:
             pending_entry = True
-        elif entry is not None and has_next and signals.exit_long[index]:
-            pending_exit = True
+        elif entry is not None and has_next:
+            if signals.exit_long[index]:
+                pending_exit = "SIGNAL_EXIT"
+            elif (
+                signals.max_bars_held is not None
+                and index - entry[0] + 1 >= signals.max_bars_held
+            ):
+                pending_exit = "TIME_EXIT"
 
     if entry is not None:
         close_position(end - 1, candles[end - 1].close, "END_OF_SEGMENT")

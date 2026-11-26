@@ -74,7 +74,30 @@ python -m trading_platform_api.research run --strategy trend-daily-regime --prot
 
 Only a HISTORICAL_PASS moves to the prospective stage (signals recorded
 forward; review at 15 trades or 6 months). Other strategy/protocol pairs are
-refused (fail closed). Markers-API support for this strategy is a follow-up.
+refused (fail closed). Chart markers: see `strategy=trend-daily-regime` below.
+
+## Strategy B study: `range-reversion-4h` v1, protocol v2 (E2f)
+
+Pre-registered on #516 (2026-11-26) before any result existed. Run once:
+
+```powershell
+python -m trading_platform_api.research fetch --timeframe 4h --start 2021-09-30
+python -m trading_platform_api.research run --strategy range-reversion-4h --protocol v2 --timeframe 4h
+```
+
+| Item | Value |
+|---|---|
+| Strategy | enter at the next open when at the 4h close `ADX14 < 20 AND close < lower Bollinger band (20, 2σ population) AND RSI14 < 30`; fixed stop entry − 1.5×ATR14; exit at the next open after a close ≥ the middle band (SMA20), or after 12 held bars (time stop, entry bar counted); no take-profit |
+| Indicators | RSI14 (Wilder) and Bollinger (20, 2σ population) equal the platform's registered methods exactly (parity test); ADX14 is the standard Wilder definition (no platform method yet; hand-computed test) |
+| Protocol | `spot-walk-forward-prospective` v2, same criteria and periods as Strategy A, on 4h bars |
+| Prospective review | 30 trades or 3 months, only after a HISTORICAL_PASS |
+
+Chart markers: `GET /api/research/spot/{instrument}/strategy-markers?timeframe=4h&limit=500&strategy=range-reversion-4h&version=1`
+(4h snapshots only). BUY markers list ADX14, close vs lower band and RSI14 at the
+signal close; SELL markers explain the middle-band exit, the 12-bar time stop
+(`TIME_EXIT`, with bars held) or the stop. The served RSI14 and Bollinger values
+must equal the research formulas or no markers are returned; ADX14 is recomputed
+from the snapshot's validated candles.
 
 ## Calculation verification (E2d)
 
@@ -149,3 +172,12 @@ reads: it never records a decision, journal entry or outcome.
 
 The task's *Last Run Result* is `0x0` when everything is READY and `0x1` when
 the report lists a PROBLEM.
+
+`strategy=trend-daily-regime&version=1` replays Strategy A instead, on `1d`
+snapshots only (other timeframes return `TIMEFRAME_NOT_PRE_REGISTERED` and no
+markers). BUY markers show the trend-state transition (EMA20, EMA50, close and
+SMA200 at the signal and the previous close); STOP exits show the trailing
+stop in effect and the initial stop; an open position reports `current_stop`
+for the next candle. SMA200 is recomputed from the snapshot's validated
+candles. Any other strategy/version pair is refused with `422
+STRATEGY_NOT_REGISTERED`. Use `limit` ≥ 202 so SMA200 is warmed up and one candle can trade.

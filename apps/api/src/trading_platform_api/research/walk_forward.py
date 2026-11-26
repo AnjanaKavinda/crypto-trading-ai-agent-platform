@@ -1,7 +1,8 @@
 """Protocol v2 study: development-era judgement plus a contaminated holdout.
 
 Implements ``spot-walk-forward-prospective`` v2 exactly as pre-registered on
-#516 (2026-11-26) for ``trend-daily-regime`` v1:
+#516 (2026-11-26) for ``trend-daily-regime`` v1 (1d) and ``range-reversion-4h``
+v1 (4h):
 
 - Candles before ``development_start`` are ignored; indicators warm up from
   that date, so trading starts once every input is defined.
@@ -42,7 +43,15 @@ from trading_platform_api.research.report import (
     _pct,
     _segment_summary,
 )
-from trading_platform_api.research.strategy import TrendDailyRegime
+from trading_platform_api.research.strategy import RangeReversion4h, TrendDailyRegime
+
+V2Strategy = TrendDailyRegime | RangeReversion4h
+
+# Pre-registered timeframe and prospective review rule per strategy id.
+V2_STRATEGIES: dict[str, tuple[str, str]] = {
+    "trend-daily-regime": ("1d", "15 trades or 6 months"),
+    "range-reversion-4h": ("4h", "30 trades or 3 months"),
+}
 
 V2_LIMITATIONS = (
     *LIMITATIONS,
@@ -108,7 +117,7 @@ def historical_verdict(
 def run_walk_forward_study(
     series: list[CandleSeries],
     *,
-    strategy: TrendDailyRegime | None = None,
+    strategy: V2Strategy | None = None,
     protocol: WalkForwardProtocol | None = None,
     costs: CostAssumptions | None = None,
     created_at: datetime | None = None,
@@ -121,9 +130,13 @@ def run_walk_forward_study(
     symbols = [item.symbol for item in series]
     if len(set(symbols)) != len(symbols):
         raise StudyError("Use one file per symbol.")
-    if {item.timeframe for item in series} != {"1d"}:
-        raise StudyError("trend-daily-regime v1 is pre-registered for 1d only.")
-    step = timedelta(seconds=TIMEFRAME_SECONDS["1d"])
+    timeframe, review = V2_STRATEGIES[strategy.strategy_id]
+    if {item.timeframe for item in series} != {timeframe}:
+        raise StudyError(
+            f"{strategy.strategy_id} v{strategy.version} is pre-registered for "
+            f"{timeframe} only."
+        )
+    step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
     era_start = _day(protocol.development_start)
     seen_start = _day(protocol.seen_start)
     seen_end = _day(protocol.seen_end)
@@ -237,7 +250,7 @@ def run_walk_forward_study(
         "verdict": verdict,
         "next_stage": (
             "PROSPECTIVE: record signals forward from "
-            f"{protocol.prospective_start}; review at 15 trades or 6 months"
+            f"{protocol.prospective_start}; review at {review}"
             if verdict.status == "HISTORICAL_PASS"
             else "NONE: only a HISTORICAL_PASS moves to the prospective stage"
         ),
