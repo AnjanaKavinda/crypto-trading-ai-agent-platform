@@ -1,3 +1,4 @@
+import { markerAnchors, markersBindingError, MARKER_LABELS, sizingInputs, tradeDetails } from "./strategy-markers.mjs";
 import { toolbarPills } from "./indicator-toolbar.mjs";
 import {
   createDrawing,
@@ -31,6 +32,7 @@ import {
 import {
   listSupportedSymbols,
   readSnapshot,
+  readStrategyMarkers,
   refreshSnapshot,
   MAX_CANDLES,
   MAX_REFRESH_SECONDS,
@@ -218,6 +220,14 @@ function analysisAvailability(snapshot, id) {
   return { available: true };
 }
 
+function markersAvailability(snapshot) {
+  if (markerState.error) return { available: false, reason: markerState.error };
+  const response = markerState.response;
+  if (!response) return { available: false, reason: "strategy markers not loaded" };
+  if (response.status !== "AVAILABLE") return { available: false, reason: `${response.status} ${response.reason_code ?? ""}`.trim() };
+  return markersBindingError(response, snapshot) ? { available: false, reason: "markers do not match the snapshot" } : { available: true };
+}
+
 function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
   const toolbar = $("#indicator-toolbar");
   if (!toolbar) return;
@@ -226,7 +236,9 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
   const pills = toolbarPills({
     snapshotLoaded: Boolean(snapshot),
     enabled,
-    availability: (kind, id) => kind === "indicator" ? indicatorAvailability(snapshot, id) : analysisAvailability(snapshot, id),
+    availability: (kind, id) => kind === "indicator"
+      ? indicatorAvailability(snapshot, id)
+      : kind === "markers" ? markersAvailability(snapshot) : analysisAvailability(snapshot, id),
   });
   for (const pill of pills) {
     const button = element("button", pill.short, `indicator-pill${pill.live ? "" : " not-ready"}`);
@@ -248,7 +260,9 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
       });
     } else {
       button.addEventListener("click", () => {
-        const card = document.querySelector(`[data-analysis-key="${pill.action.id}"]`);
+        const card = pill.action.id === "strategy-markers"
+          ? $("#strategy-markers-panel")
+          : document.querySelector(`[data-analysis-key="${pill.action.id}"]`);
         if (card) {
           card.tabIndex = -1;
           card.scrollIntoView({ block: "start" });
@@ -758,6 +772,144 @@ const chartView = { key: null, window: null, scale: "auto" };
 
 // U4: the owner's own annotations (browser-only, never evidence or API data).
 const drawingState = { tool: "cursor", pending: [] };
+const markerState = { response: null, error: null, selected: 0, accountSize: null, riskPct: null, onSelect: null };
+
+function currentMarkers(snapshot) {
+  const response = markerState.response;
+  return response && !markersBindingError(response, snapshot) && response.status === "AVAILABLE"
+    ? response
+    : null;
+}
+
+function renderStrategyMarkers(svg, snapshot, candles, xOf, priceY) {
+  const response = currentMarkers(snapshot);
+  if (!response) return;
+  const group = svgNode("g", { class: "strategy-markers", "clip-path": "url(#price-pane-clip)" });
+  for (const anchor of markerAnchors(response.markers, candles.map(({ source }) => source.open_time))) {
+    const { values } = candles[anchor.candleIndex];
+    const x = xOf(anchor.candleIndex);
+    const buy = anchor.side === "BUY";
+    const y = priceY(buy ? values.low.numeric : values.high.numeric);
+    if (y === null) continue;
+    const tip = buy ? y + 6 : y - 6;
+    const base = buy ? tip + 10 : tip - 10;
+    const shape = svgNode("polygon", {
+      points: `${x},${tip} ${x - 6},${base} ${x + 6},${base}`,
+      class: `strategy-marker strategy-marker-${buy ? "buy" : "sell"}${anchor.pending ? " pending" : ""}${anchor.markerIndex === markerState.selected ? " selected" : ""}`,
+      "data-marker-index": String(anchor.markerIndex),
+      tabindex: "0",
+      role: "button",
+      "aria-label": `${anchor.side} marker${anchor.pending ? " (pending fill)" : ""} — open its evidence`,
+    });
+    const select = (event) => {
+      event.stopPropagation();
+      markerState.onSelect?.(anchor.markerIndex);
+    };
+    shape.addEventListener("click", select);
+    shape.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(event); }
+    });
+    group.append(shape);
+  }
+  svg.append(group);
+}
+
+function labelledValue(field) {
+  const wrapper = element("span", undefined, "labelled-value");
+  wrapper.append(
+    element("span", field.value === null || field.value === undefined ? "—" : String(field.value), "labelled-value-text"),
+    element("span", MARKER_LABELS[field.label] ?? "Unlabelled", `label-badge label-${String(field.label).toLowerCase()}`),
+  );
+  if (field.reason) wrapper.append(element("span", field.reason, "labelled-value-reason"));
+  return wrapper;
+}
+
+function renderMarkersPanel(snapshot) {
+  const body = $("#markers-body");
+  if (!body) return;
+  body.replaceChildren();
+  const response = markerState.response;
+  if (!snapshot) {
+    body.append(element("p", "No snapshot is loaded; no strategy markers are shown.", "empty-state"));
+    return;
+  }
+  if (markerState.error || !response) {
+    body.append(element("p", markerState.error ?? "Loading strategy markers…", "empty-state"));
+    return;
+  }
+  const bindingError = markersBindingError(response, snapshot);
+  if (bindingError) {
+    body.append(element("p", `${bindingError} No markers are shown.`, "empty-state"));
+    return;
+  }
+  const strategy = response.strategy ?? {};
+  body.append(element("p", `${strategy.strategy_id ?? "strategy"} v${strategy.version ?? "?"} · strategy sha256 ${String(strategy.content_sha256 ?? "").slice(0, 12)}… · ${response.evidence_scope ?? ""}`, "muted"));
+  if (response.status !== "AVAILABLE") {
+    body.append(element("p", `Strategy markers ${response.status}: ${response.reason_code ?? "no reason given"}. No markers are shown.`, "empty-state"));
+    return;
+  }
+  body.append(element("p", `${response.markers.length} markers · position ${response.position ?? "unknown"}.`, "markers-summary"));
+  if (!response.markers.length) return;
+  const list = element("div", undefined, "marker-list");
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-label", "Strategy markers");
+  response.markers.forEach((marker, index) => {
+    const when = marker.status === "FILLED" ? marker.fill_time?.value : marker.time?.value;
+    const button = element("button", `${marker.side === "BUY" ? "▲ BUY" : "▼ SELL"} ${when ?? ""}${marker.status === "FILLED" ? "" : " · pending"}`, `marker-item marker-item-${String(marker.side).toLowerCase()}`);
+    button.type = "button";
+    button.dataset.markerIndex = String(index);
+    button.setAttribute("aria-pressed", String(index === markerState.selected));
+    button.addEventListener("click", () => markerState.onSelect?.(index));
+    list.append(button);
+  });
+  body.append(list);
+  const marker = response.markers[Math.min(markerState.selected, response.markers.length - 1)];
+  const detail = element("div", undefined, "marker-detail");
+  detail.id = "marker-detail";
+  const conditions = element("section", undefined, "marker-section");
+  conditions.append(element("h3", "Conditions"));
+  const conditionList = element("ul");
+  for (const condition of marker.conditions ?? []) {
+    const item = element("li");
+    item.append(element("strong", `${condition.met ? "✓" : "✗"} ${condition.condition ?? ""}`));
+    for (const [key, value] of Object.entries(condition)) {
+      if (value && typeof value === "object" && "label" in value) {
+        const row = element("div", undefined, "marker-field");
+        row.append(element("span", key.replaceAll("_", " "), "marker-field-name"), labelledValue(value));
+        item.append(row);
+      }
+    }
+    conditionList.append(item);
+  }
+  conditions.append(conditionList);
+  const trade = element("section", undefined, "marker-section");
+  trade.append(element("h3", "Trade details"));
+  const table = element("dl", undefined, "marker-fields");
+  for (const row of tradeDetails(marker)) {
+    const term = element("dt", row.name);
+    const value = element("dd");
+    value.append(labelledValue(row));
+    table.append(term, value);
+  }
+  if (marker.position_size?.capped) table.append(element("dt", "Size cap"), element("dd", "Capped at account ÷ entry (Spot, no leverage)."));
+  trade.append(table);
+  const evidence = element("section", undefined, "marker-section");
+  evidence.append(element("h3", "Evidence"));
+  const facts = element("dl", undefined, "marker-fields");
+  for (const [name, value] of [
+    ["Snapshot", response.snapshot_id], ["Quality report", response.quality_report_id],
+    ["Data quality", response.data_quality_status], ["As of", response.as_of],
+    ["Costs", `${response.costs?.fee_bps_per_side ?? "?"} bps fee + ${response.costs?.slippage_bps_per_side ?? "?"} bps slippage per side (${response.costs?.label ?? "unlabelled"})`],
+  ]) facts.append(element("dt", name), element("dd", String(value ?? "—")));
+  for (const [name, field] of Object.entries(response.not_applicable ?? {})) {
+    const value = element("dd");
+    value.append(labelledValue(field));
+    facts.append(element("dt", name.replaceAll("_", " ")), value);
+  }
+  evidence.append(facts);
+  detail.append(conditions, trade, evidence);
+  body.append(detail);
+}
 
 function drawingStatusText() {
   const tool = drawingTool(drawingState.tool);
@@ -1208,6 +1360,7 @@ function renderChart(snapshot, preferences) {
     pending: drawingState.pending,
     timeX, priceY, formatPrice, left, right: width - right,
   });
+  renderStrategyMarkers(svg, snapshot, candles, xOf, priceY);
 
   const crosshair = svgNode("line", {
     x1: 0, x2: 0, y1: priceTop, y2: volumeTop + volumeHeight,
@@ -1517,10 +1670,61 @@ async function bootstrap() {
     renderPreferences();
   };
 
+  const loadMarkers = async (loaded, { asOf } = {}) => {
+    const sequence = requestSequence;
+    markerState.response = null;
+    markerState.error = null;
+    renderMarkersPanel(loaded);
+    try {
+      const response = await readStrategyMarkers(globalThis.fetch, {
+        instrumentId: loaded.instrument_id,
+        timeframe: loaded.timeframe,
+        limit: Math.min(MAX_CANDLES, Math.max(2, loaded.candles?.length ?? 2)),
+        asOf,
+        accountSize: markerState.accountSize,
+        riskPct: markerState.riskPct,
+      });
+      if (sequence !== requestSequence || snapshot !== loaded) return;
+      const bindingError = markersBindingError(response, loaded);
+      markerState.response = bindingError ? null : response;
+      markerState.error = bindingError;
+      markerState.selected = 0;
+    } catch (error) {
+      if (sequence !== requestSequence || snapshot !== loaded) return;
+      markerState.error = `Strategy markers could not be loaded: ${error.message} No markers are shown.`;
+    }
+    renderMarkersPanel(loaded);
+    renderIndicatorControls(loaded, preferences, setPreferences);
+    renderChart(loaded, preferences);
+  };
+  let markerAsOf;
+  markerState.onSelect = (index) => {
+    markerState.selected = index;
+    renderMarkersPanel(snapshot);
+    if (snapshot) renderChart(snapshot, preferences);
+    $("#strategy-markers-panel details").open = true;
+    $("#marker-detail")?.scrollIntoView({ block: "nearest" });
+  };
+  $("#sizing-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const parsed = sizingInputs($("#sizing-account").value, $("#sizing-risk").value);
+    $("#sizing-error").hidden = parsed.ok;
+    if (!parsed.ok) {
+      $("#sizing-error").textContent = parsed.error;
+      return;
+    }
+    markerState.accountSize = parsed.accountSize;
+    markerState.riskPct = parsed.riskPct;
+    if (snapshot) void loadMarkers(snapshot, { asOf: markerAsOf });
+  });
+
   const showFailure = (error, sequence) => {
     if (sequence !== requestSequence) return;
     snapshot = null;
     setStatus(null, error.message);
+    markerState.response = null;
+    markerState.error = null;
+    renderMarkersPanel(null);
     $("#chart-container").replaceChildren(element("p", error.message, "empty-state"));
     renderCandles(null);
     renderMetadata(null);
@@ -1584,6 +1788,7 @@ async function bootstrap() {
       });
       if (validationError) throw new Error(validationError);
       snapshot = response;
+      markerState.response = null;
       setStatus(snapshot);
       renderChart(snapshot, preferences);
       renderCandles(snapshot);
@@ -1592,6 +1797,8 @@ async function bootstrap() {
       renderIndicators(snapshot, preferences);
       renderOrderFlow(snapshot);
       renderSpotAnalyses(snapshot);
+      markerAsOf = asOf;
+      void loadMarkers(snapshot, { asOf });
     } catch (error) {
       showFailure(error, sequence);
     }
@@ -1684,6 +1891,7 @@ async function bootstrap() {
       const validationError = validateSnapshot(response, { instrumentId, symbol, timeframe: selectedTimeframe });
       if (validationError) throw new Error(validationError);
       snapshot = response;
+      markerState.response = null;
       setStatus(snapshot);
       renderChart(snapshot, preferences);
       renderCandles(snapshot);
@@ -1692,6 +1900,8 @@ async function bootstrap() {
       renderIndicators(snapshot, preferences);
       renderOrderFlow(snapshot);
       renderSpotAnalyses(snapshot);
+      markerAsOf = undefined;
+      void loadMarkers(snapshot);
     } catch (error) {
       showFailure(error, sequence);
     } finally {

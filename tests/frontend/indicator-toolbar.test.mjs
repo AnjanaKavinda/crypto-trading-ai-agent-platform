@@ -21,11 +21,12 @@ test("live pills toggle and reflect the enabled set; not-ready pills are disable
   assert.equal(by.EMA20.pressed, "true");
   assert.equal(by.RSI.pressed, "false");
   assert.deepEqual(by.VWAP.action, { type: "jump", id: "vwap" });
+  assert.deepEqual(by.SIGNALS.action, { type: "jump", id: "strategy-markers" });
   assert.equal(by.VOL.live, true);
   assert.equal(by.VOL.action, null);
   for (const [short, badge, pattern] of [
     ["SMA", "Connect", /not yet sent/], ["OBV", "To build", /not implemented/],
-    ["CVD", "Needs trades", /#355/], ["HEAT", "Needs order book", /#355/], ["SIGNALS", "Connect", /U5/],
+    ["CVD", "Needs trades", /#355/], ["HEAT", "Needs order book", /#355/],
   ]) {
     assert.equal(by[short].live, false);
     assert.equal(by[short].action, null);

@@ -116,6 +116,26 @@
         </details>
       </section>
 
+      <section id="strategy-markers-panel" class="panel" tabindex="-1" aria-labelledby="markers-heading">
+        <details open>
+          <summary><h2 id="markers-heading">Strategy markers and evidence</h2></summary>
+          <p class="education-note"><strong>Research evidence only.</strong> BUY ▲ / SELL ▼ replay ema-trend-atr-stop v1 over this snapshot. Not a verdict, not a recommendation and not an order. Every value carries the backend's label.</p>
+          <form id="sizing-form" class="sizing-form" novalidate>
+            <label>Account size (USDT)
+              <input id="sizing-account" inputmode="decimal" autocomplete="off" placeholder="e.g. 1000">
+            </label>
+            <label>Risk per trade (%)
+              <input id="sizing-risk" inputmode="decimal" autocomplete="off" placeholder="e.g. 1">
+            </label>
+            <button type="submit">Update position sizes</button>
+          </form>
+          <p id="sizing-error" class="error-text" role="alert" hidden></p>
+          <div id="markers-body" aria-live="polite">
+            <p class="empty-state">No snapshot is loaded; no strategy markers are shown.</p>
+          </div>
+        </details>
+      </section>
+
       <section class="panel" aria-labelledby="indicator-heading">
         <div class="section-heading">
           <div>
