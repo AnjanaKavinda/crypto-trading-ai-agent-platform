@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Callable, Literal
 from uuid import UUID, uuid5
@@ -25,7 +25,12 @@ from trading_platform_api.learning.decision_journal import (
     ResearchDecisionJournalEntry,
     utc,
 )
-from trading_platform_api.learning.owner_scoring import score_owner_results
+from trading_platform_api.learning.owner_scoring import (
+    NoTradeDecision,
+    OwnerResultsProtocol,
+    price_points,
+    score_owner_results,
+)
 from trading_platform_api.learning.trade_outcome import (
     MAX_FILLS,
     OUTCOME_NAMESPACE,
@@ -36,6 +41,7 @@ from trading_platform_api.lineage.codec import LineageError, LineageKey
 from trading_platform_api.lineage.policy import PERSONAL_SPOT_INSTRUMENTS
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
 from trading_platform_api.lineage.tables import records
+from trading_platform_api.spot_research import SpotResearchError, SpotResearchService
 from trading_platform_api.strategy_api import (
     ApiVersionReference,
     StrategySignalApiError,
@@ -298,6 +304,38 @@ class TradeOutcomeService:
                 await self._read(store, LineageKey("C-108", value)) for value in ids
             ]
 
+    async def no_trade_decisions(self) -> list[NoTradeDecision]:
+        """Current ABSTAIN declarations (corrected versions superseded)."""
+        views: list[dict] = []
+        cursor: UUID | None = None
+        while True:
+            page = await self.journal.page(100, cursor)
+            views.extend(page["items"])
+            if page["next_cursor"] is None or len(views) > MAX_SCORED_OUTCOMES:
+                break
+            cursor = UUID(page["next_cursor"])
+        if len(views) > MAX_SCORED_OUTCOMES:
+            raise ValueError("Too many journal entries to score in one request.")
+        superseded = {
+            str(item["supersedes"]["artifact_id"])
+            for item in views
+            if item.get("supersedes")
+        }
+        return [
+            NoTradeDecision(
+                entry_id=str(item["entry_id"]),
+                instrument_id=(
+                    item["snapshot_observation"]["instrument_id"]
+                    if str(item.get("schema_version")) == "2"
+                    else None
+                ),
+                declared_at=utc(datetime.fromisoformat(item["declared_at"])),
+            )
+            for item in views
+            if item["declared_action"] == "ABSTAIN"
+            and str(item["entry_id"]) not in superseded
+        ]
+
     async def page(self, limit: int, before: UUID | None) -> dict:
         async with self.sessions() as session:
             store = SqlAlchemyLineageStore(session)
@@ -329,6 +367,31 @@ class TradeOutcomeService:
                 "items": [view(item) for item in items],
                 "next_cursor": str(items[-1].outcome_id) if len(ids) > limit else None,
             }
+
+
+FOUR_HOURS = timedelta(hours=4)
+
+
+async def candle_close_at(
+    spot_service: SpotResearchService | None, instrument_id: str, at: datetime
+) -> tuple[Decimal | None, str | None]:
+    """Close of the persisted VALID 4h candle that closed within 4h before ``at``."""
+    if spot_service is None:
+        return None, "RESEARCH_PERSISTENCE_UNAVAILABLE"
+    try:
+        served = await spot_service.read(
+            instrument_id=instrument_id, timeframe="4h", as_of=at, limit=2
+        )
+    except SpotResearchError as exc:
+        return None, exc.code
+    status = served["data_quality"]["status"]
+    if status != "VALID":
+        return None, f"DATA_QUALITY_{status}"
+    last = served["candles"][-1]
+    closed = datetime.fromisoformat(str(last["close_time"]).replace("Z", "+00:00"))
+    if not at - FOUR_HOURS < closed <= at:
+        return None, "NO_4H_CANDLE_CLOSED_WITHIN_ONE_CANDLE"
+    return Decimal(last["metrics"]["close"]["value"]), None
 
 
 def create_trade_outcome_router() -> APIRouter:
@@ -393,7 +456,24 @@ def create_trade_outcome_router() -> APIRouter:
     @router.get("/score")
     async def score(request: Request) -> JSONResponse:
         async def run() -> dict:
-            return score_owner_results(await service(request).all_outcomes())
+            outcomes_service = service(request)
+            outcomes = await outcomes_service.all_outcomes()
+            decisions = await outcomes_service.no_trade_decisions()
+            now = utc(outcomes_service.clock())
+            protocol = OwnerResultsProtocol()
+            prices = {
+                point: await candle_close_at(
+                    request.app.state.spot_research_service, *point
+                )
+                for point in price_points(outcomes, decisions, protocol, now)
+            }
+            return score_owner_results(
+                outcomes,
+                protocol,
+                decisions=decisions,
+                price_at=lambda instrument, at: prices[(instrument, at)],
+                now=now,
+            )
 
         return await respond(run())
 
