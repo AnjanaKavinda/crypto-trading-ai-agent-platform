@@ -4,6 +4,7 @@ python -m trading_platform_api.research fetch --start 2019-01-01
 python -m trading_platform_api.research run
 python -m trading_platform_api.research run --strategy trend-daily-regime \
     --protocol v2 --timeframe 1d
+python -m trading_platform_api.research daily-check
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from trading_platform_api.research import daily_check
 from trading_platform_api.research.candles import (
     APPROVED_SPOT_SYMBOLS,
     CandleDataError,
@@ -60,11 +62,29 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--timeframe", default=None)
     run.add_argument("--data", default="research-data", type=Path)
     run.add_argument("--out", default="research-output", type=Path)
+
+    check = commands.add_parser(
+        "daily-check", help="Refresh and verify the local stack (read/refresh only)."
+    )
+    check.add_argument("--base-url", default=daily_check.DEFAULT_BASE_URL)
+    check.add_argument("--out", default="research-output", type=Path)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "daily-check":
+        generated_at = datetime.now(UTC)
+        results = daily_check.run_daily_check(base_url=args.base_url)
+        path = daily_check.write_report(
+            results, out=args.out, generated_at=generated_at, base_url=args.base_url
+        )
+        problems = [item for item in results if not item.ready]
+        print(f"Daily check: {'PROBLEM' if problems else 'READY'}")
+        for item in problems:
+            print(f"  - PROBLEM {item.name}: {item.detail}")
+        print(f"wrote {path}")
+        return 1 if problems else 0
     chosen = [item.strip() for item in args.symbols.split(",") if item.strip()]
     if args.command == "fetch":
         start = datetime.fromisoformat(args.start).replace(tzinfo=UTC)
