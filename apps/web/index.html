@@ -85,10 +85,19 @@
           <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
           <div id="view-mode" class="mode-pill">Beginner view</div>
         </div>
+        <div id="indicator-toolbar" class="indicator-toolbar" role="toolbar" aria-label="Indicators"></div>
         <p id="chart-note" class="muted">Chart geometry is display-only. Values and indicators come from the exact response.</p>
-        <div id="chart-container" class="chart-container">
-          <p class="empty-state">Waiting for a local Spot research snapshot.</p>
+        <div class="chart-workspace">
+          <nav id="drawing-tools" class="drawing-tools" aria-label="Drawing tools"></nav>
+          <div id="chart-container" class="chart-container">
+            <p class="empty-state">Waiting for a local Spot research snapshot.</p>
+          </div>
         </div>
+        <div class="drawing-bar">
+          <label>Note text <input id="drawing-note-text" type="text" maxlength="200" placeholder="Text for the T tool"></label>
+          <p id="drawing-status" class="muted" role="status">Select / pan · Your annotation — not evidence.</p>
+        </div>
+        <p class="muted">Drawings are your own annotations, kept only in this browser for this market and timeframe. They are never sent to the API and are not evidence.</p>
         <p class="muted">Prices are shown at display precision for the instrument; hover the readout or last-price tag, or open the table below, for the exact returned values.</p>
         <section id="market-trades" class="unavailable-panel" aria-labelledby="market-trades-heading">
           <h3 id="market-trades-heading">Market trades — unavailable</h3>

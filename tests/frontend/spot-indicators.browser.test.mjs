@@ -1278,3 +1278,77 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
     await page.close();
   }
 });
+
+test("indicator toolbar pills toggle backend overlays and disable not-ready indicators with reasons", async () => {
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
+  try {
+    await waitForLoadedSnapshot(page);
+    const pill = (short) => page.locator(`#indicator-toolbar [data-pill="${short}"]`);
+    assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "true");
+    assert.equal(await pill("RSI").getAttribute("aria-pressed"), "false");
+    const before = apiRequests.length;
+    await pill("RSI").click();
+    assert.equal(await pill("RSI").getAttribute("aria-pressed"), "true");
+    assert.ok((await readSeries(page)).some((line) => line.series === "rsi-line"));
+    assert.equal(await page.locator("#view-mode").textContent(), "Pro view");
+    await pill("EMA20").click();
+    assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "false");
+    assert.ok(!(await readSeries(page)).some((line) => line.series === "ema-20"));
+    for (const short of ["SMA", "OBV", "CVD", "HEAT", "SIGNALS"]) {
+      assert.equal(await pill(short).isDisabled(), true, short);
+      assert.match(await pill(short).getAttribute("title"), /Connect|To build|Needs trades|Needs order book/);
+    }
+    assert.equal(await pill("VWAP").isDisabled(), false);
+    await pill("VWAP").click();
+    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "vwap");
+    assert.equal(apiRequests.length, before, "toolbar pills must not issue API requests");
+  } finally {
+    await page.close();
+  }
+});
+
+test("drawing tools place browser-only annotations that persist and clear without API requests", async () => {
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
+  try {
+    await waitForLoadedSnapshot(page);
+    const clickChart = async (xFraction, viewY) => {
+      const svg = page.locator("#chart-container svg");
+      const box = await svg.boundingBox();
+      const [, , viewWidth, viewHeight] = (await svg.getAttribute("viewBox")).split(/\s+/).map(Number);
+      const plotLeft = 150;
+      const plotWidth = viewWidth - 150 - 125;
+      await page.mouse.click(
+        box.x + ((plotLeft + xFraction * plotWidth) / viewWidth) * box.width,
+        box.y + (viewY / viewHeight) * box.height,
+      );
+    };
+    const count = () => page.locator("#chart-container .user-drawings").getAttribute("data-drawing-count");
+    assert.equal(await count(), "0");
+    const before = apiRequests.length;
+    await page.locator('[data-drawing-tool="hline"]').click();
+    assert.equal(await page.locator('[data-drawing-tool="hline"]').getAttribute("aria-pressed"), "true");
+    await clickChart(0.5, 150);
+    assert.equal(await count(), "1");
+    await page.locator('[data-drawing-tool="fib"]').click();
+    await clickChart(0.2, 60);
+    assert.match(await page.locator("#drawing-status").textContent(), /swing end \(2 of 2\)/);
+    await clickChart(0.7, 240);
+    assert.equal(await count(), "2");
+    assert.equal(await page.locator("#chart-container .drawing-fib .drawing-fib-level").count(), 7);
+    assert.match(await page.locator("#chart-container .drawing-fib title").textContent(), /Your annotation — not evidence/);
+    assert.equal(apiRequests.length, before, "drawing must not issue API requests");
+    // Drawings are anchored to candle time + price, so they survive zoom.
+    await page.locator('[data-chart-action="zoom-in"]').click();
+    assert.equal(await count(), "2");
+    await page.reload();
+    await waitForLoadedSnapshot(page);
+    assert.equal(await count(), "2");
+    const afterReload = apiRequests.length;
+    await page.locator('[data-drawing-tool="clear"]').click();
+    assert.equal(await count(), "0");
+    assert.equal(apiRequests.length, afterReload, "clear must not issue API requests");
+    assert.ok(apiRequests.every((item) => item.method === "GET"));
+  } finally {
+    await page.close();
+  }
+});

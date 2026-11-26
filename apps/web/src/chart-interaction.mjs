@@ -202,7 +202,12 @@ export function priceScale({ minimum, maximum, mode = "auto", base, divisions = 
       : null;
     return { fraction, value, label };
   });
-  return { mode: effective, reason, fractionOf, ticks };
+  const valueAt = (fraction) => {
+    if (!Number.isFinite(fraction)) return null;
+    const scaled = high - fraction * (high - low);
+    return effective === "log" ? 10 ** scaled : scaled;
+  };
+  return { mode: effective, reason, fractionOf, valueAt, ticks };
 }
 
 // Evenly spaced candle indexes for the date axis and vertical grid lines.

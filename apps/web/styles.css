@@ -209,3 +209,28 @@ footer strong { color: #ccecff; }
 .markets-list-items { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: .5rem 0 0; }
 .volume-average-line { stroke: #f1d48e; stroke-width: 1.5; fill: none; }
 .legend-volume-average-line { fill: #f1d48e; }
+
+.indicator-toolbar { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; padding: .5rem; margin-bottom: .6rem; border: 1px solid #263040; border-radius: 10px; background: #121a22; }
+.indicator-pill { min-height: 30px; padding: 0 .6rem; border-radius: 5px; font-size: .7rem; font-weight: 700; letter-spacing: .03em; border: 1.5px solid var(--pill-color); background: #0f1419; color: var(--pill-color); }
+.indicator-pill[aria-pressed="true"] { background: var(--pill-color); color: #0b1015; }
+.indicator-pill.not-ready { border-style: dashed; color: #8796a5; opacity: .75; cursor: not-allowed; }
+.indicator-toolbar-legend { margin-left: auto; font-size: .7rem; color: var(--muted); }
+
+.chart-workspace { display: flex; gap: .5rem; align-items: flex-start; }
+.chart-workspace .chart-container { flex: 1 1 auto; min-width: 0; }
+.drawing-tools { flex: none; display: flex; flex-direction: column; gap: .25rem; padding: .3rem; border: 1px solid #263040; border-radius: 10px; background: #121a22; }
+.drawing-tool { width: 34px; min-height: 34px; padding: 0; font-size: .7rem; font-weight: 700; }
+.drawing-tool[aria-pressed="true"] { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+.drawing-bar { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; margin-top: .4rem; }
+.drawing-line { stroke: #e6edf3; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.drawing-fib-level { stroke: #2dd4bf; }
+.drawing-range { stroke: #facc15; }
+.drawing-zone { fill: rgba(56, 189, 248, .12); stroke: #38bdf8; stroke-width: 1; }
+.drawing-zone.zone-reward { fill: rgba(34, 197, 94, .16); stroke: none; }
+.drawing-zone.zone-risk { fill: rgba(239, 68, 68, .16); stroke: none; }
+.drawing-label { fill: #e6edf3; font-size: 10px; }
+.drawing-pending { fill: #facc15; }
+@media (max-width: 640px) {
+  .chart-workspace { flex-direction: column; }
+  .drawing-tools { flex-direction: row; flex-wrap: wrap; }
+}
