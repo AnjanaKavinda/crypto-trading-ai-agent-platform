@@ -5,14 +5,14 @@ Every report here is a SYNTHETIC fixture; no real study result is represented.
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from test_lineage_postgresql import database_url as database_url
-from test_spot_research_api import client_for
+from test_spot_research_api import INSTRUMENT, client_for, refresh_body
 from test_spot_research_api import persisted_service as persisted_service
 from test_study_verdict import report
 from trading_platform_api.forward_api import ForwardService
@@ -82,3 +82,21 @@ def test_verdict_import_is_idempotent_and_drives_the_forward_api(
             }
     finally:
         asyncio.run(engine.dispose())
+
+
+def test_snapshot_windows_list_persisted_snapshots(persisted_service):
+    research, _, repository, now = persisted_service
+    with client_for(research) as client:
+        response = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(timeframe="1m", limit=50, now=now),
+        )
+    assert response.status_code == 200, response.text
+    windows = asyncio.run(
+        repository.snapshot_windows(
+            instrument_id=INSTRUMENT, timeframe="1m", since=now - timedelta(days=1)
+        )
+    )
+    assert windows and windows[0][1] == 50
+    assert windows == tuple(sorted(windows, reverse=True))
+    assert windows[0][0].tzinfo is not None

@@ -25,6 +25,7 @@ from trading_platform_api.research.forward import (
     forward_record,
     forward_stage,
     historical_verdict_from_report,
+    history_start,
     symbol_forward,
 )
 from trading_platform_api.research.strategy import RangeReversion4h, TrendDailyRegime
@@ -139,7 +140,7 @@ def test_review_by_trade_count_or_date_decides_pass_or_fail() -> None:
 
 
 def test_forward_record_replays_frozen_rules_from_the_prospective_start() -> None:
-    candles = daily(PROSPECTIVE - DAY * 300, 300 + 200)
+    candles = daily(PROSPECTIVE - DAY * 200, 200 + 200)
     record = forward_record(
         STRATEGY,
         {"BTCUSDT": candles},
@@ -150,7 +151,7 @@ def test_forward_record_replays_frozen_rules_from_the_prospective_start() -> Non
     assert record["stage"] == "NOT_VALIDATED"
     assert set(record["authority"].values()) == {False}
     signals = STRATEGY.signals(candles)
-    start = 300
+    start = 200
     expected = run_segment(
         candles, signals, CostAssumptions(), start=start, end=len(candles)
     )
@@ -188,9 +189,21 @@ def test_forward_fails_closed_without_warm_up_or_with_misaligned_symbols() -> No
         forward_record(
             STRATEGY,
             {
-                "BTCUSDT": daily(PROSPECTIVE - DAY * 300, 320),
-                "ETHUSDT": daily(PROSPECTIVE - DAY * 300, 330),
+                "BTCUSDT": daily(PROSPECTIVE - DAY * 200, 220),
+                "ETHUSDT": daily(PROSPECTIVE - DAY * 200, 230),
             },
+            historical=None,
+            as_of=PROSPECTIVE,
+        )
+
+
+def test_forward_history_has_a_fixed_warm_up_start() -> None:
+    assert history_start(STRATEGY) == datetime(2026, 5, 10, tzinfo=UTC)
+    assert history_start(RangeReversion4h()) == datetime(2026, 11, 21, 12, tzinfo=UTC)
+    with pytest.raises(ValueError, match="fixed warm-up start"):
+        forward_record(
+            STRATEGY,
+            {"BTCUSDT": daily(PROSPECTIVE - DAY * 300, 400)},
             historical=None,
             as_of=PROSPECTIVE,
         )

@@ -5,7 +5,7 @@ none of it is real market data or a real snapshot.
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -42,10 +42,30 @@ def synthetic_snapshot(timeframe, *, quality="VALID", overrides=None):
     }
 
 
+FORWARD_RECORD = {
+    "stage": "NOT_VALIDATED",
+    "reason": "NO_HISTORICAL_VERDICT_RECORDED",
+    "forward": {"closed_trades": 0},
+}
+
+
+def covered_history(url):
+    """SYNTHETIC historical read that already covers the requested window."""
+    as_of = url.split("as_of=")[1].replace("%3A", ":")
+    return {
+        "data_quality": {"status": "VALID"},
+        "candles": [
+            {"open_time": "2020-01-01T00:00:00Z", "close_time": "2020-01-02T00:00:00Z"},
+            {"open_time": "2020-01-02T00:00:00Z", "close_time": as_of},
+        ],
+    }
+
+
 class FakeTransport:
-    def __init__(self, responses=None):
+    def __init__(self, responses=None, history_covered=True):
         self.calls = []
         self.responses = responses or {}
+        self.history_covered = history_covered
 
     def __call__(self, method, url, headers, body):
         self.calls.append((method, url, dict(headers), body))
@@ -56,6 +76,12 @@ class FakeTransport:
         if method == "POST":
             timeframe = json.loads(body)["timeframe"]
             return 200, json.dumps(synthetic_snapshot(timeframe)).encode()
+        if "/candles?" in url:
+            if self.history_covered:
+                return 200, json.dumps(covered_history(url)).encode()
+            return 404, b'{"code": "SPOT_SNAPSHOT_NOT_FOUND"}'
+        if "/api/research/forward/" in url:
+            return 200, json.dumps(FORWARD_RECORD).encode()
         return 200, b'{"items": [], "next_cursor": null}'
 
 
@@ -81,10 +107,18 @@ def test_all_ready_refreshes_every_pair_and_only_reads_otherwise():
     assert all(call[1].endswith("/refresh") for call in posts)
     assert all(call[2]["Origin"] == "http://127.0.0.1:5173" for call in posts)
     gets = [call for call in transport.calls if call[0] == "GET"]
-    assert [call[1] for call in gets] == [
+    assert [
+        call[1]
+        for call in gets
+        if "/candles?" not in call[1] and "/forward/" not in call[1]
+    ] == [
         "http://127.0.0.1:5173/api/research/decision-journal?limit=20",
         "http://127.0.0.1:5173/api/research/strategy-signals"
         "?contract_id=C-026&schema_version=2&limit=20",
+    ]
+    assert [call[1] for call in gets if "/forward/" in call[1]] == [
+        "http://127.0.0.1:5173/api/research/forward/trend-daily-regime?version=1",
+        "http://127.0.0.1:5173/api/research/forward/range-reversion-4h?version=1",
     ]
     assert all("Origin" not in call[2] for call in gets)
     # Only refresh POSTs and reads: nothing else is ever written.
@@ -206,7 +240,7 @@ def test_report_and_cli_exit_code(tmp_path: Path, monkeypatch):
     assert main(["daily-check", "--out", str(tmp_path)]) == 1
     [report] = tmp_path.glob("daily-check-*.md")
     text = report.read_text("utf-8")
-    assert "Overall: **PROBLEM** (1 problem(s), 32 checks)" in text
+    assert "Overall: **PROBLEM** (1 problem(s), 34 checks)" in text
     assert "| strategy-signal read | PROBLEM | HTTP 500 |" in text
     assert "no decision, journal entry, outcome or order was recorded" in text
 
@@ -224,3 +258,52 @@ def test_markdown_escapes_pipes():
         base_url="http://127.0.0.1:5173",
     )
     assert "| x | PROBLEM | a\\|b |" in text
+
+
+def test_backfill_windows_are_fixed_and_bounded():
+    # Strategy A (1d) warms up from 2026-05-10; the current 1d refresh covers
+    # the last 90 candles from 2026-08-28.
+    assert daily_check.backfill_windows(
+        "1d", datetime(2026, 5, 10, tzinfo=UTC), NOW
+    ) == [
+        (datetime(2026, 5, 10, tzinfo=UTC), datetime(2026, 8, 8, tzinfo=UTC)),
+        (datetime(2026, 8, 8, tzinfo=UTC), datetime(2026, 8, 28, tzinfo=UTC)),
+    ]
+    # Strategy B (4h) is still inside the current 501-candle refresh.
+    start_b = datetime(2026, 11, 21, 12, tzinfo=UTC)
+    assert daily_check.backfill_windows("4h", start_b, NOW) == []
+    later = datetime(2027, 3, 1, tzinfo=UTC)
+    windows = daily_check.backfill_windows("4h", start_b, later)
+    assert windows[0][0] == start_b
+    assert all(b - a <= timedelta(days=80) for a, b in windows)
+    assert all(a == b for (_, a), (b, _) in zip(windows, windows[1:]))
+
+
+def test_missing_history_is_backfilled_and_forward_stage_reported():
+    transport = FakeTransport(history_covered=False)
+    results = run(transport)
+    backfills = [
+        json.loads(call[3])
+        for call in transport.calls
+        if call[0] == "POST" and json.loads(call[3])["coverage_end"] < "2026-11"
+    ]
+    assert len(backfills) == 2 * len(daily_check.INSTRUMENTS)
+    assert {
+        (b["coverage_start"], b["coverage_end"], b["limit"]) for b in backfills
+    } == {
+        ("2026-05-10T00:00:00Z", "2026-08-08T00:00:00Z", 90),
+        ("2026-08-08T00:00:00Z", "2026-08-28T00:00:00Z", 20),
+    }
+    stage = next(i for i in results if i.name == "forward stage trend-daily-regime v1")
+    assert stage.ready and stage.detail.startswith("NOT_VALIDATED")
+    assert all(item.ready for item in results)
+
+
+def test_forward_stage_failure_is_a_problem():
+    responses = {
+        "forward/range-reversion-4h": (422, {"code": "FORWARD_HISTORY_INSUFFICIENT"})
+    }
+    results = run(FakeTransport(responses))
+    failed = [item for item in results if not item.ready]
+    assert [item.name for item in failed] == ["forward stage range-reversion-4h v1"]
+    assert "FORWARD_HISTORY_INSUFFICIENT" in failed[0].detail
