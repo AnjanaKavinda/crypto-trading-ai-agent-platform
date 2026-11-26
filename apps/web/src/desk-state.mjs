@@ -8,7 +8,7 @@ export const DESK_TABS = Object.freeze([
   Object.freeze({ id: "strategy-lab", label: "Strategy lab", page: "./evidence.html",
     title: "Stored strategy evidence reports" }),
   Object.freeze({ id: "my-results", label: "My results", page: "./signals.html",
-    title: "Research records, NO_TRADE decisions and the owner decision journal" }),
+    title: "My results vs baselines, research records, NO_TRADE decisions and the owner decision journal" }),
 ]);
 
 export const DEFAULT_TAB = "today";
