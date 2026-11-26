@@ -92,7 +92,12 @@ python -m trading_platform_api.research run --strategy range-reversion-4h --prot
 | Protocol | `spot-walk-forward-prospective` v2, same criteria and periods as Strategy A, on 4h bars |
 | Prospective review | 30 trades or 3 months, only after a HISTORICAL_PASS |
 
-Chart markers for this strategy are a follow-up.
+Chart markers: `GET /api/research/spot/{instrument}/strategy-markers?timeframe=4h&limit=500&strategy=range-reversion-4h&version=1`
+(4h snapshots only). BUY markers list ADX14, close vs lower band and RSI14 at the
+signal close; SELL markers explain the middle-band exit, the 12-bar time stop
+(`TIME_EXIT`, with bars held) or the stop. The served RSI14 and Bollinger values
+must equal the research formulas or no markers are returned; ADX14 is recomputed
+from the snapshot's validated candles.
 
 ## Calculation verification (E2d)
 
