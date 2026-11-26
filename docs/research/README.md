@@ -115,3 +115,37 @@ Add `account_size` (USDT) and `risk_pct` for a position size:
 (account × risk%) ÷ (entry − stop), capped at account ÷ entry (Spot, no
 leverage). Stale or invalid data, or any indicator mismatch, returns no
 markers. Markers cover one snapshot only and are not a strategy verdict.
+
+## Daily research check (E2c3)
+
+With the local stack running (`http://127.0.0.1:5173`):
+
+```powershell
+.venv\Scripts\python -m trading_platform_api.research daily-check
+# or: powershell -ExecutionPolicy Bypass -File scripts\daily-research-check.ps1
+```
+
+It explicitly refreshes 4h (501 candles) and 1d (90 candles, the API's 90-day
+refresh bound) for BTC, ETH, BNB, SOL and XRP through the same local web
+endpoint and headers the browser uses, then checks that each snapshot's quality
+is `VALID` and `CURRENT`, that EMA 20/50/500, ATR 14, Bollinger 20 and RSI 14
+are `AVAILABLE` (EMA 500 is reported but not required on 1d, because 90 daily
+candles cannot warm it up), and that the decision-journal and strategy-signal
+reads return 200. It writes `research-output/daily-check-<UTC date>.md` with
+READY/PROBLEM per check and exits `1` on any PROBLEM. It only refreshes and
+reads: it never records a decision, journal entry or outcome.
+
+**Windows Task Scheduler** (daily, after the 00:00 UTC daily close, e.g.
+06:00 Asia/Colombo):
+
+1. Task Scheduler → *Create Task…* → name `Daily research check`; *Run only
+   when user is logged on* (the Docker stack runs in your session).
+2. *Triggers* → *New…* → Daily, 06:00.
+3. *Actions* → *New…* → Program `powershell.exe`, arguments
+   `-NoProfile -ExecutionPolicy Bypass -File "<repo>\scripts\daily-research-check.ps1"`,
+   start in `<repo>`.
+4. *Settings* → *Run task as soon as possible after a scheduled start is
+   missed*.
+
+The task's *Last Run Result* is `0x0` when everything is READY and `0x1` when
+the report lists a PROBLEM.
