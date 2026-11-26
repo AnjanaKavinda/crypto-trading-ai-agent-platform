@@ -76,6 +76,18 @@
         <span>Only read-only local API requests run on initial load and selector changes.</span>
       </section>
 
+      <section id="decision-panel" class="panel" aria-labelledby="decision-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">MY DECISION</p>
+            <h2 id="decision-heading">Record my decision</h2>
+          </div>
+          <button id="record-decision-button" class="primary" type="button" disabled>Record my decision</button>
+        </div>
+        <p id="decision-note" class="muted" role="status">No snapshot is loaded. Load a chart first.</p>
+        <div id="decision-body"></div>
+      </section>
+
       <section class="panel chart-panel" aria-labelledby="chart-heading">
         <div class="section-heading">
           <div>

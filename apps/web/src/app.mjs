@@ -1,3 +1,4 @@
+import { mountJournal, snapshotDecisionEligibility } from "./decision-journal.mjs";
 import { markerAnchors, markersBindingError, MARKER_LABELS, sizingInputs, tradeDetails } from "./strategy-markers.mjs";
 import { toolbarPills } from "./indicator-toolbar.mjs";
 import {
@@ -170,6 +171,24 @@ const isoText = (value) => {
   return Number.isNaN(instant.valueOf()) ? value : `${formatter.format(instant)} UTC · ${value}`;
 };
 const stringValue = (value) => typeof value === "string" ? value : value == null ? "Not reported" : String(value);
+
+// U2j: "Record my decision" binds the journal (C-107v2) to the exact snapshot on screen.
+function renderDecisionPanel(snapshot) {
+  const button = $("#record-decision-button");
+  if (!button) return;
+  const eligibility = snapshotDecisionEligibility(snapshot);
+  $("#decision-body").replaceChildren();
+  button.disabled = !eligibility.ok;
+  button.onclick = null;
+  $("#decision-note").textContent = eligibility.ok
+    ? `Declare ABSTAIN or an external trade intention against snapshot ${eligibility.target.snapshot_id} (${snapshot.symbol} · ${snapshot.timeframe}, quality VALID). Unverified local declaration; no trade authority.`
+    : eligibility.reason;
+  if (!eligibility.ok) return;
+  button.onclick = () => {
+    button.disabled = true;
+    mountJournal(document, $("#decision-body"), null, globalThis.fetch, { snapshot: eligibility.target });
+  };
+}
 
 function setStatus(snapshot, errorMessage) {
   const panel = $("#snapshot-status");
@@ -1722,6 +1741,7 @@ async function bootstrap() {
     if (sequence !== requestSequence) return;
     snapshot = null;
     setStatus(null, error.message);
+    renderDecisionPanel(null);
     markerState.response = null;
     markerState.error = null;
     renderMarkersPanel(null);
@@ -1739,6 +1759,7 @@ async function bootstrap() {
     controlError.hidden = true;
     snapshot = null;
     updateRefreshAvailability();
+    renderDecisionPanel(null);
     const statusPanel = $("#snapshot-status");
     statusPanel.dataset.state = "warning";
     statusPanel.replaceChildren(
@@ -1790,6 +1811,7 @@ async function bootstrap() {
       snapshot = response;
       markerState.response = null;
       setStatus(snapshot);
+      renderDecisionPanel(snapshot);
       renderChart(snapshot, preferences);
       renderCandles(snapshot);
       renderMetadata(snapshot);
@@ -1893,6 +1915,7 @@ async function bootstrap() {
       snapshot = response;
       markerState.response = null;
       setStatus(snapshot);
+      renderDecisionPanel(snapshot);
       renderChart(snapshot, preferences);
       renderCandles(snapshot);
       renderMetadata(snapshot);
