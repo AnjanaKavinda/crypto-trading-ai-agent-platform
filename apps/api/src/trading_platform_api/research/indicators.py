@@ -1,7 +1,7 @@
 """Deterministic indicators over validated closed candles.
 
 The formulas match ``analysis.moving_averages`` (EMA: SMA seed, alpha
-2/(N+1)) and ``analysis.volatility.calculate_atr14`` (Wilder ATR: first true
+2/(N+1); SMA: running trailing sum) and ``analysis.volatility.calculate_atr14`` (Wilder ATR: first true
 range starts at candle two, first value at index ``period``). They are
 restated here only because those functions are bound to bounded market
 snapshots (at most 10,000 candles); a long backtest needs the same arithmetic
@@ -28,6 +28,21 @@ def ema(values: Sequence[Decimal], period: int) -> list[Decimal | None]:
     for value in values[period:]:
         previous = alpha * value + (Decimal(1) - alpha) * previous
         out.append(previous)
+    return out
+
+
+def sma(values: Sequence[Decimal], period: int) -> list[Decimal | None]:
+    if period < 1:
+        raise ValueError("period must be positive.")
+    if len(values) < period:
+        return [None] * len(values)
+    out: list[Decimal | None] = [None] * (period - 1)
+    divisor = Decimal(period)
+    running = sum(values[:period], Decimal(0))
+    out.append(running / divisor)
+    for index in range(period, len(values)):
+        running += values[index] - values[index - period]
+        out.append(running / divisor)
     return out
 
 
