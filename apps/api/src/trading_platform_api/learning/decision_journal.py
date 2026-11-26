@@ -138,3 +138,121 @@ class ResearchDecisionJournalEntry:
         object.__setattr__(
             self, "entry_id", uuid5(JOURNAL_NAMESPACE, "C-107:1:" + digest)
         )
+
+
+SNAPSHOT_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotObservation:
+    """Server-resolved facts of the quality-VALID snapshot the owner viewed."""
+
+    instrument_id: str
+    timeframe: str
+    as_of: datetime
+    last_candle_open_time: datetime
+    candle_count: int
+    fresh_until: datetime
+    quality_status: str = field(default="VALID", init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.instrument_id) is not str
+            or not 1 <= len(self.instrument_id) <= 64
+            or self.timeframe not in SNAPSHOT_TIMEFRAMES
+            or type(self.candle_count) is not int
+            or self.candle_count < 2
+        ):
+            raise ValueError("Invalid snapshot observation.")
+        for name in ("as_of", "last_candle_open_time", "fresh_until"):
+            object.__setattr__(self, name, utc(getattr(self, name)))
+        # fresh_until = last candle close + the approved policy freshness window,
+        # the same rule the served snapshot uses to report STALE.
+        if not self.last_candle_open_time <= self.as_of or not (
+            self.last_candle_open_time < self.fresh_until
+        ):
+            raise ValueError("Snapshot observation times are out of order.")
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotDecisionJournalEntry:
+    """C-107v2: a declaration against the exact persisted snapshot on screen.
+
+    Owner-approved amendment to ADR-0031 (E2c2, 2026-11-26). Same append-only,
+    correction and idempotency rules as C-107v1; no qualification, approval or
+    execution authority.
+    """
+
+    request_id: UUID
+    request_sha256: str
+    source: VersionReference
+    quality_report: VersionReference
+    snapshot_observation: SnapshotObservation
+    declared_action: str
+    declared_at: datetime
+    recorded_at: datetime
+    note: str = ""
+    supersedes: VersionReference | None = None
+    correction_reason: str | None = None
+    entry_id: UUID = field(init=False)
+    content_sha256: str = field(init=False)
+    contract_id: str = field(default="C-107", init=False)
+    schema_version: str = field(default="2", init=False)
+    profile: str = field(default="PERSONAL_SPOT_RESEARCH", init=False)
+    operating_mode: str = field(default="RESEARCH", init=False)
+    origin: str = field(default="LOCAL_USER_DECLARATION", init=False)
+    identity_assurance: str = field(default="LOCAL_SESSION_UNAUTHENTICATED", init=False)
+    qualification_authorized: bool = field(default=False, init=False)
+    approval_authorized: bool = field(default=False, init=False)
+    execution_authorized: bool = field(default=False, init=False)
+    trade_facts_verified: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        VersionReference("request", self.request_id, "1", self.request_sha256)
+        if type(self.source) is not VersionReference or (
+            self.source.artifact_type,
+            self.source.version,
+        ) != ("C-002", "1"):
+            raise ValueError("Exact C-002v1 snapshot source required.")
+        if type(self.quality_report) is not VersionReference or (
+            self.quality_report.artifact_type,
+            self.quality_report.version,
+        ) != ("C-003", "1"):
+            raise ValueError("Exact C-003v1 quality report required.")
+        if type(self.snapshot_observation) is not SnapshotObservation:
+            raise ValueError("Invalid snapshot observation.")
+        if self.declared_action not in ("ABSTAIN", "EXTERNAL_TRADE_INTENT"):
+            raise ValueError("Unsupported declaration action.")
+        for name in ("declared_at", "recorded_at"):
+            object.__setattr__(self, name, utc(getattr(self, name)))
+        observed = self.snapshot_observation
+        if max(self.declared_at, observed.as_of) > self.recorded_at:
+            raise ValueError("Future declaration/snapshot or reversed server clock.")
+        if self.recorded_at > observed.fresh_until:
+            raise ValueError("Snapshot was stale when the declaration was recorded.")
+        if type(self.note) is not str or len(self.note) > 2000:
+            raise ValueError("Note must be plain text of at most 2000 characters.")
+        if (self.supersedes is None) != (self.correction_reason is None):
+            raise ValueError("Correction reference and reason must both be supplied.")
+        if self.supersedes is not None:
+            if type(self.supersedes) is not VersionReference or (
+                self.supersedes.artifact_type,
+                self.supersedes.version,
+            ) != ("C-107", "2"):
+                raise ValueError("Invalid correction parent.")
+            if (
+                type(self.correction_reason) is not str
+                or not self.correction_reason.strip()
+                or len(self.correction_reason) > 2000
+            ):
+                raise ValueError("Correction reason is required and bounded.")
+        material = {
+            f.name: getattr(self, f.name)
+            for f in fields(self)
+            if f.name not in {"entry_id", "content_sha256"}
+        }
+        digest = canonical_sha256(material)
+        object.__setattr__(self, "content_sha256", digest)
+        object.__setattr__(
+            self, "entry_id", uuid5(JOURNAL_NAMESPACE, "C-107:2:" + digest)
+        )

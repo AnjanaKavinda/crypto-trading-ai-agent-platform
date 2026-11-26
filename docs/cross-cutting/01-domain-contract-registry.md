@@ -1172,6 +1172,15 @@ Writes require configured allowed Origin and bounded JSON (16 KiB). The research
 records page offers an explicit action/save and read-only history; safe text
 notes remain unverified claims. No manual result/cost schema is introduced.
 
+C-107 schema 2 `SnapshotDecisionJournalEntry` (ADR-0031 amendment 1, E2c2)
+links the same kind of declaration to the exact persisted, quality-VALID
+C-002v1 snapshot and C-003v1 report the owner is viewing. The server resolves
+instrument, timeframe, `as_of`, last candle open time, candle count and
+`fresh_until`, and rejects unknown, superseded, mismatched or stale snapshots.
+POST the same endpoint with `snapshot_id`/`quality_report_id` instead of
+`source`; read with `schema_version=2`. Migration 0014 widens the request index
+to versions 1 and 2. Identity, authority flags and correction rules match v1.
+
 ## C-108 — Owner-reported Spot trade outcome (#157, ADR-0032 queue E2)
 
 C-108 schema 1 `OwnerTradeOutcome` records what the owner says happened after
