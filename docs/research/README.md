@@ -113,7 +113,22 @@ or 3 months, whichever first), then `FORWARD_PASS` if pooled expectancy after
 costs > 0 and the forward portfolio max drawdown ≤ 1.5 × the historical one,
 else `FAIL`. The historical verdict is read from the owner's study report only
 if its strategy and protocol digests match exactly (owner decision on #516:
-import the report). Persistence, the import command and the API follow in part 2.
+import the report).
+
+Import a study report once it has been run (the local stack must be up):
+
+```powershell
+python -m trading_platform_api.research record-verdict research-output\<report>.json
+```
+
+The API stores it append-only as C-109 (an identical re-import returns the same
+record). `GET /api/research/forward/trend-daily-regime` (or
+`range-reversion-4h`) then returns the SIMULATED forward signals, stats and
+stage from the persisted 1d (or 4h) snapshots; it fails closed if a snapshot is
+missing, not VALID or too short to warm up the indicators before 2026-11-26
+(refresh with a larger `limit`, up to 501 candles). Recording each signal
+append-only as candles arrive (so 4h history beyond 501 candles is kept) and
+the daily-check hook follow in part 3.
 
 ## Calculation verification (E2d)
 

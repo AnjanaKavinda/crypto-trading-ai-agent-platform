@@ -23,6 +23,7 @@ from trading_platform_api.docker_local import (
     DockerLocalSettings,
     load_docker_local_settings,
 )
+from trading_platform_api.forward_api import ForwardService, create_forward_router
 from trading_platform_api.health import create_router as create_health_router
 from trading_platform_api.journal_api import JournalService, create_journal_router
 from trading_platform_api.lineage.archive_storage import LocalFilesystemObjectStore
@@ -254,6 +255,9 @@ def create_app(
     app.state.trade_outcome_service = (
         TradeOutcomeService(session_factory) if session_factory is not None else None
     )
+    app.state.forward_service = (
+        ForwardService(session_factory) if session_factory is not None else None
+    )
     if docker_settings is not None:
         allowed_origin = docker_settings.origin
     elif allowed_origin is None:
@@ -280,6 +284,7 @@ def create_app(
     app.include_router(create_strategy_signal_router())
     app.include_router(create_journal_router())
     app.include_router(create_trade_outcome_router())
+    app.include_router(create_forward_router())
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(

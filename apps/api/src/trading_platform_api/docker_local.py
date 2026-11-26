@@ -28,6 +28,7 @@ ORIGINLESS_GET_PATHS = frozenset(
         "/api/research/decision-journal",
         "/api/research/owner-outcomes",
         "/api/research/owner-outcomes/score",
+        "/api/research/forward/verdicts",
     }
 )
 _UUID = r"[0-9A-Fa-f-]{32,36}"
@@ -37,6 +38,7 @@ ORIGINLESS_GET_PATTERNS = tuple(
         r"/api/research/spot/[A-Za-z0-9._:-]+/(candles|strategy-markers)",
         rf"/api/research/strategy-signals/C-[0-9]{{3}}/{_UUID}(/evidence)?",
         rf"/api/research/(decision-journal|owner-outcomes)/(requests/)?{_UUID}",
+        r"/api/research/forward/(trend-daily-regime|range-reversion-4h)",
     )
 )
 

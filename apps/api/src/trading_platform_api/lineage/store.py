@@ -78,6 +78,7 @@ from trading_platform_api.market_data.history_contracts import (
     ObservationRevision,
     ReconstructionManifest,
 )
+from trading_platform_api.research.study_verdict import StudyVerdictRecord
 from trading_platform_api.strategy.contracts import (
     SignalCandidate,
     StrategyEligibility,
@@ -134,6 +135,7 @@ def _reference_content_sha256(record: object) -> str:
         type(record) is ResearchDecisionJournalEntry
         or type(record) is SnapshotDecisionJournalEntry
         or type(record) is OwnerTradeOutcome
+        or type(record) is StudyVerdictRecord
     ):
         return record.content_sha256
     if type(record) is AnalysisSnapshotV4:
@@ -209,6 +211,7 @@ def references(record: object) -> tuple[Reference, ...]:
         type(record) is ResearchDecisionJournalEntry
         or type(record) is SnapshotDecisionJournalEntry
         or type(record) is OwnerTradeOutcome
+        or type(record) is StudyVerdictRecord
     ):
         return _typed_contract_references(record)
     if type(record) is ValidationFreshnessAssessmentV1:
