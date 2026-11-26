@@ -7,6 +7,7 @@
     <title>Spot Research Records and NO_TRADE</title>
     <link rel="stylesheet" href="./styles.css">
     <script type="module" src="./src/signal-board.mjs"></script>
+    <script type="module" src="./src/owner-results.mjs"></script>
   </head>
   <body>
     <header class="app-header">
@@ -23,6 +24,12 @@
       </nav>
     </header>
     <main>
+      <section class="panel" aria-labelledby="results-heading">
+        <h2 id="results-heading">My results vs baselines</h2>
+        <p class="education-note"><strong>Your own results, scored by the pre-registered owner-results protocol.</strong> Recorded trades (net of fees) are compared with cash and buy-and-hold; NO_TRADE decisions are compared with holding over a fixed horizon. Kept separate from strategy evidence.</p>
+        <p id="results-status" role="status" aria-live="polite">Loading your results…</p>
+        <div id="results-body" class="source-list"></div>
+      </section>
       <section class="panel" aria-labelledby="records-heading">
         <h2 id="records-heading">Persisted research records</h2>
         <p class="education-note"><strong>Recorded state is not a current trade instruction.</strong> Qualification, present validity, current trade-risk acceptance, human approval and execution are separate. This page does not create or promote a signal.</p>
