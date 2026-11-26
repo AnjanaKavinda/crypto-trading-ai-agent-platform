@@ -15,7 +15,9 @@ from trading_platform_api.config import (
     OperatingMode,
 )
 from trading_platform_api.learning.owner_scoring import (
+    NoTradeDecision,
     OwnerResultsProtocol,
+    price_points,
     score_owner_results,
 )
 from trading_platform_api.learning.trade_outcome import OwnerFill, OwnerTradeOutcome
@@ -133,6 +135,12 @@ class _Outcomes:
     async def all_outcomes(self):
         return self.outcomes
 
+    async def no_trade_decisions(self):
+        return [NoTradeDecision("n1", "BTC-USDT-SPOT", T0)]
+
+    def clock(self):
+        return T0 + timedelta(days=30)
+
 
 def test_score_endpoint_reads_all_outcomes_and_is_not_an_outcome_id():
     app = create_app(
@@ -146,3 +154,79 @@ def test_score_endpoint_reads_all_outcomes_and_is_not_an_outcome_id():
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["trades"]["counted"] == 1
     assert response.json()["verdict"]["status"] == "INCONCLUSIVE"
+    # No persisted candles in this app: baselines fail closed with the reason.
+    hold = response.json()["baselines"]["BUY_AND_HOLD"]
+    assert hold["status"] == "UNAVAILABLE"
+    assert hold["coins"][0]["reason"] == "RESEARCH_PERSISTENCE_UNAVAILABLE"
+    no_trade = response.json()["no_trade_decisions"]
+    assert (no_trade["status"], no_trade["evaluated"]) == ("UNAVAILABLE", 0)
+
+
+def test_buy_and_hold_and_no_trade_baselines_use_supplied_candle_closes():
+    # SYNTHETIC closes keyed by (instrument, time); missing keys fail closed.
+    btc = trade(0, "100", "110")
+    eth = trade(2, "100", "90")
+    eth = OwnerTradeOutcome(
+        request_id=uuid4(),
+        request_sha256="a" * 64,
+        journal_entry=VersionReference("C-107", uuid4(), "1", "b" * 64),
+        journal_recorded_at=T0,
+        instrument_id="ETH-USDT-SPOT",
+        fills=eth.fills,
+        recorded_at=T0 + timedelta(days=400),
+    )
+    now = T0 + timedelta(days=20)
+    decisions = [
+        NoTradeDecision("a", "BTC-USDT-SPOT", T0 + timedelta(days=1)),
+        NoTradeDecision("b", "BTC-USDT-SPOT", T0 + timedelta(days=3)),
+        NoTradeDecision("c", "BTC-USDT-SPOT", T0 + timedelta(days=15)),
+        NoTradeDecision("d", None, T0 + timedelta(days=2)),
+    ]
+    hour = timedelta(hours=1)
+    closes = {
+        ("BTC-USDT-SPOT", T0): Decimal("100"),
+        ("BTC-USDT-SPOT", T0 + hour): Decimal("120"),
+        ("ETH-USDT-SPOT", T0 + timedelta(days=2)): Decimal("50"),
+        ("ETH-USDT-SPOT", T0 + timedelta(days=2) + hour): Decimal("45"),
+        ("BTC-USDT-SPOT", T0 + timedelta(days=1)): Decimal("200"),
+        ("BTC-USDT-SPOT", T0 + timedelta(days=8)): Decimal("180"),
+        ("BTC-USDT-SPOT", T0 + timedelta(days=3)): Decimal("100"),
+        ("BTC-USDT-SPOT", T0 + timedelta(days=10)): Decimal("105"),
+    }
+    protocol = OwnerResultsProtocol()
+    assert set(price_points([btc, eth], decisions, protocol, now)) == set(closes)
+
+    def price_at(instrument, at):
+        value = closes.get((instrument, at))
+        return (value, None) if value is not None else (None, "NO_CANDLE")
+
+    result = score_owner_results(
+        [btc, eth], decisions=decisions, price_at=price_at, now=now
+    )
+    hold = result["baselines"]["BUY_AND_HOLD"]
+    # BTC 100 -> 120 = +0.2, ETH 50 -> 45 = -0.1; equal-weight mean 0.05.
+    assert hold["status"] == "AVAILABLE"
+    assert [coin["hold_return"] for coin in hold["coins"]] == ["0.2", "-0.1"]
+    assert hold["total_return"] == "0.05"
+    no_trade = result["no_trade_decisions"]
+    by_id = {item["entry_id"]: item for item in no_trade["items"]}
+    assert (by_id["a"]["hold_return"], by_id["a"]["standing_aside_better"]) == (
+        "-0.1",
+        True,
+    )
+    assert (by_id["b"]["hold_return"], by_id["b"]["standing_aside_better"]) == (
+        "0.05",
+        False,
+    )
+    assert by_id["c"]["status"] == "PENDING"
+    assert by_id["d"]["status"] == "UNAVAILABLE"
+    assert (no_trade["evaluated"], no_trade["standing_aside_better"]) == (2, 1)
+    assert no_trade["average_hold_return"] == "-0.025"
+    # The verdict is unchanged by baselines.
+    assert result["verdict"]["status"] == "INCONCLUSIVE"
+
+    missing = score_owner_results(
+        [btc], decisions=[], price_at=lambda i, t: (None, "NO_CANDLE"), now=now
+    )["baselines"]["BUY_AND_HOLD"]
+    assert missing["status"] == "UNAVAILABLE"
+    assert missing["coins"][0]["reason"] == "NO_CANDLE"

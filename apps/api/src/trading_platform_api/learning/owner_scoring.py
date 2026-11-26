@@ -14,8 +14,16 @@ scored. Changing a criterion needs a new protocol version.
   <= 0 (does not beat cash) or max drawdown > ``max_drawdown``. PASS also needs
   profit factor >= ``min_profit_factor`` and a bootstrap 5% lower bound of the
   mean trade return > 0, with no UNKNOWN-fee trades.
-- Buy-and-hold of the same coin and the 7-day NO_TRADE comparison need
-  persisted candles; until wired they are reported UNAVAILABLE with a reason.
+- Buy-and-hold baseline: for each coin traded, hold it from the first entry
+  fill to the last exit fill, using the close of the persisted, quality-VALID
+  4h candle that closed at or within one candle before each time; the
+  baseline is the equal-weight mean across coins. Missing candles make it
+  UNAVAILABLE with the reason, never estimated. It is reported beside the
+  verdict and does not change it.
+- NO_TRADE (ABSTAIN) decisions: each is compared with holding that coin for
+  ``no_trade_horizon_days`` from the declared time, using the same candle
+  rule. Standing aside was better when that hold return is <= 0. Decisions
+  whose horizon has not passed are PENDING. Kept separate from trade P&L.
 
 Facts stay owner-reported and unverified; a PASS is evidence about past
 decisions only and grants no trading authority.
@@ -25,8 +33,9 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import TYPE_CHECKING
@@ -60,6 +69,151 @@ class OwnerResultsProtocol:
     def content_sha256(self) -> str:
         document = json.dumps(self.describe(), sort_keys=True, separators=(",", ":"))
         return sha256(document.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class NoTradeDecision:
+    """A current (not superseded) ABSTAIN journal declaration."""
+
+    entry_id: str
+    instrument_id: str | None
+    declared_at: datetime
+
+
+# price_at(instrument_id, time) -> (close, None) or (None, reason)
+PriceLookup = Callable[[str, datetime], tuple[Decimal | None, str | None]]
+
+
+def price_points(
+    outcomes: Sequence[OwnerTradeOutcome],
+    decisions: Sequence[NoTradeDecision],
+    protocol: OwnerResultsProtocol,
+    now: datetime,
+) -> list[tuple[str, datetime]]:
+    """Every (instrument, time) whose candle close the baselines need."""
+    points: set[tuple[str, datetime]] = set()
+    for instrument, (start, end) in _holding_windows(outcomes).items():
+        points.update({(instrument, start), (instrument, end)})
+    horizon = timedelta(days=protocol.no_trade_horizon_days)
+    for item in decisions:
+        if item.instrument_id is not None and item.declared_at + horizon <= now:
+            points.update(
+                {
+                    (item.instrument_id, item.declared_at),
+                    (item.instrument_id, item.declared_at + horizon),
+                }
+            )
+    return sorted(points)
+
+
+def _holding_windows(
+    outcomes: Sequence[OwnerTradeOutcome],
+) -> dict[str, tuple[datetime, datetime]]:
+    windows: dict[str, tuple[datetime, datetime]] = {}
+    for item in current_outcomes(outcomes):
+        if net_return(item) is None:
+            continue
+        start, end = item.fills[0].executed_at, item.fills[-1].executed_at
+        if item.instrument_id in windows:
+            old_start, old_end = windows[item.instrument_id]
+            start, end = min(start, old_start), max(end, old_end)
+        windows[item.instrument_id] = (start, end)
+    return windows
+
+
+def _hold(
+    price_at: PriceLookup, instrument: str, start: datetime, end: datetime
+) -> tuple[dict[str, object], Decimal | None]:
+    first, first_reason = price_at(instrument, start)
+    last, last_reason = price_at(instrument, end)
+    row: dict[str, object] = {
+        "instrument_id": instrument,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "start_close": _text(first),
+        "end_close": _text(last),
+    }
+    if first is None or last is None:
+        row.update(status="UNAVAILABLE", reason=first_reason or last_reason)
+        return row, None
+    value = last / first - Decimal(1)
+    row.update(status="AVAILABLE", hold_return=str(value))
+    return row, value
+
+
+def buy_and_hold_baseline(
+    outcomes: Sequence[OwnerTradeOutcome], price_at: PriceLookup
+) -> dict[str, object]:
+    windows = _holding_windows(outcomes)
+    if not windows:
+        return {"status": "UNAVAILABLE", "reason": "No counted trades.", "coins": []}
+    rows, values = [], []
+    for instrument, (start, end) in sorted(windows.items()):
+        row, value = _hold(price_at, instrument, start, end)
+        rows.append(row)
+        values.append(value)
+    if any(value is None for value in values):
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "A persisted VALID 4h candle is missing for a holding window.",
+            "coins": rows,
+        }
+    known = [value for value in values if value is not None]
+    return {
+        "status": "AVAILABLE",
+        "basis": "equal-weight hold of each traded coin, first entry to last exit",
+        "total_return": str(sum(known, Decimal(0)) / Decimal(len(known))),
+        "coins": rows,
+    }
+
+
+def no_trade_comparison(
+    decisions: Sequence[NoTradeDecision],
+    price_at: PriceLookup,
+    protocol: OwnerResultsProtocol,
+    now: datetime,
+) -> dict[str, object]:
+    horizon = timedelta(days=protocol.no_trade_horizon_days)
+    rows: list[dict[str, object]] = []
+    evaluated: list[Decimal] = []
+    for item in sorted(decisions, key=lambda d: (d.declared_at, d.entry_id)):
+        base: dict[str, object] = {
+            "entry_id": item.entry_id,
+            "declared_at": item.declared_at.isoformat(),
+            "horizon_end": (item.declared_at + horizon).isoformat(),
+        }
+        if item.instrument_id is None:
+            rows.append(
+                {
+                    **base,
+                    "status": "UNAVAILABLE",
+                    "reason": "Entry has no snapshot-linked instrument (C-107v1).",
+                }
+            )
+            continue
+        if item.declared_at + horizon > now:
+            rows.append(
+                {**base, "instrument_id": item.instrument_id, "status": "PENDING"}
+            )
+            continue
+        row, value = _hold(
+            price_at, item.instrument_id, item.declared_at, item.declared_at + horizon
+        )
+        if value is not None:
+            evaluated.append(value)
+            row["standing_aside_better"] = value <= 0
+        rows.append({**base, **row})
+    return {
+        "status": "AVAILABLE" if evaluated else "UNAVAILABLE",
+        "horizon_days": protocol.no_trade_horizon_days,
+        "decisions": len(rows),
+        "evaluated": len(evaluated),
+        "standing_aside_better": sum(1 for value in evaluated if value <= 0),
+        "average_hold_return": _text(
+            sum(evaluated, Decimal(0)) / Decimal(len(evaluated)) if evaluated else None
+        ),
+        "items": rows,
+    }
 
 
 def _text(value: Decimal | None) -> str | None:
@@ -109,6 +263,10 @@ def _bootstrap_lower_bound(
 def score_owner_results(
     outcomes: Sequence[OwnerTradeOutcome],
     protocol: OwnerResultsProtocol | None = None,
+    *,
+    decisions: Sequence[NoTradeDecision] = (),
+    price_at: PriceLookup | None = None,
+    now: datetime | None = None,
 ) -> dict[str, object]:
     protocol = protocol or OwnerResultsProtocol()
     current = sorted(
@@ -214,16 +372,24 @@ def score_owner_results(
         },
         "baselines": {
             "CASH": {"status": "AVAILABLE", "total_return": "0"},
-            "BUY_AND_HOLD": {
+            "BUY_AND_HOLD": (
+                buy_and_hold_baseline(outcomes, price_at)
+                if price_at is not None
+                else {
+                    "status": "UNAVAILABLE",
+                    "reason": "Persisted candle prices were not supplied.",
+                }
+            ),
+        },
+        "no_trade_decisions": (
+            no_trade_comparison(decisions, price_at, protocol, now)
+            if price_at is not None and now is not None
+            else {
                 "status": "UNAVAILABLE",
-                "reason": "Needs persisted candles for each coin; not wired yet.",
-            },
-        },
-        "no_trade_decisions": {
-            "status": "UNAVAILABLE",
-            "horizon_days": protocol.no_trade_horizon_days,
-            "reason": "7-day comparison needs persisted candles; not wired yet.",
-        },
+                "horizon_days": protocol.no_trade_horizon_days,
+                "reason": "Persisted candle prices were not supplied.",
+            }
+        ),
         "trade_facts_verified": False,
         "execution_authorized": False,
     }
