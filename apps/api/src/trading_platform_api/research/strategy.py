@@ -13,7 +13,14 @@ from decimal import Decimal
 from hashlib import sha256
 
 from trading_platform_api.research.candles import Candle
-from trading_platform_api.research.indicators import atr_wilder, ema, sma
+from trading_platform_api.research.indicators import (
+    adx_wilder,
+    atr_wilder,
+    bollinger,
+    ema,
+    rsi_wilder,
+    sma,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +34,9 @@ class StrategySignals:
     # Trailing stop: after each held bar's close the stop becomes
     # max(stop, highest close since entry - trail_distance[i]). None = fixed.
     trail_distance: tuple[Decimal | None, ...] | None = None
+    # Time stop: once a position has been held this many bars (entry bar
+    # included) at a close, exit at the next open. None = no time stop.
+    max_bars_held: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,4 +192,93 @@ class TrendDailyRegime:
         first = max(self.regime_period, self.atr_period + 1)
         return StrategySignals(
             tuple(enter), tuple(leave), tuple(stops), first, tuple(trails)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RangeReversion4h:
+    """Long-only 4h range mean reversion (pre-registered on #516, 2026-11-26).
+
+    - Enter at the next open when at close t: ``ADX14 < 20 AND close < lower
+      Bollinger band (20, 2 sigma population) AND RSI14 < 30``.
+    - Stop: entry fill minus 1.5 x ATR14 known at the signal close, fixed.
+    - Exit at the next open after a close at or above the middle band (SMA20),
+      or after 12 held bars (time stop). No take-profit beyond that.
+    """
+
+    strategy_id: str = "range-reversion-4h"
+    version: int = 1
+    band_period: int = 20
+    rsi_period: int = 14
+    adx_period: int = 14
+    atr_period: int = 14
+    adx_below: Decimal = Decimal("20")
+    rsi_below: Decimal = Decimal("30")
+    stop_atr_multiple: Decimal = Decimal("1.5")
+    max_bars_held: int = 12
+
+    def __post_init__(self) -> None:
+        periods = (self.band_period, self.rsi_period, self.adx_period, self.atr_period)
+        if min(periods) < 2 or self.max_bars_held < 1:
+            raise ValueError("Periods must be at least 2 and the time stop positive.")
+        if self.stop_atr_multiple <= 0:
+            raise ValueError("The ATR stop multiple must be positive.")
+
+    def describe(self) -> dict[str, object]:
+        payload = asdict(self)
+        for key in ("adx_below", "rsi_below", "stop_atr_multiple"):
+            payload[key] = str(payload[key])
+        return payload
+
+    @property
+    def content_sha256(self) -> str:
+        document = json.dumps(self.describe(), sort_keys=True, separators=(",", ":"))
+        return sha256(document.encode("utf-8")).hexdigest()
+
+    def signals(self, candles: tuple[Candle, ...]) -> StrategySignals:
+        closes = [item.close for item in candles]
+        bands = bollinger(closes, self.band_period)
+        rsi = rsi_wilder(closes, self.rsi_period)
+        adx = adx_wilder(candles, self.adx_period)
+        atr = atr_wilder(candles, self.atr_period)
+        enter: list[bool] = []
+        leave: list[bool] = []
+        stops: list[Decimal | None] = []
+        for index, close in enumerate(closes):
+            band, strength, trend, current_atr = (
+                bands[index],
+                rsi[index],
+                adx[index],
+                atr[index],
+            )
+            ready = None not in (band, strength, trend, current_atr)
+            if ready:
+                assert band is not None and strength is not None
+                assert trend is not None and current_atr is not None
+                enter.append(
+                    trend < self.adx_below
+                    and close < band[2]
+                    and strength < self.rsi_below
+                    and current_atr > 0
+                )
+            else:
+                enter.append(False)
+            leave.append(band is not None and close >= band[0])
+            stops.append(
+                current_atr * self.stop_atr_multiple
+                if current_atr is not None
+                else None
+            )
+        first = max(
+            self.band_period - 1,
+            self.rsi_period,
+            2 * self.adx_period - 1,
+            self.atr_period,
+        )
+        return StrategySignals(
+            tuple(enter),
+            tuple(leave),
+            tuple(stops),
+            first,
+            max_bars_held=self.max_bars_held,
         )
