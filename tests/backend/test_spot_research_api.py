@@ -787,6 +787,8 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
         "macd-12-26-9",
         "stochastic-14-3",
         "cci-20",
+        "sma-20",
+        "wma-20",
     }
     assert set(payload["spot_analysis"]) == {
         "vwap",
@@ -814,6 +816,38 @@ def test_bounded_refresh_persists_and_returns_quality_lineage_and_indicators() -
     assert payload["indicators"]["ema-20"]["result"]["points"][19]["value"] == str(
         expected_ema.points[19].value
     )
+    # E5: SMA 20 and WMA 20 are served from the registered moving-average
+    # calculator with its method version, bound to the same candles.
+    for name, kind in (
+        ("sma-20", MovingAverageKind.SMA),
+        ("wma-20", MovingAverageKind.WMA),
+    ):
+        served = payload["indicators"][name]
+        assert served["status"] == "AVAILABLE"
+        assert served["reason_code"] is None
+        expected = calculate_moving_average(
+            snapshot=repository.stored.snapshot,
+            observations=repository.stored.observations,
+            quality=repository.stored.quality,
+            kind=kind,
+            period=20,
+            timeframe="1m",
+        )
+        assert served["result"]["indicator_id"] == kind.value
+        assert served["result"]["calculation_version"] == (expected.calculation_version)
+        assert served["result"]["metadata_version"] == expected.metadata_version
+        assert [point["value"] for point in served["result"]["points"]] == [
+            None if point.value is None else str(point.value)
+            for point in expected.points
+        ]
+        assert [point["candle_end"] for point in served["result"]["points"]] == [
+            candle["close_time"] for candle in payload["candles"]
+        ]
+    # Bollinger bandwidth and its direction are already served per point.
+    bollinger_point = payload["indicators"]["bollinger-bands-20"]["result"]["points"][
+        -1
+    ]
+    assert {"bandwidth", "bandwidth_direction"} <= set(bollinger_point)
 
 
 def test_spot_ohlcv_analysis_projection_matches_calculators_and_lineage() -> None:
@@ -1732,6 +1766,12 @@ def test_stale_read_preserves_report_and_disables_current_indicators() -> None:
     assert payload["data_quality"]["report"]["status"] == "VALID"
     assert payload["indicators"]["ema-20"]["status"] == "UNAVAILABLE"
     assert payload["indicators"]["ema-20"]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"
+    for name in ("sma-20", "wma-20"):
+        assert payload["indicators"][name] == {
+            "status": "UNAVAILABLE",
+            "reason_code": "STALE_FOR_SERVING_CUTOFF",
+            "result": None,
+        }
     assert all(
         payload["spot_analysis"][name]["status"] == "UNAVAILABLE"
         and payload["spot_analysis"][name]["reason_code"] == "STALE_FOR_SERVING_CUTOFF"

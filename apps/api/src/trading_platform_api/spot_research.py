@@ -893,6 +893,8 @@ def _calculate_indicators(
                 "macd-12-26-9",
                 "stochastic-14-3",
                 "cci-20",
+                "sma-20",
+                "wma-20",
             )
         }
     calculators = (
@@ -997,6 +999,28 @@ def _calculate_indicators(
                 snapshot=snapshot,
                 observations=observations,
                 quality=quality,
+                period=20,
+                timeframe=timeframe,
+            ),
+        ),
+        (
+            "sma-20",
+            lambda: calculate_moving_average(
+                snapshot=snapshot,
+                observations=observations,
+                quality=quality,
+                kind=MovingAverageKind.SMA,
+                period=20,
+                timeframe=timeframe,
+            ),
+        ),
+        (
+            "wma-20",
+            lambda: calculate_moving_average(
+                snapshot=snapshot,
+                observations=observations,
+                quality=quality,
+                kind=MovingAverageKind.WMA,
                 period=20,
                 timeframe=timeframe,
             ),
