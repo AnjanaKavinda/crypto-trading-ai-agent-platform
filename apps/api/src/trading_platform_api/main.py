@@ -247,7 +247,9 @@ def create_app(
         else default_strategy_service
     )
     app.state.journal_service = (
-        JournalService(session_factory) if session_factory is not None else None
+        JournalService(session_factory, research=app.state.spot_research_service)
+        if session_factory is not None
+        else None
     )
     app.state.trade_outcome_service = (
         TradeOutcomeService(session_factory) if session_factory is not None else None
