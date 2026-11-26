@@ -179,6 +179,20 @@ export function readSnapshot(fetcher, { instrumentId, timeframe, limit, asOf }) 
   });
 }
 
+export function readStrategyMarkers(fetcher, { instrumentId, timeframe, limit, asOf, accountSize, riskPct }) {
+  if (!Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) throw new Error("Unsupported API timeframe.");
+  if (!Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLES) throw new Error("History bound is outside the API limit.");
+  const query = new URLSearchParams({ timeframe, limit: String(limit) });
+  if (asOf) query.set("as_of", asOf);
+  if (accountSize && riskPct) {
+    query.set("account_size", accountSize);
+    query.set("risk_pct", riskPct);
+  }
+  return request(fetcher, `/${encodeURIComponent(instrumentId)}/strategy-markers?${query}`, {}, {
+    timeframe, limit, asOf,
+  });
+}
+
 export function refreshRequestWithinBounds(timeframe, limit, { historical = false } = {}) {
   const seconds = TIMEFRAME_SECONDS[timeframe];
   return !historical && Boolean(seconds) && Number.isInteger(limit) &&

@@ -26,7 +26,7 @@ export const PILL_STATUS_LABELS = Object.freeze({
 // kind: "indicator" toggles a chart overlay/panel; "analysis" jumps to its
 // backend analysis card; "fixed" is always drawn; status marks not-ready pills.
 export const TOOLBAR_PILLS = Object.freeze([
-  { short: "SIGNALS", label: "BUY / SELL markers", group: "strategy", status: "CONNECT", reason: "Strategy markers API is merged (E3); chart markers arrive with U5." },
+  { short: "SIGNALS", label: "BUY / SELL markers", group: "strategy", kind: "markers", id: "strategy-markers" },
   { short: "EMA20", label: "EMA 20", group: "trend", kind: "indicator", id: "ema-20" },
   { short: "EMA50", label: "EMA 50", group: "trend", kind: "indicator", id: "ema-50" },
   { short: "EMA500", label: "EMA 500", group: "trend", kind: "indicator", id: "ema-500" },
@@ -81,6 +81,10 @@ export function toolbarPills({ availability, enabled = [], snapshotLoaded = fals
     if (!state.available) {
       return { ...base, live: false, action: null, pressed: null, badge: "Live",
         reason: `Unavailable for this snapshot: ${state.reason ?? "not supplied in response"}.` };
+    }
+    if (pill.kind === "markers") {
+      return { ...base, live: true, action: { type: "jump", id: pill.id }, pressed: "true", badge: "Live",
+        reason: "Strategy markers are on the chart — click to open their evidence." };
     }
     if (pill.kind === "analysis") {
       return { ...base, live: true, action: { type: "jump", id: pill.id }, pressed: null, badge: "Live",
