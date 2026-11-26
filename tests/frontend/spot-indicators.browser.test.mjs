@@ -351,7 +351,7 @@ test.after(async () => {
   if (server?.listening) await new Promise((resolveClose) => server.close(resolveClose));
 });
 
-async function openWorkspace({ storedSnapshot, allowRefresh = false, visible } = {}) {
+async function openWorkspace({ storedSnapshot, allowRefresh = false, visible, markers } = {}) {
   const page = await browser.newPage();
   const apiRequests = [];
   let stored = storedSnapshot ?? snapshot;
@@ -413,6 +413,10 @@ async function openWorkspace({ storedSnapshot, allowRefresh = false, visible } =
       assert.ok(body.limit <= 501);
       stored = createSnapshot({ timeframe: body.timeframe, count: body.limit });
       await route.fulfill({ status: 200, contentType: "application/json", headers, body: JSON.stringify(stored) });
+      return;
+    }
+    if (url.pathname.endsWith("/strategy-markers") && markers && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", headers, body: JSON.stringify(markers(stored, url.searchParams)) });
       return;
     }
     await route.fulfill({ status: 405, contentType: "application/json", headers, body: "{}" });
@@ -1294,7 +1298,7 @@ test("indicator toolbar pills toggle backend overlays and disable not-ready indi
     await pill("EMA20").click();
     assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "false");
     assert.ok(!(await readSeries(page)).some((line) => line.series === "ema-20"));
-    for (const short of ["SMA", "OBV", "CVD", "HEAT", "SIGNALS"]) {
+    for (const short of ["SMA", "OBV", "CVD", "HEAT"]) {
       assert.equal(await pill(short).isDisabled(), true, short);
       assert.match(await pill(short).getAttribute("title"), /Connect|To build|Needs trades|Needs order book/);
     }
@@ -1347,6 +1351,77 @@ test("drawing tools place browser-only annotations that persist and clear withou
     await page.locator('[data-drawing-tool="clear"]').click();
     assert.equal(await count(), "0");
     assert.equal(apiRequests.length, afterReload, "clear must not issue API requests");
+    assert.ok(apiRequests.every((item) => item.method === "GET"));
+  } finally {
+    await page.close();
+  }
+});
+
+function syntheticMarkers(stored, params) {
+  // SYNTHETIC marker response bound to the fixture snapshot; not market data.
+  const fact = (value) => ({ label: "VERIFIED_FACT", value, reason: null });
+  const proposal = (value, reason) => ({ label: "RESEARCH_PROPOSAL", value, reason });
+  const sized = params.get("account_size") && params.get("risk_pct");
+  return {
+    instrument_id: stored.instrument_id,
+    symbol: stored.symbol,
+    timeframe: stored.timeframe,
+    as_of: stored.as_of,
+    snapshot_id: stored.snapshot_id,
+    data_quality_status: "VALID",
+    quality_report_id: stored.data_quality.report_id,
+    strategy: { strategy_id: "ema-trend-atr-stop", version: 1, content_sha256: "c".repeat(64), parameters: {} },
+    costs: { fee_bps_per_side: "10", slippage_bps_per_side: "5", basis: "assumption", label: "RESEARCH_PROPOSAL" },
+    evidence_scope: "Replays ema-trend-atr-stop v1 over this snapshot only.",
+    not_applicable: { leverage: { label: "NOT_APPLICABLE", value: null, reason: "Spot research, no leverage" } },
+    status: "AVAILABLE",
+    reason_code: null,
+    position: "FLAT",
+    markers: [
+      {
+        side: "BUY", status: "FILLED", time: fact(stored.candles[20].open_time), fill_time: fact(stored.candles[21].open_time),
+        conditions: [{ condition: "EMA20 closed above EMA50 after being on the other side", met: true, ema_20: fact("101.5") }],
+        entry_open: fact(stored.candles[21].metrics.open.value),
+        modelled_entry_fill: proposal("101.05", "next candle open plus modelled slippage"),
+        stop: proposal("97.05", "modelled entry fill minus stop distance"),
+        position_size: sized
+          ? { quantity: proposal("2.50000000", "(account x risk%) / (entry - stop), before fees"), capped: false }
+          : { quantity: { label: "UNAVAILABLE", value: null, reason: "enter account size and risk %" }, capped: null },
+      },
+      {
+        side: "SELL", status: "FILLED", exit_reason: "SIGNAL_EXIT", time: fact(stored.candles[30].open_time),
+        fill_time: fact(stored.candles[31].open_time),
+        conditions: [{ condition: "EMA20 closed below EMA50 after being on the other side", met: true }],
+        net_return: proposal("-0.012", "after modelled fees/slippage"),
+      },
+    ],
+  };
+}
+
+test("strategy markers draw on the chart and the evidence panel shows labelled values and sizing", async () => {
+  const fixture = createSnapshot({ count: 50 });
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture, markers: syntheticMarkers });
+  try {
+    await waitForLoadedSnapshot(page);
+    await page.locator("#chart-container polygon.strategy-marker-buy").waitFor();
+    assert.equal(await page.locator("#chart-container polygon.strategy-marker-sell").count(), 1);
+    const body = page.locator("#markers-body");
+    assert.match(await body.innerText(), /2 markers · position FLAT/);
+    assert.match(await page.locator("#marker-detail").innerText(), /Modelled entry fill[\s\S]*101\.05[\s\S]*Research proposal/);
+    assert.match(await page.locator("#marker-detail").innerText(), /enter account size and risk %/);
+    assert.equal(await page.locator('#indicator-toolbar [data-pill="SIGNALS"]').isDisabled(), false);
+    await page.locator("#chart-container polygon.strategy-marker-sell").click();
+    assert.match(await page.locator("#marker-detail").innerText(), /Net return[\s\S]*-0\.012/);
+    await page.locator("#sizing-account").fill("abc");
+    await page.locator("#sizing-form button").click();
+    assert.match(await page.locator("#sizing-error").innerText(), /positive USDT amount/);
+    await page.locator("#sizing-account").fill("1000");
+    await page.locator("#sizing-risk").fill("1");
+    await page.locator("#sizing-form button").click();
+    await page.locator('#markers-body [data-marker-index="0"]').click();
+    await page.waitForFunction(() => document.querySelector("#marker-detail")?.innerText.includes("2.50000000"));
+    const markerReads = apiRequests.filter((item) => item.pathname.endsWith("/strategy-markers"));
+    assert.equal(markerReads.length, 2);
     assert.ok(apiRequests.every((item) => item.method === "GET"));
   } finally {
     await page.close();
