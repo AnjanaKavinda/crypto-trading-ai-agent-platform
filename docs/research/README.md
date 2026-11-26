@@ -74,7 +74,7 @@ python -m trading_platform_api.research run --strategy trend-daily-regime --prot
 
 Only a HISTORICAL_PASS moves to the prospective stage (signals recorded
 forward; review at 15 trades or 6 months). Other strategy/protocol pairs are
-refused (fail closed). Markers-API support for this strategy is a follow-up.
+refused (fail closed). Chart markers: see `strategy=trend-daily-regime` below.
 
 ## Calculation verification (E2d)
 
@@ -149,3 +149,12 @@ reads: it never records a decision, journal entry or outcome.
 
 The task's *Last Run Result* is `0x0` when everything is READY and `0x1` when
 the report lists a PROBLEM.
+
+`strategy=trend-daily-regime&version=1` replays Strategy A instead, on `1d`
+snapshots only (other timeframes return `TIMEFRAME_NOT_PRE_REGISTERED` and no
+markers). BUY markers show the trend-state transition (EMA20, EMA50, close and
+SMA200 at the signal and the previous close); STOP exits show the trailing
+stop in effect and the initial stop; an open position reports `current_stop`
+for the next candle. SMA200 is recomputed from the snapshot's validated
+candles. Any other strategy/version pair is refused with `422
+STRATEGY_NOT_REGISTERED`. Use `limit` ≥ 202 so SMA200 is warmed up and one candle can trade.

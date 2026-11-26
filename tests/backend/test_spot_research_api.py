@@ -3030,3 +3030,31 @@ def test_strategy_markers_use_the_persisted_snapshot_and_fail_closed_when_stale(
     assert stale.json()["status"] == "UNAVAILABLE"
     assert stale.json()["reason_code"] == "DATA_QUALITY_STALE"
     assert stale.json()["markers"] == []
+
+
+def test_strategy_markers_select_only_registered_strategies() -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+    research.provider_factory = lambda settings: WaveProvider(settings, calls)
+    params = {"timeframe": "1m", "limit": 400}
+    path = f"/api/research/spot/{INSTRUMENT}/strategy-markers"
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=400),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        unknown = client.get(
+            path, params={**params, "strategy": "trend-daily-regime", "version": 2}
+        )
+        daily = client.get(
+            path, params={**params, "strategy": "trend-daily-regime", "version": 1}
+        )
+
+    assert unknown.status_code == 422
+    assert unknown.json()["code"] == "STRATEGY_NOT_REGISTERED"
+    assert daily.status_code == 200, daily.text
+    payload = daily.json()
+    assert payload["strategy"]["strategy_id"] == "trend-daily-regime"
+    assert payload["status"] == "UNAVAILABLE"
+    assert payload["reason_code"] == "TIMEFRAME_NOT_PRE_REGISTERED"
+    assert payload["markers"] == []
