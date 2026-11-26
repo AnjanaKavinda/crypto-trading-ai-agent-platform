@@ -2,6 +2,8 @@
 
 python -m trading_platform_api.research fetch --start 2019-01-01
 python -m trading_platform_api.research run
+python -m trading_platform_api.research run --strategy trend-daily-regime \
+    --protocol v2 --timeframe 1d
 """
 
 from __future__ import annotations
@@ -27,6 +29,16 @@ from trading_platform_api.research.report import (
     to_json,
     to_markdown,
 )
+from trading_platform_api.research.walk_forward import (
+    run_walk_forward_study,
+    to_markdown_v2,
+)
+
+# Only these pre-registered strategy/protocol pairs can be run.
+STUDIES = {
+    ("ema-trend-atr-stop", "v1"): "4h",
+    ("trend-daily-regime", "v2"): "1d",
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,7 +55,9 @@ def _parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="Run the pre-registered study.")
     run.add_argument("--symbols", default=symbols)
-    run.add_argument("--timeframe", default="4h")
+    run.add_argument("--strategy", default="ema-trend-atr-stop")
+    run.add_argument("--protocol", default="v1")
+    run.add_argument("--timeframe", default=None)
     run.add_argument("--data", default="research-data", type=Path)
     run.add_argument("--out", default="research-output", type=Path)
     return parser
@@ -64,24 +78,46 @@ def main(argv: list[str] | None = None) -> int:
             path = write_dataset(document, args.data, symbol, args.timeframe)
             print(f"wrote {path}")
         return 0
+    study = (args.strategy, args.protocol)
+    if study not in STUDIES:
+        print(
+            f"Study not run (fail closed): {args.strategy} with protocol "
+            f"{args.protocol} is not pre-registered.",
+            file=sys.stderr,
+        )
+        return 2
+    timeframe = args.timeframe or STUDIES[study]
+    if timeframe != STUDIES[study]:
+        print(
+            f"Study not run (fail closed): {args.strategy} is pre-registered for "
+            f"{STUDIES[study]}, not {timeframe}.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         series = [
             parse_candle_csv(
-                (args.data / f"{symbol}_{args.timeframe}.csv").read_text("utf-8")
+                (args.data / f"{symbol}_{timeframe}.csv").read_text("utf-8")
             )
             for symbol in chosen
         ]
-        report = run_study(series)
+        if args.protocol == "v2":
+            report = run_walk_forward_study(series)
+        else:
+            report = run_study(series)
     except (OSError, CandleDataError, StudyError) as exc:
         print(f"Study not run (fail closed): {exc}", file=sys.stderr)
         return 2
     args.out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"{report['strategy']['strategy_id']}-v{report['strategy']['version']}"
-    json_path = args.out / f"{name}-{args.timeframe}-{stamp}.json"
+    if args.protocol != "v1":
+        name = f"{name}-protocol-{args.protocol}"
+    json_path = args.out / f"{name}-{timeframe}-{stamp}.json"
     md_path = json_path.with_suffix(".md")
+    render = to_markdown_v2 if args.protocol == "v2" else to_markdown
     json_path.write_text(to_json(report), encoding="utf-8")
-    md_path.write_text(to_markdown(report), encoding="utf-8")
+    md_path.write_text(render(report), encoding="utf-8")
     print(f"Verdict: {report['verdict']['status']}")
     for reason in report["verdict"]["reasons"]:
         print(f"  - {reason}")

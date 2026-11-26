@@ -3,7 +3,10 @@
 Timing (no look-ahead): every decision uses data up to and including bar
 ``i``'s close; entries and signal exits fill at bar ``i + 1``'s open. A stop
 is checked against each held bar's low, including the entry bar, and fills at
-the stop price or at the bar's open if the bar opens through the stop.
+the stop price or at the bar's open if the bar opens through the stop. When
+the signals carry a trailing distance, the stop is raised after each held
+bar's close to ``highest close since entry - distance`` and is never lowered;
+``Trade.stop_price`` and the R multiple keep the initial stop.
 
 Sizing: the whole strategy equity is invested per trade (no leverage), so
 results are growth of 1 unit of equity. Costs are applied on both sides:
@@ -95,13 +98,18 @@ def run_segment(
     """Trade bars ``start <= i < end``; any open position closes at bar end-1."""
     if not signals.first_tradable_index <= start < end <= len(candles):
         raise ValueError("Segment must lie inside the tradable candle range.")
-    if len(signals.enter_long) != len(candles):
+    if len(signals.enter_long) != len(candles) or (
+        signals.trail_distance is not None
+        and len(signals.trail_distance) != len(candles)
+    ):
         raise ValueError("Signals do not match the candle series.")
     cash = Decimal(1)
     units = Decimal(0)
     entry: tuple[int, Decimal, Decimal, Decimal] | None = None  # idx, px, stop, cost
     pending_entry = False
     pending_exit = False
+    stop_now = Decimal(0)
+    highest_close = Decimal(0)
     trades: list[Trade] = []
     equity: list[Decimal] = []
     in_market = 0
@@ -140,17 +148,23 @@ def run_segment(
                 basis = cash
                 units = cash * (Decimal(1) - costs.fee_rate) / fill
                 entry = (index, fill, stop, basis)
+                stop_now, highest_close = stop, Decimal(0)
                 cash = Decimal(0)
         elif pending_exit and entry is not None:
             close_position(index, bar.open, "SIGNAL_EXIT")
         pending_entry = pending_exit = False
 
-        if entry is not None and bar.low <= entry[2]:
-            close_position(index, min(bar.open, entry[2]), "STOP")
+        if entry is not None and bar.low <= stop_now:
+            close_position(index, min(bar.open, stop_now), "STOP")
 
         if entry is not None:
             in_market += 1
             equity.append(_liquidation_value(units, bar.close, costs))
+            highest_close = max(highest_close, bar.close)
+            trail = signals.trail_distance
+            distance = trail[index] if trail is not None else None
+            if distance is not None:
+                stop_now = max(stop_now, highest_close - distance)
         else:
             equity.append(cash)
 
