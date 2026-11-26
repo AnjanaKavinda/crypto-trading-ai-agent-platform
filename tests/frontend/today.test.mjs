@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 
 import { STRATEGY_STUDIES, studyLine, todayState } from "../../apps/web/src/today-state.mjs";
 import { loadToday } from "../../apps/web/src/today.mjs";
-import { APPROVED_INSTRUMENTS } from "../../apps/web/src/watchlist-state.mjs";
+import { APPROVED_INSTRUMENTS, WATCHLIST_LIMIT } from "../../apps/web/src/watchlist-state.mjs";
 
 // SYNTHETIC row shaped like watchlistRow() output; not market data.
 const row = (overrides = {}) => ({
@@ -90,6 +90,10 @@ test("Today reads only 4h snapshots (no strategy markers) and links each coin to
   assert.equal(rows.length, 5);
   assert.ok(calls.every((url) => !url.includes("strategy-markers") && !url.includes("/refresh")));
   assert.ok(calls.slice(1).every((url) => new URL(url).searchParams.get("timeframe") === "4h"));
+  // UR4: read with the stored daily-check snapshot size (501), never 250.
+  assert.equal(WATCHLIST_LIMIT, 501);
+  assert.ok(calls.slice(1).every((url) => new URL(url).searchParams.get("limit") === "501"));
+  assert.match(text(rows[0]), /\[HTTP 503\]/);
   assert.match(text(rows[0]), /BTCUSDT NO_TRADE/);
   const link = find(rows[0], (node) => node.tagName === "a");
   assert.equal(link.href, "./index.html?instrument=BTC-USDT-SPOT&timeframe=4h#decision-panel");
@@ -101,4 +105,31 @@ test("the Today panel is on the overview page and states research-only NO_TRADE"
   assert.match(html, /<script type="module" src="\.\/src\/today\.mjs"><\/script>/);
   assert.match(html, /id="today-rows"/);
   assert.match(html, /NO_TRADE until a strategy passes its study/);
+});
+
+test("UR4: a rejected read names the API error code in the coin row", async () => {
+  const fetcher = async (url) => {
+    if (url.endsWith("/symbols")) {
+      return { ok: true, json: async () => ({
+        provider: "binance-spot-public",
+        redistribution: "NOT_AUTHORIZED",
+        instruments: Object.entries(APPROVED_INSTRUMENTS).map(([instrument_id, symbol]) => ({
+          instrument_id, symbol, venue_id: "BINANCE-SPOT", eligibility: "CHECKED_ON_EACH_REFRESH",
+        })),
+      }) };
+    }
+    return { ok: false, status: 422, json: async () => ({ code: "SPOT_CANDLE_LIMIT_EXCEEDED" }) };
+  };
+  const document = fakeDocument();
+  await loadToday(document, fetcher);
+  const rows = document.nodes["#today-rows"].children;
+  assert.equal(rows.length, 5);
+  for (const item of rows) assert.match(text(item), /UNAVAILABLE.*\[SPOT_CANDLE_LIMIT_EXCEEDED\]/s);
+});
+
+test("UR4: every page declares an inline favicon so the browser never requests a missing one", async () => {
+  for (const page of ["desk", "index", "watchlist", "signals", "evidence"]) {
+    const html = await readFile(new URL(`../../apps/web/${page}.html`, import.meta.url), "utf8");
+    assert.match(html, /<link rel="icon" href="data:image\/svg\+xml,/, page);
+  }
 });

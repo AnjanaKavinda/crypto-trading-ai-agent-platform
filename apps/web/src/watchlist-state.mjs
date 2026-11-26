@@ -1,4 +1,4 @@
-import { listSupportedSymbols, readSnapshot, TIMEFRAME_SECONDS } from "./research-api.mjs";
+import { listSupportedSymbols, MAX_CANDLES, readSnapshot, TIMEFRAME_SECONDS } from "./research-api.mjs";
 import { validateSnapshot } from "./workspace-state.mjs";
 
 export const APPROVED_INSTRUMENTS = Object.freeze({
@@ -9,7 +9,19 @@ export const APPROVED_INSTRUMENTS = Object.freeze({
   "XRP-USDT-SPOT": "XRPUSDT",
 });
 
-export const WATCHLIST_LIMIT = 250;
+// Read with the largest allowed history bound: the daily check stores 501-candle
+// snapshots, and a smaller bound is rejected (422 SPOT_CANDLE_LIMIT_EXCEEDED)
+// rather than truncated (UR4, #516).
+export const WATCHLIST_LIMIT = MAX_CANDLES;
+
+// A failed read keeps the safe message and names the API code (or HTTP status).
+export function readErrorText(error) {
+  const message = error?.message ?? "Snapshot read failed.";
+  const code = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(error.code)
+    ? error.code
+    : Number.isInteger(error?.status) ? `HTTP ${error.status}` : null;
+  return code ? `${message} [${code}]` : message;
+}
 
 export function supportedWatchlistSymbols(response) {
   if (response?.provider !== "binance-spot-public" ||
@@ -101,7 +113,7 @@ export async function readWatchlist(fetcher, timeframe, symbols) {
       if (validationError) throw new Error(validationError);
       return { symbol: item.symbol, snapshot, row: watchlistRow(snapshot, item.symbol), error: null };
     } catch (error) {
-      return { symbol: item.symbol, snapshot: null, row: null, error: error.message };
+      return { symbol: item.symbol, snapshot: null, row: null, error: readErrorText(error) };
     }
   }));
 }
