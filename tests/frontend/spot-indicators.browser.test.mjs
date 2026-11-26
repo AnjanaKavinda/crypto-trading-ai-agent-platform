@@ -1427,3 +1427,59 @@ test("strategy markers draw on the chart and the evidence panel shows labelled v
     await page.close();
   }
 });
+
+test("record my decision binds the journal to the exact current VALID snapshot on screen", async () => {
+  // Synthetic fixture: identifiers rewritten to UUIDs so the C-107v2 readback can bind to them.
+  const snapshotUuid = "00000000-0000-4000-8000-00000000c002";
+  const reportUuid = "00000000-0000-4000-8000-00000000c003";
+  const fixture = JSON.parse(JSON.stringify(createSnapshot({ count: 50 })).replaceAll(snapshotId, snapshotUuid).replaceAll(qualityReportId, reportUuid));
+  const { page } = await openWorkspace({ storedSnapshot: fixture });
+  const posts = [];
+  const entries = [];
+  await page.route("http://127.0.0.1:8000/api/research/decision-journal**", async (route) => {
+    const request = route.request();
+    const headers = { "content-type": "application/json", "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type" };
+    if (request.method() === "OPTIONS") { await route.fulfill({ status: 204, headers }); return; }
+    if (request.method() === "GET") { await route.fulfill({ status: 200, headers, body: JSON.stringify({ items: entries, next_cursor: null }) }); return; }
+    const body = request.postDataJSON();
+    posts.push(body);
+    const recordedAt = new Date().toISOString();
+    const entry = {
+      contract_id: "C-107", schema_version: "2", entry_id: "00000000-0000-4000-8000-0000000000e1", content_sha256: "b".repeat(64),
+      request_id: body.request_id, request_sha256: "c".repeat(64), profile: "PERSONAL_SPOT_RESEARCH", operating_mode: "RESEARCH",
+      origin: "LOCAL_USER_DECLARATION", identity_assurance: "LOCAL_SESSION_UNAUTHENTICATED", qualification_authorized: false,
+      approval_authorized: false, execution_authorized: false, trade_facts_verified: false,
+      source: { artifact_type: "C-002", artifact_id: body.snapshot_id, version: "1", content_sha256: "d".repeat(64) },
+      quality_report: { artifact_type: "C-003", artifact_id: body.quality_report_id, version: "1", content_sha256: "e".repeat(64) },
+      snapshot_observation: { instrument_id: body.instrument_id, timeframe: body.timeframe, as_of: fixture.as_of, last_candle_open_time: fixture.candles.at(-1).open_time, candle_count: 50, fresh_until: new Date(Date.now() + 3600_000).toISOString(), quality_status: "VALID" },
+      declared_action: body.declared_action, declared_at: body.declared_at, recorded_at: recordedAt, note: body.note, supersedes: null, correction_reason: null,
+    };
+    entries.push(entry);
+    await route.fulfill({ status: 200, headers, body: JSON.stringify(entry) });
+  });
+  try {
+    await waitForLoadedSnapshot(page);
+    const button = page.getByRole("button", { name: "Record my decision", exact: true });
+    await page.waitForFunction(() => !document.querySelector("#record-decision-button").disabled);
+    assert.match(await page.locator("#decision-note").innerText(), new RegExp(snapshotUuid));
+    assert.equal(posts.length, 0);
+    await button.click();
+    await page.locator("#decision-body select").first().selectOption("ABSTAIN");
+    await page.locator("#decision-body textarea").first().fill("No clear trend; staying out.");
+    await page.getByRole("button", { name: "Save declaration", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#decision-body")?.innerText.includes("Saved unverified research declaration"));
+    assert.equal(posts.length, 1);
+    assert.deepEqual(
+      { instrument_id: posts[0].instrument_id, timeframe: posts[0].timeframe, snapshot_id: posts[0].snapshot_id, quality_report_id: posts[0].quality_report_id, declared_action: posts[0].declared_action },
+      { instrument_id: instrumentId, timeframe: "1m", snapshot_id: snapshotUuid, quality_report_id: reportUuid, declared_action: "ABSTAIN" },
+    );
+    assert.equal(Object.hasOwn(posts[0], "source"), false);
+    const text = await page.locator("#decision-body").innerText();
+    assert.match(text, new RegExp("Request key \\(retain for recovery\\): " + posts[0].request_id));
+    assert.match(text, /Quality report: 00000000-0000-4000-8000-00000000c003 · VALID/);
+    await page.getByRole("button", { name: "Read declaration history", exact: true }).click();
+    await page.getByRole("button", { name: "Append correction", exact: true }).waitFor();
+  } finally {
+    await page.close();
+  }
+});
