@@ -82,7 +82,7 @@ class ForwardService:
         return record
 
     async def _ids(self, session: AsyncSession) -> list[str]:
-        ids = list(
+        ids: list[str] = list(
             (
                 await session.execute(
                     select(records.c.record_id)
