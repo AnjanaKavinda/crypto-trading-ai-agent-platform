@@ -76,6 +76,24 @@ Only a HISTORICAL_PASS moves to the prospective stage (signals recorded
 forward; review at 15 trades or 6 months). Other strategy/protocol pairs are
 refused (fail closed). Chart markers: see `strategy=trend-daily-regime` below.
 
+## Strategy B study: `range-reversion-4h` v1, protocol v2 (E2f)
+
+Pre-registered on #516 (2026-11-26) before any result existed. Run once:
+
+```powershell
+python -m trading_platform_api.research fetch --timeframe 4h --start 2021-09-30
+python -m trading_platform_api.research run --strategy range-reversion-4h --protocol v2 --timeframe 4h
+```
+
+| Item | Value |
+|---|---|
+| Strategy | enter at the next open when at the 4h close `ADX14 < 20 AND close < lower Bollinger band (20, 2σ population) AND RSI14 < 30`; fixed stop entry − 1.5×ATR14; exit at the next open after a close ≥ the middle band (SMA20), or after 12 held bars (time stop, entry bar counted); no take-profit |
+| Indicators | RSI14 (Wilder) and Bollinger (20, 2σ population) equal the platform's registered methods exactly (parity test); ADX14 is the standard Wilder definition (no platform method yet; hand-computed test) |
+| Protocol | `spot-walk-forward-prospective` v2, same criteria and periods as Strategy A, on 4h bars |
+| Prospective review | 30 trades or 3 months, only after a HISTORICAL_PASS |
+
+Chart markers for this strategy are a follow-up.
+
 ## Calculation verification (E2d)
 
 `tests/backend/test_research_calculation_verification.py` (synthetic candles):

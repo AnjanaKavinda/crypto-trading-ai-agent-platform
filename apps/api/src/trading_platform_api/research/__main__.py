@@ -4,6 +4,8 @@ python -m trading_platform_api.research fetch --start 2019-01-01
 python -m trading_platform_api.research run
 python -m trading_platform_api.research run --strategy trend-daily-regime \
     --protocol v2 --timeframe 1d
+python -m trading_platform_api.research run --strategy range-reversion-4h \
+    --protocol v2 --timeframe 4h
 python -m trading_platform_api.research daily-check
 """
 
@@ -31,6 +33,7 @@ from trading_platform_api.research.report import (
     to_json,
     to_markdown,
 )
+from trading_platform_api.research.strategy import RangeReversion4h, TrendDailyRegime
 from trading_platform_api.research.walk_forward import (
     run_walk_forward_study,
     to_markdown_v2,
@@ -40,6 +43,11 @@ from trading_platform_api.research.walk_forward import (
 STUDIES = {
     ("ema-trend-atr-stop", "v1"): "4h",
     ("trend-daily-regime", "v2"): "1d",
+    ("range-reversion-4h", "v2"): "4h",
+}
+V2_STRATEGIES = {
+    "trend-daily-regime": TrendDailyRegime,
+    "range-reversion-4h": RangeReversion4h,
 }
 
 
@@ -122,7 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             for symbol in chosen
         ]
         if args.protocol == "v2":
-            report = run_walk_forward_study(series)
+            report = run_walk_forward_study(
+                series, strategy=V2_STRATEGIES[args.strategy]()
+            )
         else:
             report = run_study(series)
     except (OSError, CandleDataError, StudyError) as exc:
