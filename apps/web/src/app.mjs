@@ -1654,7 +1654,7 @@ async function bootstrap() {
 
   const selectedHistory = () => {
     const limit = Number(history.value);
-    return HISTORY_LIMITS.has(limit) ? limit : 250;
+    return HISTORY_LIMITS.has(limit) ? limit : MAX_CANDLES;
   };
   const updateRefreshAvailability = () => {
     const limit = selectedHistory();

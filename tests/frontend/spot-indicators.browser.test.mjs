@@ -704,8 +704,7 @@ test("VWAP overlay remains isolated from indicator visibility preferences withou
 test("indicator provenance links use the loaded response and the synthetic example stays separate", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
-    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
-    await page.locator("#history-select").selectOption("501");
+    // U5b: the 501-candle default reads the stored snapshot on first load.
     await waitForLoadedSnapshot(page);
 
     const provenanceText = await page.locator("#snapshot-metadata").innerText();
@@ -787,8 +786,7 @@ test("indicator provenance links use the loaded response and the synthetic examp
 test("browser chart toggles preserve series isolation and bind every point to its candle timestamp", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
-    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
-    await page.locator("#history-select").selectOption("501");
+    // U5b: the 501-candle default reads the stored snapshot on first load.
     await waitForLoadedSnapshot(page);
     await page.getByRole("button", { name: "Pro", exact: true }).click();
     for (const name of [
@@ -956,8 +954,7 @@ for (const scenario of [
 test("browser clears the previous chart after a 501-candle snapshot rejects a 250-candle read", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
-    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
-    await page.locator("#history-select").selectOption("501");
+    // U5b: the 501-candle default reads the stored snapshot on first load.
     await waitForLoadedSnapshot(page);
     assert.equal(await page.locator("#chart-container svg").count(), 1);
 
@@ -1032,7 +1029,7 @@ for (const [state, status, expected] of [
     const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
     try {
       await waitForLoadedSnapshot(page);
-      assert.equal(await page.locator("#history-select").inputValue(), "250");
+      assert.equal(await page.locator("#history-select").inputValue(), "501");
       assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Returned candles\n50"));
       const corrupt = createSnapshot({ count: 50 });
       corrupt.lineage.market_data_ids[0] = "mismatched-source";
