@@ -86,7 +86,18 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Run native web regression tests
+        env:
+          UI_SCREENSHOT_DIR: ${{ runner.temp }}/ui-screenshots
         run: node --test tests/frontend/*.test.mjs
+
+      - name: Upload UI screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ui-screenshots
+          path: ${{ runner.temp }}/ui-screenshots
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Verify isolated offline Docker-local stack and volume persistence
         run: python tests/docker/test_local_stack.py

@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import { extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { DESK_TABS } from "../../apps/web/src/desk-state.mjs";
+import { captureScreenshot, SCREENSHOT_VIEWPORTS, screenshotDir } from "./screenshots.mjs";
 
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium } = require("playwright");
@@ -62,6 +64,19 @@ test("desk tabs fold in existing pages lazily, route by hash and fail closed on 
       .getByRole("heading", { name: "Research records and NO_TRADE" }).waitFor();
     assert.ok(apiCalls.every(({ method }) => method === "GET" || method === "OPTIONS"), "desk never writes");
     assert.ok(apiCalls.every(({ url }) => !url.includes("/refresh")), "desk never refreshes providers");
+
+    // UR0: one full-page screenshot per tab and viewport (API down: honest error states).
+    if (screenshotDir()) {
+      for (const viewport of SCREENSHOT_VIEWPORTS) {
+        await page.setViewportSize(viewport);
+        for (const tab of DESK_TABS) {
+          await page.goto(`${origin}/desk.html#${tab.id}`);
+          await page.locator(`#panel-${tab.id} iframe`).waitFor();
+          await page.waitForLoadState("networkidle");
+          assert.ok(await captureScreenshot(page, tab.id, viewport));
+        }
+      }
+    }
   } finally {
     await browser?.close();
     server.close();
