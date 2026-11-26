@@ -271,7 +271,7 @@ class TradeOutcomeService:
     async def all_outcomes(self) -> list[OwnerTradeOutcome]:
         async with self.sessions() as session:
             store = SqlAlchemyLineageStore(session)
-            ids = (
+            ids: list[str] = list(
                 (
                     await session.execute(
                         select(records.c.record_id)
