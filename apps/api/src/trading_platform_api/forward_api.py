@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
@@ -31,8 +31,16 @@ from trading_platform_api.lineage.codec import LineageError, LineageKey
 from trading_platform_api.lineage.policy import PERSONAL_SPOT_INSTRUMENTS
 from trading_platform_api.lineage.store import SqlAlchemyLineageStore
 from trading_platform_api.lineage.tables import records
-from trading_platform_api.research.candles import Candle
-from trading_platform_api.research.forward import FORWARD_STRATEGIES, forward_record
+from trading_platform_api.research.candles import TIMEFRAME_SECONDS, Candle
+from trading_platform_api.research.forward import (
+    FORWARD_STRATEGIES,
+    forward_record,
+    history_start,
+)
+from trading_platform_api.research.forward_history import (
+    covering_snapshots,
+    merge_windows,
+)
 from trading_platform_api.research.report import _jsonable
 from trading_platform_api.research.study_verdict import (
     StudyVerdictRecord,
@@ -164,6 +172,73 @@ def research_candles(served: dict[str, Any]) -> tuple[Candle, ...]:
     )
 
 
+async def _valid_read(
+    spot: Any,
+    instrument: str,
+    timeframe: str,
+    as_of: datetime | None,
+    correlation_id: str | None,
+) -> dict[str, Any]:
+    label = f"{instrument} {timeframe}" + ("" if as_of is None else f" at {as_of}")
+    try:
+        served: dict[str, Any] = await spot.read(
+            instrument_id=instrument,
+            timeframe=timeframe,
+            as_of=as_of,
+            limit=MAX_READ_CANDLES,
+            correlation_id=correlation_id,
+        )
+    except SpotResearchError as exc:
+        raise error(
+            422, "FORWARD_SNAPSHOT_UNAVAILABLE", f"{label}: {exc.code}"
+        ) from exc
+    status = served["data_quality"]["status"]
+    if status != "VALID":
+        raise error(
+            422, "FORWARD_SNAPSHOT_NOT_VALID", f"{label}: data quality {status}"
+        )
+    return served
+
+
+async def stitched_history(
+    spot: Any,
+    instrument: str,
+    timeframe: str,
+    *,
+    start: datetime,
+    step: timedelta,
+    correlation_id: str | None,
+) -> tuple[str, tuple[Candle, ...]]:
+    """Contiguous persisted candles from the fixed warm-up ``start`` onward."""
+    latest = await _valid_read(spot, instrument, timeframe, None, correlation_id)
+    windows = [research_candles(latest)]
+    if not windows[0]:
+        raise error(422, "FORWARD_HISTORY_INSUFFICIENT", f"{instrument}: no candles")
+    try:
+        if windows[0][0].open_time > start:
+            if spot.repository is None:
+                raise error(503, "FORWARD_SNAPSHOTS_UNAVAILABLE")
+            available = await spot.repository.snapshot_windows(
+                instrument_id=instrument, timeframe=timeframe, since=start
+            )
+            for as_of in covering_snapshots(
+                available,
+                covered_from=windows[0][0].open_time,
+                start=start,
+                step=step,
+            ):
+                older = await _valid_read(
+                    spot, instrument, timeframe, as_of, correlation_id
+                )
+                windows.append(research_candles(older))
+        candles = merge_windows(windows, start=start, step=step)
+    except ValueError as exc:
+        raise error(
+            422, "FORWARD_HISTORY_INSUFFICIENT", f"{instrument} {timeframe}: {exc}"
+        ) from exc
+    return str(latest["symbol"]), candles
+
+
 def create_forward_router() -> APIRouter:
     router = APIRouter(prefix="/api/research/forward", tags=["forward-research"])
 
@@ -238,29 +313,18 @@ def create_forward_router() -> APIRouter:
 
         async def run() -> dict[str, Any]:
             series: dict[str, tuple[Candle, ...]] = {}
+            start = history_start(strategy)
+            step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
             for instrument in sorted(PERSONAL_SPOT_INSTRUMENTS):
-                try:
-                    served = await spot.read(
-                        instrument_id=instrument,
-                        timeframe=timeframe,
-                        as_of=None,
-                        limit=MAX_READ_CANDLES,
-                        correlation_id=request.state.correlation_id,
-                    )
-                except SpotResearchError as exc:
-                    raise error(
-                        422,
-                        "FORWARD_SNAPSHOT_UNAVAILABLE",
-                        f"{instrument} {timeframe}: {exc.code}",
-                    ) from exc
-                status = served["data_quality"]["status"]
-                if status != "VALID":
-                    raise error(
-                        422,
-                        "FORWARD_SNAPSHOT_NOT_VALID",
-                        f"{instrument} {timeframe}: data quality {status}",
-                    )
-                series[str(served["symbol"])] = research_candles(served)
+                symbol, candles = await stitched_history(
+                    spot,
+                    instrument,
+                    timeframe,
+                    start=start,
+                    step=step,
+                    correlation_id=request.state.correlation_id,
+                )
+                series[symbol] = candles
             verdict = await forward.latest_verdict(strategy.content_sha256)
             try:
                 record = forward_record(

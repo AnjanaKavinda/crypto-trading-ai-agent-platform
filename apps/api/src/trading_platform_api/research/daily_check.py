@@ -2,8 +2,10 @@
 
 Explicitly refreshes the approved Spot pairs on 4h and 1d through the same
 local web endpoint the browser uses, then checks data quality, the required
-indicators and the journal and strategy-signal reads. It writes a READY /
-PROBLEM report. It only refreshes and reads: it never records a decision,
+indicators and the journal and strategy-signal reads. For the protocol v2
+forward stage it also refreshes any missing historical window back to each
+candidate's fixed warm-up start (fixed, aligned windows) and reads each
+candidate's forward stage. It writes a READY / PROBLEM report. It only refreshes and reads: it never records a decision,
 never writes a journal entry or outcome, and has no order path.
 """
 
@@ -19,7 +21,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
+
+from trading_platform_api.research.forward import FORWARD_STRATEGIES, history_start
+from trading_platform_api.research.walk_forward import V2_STRATEGIES
 
 DEFAULT_BASE_URL = "http://127.0.0.1:5173"
 INSTRUMENTS = (
@@ -99,6 +104,45 @@ def _problem_text(status: int, payload: bytes) -> str:
         return f"HTTP {status}"
     parts = [str(problem[key]) for key in ("code", "title") if problem.get(key)]
     return f"HTTP {status}" + (f" ({'; '.join(parts)})" if parts else "")
+
+
+# Candles per historical backfill window (each refresh is bounded to 90 days).
+BACKFILL_CANDLES = {"4h": 480, "1d": 90}
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def backfill_windows(
+    timeframe: str, start: datetime, now: datetime
+) -> list[tuple[datetime, datetime]]:
+    """Fixed, aligned historical windows from ``start`` that end before the
+    current refresh window; identical on every run."""
+    step = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
+    width = step * BACKFILL_CANDLES[timeframe]
+    end_ts = int(now.astimezone(UTC).timestamp()) // int(step.total_seconds())
+    current_start = (
+        datetime.fromtimestamp(end_ts * int(step.total_seconds()), UTC)
+        - step * REFRESH_LIMITS[timeframe]
+    )
+    windows = []
+    cursor = start
+    while cursor < current_start:
+        windows.append((cursor, min(cursor + width, current_start)))
+        cursor += width
+    return [(a, b) for a, b in windows if (b - a) >= step * 2]
+
+
+def _covered(snapshot: Any, start: datetime, end: datetime) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    candles = snapshot.get("candles") or ()
+    if (snapshot.get("data_quality") or {}).get("status") != "VALID" or not candles:
+        return False
+    first = datetime.fromisoformat(str(candles[0]["open_time"]).replace("Z", "+00:00"))
+    last = datetime.fromisoformat(str(candles[-1]["close_time"]).replace("Z", "+00:00"))
+    return first <= start and last >= end
 
 
 def refresh_body(timeframe: str, now: datetime) -> dict[str, Any]:
@@ -216,6 +260,85 @@ def run_daily_check(
             continue
         detail = "HTTP 200" if status == 200 else _problem_text(status, payload)
         results.append(CheckResult(name, status == 200, detail))
+    results.extend(_forward_checks(base, origin, transport, now(), sleep))
+    return results
+
+
+def _forward_checks(
+    base: str,
+    origin: str,
+    transport: Transport,
+    now: datetime,
+    sleep: Callable[[float], None],
+) -> list[CheckResult]:
+    results: list[CheckResult] = []
+    for strategy_id, strategy in FORWARD_STRATEGIES.items():
+        timeframe = V2_STRATEGIES[strategy_id][0]
+        start = history_start(strategy)
+        for instrument in INSTRUMENTS:
+            for low, high in backfill_windows(timeframe, start, now):
+                label = f"{instrument} {timeframe} history {_iso(low)[:10]}"
+                query = f"timeframe={timeframe}&limit=501&as_of={quote(_iso(high))}"
+                try:
+                    status, payload = transport(
+                        "GET",
+                        f"{base}/api/research/spot/{instrument}/candles?{query}",
+                        _headers(origin=None, json_body=False),
+                        None,
+                    )
+                    snapshot = json.loads(payload) if status == 200 else None
+                except (OSError, ValueError):
+                    snapshot = None
+                if _covered(snapshot, low, high):
+                    continue
+                sleep(REFRESH_PAUSE_SECONDS)
+                body = {
+                    "timeframe": timeframe,
+                    "coverage_start": _iso(low),
+                    "coverage_end": _iso(high),
+                    "limit": int((high - low).total_seconds())
+                    // TIMEFRAME_SECONDS[timeframe],
+                }
+                try:
+                    status, payload = transport(
+                        "POST",
+                        f"{base}/api/research/spot/{instrument}/refresh",
+                        _headers(origin=origin, json_body=True),
+                        json.dumps(body).encode("utf-8"),
+                    )
+                except OSError as exc:
+                    results.append(CheckResult(label, False, f"unreachable: {exc}"))
+                    continue
+                detail = (
+                    "backfilled (HTTP 200)"
+                    if status == 200
+                    else _problem_text(status, payload)
+                )
+                results.append(CheckResult(label, status == 200, detail))
+        name = f"forward stage {strategy_id} v{strategy.version}"
+        try:
+            status, payload = transport(
+                "GET",
+                f"{base}/api/research/forward/{strategy_id}?version={strategy.version}",
+                _headers(origin=None, json_body=False),
+                None,
+            )
+        except OSError as exc:
+            results.append(CheckResult(name, False, f"unreachable: {exc}"))
+            continue
+        if status != 200:
+            results.append(CheckResult(name, False, _problem_text(status, payload)))
+            continue
+        try:
+            record = json.loads(payload)
+            detail = (
+                f"{record['stage']} ({record['reason']}), "
+                f"{record['forward']['closed_trades']} closed SIMULATED trades"
+            )
+        except (ValueError, KeyError, TypeError):
+            results.append(CheckResult(name, False, "unreadable response"))
+            continue
+        results.append(CheckResult(name, True, detail))
     return results
 
 

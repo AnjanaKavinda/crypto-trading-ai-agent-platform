@@ -124,11 +124,18 @@ python -m trading_platform_api.research record-verdict research-output\<report>.
 The API stores it append-only as C-109 (an identical re-import returns the same
 record). `GET /api/research/forward/trend-daily-regime` (or
 `range-reversion-4h`) then returns the SIMULATED forward signals, stats and
-stage from the persisted 1d (or 4h) snapshots; it fails closed if a snapshot is
-missing, not VALID or too short to warm up the indicators before 2026-11-26
-(refresh with a larger `limit`, up to 501 candles). Recording each signal
-append-only as candles arrive (so 4h history beyond 501 candles is kept) and
-the daily-check hook follow in part 3.
+stage.
+
+**Forward history (E2f2 part 3).** Every forward replay starts at a fixed
+warm-up candle: the prospective start minus the strategy's warm-up bars
+(A: 2026-05-10 on 1d; B: 2026-11-21 12:00 UTC on 4h), so it is identical each
+time it is recomputed. One snapshot holds at most 501 candles and one refresh at
+most 90 days, so the API stitches the history from several persisted snapshots;
+overlapping snapshots must agree exactly and any missing candle fails closed
+(`FORWARD_HISTORY_INSUFFICIENT`, naming the uncovered date). The daily check
+refreshes any missing historical window back to the warm-up start in fixed,
+aligned windows (1d: 90 candles, 4h: 480 candles), then reads both forward
+stages and reports them.
 
 ## Calculation verification (E2d)
 

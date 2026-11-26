@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -33,7 +33,7 @@ from trading_platform_api.research.backtest import (
     Trade,
     run_segment,
 )
-from trading_platform_api.research.candles import Candle
+from trading_platform_api.research.candles import TIMEFRAME_SECONDS, Candle
 from trading_platform_api.research.evaluation import (
     WalkForwardProtocol,
     curve_stats,
@@ -41,6 +41,7 @@ from trading_platform_api.research.evaluation import (
     trade_stats,
 )
 from trading_platform_api.research.strategy import RangeReversion4h, TrendDailyRegime
+from trading_platform_api.research.walk_forward import V2_STRATEGIES
 
 ForwardStrategy = TrendDailyRegime | RangeReversion4h
 SIMULATED = "SIMULATED"
@@ -78,6 +79,18 @@ class SymbolForward:
 
 def _day(value: str) -> datetime:
     return datetime.fromisoformat(value).replace(tzinfo=UTC)
+
+
+def history_start(
+    strategy: ForwardStrategy, protocol: WalkForwardProtocol | None = None
+) -> datetime:
+    """Fixed first candle of every forward replay: the prospective start minus
+    exactly the strategy's warm-up bars. A fixed start keeps the replay (and
+    its EMA seeds) identical whenever it is recomputed."""
+    protocol = protocol or WalkForwardProtocol()
+    step = timedelta(seconds=TIMEFRAME_SECONDS[V2_STRATEGIES[strategy.strategy_id][0]])
+    warmup = strategy.signals(()).first_tradable_index
+    return _day(protocol.prospective_start) - step * warmup
 
 
 def add_months(moment: datetime, months: int) -> datetime:
@@ -282,6 +295,13 @@ def forward_record(
     protocol = protocol or WalkForwardProtocol()
     costs = costs or CostAssumptions()
     start = _day(protocol.prospective_start)
+    first = history_start(strategy, protocol)
+    for symbol, candles in series.items():
+        if not candles or candles[0].open_time != first:
+            raise ValueError(
+                f"{symbol}: the forward history must start exactly at "
+                f"{_iso(first)} (fixed warm-up start)."
+            )
     per_symbol = [
         symbol_forward(strategy, symbol, candles, prospective_start=start, costs=costs)
         for symbol, candles in sorted(series.items())
