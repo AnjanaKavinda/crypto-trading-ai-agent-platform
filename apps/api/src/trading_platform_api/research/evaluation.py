@@ -61,6 +61,62 @@ class EvaluationProtocol:
 
 
 @dataclass(frozen=True, slots=True)
+class WalkForwardProtocol:
+    """``spot-walk-forward-prospective`` v2 (pre-registered on #516, 2026-11-26).
+
+    The v1 holdout (``seen_start`` to ``seen_end``) has been seen and is
+    reported as contaminated information only. The historical verdict uses the
+    development era (``development_start`` up to ``seen_start``) with all v1
+    criteria pooled across symbols, plus positive pooled expectancy in at least
+    ``min_positive_windows`` of ``windows`` consecutive equal windows. Only a
+    HISTORICAL_PASS moves to the prospective stage (from
+    ``prospective_start``), which is reviewed outside this study.
+    """
+
+    protocol_id: str = "spot-walk-forward-prospective"
+    version: int = 2
+    development_start: str = "2021-09-30"
+    seen_start: str = "2025-05-12"
+    seen_end: str = "2026-11-25"
+    prospective_start: str = "2026-11-26"
+    windows: int = 4
+    min_positive_windows: int = 3
+    min_holdout_trades: int = 30
+    max_portfolio_drawdown: Decimal = Decimal("0.30")
+    max_symbol_drawdown: Decimal = Decimal("0.40")
+    min_profit_factor: Decimal = Decimal("1.20")
+    bootstrap_resamples: int = 5000
+    bootstrap_lower_quantile: Decimal = Decimal("0.05")
+    bootstrap_seed: int = 20261125
+    baselines: tuple[str, ...] = ("CASH", "BUY_AND_HOLD")
+    prospective_review: tuple[str, ...] = (
+        "trend-daily-regime v1: 15 trades or 6 months, whichever first",
+        "range-reversion-4h v1: 30 trades or 3 months, whichever first",
+    )
+    prospective_pass: str = (
+        "expectancy after costs > 0 and max drawdown <= historical max drawdown x 1.5"
+    )
+    tested_candidates: tuple[str, ...] = (
+        "trend-daily-regime v1",
+        "range-reversion-4h v1",
+    )
+
+    def describe(self) -> dict[str, object]:
+        payload = asdict(self)
+        for key, value in payload.items():
+            if isinstance(value, Decimal):
+                payload[key] = str(value)
+            elif isinstance(value, tuple):
+                payload[key] = list(value)
+        return payload
+
+    @property
+    def content_sha256(self) -> str:
+        document = json.dumps(self.describe(), sort_keys=True, separators=(",", ":"))
+        return sha256(document.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class TradeStats:
     trades: int
     wins: int
@@ -127,7 +183,7 @@ def portfolio_curve(curves: Sequence[Sequence[Decimal]]) -> tuple[Decimal, ...]:
 
 
 def bootstrap_lower_bound(
-    returns: Sequence[Decimal], protocol: EvaluationProtocol
+    returns: Sequence[Decimal], protocol: EvaluationProtocol | WalkForwardProtocol
 ) -> Decimal | None:
     if len(returns) < 2:
         return None
@@ -143,9 +199,11 @@ def bootstrap_lower_bound(
 
 
 def decide(
-    protocol: EvaluationProtocol,
+    protocol: EvaluationProtocol | WalkForwardProtocol,
     holdout: Sequence[SegmentResult],
     symbols: Sequence[str] | None = None,
+    *,
+    sample_label: str = "holdout",
 ) -> tuple[Verdict, dict[str, object]]:
     names = (
         list(symbols)
@@ -172,7 +230,7 @@ def decide(
             Verdict(
                 "INCONCLUSIVE",
                 (
-                    f"INSUFFICIENT_SAMPLE: {stats.trades} holdout trades < "
+                    f"INSUFFICIENT_SAMPLE: {stats.trades} {sample_label} trades < "
                     f"{protocol.min_holdout_trades}",
                 ),
             ),
