@@ -1278,3 +1278,31 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
     await page.close();
   }
 });
+
+test("indicator toolbar pills toggle backend overlays and disable not-ready indicators with reasons", async () => {
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
+  try {
+    await waitForLoadedSnapshot(page);
+    const pill = (short) => page.locator(`#indicator-toolbar [data-pill="${short}"]`);
+    assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "true");
+    assert.equal(await pill("RSI").getAttribute("aria-pressed"), "false");
+    const before = apiRequests.length;
+    await pill("RSI").click();
+    assert.equal(await pill("RSI").getAttribute("aria-pressed"), "true");
+    assert.ok((await readSeries(page)).some((line) => line.series === "rsi-line"));
+    assert.equal(await page.locator("#view-mode").textContent(), "Pro view");
+    await pill("EMA20").click();
+    assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "false");
+    assert.ok(!(await readSeries(page)).some((line) => line.series === "ema-20"));
+    for (const short of ["SMA", "OBV", "CVD", "HEAT", "SIGNALS"]) {
+      assert.equal(await pill(short).isDisabled(), true, short);
+      assert.match(await pill(short).getAttribute("title"), /Connect|To build|Needs trades|Needs order book/);
+    }
+    assert.equal(await pill("VWAP").isDisabled(), false);
+    await pill("VWAP").click();
+    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "vwap");
+    assert.equal(apiRequests.length, before, "toolbar pills must not issue API requests");
+  } finally {
+    await page.close();
+  }
+});

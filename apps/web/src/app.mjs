@@ -1,3 +1,4 @@
+import { toolbarPills } from "./indicator-toolbar.mjs";
 import {
   axisTimeLabel,
   CHART_TIMEFRAME_PILLS,
@@ -181,7 +182,75 @@ function setStatus(snapshot, errorMessage) {
   }
 }
 
+function indicatorAvailability(snapshot, id) {
+  const supplied = Object.hasOwn(snapshot?.indicators ?? {}, id);
+  const indicator = snapshot?.indicators?.[id];
+  const bindingError = supplied ? indicatorBindingError(snapshot, id, indicator) : null;
+  const available = supplied && indicator?.status === "AVAILABLE" && !bindingError;
+  const reason = !supplied
+    ? "not supplied in response"
+    : indicator?.status === "UNAVAILABLE" && indicator?.reason_code
+      ? indicator.reason_code
+      : bindingError ?? indicator?.reason_code ?? indicator?.status ?? "unavailable";
+  return { available, reason };
+}
+
+function analysisAvailability(snapshot, id) {
+  const analysis = snapshot?.spot_analysis?.[id];
+  if (!analysis) return { available: false, reason: "not supplied in response" };
+  const bindingError = spotAnalysisBindingError(snapshot, id, analysis);
+  if (bindingError) return { available: false, reason: bindingError };
+  if (!["AVAILABLE", "PARTIAL"].includes(analysis.status)) {
+    return { available: false, reason: analysis.reason_code ?? analysis.status ?? "unavailable" };
+  }
+  return { available: true };
+}
+
+function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
+  const toolbar = $("#indicator-toolbar");
+  if (!toolbar) return;
+  toolbar.replaceChildren();
+  const enabled = preferences.mode === "beginner" ? [...DEFAULT_VISIBILITY] : preferences.visible;
+  const pills = toolbarPills({
+    snapshotLoaded: Boolean(snapshot),
+    enabled,
+    availability: (kind, id) => kind === "indicator" ? indicatorAvailability(snapshot, id) : analysisAvailability(snapshot, id),
+  });
+  for (const pill of pills) {
+    const button = element("button", pill.short, `indicator-pill${pill.live ? "" : " not-ready"}`);
+    button.type = "button";
+    button.style.setProperty("--pill-color", pill.color);
+    button.dataset.pill = pill.short;
+    button.title = `${pill.label} — ${pill.group} · ${pill.badge}: ${pill.reason}`;
+    button.setAttribute("aria-label", `${pill.label} (${pill.group}), ${pill.badge}. ${pill.reason}`);
+    if (pill.pressed !== null) button.setAttribute("aria-pressed", pill.pressed);
+    if (!pill.action) {
+      if (!pill.live) button.disabled = true;
+      else button.setAttribute("aria-disabled", "true");
+    } else if (pill.action.type === "toggle") {
+      button.addEventListener("click", () => {
+        const visible = new Set(enabled);
+        if (visible.has(pill.action.id)) visible.delete(pill.action.id);
+        else visible.add(pill.action.id);
+        updatePreferences({ mode: "pro", visible: [...visible] });
+      });
+    } else {
+      button.addEventListener("click", () => {
+        const card = document.querySelector(`[data-analysis-key="${pill.action.id}"]`);
+        if (card) {
+          card.tabIndex = -1;
+          card.scrollIntoView({ block: "start" });
+          card.focus({ preventScroll: true });
+        }
+      });
+    }
+    toolbar.append(button);
+  }
+  toolbar.append(element("span", "Solid = live · dashed = not ready (hover for why)", "indicator-toolbar-legend"));
+}
+
 function renderIndicatorControls(snapshot, preferences, updatePreferences) {
+  renderIndicatorToolbar(snapshot, preferences, updatePreferences);
   const controls = $("#indicator-controls");
   controls.hidden = preferences.mode !== "pro";
   controls.replaceChildren();
