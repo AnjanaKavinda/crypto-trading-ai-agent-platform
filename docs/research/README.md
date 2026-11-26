@@ -54,6 +54,28 @@ From protocol v2 onwards:
 - The protocol version, the development cut-off and the judged period are
   written down before the study runs.
 
+## Strategy A study: `trend-daily-regime` v1, protocol v2 (E2e)
+
+Pre-registered on #516 (2026-11-26) before any result existed. Run once:
+
+```powershell
+python -m trading_platform_api.research fetch --timeframe 1d --start 2021-09-30
+python -m trading_platform_api.research run --strategy trend-daily-regime --protocol v2 --timeframe 1d
+```
+
+| Item | Value |
+|---|---|
+| Strategy | trend state `EMA20 > EMA50 AND close > SMA200` at the daily close; enter at the next open when the state turns true; initial stop entry − 3×ATR14; trailing stop `max(stop, highest close since entry − 3×ATR14)`, never lowered; exit at the next open when EMA20 < EMA50; no take-profit |
+| Protocol | `spot-walk-forward-prospective` v2 |
+| Judged | development era: data from 2021-09-30 (indicator warm-up first, so trading starts 2022-04-18) up to the 2025-05-11 daily bar |
+| Criteria | all v1 criteria pooled across symbols on the whole era, **plus** positive pooled expectancy in at least 3 of 4 consecutive equal windows (a trade counts in the window of its entry bar) |
+| Result | HISTORICAL_PASS / FAIL / INCONCLUSIVE |
+| Not judged | 2025-05-12 → 2026-11-25 is reported as `CONTAMINATED_INFORMATIONAL`; bars from 2026-11-26 are counted, never evaluated |
+
+Only a HISTORICAL_PASS moves to the prospective stage (signals recorded
+forward; review at 15 trades or 6 months). Other strategy/protocol pairs are
+refused (fail closed). Markers-API support for this strategy is a follow-up.
+
 ## Calculation verification (E2d)
 
 `tests/backend/test_research_calculation_verification.py` (synthetic candles):
