@@ -27,6 +27,7 @@ ORIGINLESS_GET_PATHS = frozenset(
         "/api/research/strategy-signals",
         "/api/research/decision-journal",
         "/api/research/owner-outcomes",
+        "/api/research/owner-outcomes/score",
     }
 )
 _UUID = r"[0-9A-Fa-f-]{32,36}"
