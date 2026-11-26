@@ -1,4 +1,7 @@
-"""Chart markers for ``ema-trend-atr-stop`` v1 over one persisted Spot snapshot.
+"""Chart markers for a registered strategy over one persisted Spot snapshot.
+
+Registered: ``ema-trend-atr-stop`` v1 (default) and ``trend-daily-regime`` v1
+(1d only, as pre-registered on #516).
 
 The markers replay the research backtest (``run_segment``) over the served,
 quality-checked candles of a single snapshot. They are research evidence for a
@@ -15,6 +18,9 @@ Fails closed: if the snapshot is not VALID or is stale, or if a required
 indicator is not available, no markers are returned. EMA20, EMA50 and ATR14
 are recomputed by the research formulas and must equal the snapshot's served
 indicator values exactly at every marker, otherwise no markers are returned.
+SMA200 (``trend-daily-regime`` only) is not served by the snapshot; it is
+recomputed from the same validated candles with the research SMA, which has a
+parity test against the registered platform SMA.
 """
 
 from __future__ import annotations
@@ -26,16 +32,69 @@ from typing import Any
 
 from trading_platform_api.research.backtest import CostAssumptions, run_segment
 from trading_platform_api.research.candles import Candle
-from trading_platform_api.research.indicators import atr_wilder, ema
-from trading_platform_api.research.strategy import EmaTrendAtrStop
+from trading_platform_api.research.indicators import atr_wilder, ema, sma
+from trading_platform_api.research.strategy import (
+    EmaTrendAtrStop,
+    StrategySignals,
+    TrendDailyRegime,
+)
+
+MarkerStrategy = EmaTrendAtrStop | TrendDailyRegime
 
 SIZING_INPUTS_MISSING = "enter account size and risk %"
 QUANTITY_STEP = Decimal("0.00000001")
 _REQUIRED_INDICATORS = ("ema-20", "ema-50", "atr-14")
-_EVIDENCE_SCOPE = (
-    "Replays ema-trend-atr-stop v1 over this snapshot only. Not a strategy "
-    "verdict, not a recommendation and not an order."
-)
+# (strategy_id, version) -> (strategy, pre-registered timeframe or None)
+REGISTERED_MARKER_STRATEGIES: dict[
+    tuple[str, int], tuple[MarkerStrategy, str | None]
+] = {
+    ("ema-trend-atr-stop", 1): (EmaTrendAtrStop(), None),
+    ("trend-daily-regime", 1): (TrendDailyRegime(), "1d"),
+}
+
+
+def registered_marker_strategy(
+    strategy_id: str, version: int
+) -> tuple[MarkerStrategy, str | None]:
+    """Fail closed on any strategy/version pair that is not registered."""
+    try:
+        return REGISTERED_MARKER_STRATEGIES[(strategy_id, version)]
+    except KeyError:
+        raise ValueError(
+            f"Strategy {strategy_id} v{version} has no registered markers."
+        ) from None
+
+
+def _evidence_scope(strategy: MarkerStrategy) -> str:
+    return (
+        f"Replays {strategy.strategy_id} v{strategy.version} over this snapshot "
+        "only. Not a strategy verdict, not a recommendation and not an order."
+    )
+
+
+def stop_in_effect(
+    candles: Sequence[Candle],
+    signals: StrategySignals,
+    *,
+    entry_index: int,
+    initial_stop: Decimal,
+    bar_index: int,
+) -> Decimal:
+    """Stop checked against ``bar_index``'s low, as in ``run_segment``.
+
+    The trailing stop is raised after each held close before ``bar_index`` to
+    ``highest close since entry - trail distance`` and is never lowered.
+    """
+    stop = initial_stop
+    if signals.trail_distance is None:
+        return stop
+    highest = Decimal(0)
+    for index in range(entry_index, bar_index):
+        highest = max(highest, candles[index].close)
+        distance = signals.trail_distance[index]
+        if distance is not None:
+            stop = max(stop, highest - distance)
+    return stop
 
 
 def _fact(value: object) -> dict[str, Any]:
@@ -123,10 +182,13 @@ def build_strategy_markers(
     indicators: Mapping[str, Any],
     account_size: Decimal | None = None,
     risk_pct: Decimal | None = None,
-    strategy: EmaTrendAtrStop | None = None,
+    strategy: MarkerStrategy | None = None,
+    timeframe: str | None = None,
+    required_timeframe: str | None = None,
     costs: CostAssumptions | None = None,
 ) -> dict[str, Any]:
     strategy = strategy or EmaTrendAtrStop()
+    regime = isinstance(strategy, TrendDailyRegime)
     costs = costs or CostAssumptions()
     base: dict[str, Any] = {
         "strategy": {
@@ -145,13 +207,19 @@ def build_strategy_markers(
             "account_size_usdt": None if account_size is None else str(account_size),
             "risk_pct": None if risk_pct is None else str(risk_pct),
         },
-        "evidence_scope": _EVIDENCE_SCOPE,
+        "evidence_scope": _evidence_scope(strategy),
         "not_applicable": {
             "leverage": _not_applicable("Spot research, no leverage"),
-            "take_profit": _not_applicable("v1 exits on EMA cross or stop only"),
+            "take_profit": _not_applicable(
+                "v1 exits on EMA20 below EMA50 or the trailing stop only"
+                if regime
+                else "v1 exits on EMA cross or stop only"
+            ),
             "funding": _not_applicable("Spot has no funding payments"),
         },
     }
+    if required_timeframe is not None and timeframe != required_timeframe:
+        return _empty("UNAVAILABLE", "TIMEFRAME_NOT_PRE_REGISTERED", base)
     if data_quality_status != "VALID":
         return _empty("UNAVAILABLE", f"DATA_QUALITY_{data_quality_status}", base)
     for name in _REQUIRED_INDICATORS:
@@ -170,6 +238,11 @@ def build_strategy_markers(
     fast = ema(closes, strategy.fast_period)
     slow = ema(closes, strategy.slow_period)
     atr = atr_wilder(candles, strategy.atr_period)
+    baseline = (
+        sma(closes, strategy.regime_period)
+        if isinstance(strategy, TrendDailyRegime)
+        else None
+    )
     served = {
         "ema-20": _served_values(indicators, "ema-20", len(candles)),
         "ema-50": _served_values(indicators, "ema-50", len(candles)),
@@ -192,6 +265,7 @@ def build_strategy_markers(
             "ema_20": _fact(served["ema-20"][index]),
             "ema_50": _fact(served["ema-50"][index]),
             "atr_14": _fact(served["atr-14"][index]),
+            **({"sma_200": _fact(baseline[index])} if baseline is not None else {}),
         }
 
     def cross_condition(index: int, direction: str) -> dict[str, Any]:
@@ -201,6 +275,34 @@ def build_strategy_markers(
             "met": True,
             "previous_ema_20": _fact(fast[index - 1]),
             "previous_ema_50": _fact(slow[index - 1]),
+            "ema_20": _fact(fast[index]),
+            "ema_50": _fact(slow[index]),
+        }
+
+    def regime_condition(index: int) -> dict[str, Any]:
+        assert baseline is not None
+        return {
+            "condition": (
+                "Trend state turned true at close: EMA20 > EMA50 and close > SMA200 "
+                "(false at the previous close)"
+            ),
+            "met": True,
+            "previous_ema_20": _fact(fast[index - 1]),
+            "previous_ema_50": _fact(slow[index - 1]),
+            "previous_close": _fact(candles[index - 1].close),
+            "previous_sma_200": _fact(baseline[index - 1]),
+            "ema_20": _fact(fast[index]),
+            "ema_50": _fact(slow[index]),
+            "close": _fact(candles[index].close),
+            "sma_200": _fact(baseline[index]),
+        }
+
+    def exit_condition(index: int) -> dict[str, Any]:
+        if not regime:
+            return cross_condition(index, "down")
+        return {
+            "condition": "EMA20 closed below EMA50",
+            "met": True,
             "ema_20": _fact(fast[index]),
             "ema_50": _fact(slow[index]),
         }
@@ -216,7 +318,9 @@ def build_strategy_markers(
             "time": _fact(candles[signal_index].open_time),
             "signal_known_at": "signal candle close",
             "conditions": [
-                cross_condition(signal_index, "up"),
+                regime_condition(signal_index)
+                if regime
+                else cross_condition(signal_index, "up"),
                 {
                     "condition": "ATR14 is positive",
                     "met": True,
@@ -260,17 +364,29 @@ def build_strategy_markers(
     def sell_marker(trade: Any, exit_index: int) -> dict[str, Any]:
         if trade.exit_reason == "STOP":
             signal_index = exit_index
-            conditions = [
-                {
-                    "condition": "candle low reached the stop",
-                    "met": True,
-                    "low": _fact(candles[exit_index].low),
-                    "stop": _proposal(trade.stop_price, "modelled stop"),
-                }
-            ]
+            stop = stop_in_effect(
+                candles,
+                signals,
+                entry_index=index_of[trade.entry_time],
+                initial_stop=trade.stop_price,
+                bar_index=exit_index,
+            )
+            condition: dict[str, Any] = {
+                "condition": "candle low reached the stop",
+                "met": True,
+                "low": _fact(candles[exit_index].low),
+                "stop": _proposal(
+                    stop, "modelled trailing stop" if regime else "modelled stop"
+                ),
+            }
+            if regime:
+                condition["initial_stop"] = _proposal(
+                    trade.stop_price, "modelled entry fill minus stop distance"
+                )
+            conditions = [condition]
         else:
             signal_index = exit_index - 1
-            conditions = [cross_condition(signal_index, "down")]
+            conditions = [exit_condition(signal_index)]
         return {
             "side": "SELL",
             "status": "FILLED",
@@ -295,6 +411,7 @@ def build_strategy_markers(
     markers: list[dict[str, Any]] = []
     last = len(candles) - 1
     position_open = False
+    current_stop: dict[str, Any] | None = None
     try:
         for trade in result.trades:
             entry_index = index_of[trade.entry_time]
@@ -306,6 +423,17 @@ def build_strategy_markers(
             )
             if trade.exit_reason == "END_OF_SEGMENT":
                 position_open = True
+                current_stop = _proposal(
+                    stop_in_effect(
+                        candles,
+                        signals,
+                        entry_index=entry_index,
+                        initial_stop=trade.stop_price,
+                        bar_index=len(candles),
+                    ),
+                    "stop for the next candle"
+                    + (", trailing, never lowered" if regime else ""),
+                )
                 if signals.exit_long[last]:
                     pending_sell = {
                         "side": "SELL",
@@ -316,7 +444,7 @@ def build_strategy_markers(
                         "fill_time": _unavailable(
                             "fills at the next candle's open, which is not closed yet"
                         ),
-                        "conditions": [cross_condition(last, "down")],
+                        "conditions": [exit_condition(last)],
                         "indicators": readout(last),
                     }
                     markers.append(pending_sell)
@@ -331,6 +459,7 @@ def build_strategy_markers(
         "status": "AVAILABLE",
         "reason_code": None,
         "position": "OPEN" if position_open else "FLAT",
+        "current_stop": current_stop,
         "markers": markers,
     }
 

@@ -92,7 +92,11 @@ from trading_platform_api.orchestration.spot_request_handoff import (
     run_spot_analysis_request_handoff,
 )
 from trading_platform_api.research.candles import Candle as ResearchCandle
-from trading_platform_api.research.markers import build_strategy_markers
+from trading_platform_api.research.markers import (
+    MarkerStrategy,
+    build_strategy_markers,
+    registered_marker_strategy,
+)
 from trading_platform_api.spot_research_store import (
     MAX_READ_CANDLES,
     SpotResearchSnapshotNotFound,
@@ -1987,7 +1991,18 @@ def create_research_router() -> APIRouter:
         as_of: datetime | None = None,
         account_size: Decimal | None = Query(default=None, gt=0),
         risk_pct: Decimal | None = Query(default=None, gt=0, le=100),
+        strategy: str = Query(default="ema-trend-atr-stop", max_length=64),
+        version: int = Query(default=1, ge=1),
     ) -> dict[str, Any]:
+        try:
+            registered = registered_marker_strategy(strategy, version)
+        except ValueError as exc:
+            raise SpotResearchError(
+                status=422,
+                code="STRATEGY_NOT_REGISTERED",
+                title="Strategy markers unavailable",
+                detail=str(exc),
+            ) from exc
         service: SpotResearchService = request.app.state.spot_research_service
         served = await service.read(
             instrument_id=instrument_id,
@@ -1997,7 +2012,10 @@ def create_research_router() -> APIRouter:
             correlation_id=request.state.correlation_id,
         )
         return strategy_markers_response(
-            served, account_size=account_size, risk_pct=risk_pct
+            served,
+            account_size=account_size,
+            risk_pct=risk_pct,
+            registered=registered,
         )
 
     return router
@@ -2008,8 +2026,12 @@ def strategy_markers_response(
     *,
     account_size: Decimal | None,
     risk_pct: Decimal | None,
+    registered: tuple[MarkerStrategy, str | None] | None = None,
 ) -> dict[str, Any]:
-    """Replay ema-trend-atr-stop v1 over one served, verified snapshot."""
+    """Replay a registered strategy over one served, verified snapshot."""
+    strategy, required_timeframe = registered or registered_marker_strategy(
+        "ema-trend-atr-stop", 1
+    )
     candles = tuple(
         ResearchCandle(
             open_time=datetime.fromisoformat(item["open_time"].replace("Z", "+00:00")),
@@ -2028,6 +2050,9 @@ def strategy_markers_response(
             indicators=served["indicators"],
             account_size=account_size,
             risk_pct=risk_pct,
+            strategy=strategy,
+            timeframe=served["timeframe"],
+            required_timeframe=required_timeframe,
         )
     except (ArithmeticError, ValueError) as exc:
         raise SpotResearchError(
