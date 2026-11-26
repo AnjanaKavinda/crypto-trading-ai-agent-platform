@@ -25,6 +25,7 @@ from trading_platform_api.learning.decision_journal import (
     ResearchDecisionJournalEntry,
     utc,
 )
+from trading_platform_api.learning.owner_scoring import score_owner_results
 from trading_platform_api.learning.trade_outcome import (
     MAX_FILLS,
     OUTCOME_NAMESPACE,
@@ -41,6 +42,7 @@ from trading_platform_api.strategy_api import (
 )
 
 PROFILE = "PERSONAL_SPOT_RESEARCH"
+MAX_SCORED_OUTCOMES = 10000
 DECIMAL_TEXT = re.compile(r"^(0|[1-9][0-9]{0,14})(\.[0-9]{1,18})?$")
 
 
@@ -272,6 +274,30 @@ class TradeOutcomeService:
         async with self.sessions() as session:
             return await self._existing(session, request_id)
 
+    async def all_outcomes(self) -> list[OwnerTradeOutcome]:
+        async with self.sessions() as session:
+            store = SqlAlchemyLineageStore(session)
+            ids: list[str] = list(
+                (
+                    await session.execute(
+                        select(records.c.record_id)
+                        .where(
+                            records.c.contract_id == "C-108",
+                            records.c.version == "1",
+                        )
+                        .order_by(records.c.occurred_at, records.c.record_id)
+                        .limit(MAX_SCORED_OUTCOMES + 1)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(ids) > MAX_SCORED_OUTCOMES:
+                raise ValueError("Too many outcomes to score in one request.")
+            return [
+                await self._read(store, LineageKey("C-108", value)) for value in ids
+            ]
+
     async def page(self, limit: int, before: UUID | None) -> dict:
         async with self.sessions() as session:
             store = SqlAlchemyLineageStore(session)
@@ -363,6 +389,13 @@ def create_trade_outcome_router() -> APIRouter:
         cursor: UUID | None = None,
     ) -> JSONResponse:
         return await respond(service(request).page(limit, cursor))
+
+    @router.get("/score")
+    async def score(request: Request) -> JSONResponse:
+        async def run() -> dict:
+            return score_owner_results(await service(request).all_outcomes())
+
+        return await respond(run())
 
     @router.get("/requests/{request_id}")
     async def read_request(request_id: UUID, request: Request) -> JSONResponse:
