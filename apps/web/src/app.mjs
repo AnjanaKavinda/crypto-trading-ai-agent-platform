@@ -1,5 +1,17 @@
 import { toolbarPills } from "./indicator-toolbar.mjs";
 import {
+  createDrawing,
+  DRAWING_LABEL,
+  DRAWING_TOOLS,
+  drawingsKey,
+  drawingTool,
+  fibLevels,
+  loadDrawings,
+  positionSummary,
+  priceRange,
+  saveDrawings,
+} from "./chart-drawings.mjs";
+import {
   axisTimeLabel,
   CHART_TIMEFRAME_PILLS,
   chartIndexAtPointer,
@@ -744,6 +756,123 @@ function makeLine(values, candleIndexes, yOf, left, width) {
 // changes which values are returned; it resets when the snapshot changes.
 const chartView = { key: null, window: null, scale: "auto" };
 
+// U4: the owner's own annotations (browser-only, never evidence or API data).
+const drawingState = { tool: "cursor", pending: [] };
+
+function drawingStatusText() {
+  const tool = drawingTool(drawingState.tool);
+  if (!tool || tool.clicks === 0) return `${tool?.title ?? "Select / pan"} · ${DRAWING_LABEL}.`;
+  const steps = {
+    long: ["entry", "stop", "target"], short: ["entry", "stop", "target"],
+    fib: ["swing start", "swing end"], range: ["from price", "to price"],
+  }[tool.id];
+  const next = drawingState.pending.length;
+  const what = steps ? steps[next] : `point ${next + 1}`;
+  return `${tool.title} — click ${what} (${next + 1} of ${tool.clicks}). ${DRAWING_LABEL}.`;
+}
+
+function renderDrawings(svg, ctx) {
+  const group = svgNode("g", {
+    class: "user-drawings",
+    "clip-path": "url(#price-pane-clip)",
+    "data-drawing-count": String(ctx.drawings.length),
+    "aria-label": `${ctx.drawings.length} of your drawings. ${DRAWING_LABEL}.`,
+  });
+  const titled = (node, text) => {
+    const title = svgNode("title");
+    title.textContent = `${text} · ${DRAWING_LABEL}`;
+    node.prepend(title);
+    return node;
+  };
+  const hLine = (target, y, x1, className) =>
+    target.append(svgNode("line", { x1, x2: ctx.right, y1: y, y2: y, class: className }));
+  for (const drawing of ctx.drawings) {
+    const points = drawing.anchors.map(({ time, price }) => ({ x: ctx.timeX(time), y: ctx.priceY(price), price }));
+    if (points.some((point) => point.y === null || !Number.isFinite(point.y))) continue;
+    if (drawing.type !== "hline" && points.some((point) => point.x === null)) continue;
+    const node = svgNode("g", { class: `user-drawing drawing-${drawing.type}`, "data-drawing-type": drawing.type });
+    const [a, b, c] = points;
+    let description = "";
+    if (drawing.type === "hline") {
+      hLine(node, a.y, ctx.left, "drawing-line");
+      svgText(node, ctx.right - 4, a.y - 4, ctx.formatPrice(a.price), "drawing-label").setAttribute("text-anchor", "end");
+      description = `Horizontal line at ${ctx.formatPrice(a.price)}`;
+    } else if (drawing.type === "trend") {
+      node.append(svgNode("line", { x1: a.x, x2: b.x, y1: a.y, y2: b.y, class: "drawing-line" }));
+      description = `Trend line ${ctx.formatPrice(a.price)} → ${ctx.formatPrice(b.price)}`;
+    } else if (drawing.type === "rect") {
+      node.append(svgNode("rect", {
+        x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+        width: Math.max(1, Math.abs(b.x - a.x)), height: Math.max(1, Math.abs(b.y - a.y)), class: "drawing-zone",
+      }));
+      description = `Zone ${ctx.formatPrice(Math.min(a.price, b.price))}–${ctx.formatPrice(Math.max(a.price, b.price))}`;
+    } else if (drawing.type === "range") {
+      const range = priceRange(a.price, b.price);
+      node.append(svgNode("line", { x1: a.x, x2: b.x, y1: a.y, y2: b.y, class: "drawing-line drawing-range" }));
+      const sign = range.change >= 0 ? "+" : "−";
+      description = `${sign}${ctx.formatPrice(Math.abs(range.change))} (${sign}${Math.abs(range.percent).toFixed(2)}%)`;
+      svgText(node, b.x + 4, b.y - 4, description, "drawing-label");
+      description = `Price range ${description}`;
+    } else if (drawing.type === "fib") {
+      for (const level of fibLevels(a.price, b.price)) {
+        const y = ctx.priceY(level.price);
+        if (y === null || !Number.isFinite(y)) continue;
+        hLine(node, y, Math.min(a.x, b.x), "drawing-line drawing-fib-level");
+        svgText(node, Math.min(a.x, b.x) + 4, y - 3, `${level.ratio} · ${ctx.formatPrice(level.price)}`, "drawing-label");
+      }
+      description = `Fibonacci retracement ${ctx.formatPrice(a.price)} → ${ctx.formatPrice(b.price)}`;
+    } else if (drawing.type === "long" || drawing.type === "short") {
+      const summary = positionSummary(drawing.type, a.price, b.price, c.price);
+      const x1 = a.x;
+      node.append(
+        svgNode("rect", { x: x1, y: Math.min(a.y, c.y), width: Math.max(1, ctx.right - x1), height: Math.max(1, Math.abs(c.y - a.y)), class: "drawing-zone zone-reward" }),
+        svgNode("rect", { x: x1, y: Math.min(a.y, b.y), width: Math.max(1, ctx.right - x1), height: Math.max(1, Math.abs(b.y - a.y)), class: "drawing-zone zone-risk" }),
+      );
+      hLine(node, a.y, x1, "drawing-line");
+      const side = drawing.type === "long" ? "Long" : "Short (Spot cannot short — research only)";
+      const label = summary.valid
+        ? `${side} · R ${summary.rMultiple.toFixed(2)} · risk ${summary.riskPercent.toFixed(2)}% · reward ${summary.rewardPercent.toFixed(2)}%`
+        : `${side} · ${summary.reason}`;
+      svgText(node, x1 + 4, a.y - 4, label, "drawing-label");
+      description = `${label}; entry ${ctx.formatPrice(a.price)}, stop ${ctx.formatPrice(b.price)}, target ${ctx.formatPrice(c.price)}`;
+    } else if (drawing.type === "note") {
+      svgText(node, a.x, a.y, drawing.text, "drawing-label drawing-note");
+      description = `Note: ${drawing.text}`;
+    }
+    group.append(titled(node, description));
+  }
+  for (const anchor of ctx.pending) {
+    const x = ctx.timeX(anchor.time);
+    const y = ctx.priceY(anchor.price);
+    if (x !== null && y !== null) group.append(svgNode("circle", { cx: x, cy: y, r: 4, class: "drawing-pending" }));
+  }
+  svg.append(group);
+}
+
+function renderDrawingTools(onChange, onClear) {
+  const nav = $("#drawing-tools");
+  if (!nav) return;
+  nav.replaceChildren();
+  for (const tool of DRAWING_TOOLS) {
+    const button = element("button", tool.glyph, "drawing-tool");
+    button.type = "button";
+    button.dataset.drawingTool = tool.id;
+    button.title = `${tool.title} — ${DRAWING_LABEL}`;
+    button.setAttribute("aria-label", button.title);
+    if (tool.id !== "clear") button.setAttribute("aria-pressed", String(drawingState.tool === tool.id));
+    button.addEventListener("click", () => {
+      drawingState.pending = [];
+      if (tool.id === "clear") onClear();
+      else drawingState.tool = tool.id;
+      renderDrawingTools(onChange, onClear);
+      onChange();
+    });
+    nav.append(button);
+  }
+  const status = $("#drawing-status");
+  if (status) status.textContent = drawingStatusText();
+}
+
 function syncChartView(snapshot, candleCount) {
   const key = `${snapshot.snapshot_id}|${snapshot.instrument_id}|${snapshot.timeframe}|${candleCount}`;
   if (chartView.key !== key) {
@@ -1065,6 +1194,21 @@ function renderChart(snapshot, preferences) {
     svg.append(group);
   }
 
+  const clip = svgNode("clipPath", { id: "price-pane-clip" });
+  clip.append(svgNode("rect", { x: left, y: priceTop, width: plotWidth, height: priceHeight }));
+  svg.append(clip);
+  const drawingKey = drawingsKey(snapshot.instrument_id, snapshot.timeframe);
+  const globalIndexes = new Map(allCandles.map(({ source }, index) => [Date.parse(source.close_time), index]));
+  const timeX = (time) => {
+    const index = globalIndexes.get(Date.parse(time));
+    return index === undefined ? null : xOf(index - view.start);
+  };
+  renderDrawings(svg, {
+    drawings: loadDrawings(localStorage, drawingKey),
+    pending: drawingState.pending,
+    timeX, priceY, formatPrice, left, right: width - right,
+  });
+
   const crosshair = svgNode("line", {
     x1: 0, x2: 0, y1: priceTop, y2: volumeTop + volumeHeight,
     class: "chart-crosshair", "pointer-events": "none",
@@ -1128,8 +1272,28 @@ function renderChart(snapshot, preferences) {
   };
   let drag = null;
   svg.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || drawingState.tool !== "cursor") return;
     drag = { clientX: event.clientX, width: svg.getBoundingClientRect().width };
+  });
+  svg.addEventListener("click", (event) => {
+    const tool = drawingTool(drawingState.tool);
+    if (!tool || tool.clicks === 0) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const viewY = ((event.clientY - rect.top) / rect.height) * height;
+    const index = indexAtPointer(event);
+    if (index === null || viewY < priceTop || viewY > priceTop + priceHeight) return;
+    const price = scale.valueAt((viewY - priceTop) / priceHeight);
+    if (!Number.isFinite(price) || price <= 0) return;
+    drawingState.pending.push({ time: candles[index].source.close_time, price });
+    if (drawingState.pending.length >= tool.clicks) {
+      const drawing = createDrawing(tool.id, drawingState.pending, $("#drawing-note-text")?.value);
+      drawingState.pending = [];
+      if (drawing) saveDrawings(localStorage, drawingKey, [...loadDrawings(localStorage, drawingKey), drawing]);
+    }
+    const status = $("#drawing-status");
+    if (status) status.textContent = drawingStatusText();
+    renderChart(snapshot, preferences);
   });
   svg.addEventListener("pointerup", (event) => {
     const started = drag;
@@ -1486,6 +1650,10 @@ async function bootstrap() {
     select.dispatchEvent(new Event("change"));
   };
   renderTimeframePills((value) => choose(timeframe, value));
+  renderDrawingTools(
+    () => { if (snapshot) renderChart(snapshot, preferences); },
+    () => { if (snapshot) saveDrawings(localStorage, drawingsKey(snapshot.instrument_id, snapshot.timeframe), []); },
+  );
   instrument.addEventListener("change", () => { syncSelectionLists(); snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
   timeframe.addEventListener("change", () => { syncSelectionLists(); snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
   history.addEventListener("change", () => { void loadSnapshot(); });
