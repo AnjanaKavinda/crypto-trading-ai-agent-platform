@@ -384,7 +384,8 @@ research_journal_requests = Table(
     Column("record_id", String(512), nullable=False),
     Column("version", String(512), nullable=False),
     CheckConstraint(
-        "profile = 'PERSONAL_SPOT_RESEARCH' AND contract_id = 'C-107' AND version = '1'",
+        "profile = 'PERSONAL_SPOT_RESEARCH' AND contract_id = 'C-107' "
+        "AND version IN ('1', '2')",
         name="ck_journal_request_scope",
     ),
     CheckConstraint(

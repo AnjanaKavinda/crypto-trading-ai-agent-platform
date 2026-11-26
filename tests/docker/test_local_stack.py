@@ -1018,7 +1018,7 @@ class LocalStackAcceptanceTests(unittest.TestCase):
             )
             self.assertEqual(
                 stack.database("SELECT version_num FROM alembic_version"),
-                "0013_owner_trade_outcomes",
+                "0014_journal_snapshot_link",
             )
             # This is an infrastructure probe, not market or research data.
             stack.database(

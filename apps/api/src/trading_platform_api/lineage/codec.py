@@ -40,7 +40,10 @@ from trading_platform_api.contracts.serialization import (
     canonical_sha256,
     serialize_contract,
 )
-from trading_platform_api.learning.decision_journal import ResearchDecisionJournalEntry
+from trading_platform_api.learning.decision_journal import (
+    ResearchDecisionJournalEntry,
+    SnapshotDecisionJournalEntry,
+)
 from trading_platform_api.learning.trade_outcome import OwnerTradeOutcome
 from trading_platform_api.market_data.contracts import (
     DataQualityReport,
@@ -171,6 +174,8 @@ class LineageKey:
 def key_for(record: object) -> LineageKey:
     if type(record) is ResearchDecisionJournalEntry:
         return LineageKey("C-107", str(record.entry_id), "1")
+    if type(record) is SnapshotDecisionJournalEntry:
+        return LineageKey("C-107", str(record.entry_id), "2")
     if type(record) is OwnerTradeOutcome:
         return LineageKey("C-108", str(record.outcome_id), "1")
     if type(record) is MarketData:
@@ -492,6 +497,13 @@ def decode(document: str) -> object:
                 model = {"1": ValidationFreshnessAssessmentV1}.get(schema_version)
                 if model is None:
                     raise LineageError("Unsupported C-106 schema version.")
+            if contract_id == "C-107":
+                model = {
+                    "1": ResearchDecisionJournalEntry,
+                    "2": SnapshotDecisionJournalEntry,
+                }.get(schema_version)
+                if model is None:
+                    raise LineageError("Unsupported C-107 schema version.")
             if contract_id == "C-021":
                 model = {"1": StrategyVersion, "2": StrategyVersionV2}.get(
                     schema_version
@@ -522,7 +534,7 @@ def decode(document: str) -> object:
                 "C-094": schema_version,
                 "C-105": "1",
                 "C-106": "1",
-                "C-107": "1",
+                "C-107": schema_version,
                 "C-108": "1",
                 "C-071": schema_version,
                 "C-029": "2",

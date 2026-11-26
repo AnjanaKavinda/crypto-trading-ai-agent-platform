@@ -41,7 +41,10 @@ from trading_platform_api.analysis.versioned_contracts_v5 import (
 from trading_platform_api.contracts.serialization import (
     canonical_sha256,
 )
-from trading_platform_api.learning.decision_journal import ResearchDecisionJournalEntry
+from trading_platform_api.learning.decision_journal import (
+    ResearchDecisionJournalEntry,
+    SnapshotDecisionJournalEntry,
+)
 from trading_platform_api.learning.trade_outcome import OwnerTradeOutcome
 from trading_platform_api.lineage.archive_storage import ImmutableObjectStore
 from trading_platform_api.lineage.codec import (
@@ -129,6 +132,7 @@ class Reference:
 def _reference_content_sha256(record: object) -> str:
     if (
         type(record) is ResearchDecisionJournalEntry
+        or type(record) is SnapshotDecisionJournalEntry
         or type(record) is OwnerTradeOutcome
     ):
         return record.content_sha256
@@ -203,6 +207,7 @@ def _typed_contract_references(record: object) -> tuple[Reference, ...]:
 def references(record: object) -> tuple[Reference, ...]:
     if (
         type(record) is ResearchDecisionJournalEntry
+        or type(record) is SnapshotDecisionJournalEntry
         or type(record) is OwnerTradeOutcome
     ):
         return _typed_contract_references(record)
