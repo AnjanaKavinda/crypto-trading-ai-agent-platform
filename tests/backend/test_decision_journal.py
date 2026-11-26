@@ -154,7 +154,7 @@ def test_local_write_admission_body_bound_and_no_store():
                 path
                 + "/"
                 + str(uuid4())
-                + "?schema_version=2&content_sha256="
+                + "?schema_version=3&content_sha256="
                 + "a" * 64
             ).status_code
             == 422
