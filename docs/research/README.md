@@ -99,6 +99,22 @@ signal close; SELL markers explain the middle-band exit, the 12-bar time stop
 must equal the research formulas or no markers are returned; ADX14 is recomputed
 from the snapshot's validated candles.
 
+## Forward (prospective) stage (E2f2)
+
+`research/forward.py` replays each candidate's frozen rules over candles from
+2026-11-26 onward (indicators may warm up on earlier candles) and reports every
+signal and outcome as **SIMULATED**: fill at the next open plus slippage, the
+strategy's own stop/exit rules and fees. Never an order.
+
+Stage status comes only from the pre-registered rules: no recorded historical
+verdict → `NOT_VALIDATED`; historical FAIL → `FAIL`; HISTORICAL_PASS →
+`FORWARD_TESTING` until the review point (A: 15 trades or 6 months; B: 30 trades
+or 3 months, whichever first), then `FORWARD_PASS` if pooled expectancy after
+costs > 0 and the forward portfolio max drawdown ≤ 1.5 × the historical one,
+else `FAIL`. The historical verdict is read from the owner's study report only
+if its strategy and protocol digests match exactly (owner decision on #516:
+import the report). Persistence, the import command and the API follow in part 2.
+
 ## Calculation verification (E2d)
 
 `tests/backend/test_research_calculation_verification.py` (synthetic candles):
