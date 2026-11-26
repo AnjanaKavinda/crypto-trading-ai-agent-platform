@@ -82,7 +82,7 @@ def test_registry_is_fixed_and_fails_closed() -> None:
     assert isinstance(strategy, TrendDailyRegime) and required == "1d"
     default, any_timeframe = registered_marker_strategy("ema-trend-atr-stop", 1)
     assert isinstance(default, EmaTrendAtrStop) and any_timeframe is None
-    for pair in (("trend-daily-regime", 2), ("range-reversion-4h", 1)):
+    for pair in (("trend-daily-regime", 2), ("range-reversion-4h", 2), ("x", 1)):
         with pytest.raises(ValueError, match="no registered markers"):
             registered_marker_strategy(*pair)
 

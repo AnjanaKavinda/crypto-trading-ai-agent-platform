@@ -1,7 +1,7 @@
 """Chart markers for a registered strategy over one persisted Spot snapshot.
 
-Registered: ``ema-trend-atr-stop`` v1 (default) and ``trend-daily-regime`` v1
-(1d only, as pre-registered on #516).
+Registered: ``ema-trend-atr-stop`` v1 (default), ``trend-daily-regime`` v1
+(1d only) and ``range-reversion-4h`` v1 (4h only), as pre-registered on #516.
 
 The markers replay the research backtest (``run_segment``) over the served,
 quality-checked candles of a single snapshot. They are research evidence for a
@@ -18,9 +18,11 @@ Fails closed: if the snapshot is not VALID or is stale, or if a required
 indicator is not available, no markers are returned. EMA20, EMA50 and ATR14
 are recomputed by the research formulas and must equal the snapshot's served
 indicator values exactly at every marker, otherwise no markers are returned.
-SMA200 (``trend-daily-regime`` only) is not served by the snapshot; it is
-recomputed from the same validated candles with the research SMA, which has a
-parity test against the registered platform SMA.
+For ``range-reversion-4h`` the served RSI14 and Bollinger (20) values must
+match the research formulas the same way. SMA200 (``trend-daily-regime``) and
+ADX14 (``range-reversion-4h``) are not served by the snapshot; they are
+recomputed from the same validated candles (SMA200 has a parity test against
+the registered platform SMA; ADX14 is the documented Wilder definition).
 """
 
 from __future__ import annotations
@@ -32,24 +34,34 @@ from typing import Any
 
 from trading_platform_api.research.backtest import CostAssumptions, run_segment
 from trading_platform_api.research.candles import Candle
-from trading_platform_api.research.indicators import atr_wilder, ema, sma
+from trading_platform_api.research.indicators import (
+    adx_wilder,
+    atr_wilder,
+    bollinger,
+    ema,
+    rsi_wilder,
+    sma,
+)
 from trading_platform_api.research.strategy import (
     EmaTrendAtrStop,
+    RangeReversion4h,
     StrategySignals,
     TrendDailyRegime,
 )
 
-MarkerStrategy = EmaTrendAtrStop | TrendDailyRegime
+MarkerStrategy = EmaTrendAtrStop | TrendDailyRegime | RangeReversion4h
 
 SIZING_INPUTS_MISSING = "enter account size and risk %"
 QUANTITY_STEP = Decimal("0.00000001")
 _REQUIRED_INDICATORS = ("ema-20", "ema-50", "atr-14")
+_RANGE_REQUIRED_INDICATORS = ("atr-14", "rsi-14", "bollinger-bands-20")
 # (strategy_id, version) -> (strategy, pre-registered timeframe or None)
 REGISTERED_MARKER_STRATEGIES: dict[
     tuple[str, int], tuple[MarkerStrategy, str | None]
 ] = {
     ("ema-trend-atr-stop", 1): (EmaTrendAtrStop(), None),
     ("trend-daily-regime", 1): (TrendDailyRegime(), "1d"),
+    ("range-reversion-4h", 1): (RangeReversion4h(), "4h"),
 }
 
 
@@ -163,12 +175,18 @@ def position_size(
 
 
 def _served_values(
-    indicators: Mapping[str, Any], name: str, count: int
+    indicators: Mapping[str, Any], name: str, count: int, field: str = "value"
 ) -> list[Decimal | None]:
     points = indicators[name]["result"]["points"]
     if len(points) != count:
         raise ValueError(f"{name} points do not match the candles.")
-    return [None if p["value"] is None else Decimal(p["value"]) for p in points]
+    values: list[Decimal | None] = []
+    for point in points:
+        value = point[field]
+        if isinstance(value, Mapping):  # momentum values carry a status
+            value = value["value"]
+        values.append(None if value is None else Decimal(value))
+    return values
 
 
 def _empty(status: str, reason_code: str, base: dict[str, Any]) -> dict[str, Any]:
@@ -189,6 +207,7 @@ def build_strategy_markers(
 ) -> dict[str, Any]:
     strategy = strategy or EmaTrendAtrStop()
     regime = isinstance(strategy, TrendDailyRegime)
+    reversion = isinstance(strategy, RangeReversion4h)
     costs = costs or CostAssumptions()
     base: dict[str, Any] = {
         "strategy": {
@@ -213,6 +232,8 @@ def build_strategy_markers(
             "take_profit": _not_applicable(
                 "v1 exits on EMA20 below EMA50 or the trailing stop only"
                 if regime
+                else "v1 exits at the middle band, the 12-bar time stop or the stop"
+                if reversion
                 else "v1 exits on EMA cross or stop only"
             ),
             "funding": _not_applicable("Spot has no funding payments"),
@@ -222,7 +243,7 @@ def build_strategy_markers(
         return _empty("UNAVAILABLE", "TIMEFRAME_NOT_PRE_REGISTERED", base)
     if data_quality_status != "VALID":
         return _empty("UNAVAILABLE", f"DATA_QUALITY_{data_quality_status}", base)
-    for name in _REQUIRED_INDICATORS:
+    for name in _RANGE_REQUIRED_INDICATORS if reversion else _REQUIRED_INDICATORS:
         item = indicators.get(name)
         if item is None or item.get("status") != "AVAILABLE":
             reason = None if item is None else item.get("reason_code")
@@ -234,27 +255,56 @@ def build_strategy_markers(
     if len(candles) <= start + 1:
         return _empty("WARMUP", "INSUFFICIENT_HISTORY", base)
 
+    count = len(candles)
     closes = [item.close for item in candles]
-    fast = ema(closes, strategy.fast_period)
-    slow = ema(closes, strategy.slow_period)
     atr = atr_wilder(candles, strategy.atr_period)
-    baseline = (
-        sma(closes, strategy.regime_period)
-        if isinstance(strategy, TrendDailyRegime)
-        else None
-    )
-    served = {
-        "ema-20": _served_values(indicators, "ema-20", len(candles)),
-        "ema-50": _served_values(indicators, "ema-50", len(candles)),
-        "atr-14": _served_values(indicators, "atr-14", len(candles)),
-    }
-    computed = {"ema-20": fast, "ema-50": slow, "atr-14": atr}
+    fast: list[Decimal | None] = []
+    slow: list[Decimal | None] = []
+    baseline: list[Decimal | None] | None = None
+    series: dict[str, list[Decimal | None]] = {}
+    # (readout key, research values, served values or None when not served)
+    checks: list[tuple[str, list[Decimal | None], list[Decimal | None] | None]] = []
+    if isinstance(strategy, RangeReversion4h):
+        bands = bollinger(closes, strategy.band_period)
+        series = {
+            "rsi_14": rsi_wilder(closes, strategy.rsi_period),
+            "adx_14": adx_wilder(candles, strategy.adx_period),
+            "bb_middle": [None if b is None else b[0] for b in bands],
+            "bb_upper": [None if b is None else b[1] for b in bands],
+            "bb_lower": [None if b is None else b[2] for b in bands],
+        }
+        name = "bollinger-bands-20"
+        checks = [
+            ("rsi_14", series["rsi_14"], _served_values(indicators, "rsi-14", count)),
+            ("adx_14", series["adx_14"], None),
+            *(
+                (key, series[key], _served_values(indicators, name, count, field))
+                for key, field in (
+                    ("bb_middle", "middle"),
+                    ("bb_upper", "upper"),
+                    ("bb_lower", "lower"),
+                )
+            ),
+        ]
+    else:
+        fast = ema(closes, strategy.fast_period)
+        slow = ema(closes, strategy.slow_period)
+        checks = [
+            ("ema_20", fast, _served_values(indicators, "ema-20", count)),
+            ("ema_50", slow, _served_values(indicators, "ema-50", count)),
+        ]
+        if isinstance(strategy, TrendDailyRegime):
+            baseline = sma(closes, strategy.regime_period)
+            checks.append(("sma_200", baseline, None))
+    checks.append(("atr_14", atr, _served_values(indicators, "atr-14", count)))
     index_of = {item.open_time: index for index, item in enumerate(candles)}
 
     def readout(index: int) -> dict[str, Any]:
-        for name, values in computed.items():
-            if values[index] != served[name][index]:
-                raise _ParityError(name)
+        values: dict[str, Any] = {}
+        for key, research, served in checks:
+            if served is not None and research[index] != served[index]:
+                raise _ParityError(key)
+            values[key] = _fact(research[index])
         bar = candles[index]
         return {
             "candle_open_time": _fact(bar.open_time),
@@ -262,11 +312,28 @@ def build_strategy_markers(
             "high": _fact(bar.high),
             "low": _fact(bar.low),
             "close": _fact(bar.close),
-            "ema_20": _fact(served["ema-20"][index]),
-            "ema_50": _fact(served["ema-50"][index]),
-            "atr_14": _fact(served["atr-14"][index]),
-            **({"sma_200": _fact(baseline[index])} if baseline is not None else {}),
+            **values,
         }
+
+    def reversion_entry(index: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "condition": "ADX14 below 20 at close (ranging market)",
+                "met": True,
+                "adx_14": _fact(series["adx_14"][index]),
+            },
+            {
+                "condition": "close below the lower Bollinger band (20, 2 sigma)",
+                "met": True,
+                "close": _fact(candles[index].close),
+                "bb_lower": _fact(series["bb_lower"][index]),
+            },
+            {
+                "condition": "RSI14 below 30 at close",
+                "met": True,
+                "rsi_14": _fact(series["rsi_14"][index]),
+            },
+        ]
 
     def cross_condition(index: int, direction: str) -> dict[str, Any]:
         text = "above" if direction == "up" else "below"
@@ -298,6 +365,13 @@ def build_strategy_markers(
         }
 
     def exit_condition(index: int) -> dict[str, Any]:
+        if reversion:
+            return {
+                "condition": "close at or above the middle Bollinger band (SMA20)",
+                "met": True,
+                "close": _fact(candles[index].close),
+                "bb_middle": _fact(series["bb_middle"][index]),
+            }
         if not regime:
             return cross_condition(index, "down")
         return {
@@ -305,6 +379,15 @@ def build_strategy_markers(
             "met": True,
             "ema_20": _fact(fast[index]),
             "ema_50": _fact(slow[index]),
+        }
+
+    def time_condition(entry_index: int, index: int) -> dict[str, Any]:
+        return {
+            "condition": (
+                f"position held {signals.max_bars_held} bars at close (time stop)"
+            ),
+            "met": True,
+            "bars_held": _fact(index - entry_index + 1),
         }
 
     def buy_marker(
@@ -318,9 +401,15 @@ def build_strategy_markers(
             "time": _fact(candles[signal_index].open_time),
             "signal_known_at": "signal candle close",
             "conditions": [
-                regime_condition(signal_index)
-                if regime
-                else cross_condition(signal_index, "up"),
+                *(
+                    reversion_entry(signal_index)
+                    if reversion
+                    else [
+                        regime_condition(signal_index)
+                        if regime
+                        else cross_condition(signal_index, "up")
+                    ]
+                ),
                 {
                     "condition": "ATR14 is positive",
                     "met": True,
@@ -384,6 +473,9 @@ def build_strategy_markers(
                     trade.stop_price, "modelled entry fill minus stop distance"
                 )
             conditions = [condition]
+        elif trade.exit_reason == "TIME_EXIT":
+            signal_index = exit_index - 1
+            conditions = [time_condition(index_of[trade.entry_time], signal_index)]
         else:
             signal_index = exit_index - 1
             conditions = [exit_condition(signal_index)]
@@ -434,17 +526,26 @@ def build_strategy_markers(
                     "stop for the next candle"
                     + (", trailing, never lowered" if regime else ""),
                 )
-                if signals.exit_long[last]:
+                time_up = (
+                    signals.max_bars_held is not None
+                    and last - entry_index + 1 >= signals.max_bars_held
+                )
+                if signals.exit_long[last] or time_up:
+                    reason = "SIGNAL_EXIT" if signals.exit_long[last] else "TIME_EXIT"
                     pending_sell = {
                         "side": "SELL",
                         "status": "PENDING_FILL",
-                        "exit_reason": "SIGNAL_EXIT",
+                        "exit_reason": reason,
                         "time": _fact(candles[last].open_time),
                         "signal_known_at": "signal candle close",
                         "fill_time": _unavailable(
                             "fills at the next candle's open, which is not closed yet"
                         ),
-                        "conditions": [exit_condition(last)],
+                        "conditions": [
+                            exit_condition(last)
+                            if reason == "SIGNAL_EXIT"
+                            else time_condition(entry_index, last)
+                        ],
                         "indicators": readout(last),
                     }
                     markers.append(pending_sell)
