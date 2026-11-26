@@ -1,80 +1,58 @@
-import { listSupportedSymbols, readSnapshot, readStrategyMarkers } from "./research-api.mjs";
-import { TODAY_LIMIT, TODAY_TIMEFRAME, todayState } from "./today-state.mjs";
-import { supportedWatchlistSymbols, validateWatchlistSnapshot, workspaceHref } from "./watchlist-state.mjs";
+import { listSupportedSymbols } from "./research-api.mjs";
+import { TODAY_TIMEFRAME, todayState } from "./today-state.mjs";
+import { readWatchlist, supportedWatchlistSymbols, workspaceHref } from "./watchlist-state.mjs";
 
-const $ = (selector) => document.querySelector(selector);
-const element = (tag, value, className) => {
+const element = (document, tag, value, className) => {
   const node = document.createElement(tag);
   if (value !== undefined) node.textContent = value;
   if (className) node.className = className;
   return node;
 };
 
-async function coinState(fetcher, item) {
-  const input = {};
-  try {
-    const snapshot = await readSnapshot(fetcher, {
-      instrumentId: item.instrument_id, timeframe: TODAY_TIMEFRAME, limit: TODAY_LIMIT,
-    });
-    const invalid = validateWatchlistSnapshot(snapshot, {
-      instrumentId: item.instrument_id, symbol: item.symbol, timeframe: TODAY_TIMEFRAME,
-    });
-    if (invalid) throw new Error(invalid);
-    input.snapshot = snapshot;
-  } catch (error) {
-    input.snapshotError = error.message;
-    return input;
-  }
-  if (input.snapshot.data_quality?.status !== "VALID" || input.snapshot.temporal_context !== "CURRENT") return input;
-  try {
-    input.markers = await readStrategyMarkers(fetcher, {
-      instrumentId: item.instrument_id, timeframe: TODAY_TIMEFRAME,
-      limit: Math.max(2, input.snapshot.candles.length),
-    });
-  } catch (error) {
-    input.markersError = error.message;
-  }
-  return input;
-}
-
-function renderRow(item, input, symbols) {
-  const result = todayState(input);
-  const row = element("li", undefined, "today-row");
-  row.dataset.instrumentId = item.instrument_id;
+export function renderTodayRow(document, entry, instrumentId, symbols) {
+  const result = todayState(entry);
+  const row = element(document, "li", undefined, "today-row");
+  row.dataset.instrumentId = instrumentId;
   row.dataset.tone = result.tone;
-  const head = element("div", undefined, "today-row-head");
-  head.append(element("strong", item.symbol), element("span", result.state, `today-chip today-chip-${result.tone}`));
-  if (input.snapshot?.as_of) {
-    head.append(element("span", `4h snapshot as of ${input.snapshot.as_of} · quality ${input.snapshot.data_quality?.status}`, "muted"));
-  }
-  const reasons = element("ul", undefined, "today-reasons");
-  for (const reason of result.reasons) reasons.append(element("li", reason));
-  row.append(head, reasons);
-  const href = workspaceHref(item.instrument_id, TODAY_TIMEFRAME, symbols);
+  const head = element(document, "div", undefined, "today-row-head");
+  head.append(
+    element(document, "strong", entry.symbol),
+    element(document, "span", result.decision, "today-chip"),
+    element(document, "span", `Data ${result.data}`, `today-chip today-chip-${result.tone}`),
+  );
+  if (result.price) head.append(element(document, "span", result.price, "today-price"));
+  row.append(head);
+  if (result.freshness) row.append(element(document, "p", result.freshness, "muted"));
+  const reasons = element(document, "ul", undefined, "today-reasons");
+  for (const reason of result.reasons) reasons.append(element(document, "li", reason));
+  row.append(reasons);
+  const href = workspaceHref(instrumentId, TODAY_TIMEFRAME, symbols);
   if (href) {
-    const link = element("a", `Record decision for ${item.symbol} (Charts)`, "today-record");
+    const link = element(document, "a", `Record my decision for ${entry.symbol}`, "today-record");
     link.href = `${href}#decision-panel`;
     row.append(link);
   }
   return row;
 }
 
-async function loadToday() {
-  const list = $("#today-rows");
-  const status = $("#today-status");
-  if (!list) return;
+export async function loadToday(document, fetcher) {
+  const list = document.querySelector("#today-rows");
+  const status = document.querySelector("#today-status");
+  if (!list || !status) return;
   let symbols;
+  let entries;
   try {
-    symbols = supportedWatchlistSymbols(await listSupportedSymbols(globalThis.fetch));
+    symbols = supportedWatchlistSymbols(await listSupportedSymbols(fetcher));
+    entries = await readWatchlist(fetcher, TODAY_TIMEFRAME, symbols);
   } catch (error) {
     status.textContent = `Today view unavailable — ${error.message}`;
     return;
   }
-  const inputs = await Promise.all(symbols.map((item) => coinState(globalThis.fetch, item)));
-  list.replaceChildren(...symbols.map((item, index) => renderRow(item, inputs[index], symbols)));
-  status.textContent = `${symbols.length} supported pairs · ema-trend-atr-stop v1 on stored 4h snapshots. Research only — not a trade instruction.`;
+  list.replaceChildren(...entries.map((entry, index) =>
+    renderTodayRow(document, entry, symbols[index].instrument_id, symbols)));
+  status.textContent = `${entries.length} supported pairs · stored 4h snapshots. NO_TRADE until a strategy passes its study. Research only — not a trade instruction.`;
 }
 
 if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => { void loadToday(); }, { once: true });
+  document.addEventListener("DOMContentLoaded", () => { void loadToday(document, globalThis.fetch); }, { once: true });
 }

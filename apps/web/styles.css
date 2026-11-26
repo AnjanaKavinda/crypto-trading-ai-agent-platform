@@ -264,7 +264,8 @@ footer strong { color: #ccecff; }
 .today-row { border: 1px solid #263040; border-radius: 8px; padding: .6rem .8rem; }
 .today-row-head { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
 .today-chip { font-size: .7rem; font-weight: 700; padding: .15rem .55rem; border-radius: 999px; background: #262b31; color: #c9d4df; }
-.today-chip-signal { background: #1b2a3a; color: #9fc7ff; }
+.today-price { font-variant-numeric: tabular-nums; }
+.today-record { font-size: .85rem; }
 .today-chip-warning { background: #2a2414; color: #f5d38a; }
 .today-chip-error { background: #2a1f14; color: #ffc58a; }
 .today-reasons { margin: .35rem 0; padding-left: 1.1rem; font-size: .85rem; }
