@@ -164,3 +164,34 @@ Accepted by owner merge of PR #513 (`b56e55effa096a65c4bb4b7b4ff3f4bf56ec8e48`),
 confirmed by the owner on 2026-11-25. This accepts the exact first-slice contract,
 storage and local write boundary above; it does not approve operations on the
 owner's retained database or enable trading execution.
+
+## Amendment 1 — journal against the viewed snapshot (owner-approved 2026-11-26)
+
+Approved by the owner on #516 (queue item E2c2, option A, 2026-11-26). The
+original allowed sources (C-026v2 / C-023v1 / C-070v2) produced no records the
+owner could select, so no prospective decision could be recorded. This
+amendment adds one source; everything else in this ADR still applies.
+
+- **New record version C-107v2** (`SnapshotDecisionJournalEntry`). C-107v1 is
+  unchanged and still accepted. A v2 declaration links to the exact persisted
+  C-002v1 market snapshot the owner is viewing and its C-003v1 quality report,
+  each by id and content digest.
+- **Server-side resolution.** The client sends only `instrument_id`,
+  `timeframe`, `snapshot_id`, `quality_report_id`, action, declared time, note
+  and optional correction fields. The server re-reads the snapshot through the
+  same verified path the chart uses (latest accepted snapshot, deterministic
+  quality revalidation) and records instrument, timeframe, `as_of`, last candle
+  open time, candle count and `fresh_until` itself.
+- **Fail closed.** Unknown snapshot, a snapshot that is no longer the latest
+  for its instrument/timeframe, a quality report that is not the snapshot's
+  VALID report, scope mismatch, or a declaration recorded after
+  `fresh_until` (last candle close + the approved policy's `freshness_seconds`,
+  the same rule the served snapshot uses for STALE) are rejected.
+- **Same rules as v1.** Append-only; corrections append a new v2 entry with an
+  exact v2 parent and reason; idempotency uses the existing
+  `(profile, request_id)` index (migration 0014 only widens its version check
+  to `'1','2'`). An identical retry returns the original entry even if the
+  snapshot has since gone stale. All authority flags stay false.
+- **Not included.** Strategy-record links remain v1 (automatic records are
+  E2g). C-108 trade outcomes still link only to C-107v1 entries; linking them
+  to v2 trade intents is a separate small change.

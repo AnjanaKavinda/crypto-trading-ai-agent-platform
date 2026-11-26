@@ -21,7 +21,10 @@ from trading_platform_api.contracts.serialization import (
     canonical_sha256,
 )
 from trading_platform_api.journal_api import JournalService, ref
-from trading_platform_api.learning.decision_journal import utc
+from trading_platform_api.learning.decision_journal import (
+    ResearchDecisionJournalEntry,
+    utc,
+)
 from trading_platform_api.learning.owner_scoring import score_owner_results
 from trading_platform_api.learning.trade_outcome import (
     MAX_FILLS,
@@ -206,7 +209,10 @@ class TradeOutcomeService:
                 journal_ref = ref(request.journal_entry)
                 journal_key = LineageKey("C-107", str(journal_ref.artifact_id), "1")
                 journal = await self.journal._read(store, journal_key)
-                if journal.content_sha256 != journal_ref.content_sha256:
+                if (
+                    type(journal) is not ResearchDecisionJournalEntry
+                    or journal.content_sha256 != journal_ref.content_sha256
+                ):
                     raise error(422, "TRADE_OUTCOME_JOURNAL_MISMATCH")
                 if journal.declared_action != "EXTERNAL_TRADE_INTENT":
                     raise error(422, "TRADE_OUTCOME_TRADE_INTENT_REQUIRED")
