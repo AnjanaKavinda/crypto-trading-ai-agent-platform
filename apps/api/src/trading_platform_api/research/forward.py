@@ -21,7 +21,7 @@ Stage status uses only the pre-registered rules:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -271,7 +271,7 @@ def forward_stage(
 
 def forward_record(
     strategy: ForwardStrategy,
-    series: dict[str, Sequence[Candle]],
+    series: Mapping[str, Sequence[Candle]],
     *,
     historical: HistoricalVerdict | None,
     as_of: datetime,

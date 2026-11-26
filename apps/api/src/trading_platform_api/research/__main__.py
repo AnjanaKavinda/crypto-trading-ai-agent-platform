@@ -7,14 +7,17 @@ python -m trading_platform_api.research run --strategy trend-daily-regime \
 python -m trading_platform_api.research run --strategy range-reversion-4h \
     --protocol v2 --timeframe 4h
 python -m trading_platform_api.research daily-check
+python -m trading_platform_api.research record-verdict research-output/<report>.json
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from trading_platform_api.research import daily_check
 from trading_platform_api.research.candles import (
@@ -76,11 +79,61 @@ def _parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--base-url", default=daily_check.DEFAULT_BASE_URL)
     check.add_argument("--out", default="research-output", type=Path)
+
+    verdict = commands.add_parser(
+        "record-verdict",
+        help="Import one protocol v2 study report into the local API (append-only).",
+    )
+    verdict.add_argument("report", type=Path)
+    verdict.add_argument("--base-url", default=daily_check.DEFAULT_BASE_URL)
     return parser
+
+
+def record_verdict(
+    report: Path,
+    *,
+    base_url: str,
+    transport: daily_check.Transport = daily_check.urllib_transport,
+) -> int:
+    """POST the exact report bytes; the API checks digests and stores them."""
+    try:
+        body = report.read_bytes()
+    except OSError as exc:
+        print(f"Verdict not recorded (fail closed): {exc}", file=sys.stderr)
+        return 2
+    base = base_url.rstrip("/")
+    parts = urlsplit(base)
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Origin": f"{parts.scheme}://{parts.netloc}",
+    }
+    try:
+        status, payload = transport(
+            "POST", f"{base}/api/research/forward/verdicts", headers, body
+        )
+    except OSError as exc:
+        print(f"Verdict not recorded: API unreachable: {exc}", file=sys.stderr)
+        return 1
+    try:
+        result = json.loads(payload)
+    except ValueError:
+        result = {}
+    if status != 200 or not isinstance(result, dict):
+        detail = result.get("detail") or result.get("code") if result else None
+        print(f"Verdict not recorded: HTTP {status} {detail or ''}", file=sys.stderr)
+        return 1
+    print(
+        f"Recorded {result.get('strategy_id')} v{result.get('strategy_version')}: "
+        f"{result.get('verdict_status')} (report sha256 {result.get('report_sha256')})"
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "record-verdict":
+        return record_verdict(args.report, base_url=args.base_url)
     if args.command == "daily-check":
         generated_at = datetime.now(UTC)
         results = daily_check.run_daily_check(base_url=args.base_url)
