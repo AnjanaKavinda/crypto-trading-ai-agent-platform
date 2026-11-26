@@ -7,6 +7,7 @@
     <title>Local Spot Market Overview</title>
     <link rel="stylesheet" href="./styles.css">
     <script type="module" src="./src/watchlist.mjs"></script>
+    <script type="module" src="./src/today.mjs"></script>
   </head>
   <body>
     <header class="app-header">
@@ -24,6 +25,18 @@
     </header>
 
     <main>
+      <section id="today-panel" class="panel" aria-labelledby="today-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">TODAY · RESEARCH ONLY</p>
+            <h2 id="today-heading">Today: strategy state per coin</h2>
+          </div>
+        </div>
+        <p class="education-note"><strong>Research evidence only — not a trade instruction.</strong> Each state comes from the stored 4h snapshot and the ema-trend-atr-stop v1 replay (strategy verdict: FAIL on 2026-11-26). Record your own decision, including NO_TRADE, on the Charts page for that coin.</p>
+        <p id="today-status" class="muted" role="status">Reading stored 4h snapshots and strategy markers…</p>
+        <ul id="today-rows" class="today-rows" aria-label="Strategy state per coin"></ul>
+      </section>
+
       <section class="panel controls" aria-labelledby="overview-heading">
         <div class="section-heading">
           <div>
