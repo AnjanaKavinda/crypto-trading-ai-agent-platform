@@ -184,3 +184,43 @@ or customer-facing use is authorized.
 
 Pending human repository owner disposition. Until recorded here, the ADR is
 Proposed and grants no implementation or data-use authority.
+
+## Owner-approved amendment — E11 research slice (2026-11-27)
+
+The owner approved public Binance USD-M perpetual research on
+[#516, owner-answer:E11](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/516#issuecomment-7219026152),
+implemented first by #569. This amendment supersedes the pending-approval and
+Spot-first sequencing restrictions above **only for this research slice**.
+The original proposal and unresolved broader integration decisions remain recorded.
+
+Scope: public 1h perpetual klines, settled funding history and 1h premium-index
+klines for BTCUSDT/ETHUSDT, plus BNBUSDT/SOLUSDT/XRPUSDT for the preregistered
+unseen check; aligned Spot candles supply the second leg. Local research CSVs
+carry source, venue, symbol, dataset, interval, retrieval time and SHA256.
+There is no shared-contract, database, UI asset-list or retention-policy change.
+
+Funding is preserved as a rate per settlement. The E11 protocol requires exactly
+00/08/16 UTC settlements; the fetch rejects any other cadence or missing event
+rather than inferring a historical interval from current funding information.
+Premium-index values are dimensionless and may be negative or zero; they are
+not traded prices. All three Futures datasets and the Spot leg must cover the
+same requested closed-hour window before any file for that symbol is written.
+Gaps, early closes, open candles and alignment failures are reported with symbol
+and UTC time, without repair or shifted dates.
+
+Fees, funding, margin and liquidation may be modelled in simulation only under
+the separately preregistered #570 implementation, which waits for #569 to merge.
+No exchange account, API keys, authenticated/private endpoints, orders,
+paper/testnet/live execution or LLM-to-exchange path is authorized. Live stays
+disabled. The owner runs the real-data commands and handles provider access
+and applicable terms; implementation tests use labelled synthetic responses.
+
+### E11b input clarification (owner-approved 2026-11-27)
+
+For #570's simulation, the owner approved adding public 1h mark-price candles
+and requiring explicit capital plus a sourced historical maintenance-margin
+tier file with effective dates. Mark prices are fetched only by the explicit
+research `--include-mark` option; no account or authenticated bracket endpoint
+is introduced. Missing mark prices, tier coverage or other required inputs
+produce `UNAVAILABLE`, never guessed values or a substituted last-price model.
+This clarification adds no paper/testnet/live execution authority.

@@ -42,6 +42,8 @@ from trading_platform_api.research.report import (
     _num,
     _pct,
     _segment_summary,
+    _trade_records,
+    _trade_table,
 )
 from trading_platform_api.research.strategy import RangeReversion4h, TrendDailyRegime
 
@@ -157,6 +159,7 @@ def run_walk_forward_study(
     def offset(moment: datetime) -> int:
         return int((moment - era_start) / step)
 
+    trade_records: list[dict[str, Any]] = []
     era_segments: list[SegmentResult] = []
     seen_segments: list[SegmentResult] = []
     window_trades: list[list[Trade]] = [[] for _ in range(protocol.windows)]
@@ -174,6 +177,7 @@ def run_walk_forward_study(
         windows = window_bounds(trade_start_index, era_end, protocol.windows)
         era = run_segment(candles, signals, costs, start=trade_start_index, end=era_end)
         era_segments.append(era)
+        trade_records.extend(_trade_records(era, item.symbol, "development_era"))
         for trade in era.trades:
             entry = offset(trade.entry_time)
             for number, (low, high) in enumerate(windows):
@@ -184,6 +188,9 @@ def run_walk_forward_study(
         if seen_finish > era_end:
             seen = run_segment(candles, signals, costs, start=era_end, end=seen_finish)
             seen_segments.append(seen)
+            trade_records.extend(
+                _trade_records(seen, item.symbol, "seen_holdout_informational")
+            )
         prospective_bars = max(
             prospective_bars,
             sum(1 for c in candles if c.open_time >= prospective_start),
@@ -263,6 +270,7 @@ def run_walk_forward_study(
             "evidence": seen_evidence,
         },
         "per_symbol": per_symbol,
+        "trade_records": trade_records,
         "limitations": V2_LIMITATIONS,
         "authority": {
             "qualification_authorized": False,
@@ -359,6 +367,8 @@ def to_markdown_v2(report: dict[str, Any]) -> str:
             f"{_pct(seen['evidence']['portfolio']['max_drawdown'])}",
             "",
         ]
+    if "trade_records" in report:
+        lines.extend(_trade_table(report["trade_records"]))
     costs = report["costs"]
     lines += [
         f"Bars from {periods['prospective_start']} present in the data and not "

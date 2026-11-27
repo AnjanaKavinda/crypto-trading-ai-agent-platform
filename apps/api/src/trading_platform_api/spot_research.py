@@ -307,6 +307,18 @@ class SpotOrderFlowView(BaseModel):
     result: None
 
 
+class SpotServedWindowView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requested_limit: int
+    stored_candle_count: int
+    served_candle_count: int
+    first_open_time: datetime
+    last_open_time: datetime
+    indicator_scope: Literal["WHOLE_SNAPSHOT_SLICED_TO_WINDOW"]
+    analysis_scope: Literal["WHOLE_SNAPSHOT"]
+
+
 class SpotResearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -328,6 +340,7 @@ class SpotResearchResponse(BaseModel):
     spot_analysis: dict[str, SpotAnalysisView]
     analysis_fanout: dict[str, Any]
     order_flow: SpotOrderFlowView
+    served_window: SpotServedWindowView | None = None
 
 
 class SpotResearchError(RuntimeError):
@@ -1775,7 +1788,10 @@ class SpotResearchService:
                 instrument_id=instrument_id,
                 timeframe=timeframe,
                 as_of=as_of,
-                maximum_candles=limit,
+                # Load the whole selected snapshot (bounded by MAX_READ_CANDLES)
+                # so its lineage and indicators are verified in full; the
+                # response is then trimmed to the most recent ``limit`` candles.
+                maximum_candles=MAX_READ_CANDLES,
             )
         except SpotResearchSnapshotNotFound as exc:
             raise SpotResearchError(
@@ -1829,7 +1845,7 @@ class SpotResearchService:
             ),
         )
         response["requested_as_of"] = _json_value(as_of) if as_of is not None else None
-        return response
+        return served_window(response, limit)
 
     @staticmethod
     def _verify_stored(
@@ -2017,11 +2033,13 @@ def create_research_router() -> APIRouter:
                 detail=str(exc),
             ) from exc
         service: SpotResearchService = request.app.state.spot_research_service
+        # Replay over the whole snapshot so the indicator parity check compares
+        # like with like, then keep the markers inside the requested window.
         served = await service.read(
             instrument_id=instrument_id,
             timeframe=timeframe,
             as_of=as_of,
-            limit=limit,
+            limit=MAX_READ_CANDLES,
             correlation_id=request.state.correlation_id,
         )
         response = strategy_markers_response(
@@ -2030,6 +2048,20 @@ def create_research_router() -> APIRouter:
             risk_pct=risk_pct,
             registered=registered,
         )
+        window = served_window({"candles": served["candles"], "indicators": {}}, limit)[
+            "served_window"
+        ]
+        start = _parse_utc(window["first_open_time"])
+        response["markers"] = [
+            item
+            for item in response["markers"]
+            if _parse_utc(item["time"]["value"]) >= start
+        ]
+        response["served_window"] = {
+            **window,
+            "indicator_scope": "WHOLE_SNAPSHOT",
+            "analysis_scope": "WHOLE_SNAPSHOT",
+        }
         response["study_verdict"] = await recorded_study_verdict(
             getattr(request.app.state, "forward_service", None), registered[0]
         )
@@ -2132,6 +2164,49 @@ def strategy_markers_response(
         "quality_report_id": served["data_quality"]["report_id"],
         **markers,
     }
+
+
+def _parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def served_window(response: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Trim a served snapshot to its most recent ``limit`` closed candles.
+
+    The snapshot id, quality report and lineage stay those of the whole stored
+    snapshot. Indicators are calculated over the whole snapshot (the registered
+    calculators require its exact candle set) and their per-candle points are
+    sliced to the same window, so each served point keeps its full-history
+    warm-up. Snapshot-level analysis (VWAP, volume profile, price action,
+    regime) still covers the whole snapshot, as ``served_window`` states.
+    """
+    candles = response["candles"]
+    stored = len(candles)
+    served = min(limit, stored)
+    if served < stored:
+        response["candles"] = candles[stored - served :]
+        for envelope in response["indicators"].values():
+            result = envelope.get("result")
+            points = result.get("points") if isinstance(result, dict) else None
+            if isinstance(points, list):
+                if len(points) != stored:
+                    raise SpotResearchError(
+                        status=503,
+                        code="SPOT_INDICATOR_ALIGNMENT_UNAVAILABLE",
+                        title="Spot snapshot unavailable",
+                        detail="Indicator points do not align with the snapshot.",
+                    )
+                result["points"] = points[stored - served :]
+    response["served_window"] = {
+        "requested_limit": limit,
+        "stored_candle_count": stored,
+        "served_candle_count": served,
+        "first_open_time": response["candles"][0]["open_time"],
+        "last_open_time": response["candles"][-1]["open_time"],
+        "indicator_scope": "WHOLE_SNAPSHOT_SLICED_TO_WINDOW",
+        "analysis_scope": "WHOLE_SNAPSHOT",
+    }
+    return response
 
 
 def install_research_routes(app: FastAPI) -> None:

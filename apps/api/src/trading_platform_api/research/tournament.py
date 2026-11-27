@@ -67,6 +67,8 @@ from trading_platform_api.research.report import (
     _jsonable,
     _num,
     _pct,
+    _trade_records,
+    _trade_table,
 )
 from trading_platform_api.research.strategy import (
     TOURNAMENT_CANDIDATES,
@@ -293,6 +295,7 @@ def _beats_buy_and_hold(strategy: CurveStats, holding: CurveStats) -> bool:
 def _evidence(
     segments: Sequence[SegmentResult],
     symbols: Sequence[str],
+    set_name: str,
     bootstrap: TournamentProtocol | None = None,
 ) -> dict[str, Any]:
     pooled = [trade for segment in segments for trade in segment.trades]
@@ -303,6 +306,11 @@ def _evidence(
         "end": segments[0].end,
         "bars": segments[0].bars,
         "symbols": list(symbols),
+        "trade_records": [
+            row
+            for symbol, segment in zip(symbols, segments, strict=True)
+            for row in _trade_records(segment, symbol, set_name)
+        ],
         "pooled": trade_stats(pooled),
         "portfolio": strategy,
         "buy_and_hold_portfolio": holding,
@@ -512,19 +520,19 @@ def run_tournament(
             judged_end=judged_end,
             info_end=seen_end,
         )
-        s1_evidence = _evidence(s1.segments, s1_names)
+        s1_evidence = _evidence(s1.segments, s1_names, "S1")
         windows = _windows(s1, p.windows)
         h1, s1_few = hurdle_h1(s1_evidence, windows, p)
         sets["S1"] = {**s1_evidence, "windows": windows, "hurdle": h1}
         sets["S4_informational"] = {
             "status": "SEEN_INFORMATIONAL" if s1.informational else "UNAVAILABLE",
-            "evidence": _evidence(s1.informational, s1_names)
+            "evidence": _evidence(s1.informational, s1_names, "S4_informational")
             if s1.informational
             else None,
         }
         if data.s2:
             s2 = _run_set(data.s2, strategy, costs, begin=begin, judged_end=judged_end)
-            s2_evidence = _evidence(s2.segments, s2_names, bootstrap=p)
+            s2_evidence = _evidence(s2.segments, s2_names, "S2", bootstrap=p)
             h2, s2_few = hurdle_h2(s2_evidence, p)
             sets["S2"] = {**s2_evidence, "hurdle": h2}
         else:
@@ -535,7 +543,9 @@ def run_tournament(
             s3 = _run_set(
                 data.s3, strategy, costs, begin=s3_begin, judged_end=_day(p.early_end)
             )
-            s3_evidence = _evidence(s3.segments, [item.symbol for item in data.s3])
+            s3_evidence = _evidence(
+                s3.segments, [item.symbol for item in data.s3], "S3"
+            )
             h3 = hurdle_h3(s3_evidence, p)
             sets["S3"] = {**s3_evidence, "hurdle": h3}
         else:
@@ -550,7 +560,7 @@ def run_tournament(
                 judged_end=judged_end,
                 info_end=seen_end,
             )
-            s5_evidence = _evidence(s5.segments, [data.gold.symbol])
+            s5_evidence = _evidence(s5.segments, [data.gold.symbol], "S5")
             gold = gold_verdict(s5_evidence, p)
             sets["S5"] = {
                 **s5_evidence,
@@ -559,7 +569,9 @@ def run_tournament(
             }
             sets["S5_seen_informational"] = {
                 "status": "SEEN_INFORMATIONAL" if s5.informational else "UNAVAILABLE",
-                "evidence": _evidence(s5.informational, [data.gold.symbol])
+                "evidence": _evidence(
+                    s5.informational, [data.gold.symbol], "S5_seen_informational"
+                )
                 if s5.informational
                 else None,
             }
@@ -726,6 +738,18 @@ def to_markdown_tournament(report: dict[str, Any]) -> str:
                 f"{_pct(port['max_drawdown'])} | {_num(port['return_to_drawdown'])} | "
                 f"{_pct(hold['total_return'])} | {_pct(hold['max_drawdown'])} | "
                 f"{_num(hold['return_to_drawdown'])} | 0.00% |"
+            )
+        evidence_sets = [item.get("evidence", item) for item in row["sets"].values()]
+        if any(item is not None and "trade_records" in item for item in evidence_sets):
+            lines.extend(
+                _trade_table(
+                    [
+                        trade
+                        for item in evidence_sets
+                        if item is not None
+                        for trade in item.get("trade_records", [])
+                    ]
+                )
             )
         for name in ("S1", "S2", "S3"):
             hurdle = row["sets"][name].get("hurdle")

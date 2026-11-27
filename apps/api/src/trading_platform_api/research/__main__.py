@@ -17,8 +17,11 @@ import argparse
 import json
 import sys
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
+
+import httpx
 
 from trading_platform_api.research import daily_check
 from trading_platform_api.research.candles import (
@@ -26,11 +29,13 @@ from trading_platform_api.research.candles import (
     CandleDataError,
     parse_candle_csv,
 )
+from trading_platform_api.research.carry import run_carry_study
 from trading_platform_api.research.fetch import (
     DEFAULT_BASE_URL,
     fetch_klines,
     write_dataset,
 )
+from trading_platform_api.research.futures_data import fetch_futures_data
 from trading_platform_api.research.report import (
     StudyError,
     run_study,
@@ -67,6 +72,12 @@ def _parser() -> argparse.ArgumentParser:
 
     fetch = commands.add_parser("fetch", help="Download closed public klines.")
     fetch.add_argument("--symbols", default=symbols)
+    fetch.add_argument("--market", choices=("spot", "um-futures"), default="spot")
+    fetch.add_argument(
+        "--include-mark",
+        action="store_true",
+        help="Also fetch public 1h mark prices for the approved carry simulation.",
+    )
     fetch.add_argument("--timeframe", default="4h")
     fetch.add_argument("--start", default="2019-01-01")
     fetch.add_argument("--data", default="research-data", type=Path)
@@ -79,6 +90,23 @@ def _parser() -> argparse.ArgumentParser:
 
     tournament = commands.add_parser(
         "tournament", help="Run the pre-registered candidate tournament."
+    )
+    carry = commands.add_parser(
+        "carry", help="Run the pre-registered Futures carry simulation once."
+    )
+    carry.add_argument("--protocol", required=True, choices=("futures-carry-v1",))
+    carry.add_argument("--data", type=Path, default=Path("research-data/futures"))
+    carry.add_argument("--out", type=Path, default=Path("research-output/carry"))
+    carry.add_argument(
+        "--capital",
+        type=Decimal,
+        required=True,
+        help="Total starting USDT per set; split equally across its symbols.",
+    )
+    carry.add_argument(
+        "--margin-tiers",
+        type=Path,
+        help="Sourced, dated historical margin-tier JSON; missing input yields UNAVAILABLE.",
     )
     tournament.add_argument("--protocol", required=True)
     tournament.add_argument("--data", default="research-data", type=Path)
@@ -181,6 +209,18 @@ def run_tournament_command(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "carry":
+        try:
+            report = run_carry_study(
+                args.data, args.out, args.capital, args.margin_tiers
+            )
+        except (OSError, ValueError) as exc:
+            print(f"Carry not run (fail closed): {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"Carry: {report['verdict']['status']}; wrote {args.out / 'futures-carry-v1.json'} and Markdown"
+        )
+        return 0
     if args.command == "record-verdict":
         return record_verdict(args.report, base_url=args.base_url)
     if args.command == "daily-check":
@@ -200,6 +240,53 @@ def main(argv: list[str] | None = None) -> int:
     chosen = [item.strip() for item in args.symbols.split(",") if item.strip()]
     if args.command == "fetch":
         start = datetime.fromisoformat(args.start).replace(tzinfo=UTC)
+        if args.market == "um-futures":
+            supplied_start = datetime.fromisoformat(args.start)
+            start = (
+                supplied_start.replace(tzinfo=UTC)
+                if supplied_start.tzinfo is None
+                else supplied_start.astimezone(UTC)
+            )
+            if not chosen:
+                print("Futures research requires at least one symbol.", file=sys.stderr)
+                return 2
+            if args.timeframe != "1h" or args.base_url != DEFAULT_BASE_URL:
+                print(
+                    "Futures research requires --timeframe 1h and fixed public endpoints.",
+                    file=sys.stderr,
+                )
+                return 2
+            failed = 0
+            now = datetime.now(UTC)
+            for symbol in chosen:
+                try:
+                    documents = fetch_futures_data(
+                        symbol=symbol,
+                        start=start,
+                        now=now,
+                        include_mark=args.include_mark,
+                    )
+                except (CandleDataError, ValueError, httpx.HTTPError) as exc:
+                    failed += 1
+                    print(
+                        f"{symbol} {now.isoformat()} not written (fail closed): {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
+                for dataset, document in documents.items():
+                    if dataset == "spot":
+                        path = write_dataset(document, args.data / "spot", symbol, "1h")
+                    else:
+                        directory = args.data / "um-futures"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        interval = "8h" if dataset == "funding" else "1h"
+                        path = directory / f"{symbol}_{dataset}_{interval}.csv"
+                        path.write_text(document, encoding="utf-8", newline="\n")
+                    print(f"wrote {path}")
+            return 1 if failed else 0
+        if args.include_mark:
+            print("--include-mark requires --market um-futures.", file=sys.stderr)
+            return 2
         failed = 0
         for symbol in chosen:
             try:
