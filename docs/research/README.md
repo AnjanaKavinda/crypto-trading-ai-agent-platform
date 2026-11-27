@@ -210,14 +210,23 @@ python -m trading_platform_api.research fetch --start 2021-09-30
 
 ## Strategy markers on the chart (E3)
 
-`GET /api/research/spot/{instrument}/strategy-markers?timeframe=4h&limit=500`
-replays `ema-trend-atr-stop` v1 over the latest persisted snapshot and returns
+`GET /api/research/spot/{instrument}/strategy-markers?timeframe=4h&limit=500&strategy=ema-trend-atr-stop&version=1`
+replays the named strategy version over the latest persisted snapshot and returns
 BUY/SELL markers with their conditions, EMA20/EMA50/ATR14 values and labelled
 fields (`VERIFIED_FACT`, `RESEARCH_PROPOSAL`, `NOT_APPLICABLE`, `UNAVAILABLE`).
 Add `account_size` (USDT) and `risk_pct` for a position size:
 (account × risk%) ÷ (entry − stop), capped at account ÷ entry (Spot, no
 leverage). Stale or invalid data, or any indicator mismatch, returns no
 markers. Markers cover one snapshot only and are not a strategy verdict.
+
+`strategy` and `version` are required (422 `STRATEGY_REQUIRED` otherwise);
+there is no default strategy. Every response carries `study_verdict`: the
+latest study report imported with `research record-verdict` for that exact
+strategy digest (`FAIL`, `INCONCLUSIVE` or `HISTORICAL_PASS`, with reasons),
+`NO_RESULT_RECORDED` when none was imported, or `UNAVAILABLE` with a reason
+when the verdict store cannot be read. `ema-trend-atr-stop` v1 (FAIL,
+2026-11-26) was judged under protocol v1, which cannot be imported, so it
+always reports `NO_RESULT_RECORDED`.
 
 ## Daily research check (E2c3)
 
