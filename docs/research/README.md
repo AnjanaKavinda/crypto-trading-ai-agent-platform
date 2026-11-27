@@ -99,6 +99,48 @@ signal close; SELL markers explain the middle-band exit, the 12-bar time stop
 must equal the research formulas or no markers are returned; ADX14 is recomputed
 from the snapshot's validated candles.
 
+## Candidate tournament: `spot-candidate-tournament` v1 (E2t)
+
+Pre-registered on #516 (comment 7203109547, "tournament OK") with Amendment 1
+(gold, `owner-answer:tournament-gold`) before any result existed. Research
+only; no tuning; no extra candidates. Run once, in this order, from the repo
+root on the owner's machine (internet needed for the fetches):
+
+```powershell
+# S1 (5 approved coins) from 2021-09-30
+python -m trading_platform_api.research fetch --timeframe 1d --start 2021-09-30
+# S2 (8 research-only coins) and S5 gold, same dates
+python -m trading_platform_api.research fetch --research-only --timeframe 1d --start 2021-09-30 --symbols ADAUSDT,DOGEUSDT,LTCUSDT,LINKUSDT,AVAXUSDT,DOTUSDT,TRXUSDT,BCHUSDT,PAXGUSDT
+# S3 earlier history: BTC and ETH from their first Binance daily candle
+python -m trading_platform_api.research fetch --research-only --timeframe 1d --start 2017-01-01 --symbols BTCUSDT,ETHUSDT --data research-data/early
+# The tournament: one JSON + one Markdown report in research-output/
+python -m trading_platform_api.research tournament --protocol tournament-v1
+```
+
+A fetch that fails its data checks writes no file for that symbol, prints
+`not written (fail closed)` and exits 1. The other symbols are still written.
+The tournament then reports that S2 coin as excluded, or S3 / S5 as
+`UNAVAILABLE`; no substitute coin or date is used. A missing or failing S1 coin
+stops the run.
+
+| Item | Value |
+|---|---|
+| Candidates (k = 9) | C1 `sma200-long-cash`, C2 `ema-cross-1d`, C3 `donchian-20-10`, C4 `tsmom-28d`, C5 `tsmom-84d`, C6 `rsi2-uptrend`, C7 `bb-reversion-1d`, C8 `sma200-voltarget` (fractional position, rest in cash), C9 `trend-daily-regime` v1 (reference) |
+| Execution | 1d, long-only, signal at close, fill at next open, 10 bps fee + 5 bps slippage per side, equal-weight never-rebalanced portfolio; each candidate is judged only after its indicators exist |
+| S1 (seen) | BTC, ETH, BNB, SOL, XRP, 2021-09-30 → 2025-05-11, 4 equal windows. **H1:** expectancy > 0, ≥ 3 of 4 windows positive, portfolio DD ≤ 30%, every coin DD ≤ 40%, return/DD ≥ buy-and-hold's, ≥ 30 trades |
+| S2 (unseen coins) | ADA, DOGE, LTC, LINK, AVAX, DOT, TRX, BCH, same dates. **H2:** expectancy > 0 with the Bonferroni bootstrap lower bound > 0 (one-sided 5%/9, 20,000 resamples, seed 20261127, sorted index 111), return/DD ≥ buy-and-hold's, portfolio DD ≤ 30%, ≥ 30 trades |
+| S3 (earlier history) | BTC and ETH from the later of their first daily candles to 2021-09-29. **H3:** expectancy > 0, return/DD ≥ buy-and-hold's, ≥ 10 trades |
+| S4 (seen) | 2025-05-12 → 2026-11-25 on the S1 coins, informational only |
+| S5 (gold) | PAXGUSDT on S1 dates, judged on its own: GOLD_PASS / GOLD_FAIL / GOLD_INCONCLUSIVE (expectancy > 0, return/DD ≥ PAXG buy-and-hold's, ≥ 10 trades), weekend/weekday entry split for information, plus S4-style figures |
+| Verdict | INCONCLUSIVE if S1 or S2 has < 30 trades; else TOURNAMENT_PASS (H1, H2, H3), PROVISIONAL_PASS (H1, H2, S3 `UNAVAILABLE`) or FAIL |
+
+The research-only symbols are accepted only with `--research-only` and by the
+tournament; the chart, Today screen, daily check and refresh path stay on the
+five approved coins. Passing candidates go to forward paper tracking with a
+6-month review; only a forward pass could justify real money. If none passes,
+these simple rules show no defensible edge on Binance Spot after costs.
+Post the report's verdict table on #516 (queue item O5).
+
 ## Forward (prospective) stage (E2f2)
 
 `research/forward.py` replays each candidate's frozen rules over candles from

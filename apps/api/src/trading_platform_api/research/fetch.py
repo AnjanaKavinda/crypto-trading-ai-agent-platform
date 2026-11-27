@@ -15,6 +15,7 @@ import httpx
 
 from trading_platform_api.research.candles import (
     APPROVED_SPOT_SYMBOLS,
+    RESEARCH_ONLY_SPOT_SYMBOLS,
     TIMEFRAME_SECONDS,
     format_candle_csv,
     parse_candle_csv,
@@ -34,9 +35,12 @@ def fetch_klines(
     client: httpx.Client | None = None,
     now: datetime | None = None,
     pause_seconds: float = 0.2,
+    research_only: bool = False,
 ) -> str:
     """Return a validated candle CSV document for one symbol."""
-    if symbol not in APPROVED_SPOT_SYMBOLS:
+    if symbol not in APPROVED_SPOT_SYMBOLS and not (
+        research_only and symbol in RESEARCH_ONLY_SPOT_SYMBOLS
+    ):
         raise ValueError(f"{symbol} is not an approved Spot symbol.")
     if timeframe not in TIMEFRAME_SECONDS:
         raise ValueError(f"Unsupported timeframe {timeframe}.")
@@ -84,7 +88,9 @@ def fetch_klines(
         fetched_at=fetched_at,
         rows=rows,
     )
-    parse_candle_csv(document)  # fail closed before anything is saved
+    parse_candle_csv(
+        document, research_only=research_only
+    )  # fail closed before anything is saved
     return document
 
 

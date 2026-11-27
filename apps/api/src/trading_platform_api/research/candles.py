@@ -27,6 +27,20 @@ APPROVED_SPOT_SYMBOLS = {
     "SOLUSDT": "SOL-USDT-SPOT",
     "XRPUSDT": "XRP-USDT-SPOT",
 }
+# Research-only symbols for the candidate tournament (owner-approved
+# "tournament OK" and gold amendment, #516, 2026-11-27). Never used by the UI,
+# the daily check or the live refresh path, which stay on APPROVED_SPOT_SYMBOLS.
+RESEARCH_ONLY_SPOT_SYMBOLS = {
+    "ADAUSDT": "ADA-USDT-SPOT",
+    "DOGEUSDT": "DOGE-USDT-SPOT",
+    "LTCUSDT": "LTC-USDT-SPOT",
+    "LINKUSDT": "LINK-USDT-SPOT",
+    "AVAXUSDT": "AVAX-USDT-SPOT",
+    "DOTUSDT": "DOT-USDT-SPOT",
+    "TRXUSDT": "TRX-USDT-SPOT",
+    "BCHUSDT": "BCH-USDT-SPOT",
+    "PAXGUSDT": "PAXG-USDT-SPOT",
+}
 CSV_HEADER = ("open_time_ms", "open", "high", "low", "close", "volume", "close_time_ms")
 MAX_CANDLES = 200_000
 
@@ -57,7 +71,10 @@ class CandleSeries:
 
     @property
     def instrument_id(self) -> str:
-        return APPROVED_SPOT_SYMBOLS[self.symbol]
+        return (
+            APPROVED_SPOT_SYMBOLS.get(self.symbol)
+            or (RESEARCH_ONLY_SPOT_SYMBOLS[self.symbol])
+        )
 
     @property
     def first_open(self) -> datetime:
@@ -99,14 +116,19 @@ def _parse_metadata(line: str) -> dict[str, str]:
     return fields
 
 
-def parse_candle_csv(text: str) -> CandleSeries:
-    """Parse and validate one provenance-stamped candle CSV document."""
+def parse_candle_csv(text: str, *, research_only: bool = False) -> CandleSeries:
+    """Parse and validate one provenance-stamped candle CSV document.
+
+    ``research_only`` also accepts ``RESEARCH_ONLY_SPOT_SYMBOLS`` (tournament).
+    """
     lines = text.splitlines()
     if len(lines) < 3:
         raise CandleDataError("The candle file has no candles.")
     meta = _parse_metadata(lines[0])
     symbol, timeframe = meta["symbol"], meta["timeframe"]
-    if symbol not in APPROVED_SPOT_SYMBOLS:
+    if symbol not in APPROVED_SPOT_SYMBOLS and not (
+        research_only and symbol in RESEARCH_ONLY_SPOT_SYMBOLS
+    ):
         raise CandleDataError(f"{symbol} is not an approved Spot symbol.")
     if timeframe not in TIMEFRAME_SECONDS:
         raise CandleDataError(f"Unsupported timeframe {timeframe}.")
