@@ -10,12 +10,14 @@ from pathlib import Path
 
 import pytest
 from trading_platform_api.research import daily_check
+from trading_platform_api.research.candles import format_candle_csv
 from trading_platform_api.research.daily_check import (
     REQUIRED_INDICATORS,
     refresh_body,
     run_daily_check,
     to_markdown,
 )
+from trading_platform_api.research.fetch import SOURCE_ID
 
 NOW = datetime(2026, 11, 26, 17, 30, 12, tzinfo=UTC)
 
@@ -79,11 +81,24 @@ class FakeTransport:
         return 200, b'{"items": [], "next_cursor": null}'
 
 
-def run(transport, sleeps=None):
+def synthetic_paxg_fetch(*, symbol, timeframe, start, now, research_only):
+    assert (symbol, timeframe, research_only) == ("PAXGUSDT", "1d", True)
+    assert start == daily_check.PAXG_HISTORY_START
+    rows = []
+    for offset in range((now.date() - start.date()).days):
+        opened = int((start + timedelta(days=offset)).timestamp()) * 1000
+        rows.append((opened, "100", "100", "100", "100", "1", opened + 86_400_000 - 1))
+    return format_candle_csv(
+        source=SOURCE_ID, symbol=symbol, timeframe=timeframe, fetched_at=now, rows=rows
+    )
+
+
+def run(transport, sleeps=None, paxg_fetch=synthetic_paxg_fetch):
     return run_daily_check(
         base_url="http://127.0.0.1:5173",
         transport=transport,
         now=lambda: NOW,
+        paxg_fetch=paxg_fetch,
         sleep=(sleeps.append if sleeps is not None else lambda _: None),
     )
 
@@ -220,10 +235,10 @@ def test_ema_500_is_required_on_4h_and_1d():
 
 
 def test_unreachable_api_is_a_problem_not_a_crash():
-    def transport(method, url, headers, body):
+    def transport(*args, **kwargs):
         raise ConnectionRefusedError("connection refused")
 
-    results = run(transport)
+    results = run(transport, paxg_fetch=transport)
     assert results and not any(item.ready for item in results)
     assert results[0].detail.startswith("unreachable")
 
@@ -240,7 +255,7 @@ def test_report_and_cli_exit_code(tmp_path: Path, monkeypatch):
     assert main(["daily-check", "--out", str(tmp_path)]) == 1
     [report] = tmp_path.glob("daily-check-*.md")
     text = report.read_text("utf-8")
-    assert "Overall: **PROBLEM** (1 problem(s), 34 checks)" in text
+    assert "Overall: **PROBLEM** (1 problem(s), 35 checks)" in text
     assert "| strategy-signal read | PROBLEM | HTTP 500 |" in text
     assert "no decision, journal entry, outcome or order was recorded" in text
 
@@ -249,6 +264,8 @@ def test_report_and_cli_exit_code(tmp_path: Path, monkeypatch):
     )
     assert main(["daily-check", "--out", str(tmp_path)]) == 0
     assert "Overall: **READY**" in report.read_text("utf-8")
+    assert '"historical_verdict"' in report.read_text("utf-8")
+    assert '"symbol": "PAXGUSDT"' in report.read_text("utf-8")
 
 
 def test_markdown_escapes_pipes():
@@ -323,3 +340,16 @@ def test_forward_stage_failure_is_a_problem():
     failed = [item for item in results if not item.ready]
     assert [item.name for item in failed] == ["forward stage range-reversion-4h v1"]
     assert "FORWARD_HISTORY_INSUFFICIENT" in failed[0].detail
+
+
+def test_paxg_data_failure_is_visible_and_does_not_change_spot_calls():
+    def bad_data(**kwargs):
+        return synthetic_paxg_fetch(**kwargs).rsplit("\n", 2)[0] + "\n"
+
+    transport = FakeTransport()
+    results = run(transport, paxg_fetch=bad_data)
+    [failed] = [item for item in results if not item.ready]
+    assert "PAXGUSDT" in failed.name
+    assert "data unavailable" in failed.detail
+    assert failed.evidence is None
+    assert all("PAXG" not in call[1] for call in transport.calls)
