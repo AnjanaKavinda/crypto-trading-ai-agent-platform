@@ -14,7 +14,7 @@ const dir = screenshotDir();
 assert.ok(dir, "Set UI_SCREENSHOT_DIR for real-data preview evidence");
 const origin = "http://127.0.0.1:5173";
 const browser = await chromium.launch({ headless: true });
-const report = { phase, origin, published_head: process.env.TOOLBAR_REVISION ?? null, requests: [], errors: [], resources: {}, captures: [] };
+const report = { phase, origin, published_head: process.env.TOOLBAR_REVISION ?? null, requests: [], errors: [], resources: {}, captures: [], layout: [] };
 try {
   const page = await browser.newPage();
   await page.route("**/api/**", (route) => {
@@ -45,6 +45,7 @@ try {
       // Match before/after chart context: default window and open drawer.
       await page.locator("#charts-workspace").evaluate((node) => { node.dataset.drawer = "open"; });
       report.captures.push(await captureScreenshot(page, `${phase}-${mode}`, viewport));
+      report.layout.push({ mode, viewport, chart: await page.locator("#chart-container").boundingBox() });
     }
   }
   report.chart = await page.locator("#chart-container").evaluate((node) => ({

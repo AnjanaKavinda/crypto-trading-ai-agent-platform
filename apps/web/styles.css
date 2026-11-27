@@ -146,7 +146,7 @@ summary { cursor: pointer; color: #cfe3ff; font-weight: 700; padding: .25rem 0; 
 .journal-quick > button { margin: .3rem .3rem 0 0; font-size: .8rem; }
 
 /* ---------- Charts ---------- */
-.charts-workspace { display: grid; gap: .7rem; background: var(--bg); }
+.charts-workspace { display: grid; gap: .45rem; background: var(--bg); }
 .charts-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .45rem .6rem; background: var(--surface); border: 1px solid var(--border); border-radius: .6rem; position: relative; z-index: 20; }
 .charts-toolbar button, .charts-toolbar summary, .charts-toolbar select { min-height: 32px; font-size: .76rem; }
 .market-selector { display: flex; align-items: center; gap: .35rem; font-size: .73rem; color: var(--muted); }
@@ -181,6 +181,8 @@ summary { cursor: pointer; color: #cfe3ff; font-weight: 700; padding: .25rem 0; 
 .study-settings label { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
 .beginner-study-strip { display: flex; align-items: center; gap: .4rem; }
 .charts-workspace[data-mode="pro"] .beginner-study-strip .indicator-toolbar { display: none; }
+.charts-workspace[data-mode="pro"] .beginner-study-strip { display: none; }
+.chart-context-strip #active-study-summary { margin: 0; font-size: .7rem; }
 .chart-context-strip { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
 .chart-context-strip .snapshot-status { flex: 1; display: flex; justify-content: flex-end; gap: .5rem; font-size: .7rem; }
 .charts-toolbar #pillbar-hint { display: none; }
