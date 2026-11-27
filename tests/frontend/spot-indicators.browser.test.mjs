@@ -310,6 +310,7 @@ test("toolbar evidence: clearing strategy invalidates a delayed response and imp
     await page.waitForFunction(() => document.querySelector("#markers-banner").textContent.includes("imported INCONCLUSIVE"));
     assert.match(await page.locator("#markers-banner").innerText(), /synthetic-verdict[\s\S]*SYNTHETIC_TOO_FEW_TRADES/);
     assert.doesNotMatch(await page.locator("#chart-signal-banner").innerText(), /FAILED/);
+    assert.equal(await page.locator('#marker-strategy option:checked').innerText(), "ema-trend-atr-stop v1", "the selector must not keep an outdated recorded verdict beside an imported result");
   } finally { release(); await page.close(); }
 });
 

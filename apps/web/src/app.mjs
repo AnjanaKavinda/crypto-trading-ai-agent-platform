@@ -918,7 +918,8 @@ function renderMarkerControls(snapshot, preferences, timeframe, { onSignals, onS
   prompt.value = "";
   select.append(prompt);
   for (const option of markerStrategyOptions(timeframe)) {
-    const node = element("option", option.usable ? option.label : `${option.label} — ${option.reason}`);
+    const identity = `${option.strategy} v${option.version}`;
+    const node = element("option", option.usable ? identity : `${identity} — ${option.reason}`);
     node.value = option.value;
     node.disabled = !option.usable;
     select.append(node);
