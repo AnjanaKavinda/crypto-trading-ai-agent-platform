@@ -285,7 +285,38 @@ def test_study_is_deterministic_and_carries_no_authority():
         Decimal(first["periods"]["holdout_bars"] + first["periods"]["development_bars"])
         * Decimal("0.30")
     )
-    assert "RESEARCH EVIDENCE ONLY" in to_markdown(first)
+    assert first["protocol"]["content_sha256"] == protocol.content_sha256
+    for symbol, results in first["per_symbol"].items():
+        rows = [row for row in first["trade_records"] if row["symbol"] == symbol]
+        for name in ("development", "holdout"):
+            assert (
+                sum(row["set"] == name for row in rows)
+                == results[name]["trade_stats"]["trades"]
+            )
+        for row, original in zip(
+            (row for row in rows if row["set"] == "holdout"),
+            results["holdout_trades"],
+            strict=True,
+        ):
+            entry = datetime.fromisoformat(row["entry_time"])
+            assert datetime.fromisoformat(
+                row["signal_close_time"]
+            ) == entry - timedelta(milliseconds=1)
+            for key in (
+                "entry_price",
+                "stop_price",
+                "exit_time",
+                "exit_price",
+                "exit_reason",
+                "net_return",
+                "r_multiple",
+            ):
+                assert row[key] == original[key]
+    markdown = to_markdown(first)
+    assert "RESEARCH EVIDENCE ONLY" in markdown
+    assert "Simulated trades" in markdown
+    assert first["trade_records"]
+    assert first["trade_records"][0]["signal_close_time"] in markdown
 
 
 def test_strategy_version_digest_changes_with_parameters():

@@ -255,6 +255,7 @@ def test_end_to_end_report_covers_every_candidate_and_set(tmp_path: Path) -> Non
     report = run_tournament(data, protocol=SHORT, candidates=candidates)
     assert report["report_type"] == "SPOT_CANDIDATE_TOURNAMENT"
     assert report["authority"]["execution_authorized"] is False
+    assert report["protocol"]["content_sha256"] == SHORT.content_sha256
     assert [row["candidate_id"] for row in report["candidates"]] == ["C1", "C7"]
     for row in report["candidates"]:
         sets = row["sets"]
@@ -283,6 +284,18 @@ def test_end_to_end_report_covers_every_candidate_and_set(tmp_path: Path) -> Non
             "INCONCLUSIVE",
             "FAIL",
         )
+        for name, result in sets.items():
+            evidence = result.get("evidence", result)
+            records = evidence["trade_records"]
+            assert len(records) == evidence["pooled"]["trades"]
+            assert all(trade["set"] == name for trade in records)
+            assert {trade["symbol"] for trade in records} <= set(evidence["symbols"])
+        if row["candidate_id"] == "C1":
+            assert sets["S1"]["trade_records"]
+            assert all(
+                trade["stop_price"] is None and trade["r_multiple"] is None
+                for trade in sets["S1"]["trade_records"]
+            )
         # Benchmarks on every judged set.
         for name in ("S1", "S2", "S3", "S5"):
             assert "buy_and_hold_portfolio" in sets[name]
@@ -295,6 +308,7 @@ def test_end_to_end_report_covers_every_candidate_and_set(tmp_path: Path) -> Non
     markdown = to_markdown_tournament(report)
     assert "| C1 | sma200-long-cash v1 |" in markdown
     assert "S2 LTCUSDT: EXCLUDED" in markdown
+    assert "| S1 | BTCUSDT |" in markdown
 
 
 def test_s3_unavailable_when_earlier_history_fails_checks(tmp_path: Path) -> None:

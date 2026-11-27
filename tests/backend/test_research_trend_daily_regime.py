@@ -295,6 +295,17 @@ def test_walk_forward_study_end_to_end_on_synthetic_data() -> None:
     markdown = to_markdown_v2(first)
     assert "CONTAMINATED_INFORMATIONAL" in markdown
     assert "Historical verdict" in markdown
+    assert first["protocol"]["content_sha256"] == protocol.content_sha256
+    for name in ("development_era", "seen_holdout_informational"):
+        for symbol, item in first["per_symbol"].items():
+            assert (
+                sum(
+                    row["set"] == name and row["symbol"] == symbol
+                    for row in first["trade_records"]
+                )
+                == item[name]["trade_stats"]["trades"]
+            )
+    assert "Simulated trades" in markdown
 
 
 def test_walk_forward_study_fails_closed_on_late_or_wrong_data() -> None:

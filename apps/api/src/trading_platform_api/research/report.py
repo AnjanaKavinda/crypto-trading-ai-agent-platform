@@ -70,6 +70,66 @@ def _segment_summary(segment: SegmentResult) -> dict[str, Any]:
     }
 
 
+def _trade_records(
+    segment: SegmentResult, symbol: str, set_name: str
+) -> list[dict[str, Any]]:
+    """Project recorded simulation results into the shared report format."""
+    return [
+        {
+            "symbol": symbol,
+            "set": set_name,
+            # Validated Binance candles close one millisecond before the next open.
+            "signal_close_time": trade.entry_time - timedelta(milliseconds=1),
+            "entry_time": trade.entry_time,
+            "entry_price": trade.entry_price,
+            "stop_price": trade.stop_price if trade.stop_price > 0 else None,
+            "exit_time": trade.exit_time,
+            "exit_price": trade.exit_price,
+            "exit_reason": trade.exit_reason,
+            "net_return": trade.net_return,
+            "r_multiple": trade.r_multiple if trade.stop_price > 0 else None,
+        }
+        for trade in segment.trades
+    ]
+
+
+def _trade_table(records: list[dict[str, Any]]) -> list[str]:
+    lines = ["", "### Simulated trades", ""]
+    if not records:
+        return [*lines, "No trade records in this report.", ""]
+    return [
+        *lines,
+        "Times are UTC. Exit time identifies the exit candle. Stop is the "
+        "initial stop. Net return is a fraction and R uses initial stop risk.",
+        "",
+        "| Set | Symbol | Signal close | Entry time | Entry price | Stop | "
+        "Exit candle | Exit price | Exit reason | Net return | R |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+        *[
+            "| "
+            + " | ".join(
+                "—" if value is None else str(value)
+                for value in (
+                    row["set"],
+                    row["symbol"],
+                    row["signal_close_time"],
+                    row["entry_time"],
+                    row["entry_price"],
+                    row["stop_price"],
+                    row["exit_time"],
+                    row["exit_price"],
+                    row["exit_reason"],
+                    row["net_return"],
+                    row["r_multiple"],
+                )
+            )
+            + " |"
+            for row in records
+        ],
+        "",
+    ]
+
+
 def run_study(
     series: list[CandleSeries],
     *,
@@ -110,6 +170,7 @@ def run_study(
     split = trade_start + step * development_bars
 
     per_symbol: dict[str, dict[str, Any]] = {}
+    trade_records: list[dict[str, Any]] = []
     holdout_segments: list[SegmentResult] = []
     development_segments: list[SegmentResult] = []
     for item in series:
@@ -124,6 +185,8 @@ def run_study(
         )
         development_segments.append(development)
         holdout_segments.append(holdout)
+        trade_records.extend(_trade_records(development, item.symbol, "development"))
+        trade_records.extend(_trade_records(holdout, item.symbol, "holdout"))
         per_symbol[item.symbol] = {
             "development": _segment_summary(development),
             "holdout": _segment_summary(holdout),
@@ -168,6 +231,7 @@ def run_study(
         "holdout_evidence": evidence,
         "development_pooled_trade_stats": development_pooled,
         "per_symbol": per_symbol,
+        "trade_records": trade_records,
         "limitations": LIMITATIONS,
         "authority": {
             "qualification_authorized": False,
@@ -245,6 +309,8 @@ def to_markdown(report: dict[str, Any]) -> str:
             f"{_pct(hold['buy_and_hold_curve']['total_return'])} | "
             f"{_pct(hold['buy_and_hold_curve']['max_drawdown'])} |"
         )
+    if "trade_records" in report:
+        lines.extend(_trade_table(report["trade_records"]))
     costs = report["costs"]
     lines += [
         "",
