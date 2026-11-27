@@ -214,3 +214,13 @@ No exchange account, API keys, authenticated/private endpoints, orders,
 paper/testnet/live execution or LLM-to-exchange path is authorized. Live stays
 disabled. The owner runs the real-data commands and handles provider access
 and applicable terms; implementation tests use labelled synthetic responses.
+
+### E11b input clarification (owner-approved 2026-11-27)
+
+For #570's simulation, the owner approved adding public 1h mark-price candles
+and requiring explicit capital plus a sourced historical maintenance-margin
+tier file with effective dates. Mark prices are fetched only by the explicit
+research `--include-mark` option; no account or authenticated bracket endpoint
+is introduced. Missing mark prices, tier coverage or other required inputs
+produce `UNAVAILABLE`, never guessed values or a substituted last-price model.
+This clarification adds no paper/testnet/live execution authority.
