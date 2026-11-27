@@ -179,10 +179,15 @@ export function readSnapshot(fetcher, { instrumentId, timeframe, limit, asOf }) 
   });
 }
 
-export function readStrategyMarkers(fetcher, { instrumentId, timeframe, limit, asOf, accountSize, riskPct }) {
+// Markers always name the strategy and version explicitly (UR5): the API must
+// never fall back to a default strategy.
+export function readStrategyMarkers(fetcher, { instrumentId, timeframe, limit, asOf, accountSize, riskPct, strategy, version }) {
   if (!Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) throw new Error("Unsupported API timeframe.");
   if (!Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLES) throw new Error("History bound is outside the API limit.");
-  const query = new URLSearchParams({ timeframe, limit: String(limit) });
+  if (!/^[a-z0-9-]{1,64}$/.test(String(strategy ?? "")) || !/^[1-9]d{0,5}$/.test(String(version ?? ""))) {
+    throw new Error("Choose a registered strategy and version for the markers.");
+  }
+  const query = new URLSearchParams({ timeframe, limit: String(limit), strategy, version: String(version) });
   if (asOf) query.set("as_of", asOf);
   if (accountSize && riskPct) {
     query.set("account_size", accountSize);
