@@ -1,4 +1,5 @@
 import test from "node:test";
+import { normaliseToolbarPreferences } from "../../apps/web/src/chart-display.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
@@ -647,6 +648,7 @@ test("UR1/UR3: preferences are display-only, desk-wide and default to Beginner w
   const defaults = loadPreferences(storage);
   assert.deepEqual(defaults, {
     mode: "beginner", visible: [...DEFAULT_VISIBILITY], signals: false, strategy: null, collapsedPanes: [], paneOrder: [],
+    ...normaliseToolbarPreferences(),
   });
   savePreferences(storage, {
     mode: "pro",
@@ -660,6 +662,7 @@ test("UR1/UR3: preferences are display-only, desk-wide and default to Beginner w
   assert.deepEqual(saved, {
     mode: "pro", visible: ["ema-20", "rsi-14", "macd-12-26-9", "vwap"], signals: true,
     strategy: "range-reversion-4h@1", collapsedPanes: ["rsi-14"], paneOrder: ["macd-12-26-9", "rsi-14"],
+    ...normaliseToolbarPreferences(),
   });
   assert.equal([...values.keys()].join(), PREFERENCES_KEY, "one desk-wide key, not per coin or timeframe");
   // Beginner draws only its essentials; Pro draws everything chosen.

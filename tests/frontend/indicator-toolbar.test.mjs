@@ -27,10 +27,10 @@ test("live pills toggle and reflect the enabled set; not-ready pills are disable
   // U5b: SIGNALS is an on/off toggle and is off unless turned on.
   assert.deepEqual(by.SIGNALS.action, { type: "signals" });
   assert.equal(by.SIGNALS.pressed, "false");
-  assert.match(by.SIGNALS.reason, /failed/i);
+  assert.match(by.SIGNALS.reason, /choose a strategy/i);
   assert.equal(toolbarPills({ snapshotLoaded: true, availability: all, signalsOn: true })[0].pressed, "true");
   assert.equal(by.VOL.live, true);
-  assert.equal(by.VOL.action, null);
+  assert.deepEqual(by.VOL.action, { type: "toggle", id: "volume" });
   for (const [short, badge, pattern] of [
     ["SMA", "Connect", /not yet sent/], ["OBV", "To build", /not implemented/],
     ["CVD", "Needs trades", /#355/], ["HEAT", "Needs order book", /#355/],

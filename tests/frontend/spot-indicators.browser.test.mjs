@@ -198,6 +198,121 @@ async function openDrawer(page) {
   await page.evaluate(() => document.querySelectorAll("#chart-drawer details").forEach((details) => { details.open = true; }));
 }
 
+test("toolbar refinement: styles and favorites preserve candles, picker/settings share state, menus work in fullscreen and narrow view", async () => {
+  // SYNTHETIC API fixtures only; real Docker screenshots use the preview script.
+  const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 60 }) });
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await waitForLoadedSnapshot(page);
+    await page.locator('[data-chart-action="zoom-in"]').click();
+    const range = await page.locator("#chart-view-range").innerText();
+    const readout = await page.locator("#chart-inspector").innerText();
+    const reads = apiRequests.length;
+    for (const [id, selector] of [["bars", ".ohlc-bar"], ["hollow", ".hollow-body"], ["line", ".close-price-line"], ["step", ".close-price-line"], ["candles", ".candle-body"]]) {
+      await page.locator("#chart-type-menu > summary").click();
+      await page.locator(`[data-control="style-menu-${id}"]`).click();
+      assert.ok(await page.locator(`#chart-container ${selector}`).count() > 0);
+      assert.equal(await page.locator("#chart-view-range").innerText(), range);
+      assert.equal(await page.locator("#chart-inspector").innerText(), readout);
+      if (["line", "step"].includes(id)) assert.equal(await page.locator("#chart-container .candle-body").count(), 0);
+      if (id === "step") assert.match(await page.locator(".close-price-line").getAttribute("d"), /H .* V /);
+      if (id === "hollow") {
+        const paint = await page.locator(".hollow-body").first().evaluate((el) => [getComputedStyle(el).fill, getComputedStyle(el).stroke]);
+        assert.notEqual(paint[0], paint[1], "hollow bodies must visibly differ from solid candle color");
+      }
+    }
+    await page.locator("#chart-container svg").evaluate((el) => { el.dataset.identity = "preserve-me"; });
+    await page.locator("#chart-type-menu > summary").click();
+    await page.locator('[data-control="favorite-favoriteStyles-line"]').click();
+    assert.equal(await page.locator("#chart-container svg").getAttribute("data-identity"), "preserve-me");
+    assert.equal(await page.locator("#chart-container svg").getAttribute("data-chart-style"), "candles");
+    await page.locator("#timeframe-menu > summary").click();
+    await page.locator('[data-control="favorite-favoriteTimeframes-1h"]').click();
+    assert.equal(await page.locator("#chart-container svg").getAttribute("data-identity"), "preserve-me");
+    assert.equal(await page.locator("#chart-view-range").innerText(), range);
+    assert.equal(apiRequests.length, reads, "styles, menus and favorite stars cannot read candles or markers");
+    await page.reload();
+    await waitForLoadedSnapshot(page);
+    assert.equal(await page.locator('[data-control="style-shortcut-line"]').count(), 1);
+    assert.equal(await page.locator('[data-control="interval-shortcut-1h"]').count(), 0);
+    await page.locator("#indicators-menu > summary").click();
+    await page.getByRole("searchbox", { name: "Search indicators" }).fill("RSI");
+    assert.equal(await page.locator("#indicators-menu [data-study]").count(), 1);
+    await page.locator('[data-control="toggle-study-rsi-14"]').click();
+    assert.equal(await page.locator('.indicator-pane[data-pane="rsi-14"]').count(), 1);
+    await page.locator('[data-study="rsi-14"] .study-settings > summary').click();
+    await page.getByRole("combobox", { name: "RSI 14 line width" }).selectOption("3");
+    assert.equal(await page.locator(".rsi-line").evaluate((el) => getComputedStyle(el).strokeWidth), "3px");
+    await page.getByRole("searchbox", { name: "Search indicators" }).fill("");
+    await page.locator('[data-control="filter-Active"]').click();
+    assert.ok(await page.locator('#indicators-menu [data-study="rsi-14"]').count());
+    await page.locator('[data-control="toggle-study-ema-20"]').click();
+    assert.equal(await page.locator("polyline.ema-20").count(), 0);
+    await page.locator("#order-flow-menu > summary").click();
+    assert.equal(await page.locator('[data-control="toggle-flow-vwap"]').getAttribute("aria-pressed"), "true");
+    await page.locator('[data-control="toggle-flow-vwap"]').click();
+    assert.equal(await page.locator(".spot-vwap-line").count(), 0);
+    assert.match(await page.locator("#order-flow-menu > summary").innerText(), /0$/);
+    await page.locator("#indicators-menu > summary").click();
+    await page.locator('[data-control="filter-All"]').click();
+    assert.equal(await page.locator('[data-control="toggle-study-vwap"]').getAttribute("aria-pressed"), "false");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#indicators-menu > summary").evaluate((el) => el === document.activeElement), true);
+    await page.locator("#fullscreen-button").click();
+    await page.locator("#chart-type-menu > summary").click();
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#charts-workspace").evaluate((el) => el.classList.contains("is-fullscreen")), true, "first Escape closes the menu");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#fullscreen-button").getAttribute("aria-pressed"), "false");
+    await page.setViewportSize({ width: 700, height: 900 });
+    await page.locator("#chart-overflow > summary").click();
+    await page.locator("#indicators-menu > summary").click();
+    const box = await page.locator("#indicators-menu .chart-menu-panel").boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= 700);
+    assert.deepEqual(await page.evaluate(() => [document.documentElement.scrollWidth <= innerWidth]), [true]);
+    assert.ok(apiRequests.every((request) => request.method === "GET"));
+  } finally { await page.close(); }
+});
+
+test("toolbar evidence: clearing strategy invalidates a delayed response and imported verdict overrides recorded fallback", async () => {
+  const fixture = createSnapshot({ timeframe: "4h", count: 60 });
+  const { page } = await openWorkspace({ storedSnapshot: fixture });
+  let release;
+  let started;
+  const pending = new Promise((resolve) => { started = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  let calls = 0;
+  let delivered;
+  const completed = new Promise((resolve) => { delivered = resolve; });
+  await page.route("**/strategy-markers?**", async (route) => {
+    calls++;
+    if (calls === 1) { started(); await held; }
+    const body = syntheticMarkers(fixture, new URL(route.request().url()).searchParams);
+    body.study_verdict = { status: "INCONCLUSIVE", strategy_sha256: body.strategy.content_sha256,
+      verdict_id: "synthetic-verdict", report_created_at: "2026-01-01T00:00:00Z", recorded_at: "2026-01-02T00:00:00Z", protocol_id: "synthetic", protocol_version: "1", reasons: ["SYNTHETIC_TOO_FEW_TRADES"] };
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
+    if (calls === 1) delivered();
+  });
+  try {
+    await waitForLoadedSnapshot(page);
+    await page.locator("#pro-signals").click();
+    await page.locator("#marker-strategy").selectOption("ema-trend-atr-stop@1");
+    await pending;
+    await page.locator("#marker-strategy").selectOption("");
+    release();
+    await completed;
+    // Flush the page's network/body continuation before checking stale evidence.
+    await page.waitForLoadState("networkidle");
+    assert.equal(await page.locator("#chart-container .strategy-marker").count(), 0);
+    assert.match(await page.locator("#markers-body").innerText(), /Choose a strategy/);
+    assert.equal(await page.locator("#chart-signal-banner").isHidden(), true);
+    await page.locator("#marker-strategy").selectOption("ema-trend-atr-stop@1");
+    await page.waitForFunction(() => document.querySelector("#markers-banner").textContent.includes("imported INCONCLUSIVE"));
+    assert.match(await page.locator("#markers-banner").innerText(), /synthetic-verdict[\s\S]*SYNTHETIC_TOO_FEW_TRADES/);
+    assert.doesNotMatch(await page.locator("#chart-signal-banner").innerText(), /FAILED/);
+  } finally { release(); await page.close(); }
+});
+
 test("spot analyses render backend results bound to the exact snapshot and candle timestamps", async () => {
   const fixture = createSnapshot({ count: 50 });
   const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture });
@@ -420,7 +535,7 @@ test("volume-profile withholds levels when its nested result is not READY", asyn
   }
 });
 
-test("VWAP overlay has its own pill, independent of indicator toggles, without refresh", async () => {
+test("VWAP overlay shares picker and order-flow state, independent of other indicators, without refresh", async () => {
   const { page, apiRequests } = await openWorkspace({
     storedSnapshot: createSnapshot({ count: 50 }),
     visible: ["ema-20", "vwap"],
@@ -428,15 +543,17 @@ test("VWAP overlay has its own pill, independent of indicator toggles, without r
   try {
     await waitForLoadedSnapshot(page);
     assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
-    assert.equal(await page.locator('#indicator-toolbar [data-pill="VWAP"]').getAttribute("aria-pressed"), "true");
+    await page.locator("#indicators-menu > summary").click();
+    assert.equal(await page.locator('[data-control="toggle-study-vwap"]').getAttribute("aria-pressed"), "true");
     await page.getByRole("checkbox", { name: "EMA 20", exact: true }).uncheck();
     assert.equal(await page.locator("#chart-container polyline.ema-20").count(), 0);
     assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
     // UR3: the pill and the checkbox always agree.
-    assert.equal(await page.locator('#indicator-toolbar [data-pill="EMA20"]').getAttribute("aria-pressed"), "false");
-    await page.locator('#indicator-toolbar [data-pill="VWAP"]').click();
+    assert.equal(await page.locator('[data-control="toggle-study-ema-20"]').getAttribute("aria-pressed"), "false");
+    await page.locator("#indicators-menu > summary").click();
+    await page.locator('[data-control="toggle-study-vwap"]').click();
     assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 0);
-    await page.locator('#indicator-toolbar [data-pill="VWAP"]').click();
+    await page.locator('[data-control="toggle-study-vwap"]').click();
     assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
     // VWAP is not one of the Beginner essentials.
     await page.getByRole("button", { name: "Beginner", exact: true }).click();
@@ -993,7 +1110,7 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
     // Market trades are unavailable, never inferred.
     assert.match(await page.locator("#market-trades").innerText(), /Unavailable[\s\S]*#355/);
     // One timeframe control: 1h / 4h / 1D only (1 minute and 1W/1M removed, UR1).
-    assert.deepEqual(await page.locator("#timeframe-pills button").allInnerTexts(), ["1h", "4h", "1D"]);
+    assert.deepEqual(await page.locator("#timeframe-pills .toolbar-shortcuts button").allInnerTexts(), ["1h", "4h", "1D"]);
     assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "false");
     const before = apiRequests.length;
     await page.locator('#timeframe-pills [data-timeframe="4h"]').click();
@@ -1008,11 +1125,12 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
   }
 });
 
-test("indicator toolbar pills toggle backend overlays and disable not-ready indicators with reasons", async () => {
+test("indicator picker toggles backend overlays and order-flow explains missing dependencies", async () => {
   const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
   try {
     await waitForLoadedSnapshot(page);
-    const pill = (short) => page.locator(`#indicator-toolbar [data-pill="${short}"]`);
+    await page.locator("#indicators-menu > summary").click();
+    const pill = (short) => page.locator(`[data-control="toggle-study-${({ EMA20: "ema-20", RSI: "rsi-14" })[short]}"]`);
     assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "true");
     assert.equal(await pill("RSI").getAttribute("aria-pressed"), "false");
     const before = apiRequests.length;
@@ -1023,13 +1141,8 @@ test("indicator toolbar pills toggle backend overlays and disable not-ready indi
     await pill("EMA20").click();
     assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "false");
     assert.ok(!(await readSeries(page)).some((line) => line.series === "ema-20"));
-    for (const short of ["SMA", "OBV", "CVD", "HEAT"]) {
-      assert.equal(await pill(short).isDisabled(), true, short);
-      assert.match(await pill(short).getAttribute("title"), /Connect|To build|Needs trades|Needs order book/);
-    }
-    assert.equal(await pill("VPRO").isDisabled(), false);
-    await pill("VPRO").click();
-    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "volume-profile");
+    await page.locator("#order-flow-menu > summary").click();
+    assert.match(await page.locator("#order-flow-menu").innerText(), /require verified trade-side history[\s\S]*recorded order-book updates/);
     assert.equal(apiRequests.length, before, "toolbar pills must not issue API requests");
   } finally {
     await page.close();
@@ -1131,13 +1244,15 @@ test("strategy markers draw on the chart and the evidence panel shows labelled v
   try {
     await waitForLoadedSnapshot(page);
     // U5b: SIGNALS is off by default — no markers are read or drawn.
-    const signals = page.locator('#indicator-toolbar [data-pill="SIGNALS"]');
+    const signals = page.locator('#pro-signals');
     assert.equal(await signals.getAttribute("aria-pressed"), "false");
     assert.equal(await page.locator("#chart-container polygon.strategy-marker").count(), 0);
     assert.equal(markerUrls.length, 0, markerUrls.map(String).join(" "));
     assert.equal(await page.locator("#chart-signal-banner").isHidden(), true);
     // Turned on: the strategy for this timeframe is named explicitly and its FAILED verdict is shown.
     await signals.click();
+    assert.equal(markerUrls.length, 0, "explicit strategy selection is required");
+    await page.locator("#marker-strategy").selectOption("ema-trend-atr-stop@1");
     await page.locator("#chart-container polygon.strategy-marker-buy").waitFor();
     assert.equal(markerUrls[0].searchParams.get("strategy"), "ema-trend-atr-stop");
     assert.equal(markerUrls[0].searchParams.get("version"), "1");
@@ -1238,13 +1353,14 @@ test("UR1: Beginner|Pro switch — 7 pills, 6 tools and a plain reading in Begin
     assert.match(await page.locator("#plain-reading").innerText(), /Trend: [\s\S]*Momentum: RSI[\s\S]*Volatility: ATR[\s\S]*Not a signal/);
     assert.equal(await page.locator("#indicator-details").isHidden(), true);
     await page.getByRole("button", { name: "Pro", exact: true }).click();
-    assert.equal(await page.locator("#indicator-toolbar .indicator-pill").count(), 32);
+    assert.equal(await page.locator("#indicator-toolbar .indicator-pill").count(), 0);
+    assert.equal(await page.locator("#indicators-menu > summary").isVisible(), true);
     assert.equal(await page.locator("#drawing-tools .drawing-tool").count(), 11);
     assert.equal(await page.locator("#indicator-details").isHidden(), false);
     await page.reload();
     await waitForLoadedSnapshot(page);
     assert.equal(await page.locator("#pro-button").getAttribute("aria-pressed"), "true");
-    assert.equal(await page.locator("#indicator-toolbar .indicator-pill").count(), 32);
+    assert.equal(await page.locator("#indicator-toolbar .indicator-pill").count(), 0);
   } finally {
     await page.close();
   }
@@ -1258,7 +1374,7 @@ test("UR1: full screen keeps pills, mode, timeframe and tools; the drawer opens 
     await button.click();
     assert.equal(await button.innerText(), "✕ Exit full screen");
     assert.match(await page.locator("#charts-workspace").getAttribute("class"), /is-fullscreen/);
-    for (const selector of ["#indicator-toolbar", "#pro-button", "#timeframe-pills", "#drawing-tools", "#chart-container svg"]) {
+    for (const selector of ["#indicators-menu", "#pro-button", "#timeframe-pills", "#drawing-tools", "#chart-container svg"]) {
       assert.equal(await page.locator(selector).isVisible(), true, selector);
     }
     assert.equal(await page.locator("#chart-drawer").isVisible(), false);

@@ -29,7 +29,7 @@ export const PILL_STATUS_LABELS = Object.freeze({
 // status marks not-ready pills. hint = plain-language hover text.
 export const TOOLBAR_PILLS = Object.freeze([
   { short: "SIGNALS", label: "BUY / SELL markers", group: "strategy", kind: "signals", id: "strategy-markers",
-    hint: "Replays a strategy's BUY/SELL points on this chart. Every strategy so far FAILED its study, so markers are an illustration only." },
+    hint: "Choose a strategy and version to inspect its replayed BUY/SELL points and sourced verdict. Illustration only, not a trade signal." },
   { short: "EMA20", label: "EMA 20", group: "trend", kind: "indicator", id: "ema-20",
     hint: "Average of the last 20 closes, recent ones weighted more — the short-term trend." },
   { short: "EMA50", label: "EMA 50", group: "trend", kind: "indicator", id: "ema-50",
@@ -80,7 +80,7 @@ export const BEGINNER_PILLS = Object.freeze(["SIGNALS", "EMA20", "EMA50", "BB", 
 
 // availability(kind, id) -> { available: boolean, reason?: string } for the
 // loaded snapshot; enabled = currently shown overlay/pane ids.
-export function toolbarPills({ availability, enabled = [], snapshotLoaded = false, mode = "pro", signalsOn = false }) {
+export function toolbarPills({ availability, enabled = [], snapshotLoaded = false, mode = "pro", signalsOn = false, volumeOn = true }) {
   const pills = mode === "beginner" ? TOOLBAR_PILLS.filter((pill) => BEGINNER_PILLS.includes(pill.short)) : TOOLBAR_PILLS;
   return pills.map((pill) => {
     const group = PILL_GROUPS[pill.group];
@@ -96,11 +96,11 @@ export function toolbarPills({ availability, enabled = [], snapshotLoaded = fals
     if (pill.kind === "signals") {
       return { ...base, live: true, action: { type: "signals" }, pressed: String(signalsOn), badge: "Live",
         reason: signalsOn
-          ? "On — replayed markers of a FAILED strategy, illustration only. Click to hide."
-          : "Off — click to replay a strategy's markers (all recorded strategies failed their study)." };
+          ? "On — replayed strategy markers, illustration only. Click to hide."
+          : "Off — choose a strategy and version to inspect its replay and study evidence." };
     }
     if (pill.kind === "fixed") {
-      return { ...base, live: true, action: null, pressed: "true", badge: "Live", reason: "Always shown from the returned candles." };
+      return { ...base, live: true, action: { type: "toggle", id: "volume" }, pressed: String(volumeOn), badge: "Live", reason: "Display volume from the returned candles." };
     }
     const state = availability(pill.kind === "overlay" ? "analysis" : pill.kind, pill.id);
     if (!state.available) {

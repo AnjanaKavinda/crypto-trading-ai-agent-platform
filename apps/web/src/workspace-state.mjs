@@ -1,5 +1,7 @@
 // Beginner default: the two trend averages and Bollinger Bands on the price
 // pane. Oscillator panes and SIGNALS are opt-in.
+import { normaliseToolbarPreferences } from "./chart-display.mjs";
+
 export const DEFAULT_VISIBILITY = Object.freeze(["ema-20", "ema-50", "bollinger-bands-20"]);
 // Beginner shows only these indicators (pills SIGNALS, EMA20, EMA50, BB, RSI, ATR, VOL).
 export const BEGINNER_INDICATORS = Object.freeze(["ema-20", "ema-50", "bollinger-bands-20", "rsi-14", "atr-14"]);
@@ -40,6 +42,7 @@ export function defaultPreferences() {
     strategy: null,
     collapsedPanes: [],
     paneOrder: [],
+    ...normaliseToolbarPreferences(),
   };
 }
 
@@ -57,6 +60,7 @@ export function normalisePreferences(saved) {
     strategy: typeof saved.strategy === "string" && STRATEGY_KEY.test(saved.strategy) ? saved.strategy : null,
     collapsedPanes: knownIds(saved.collapsedPanes, INDICATOR_IDS) ?? [],
     paneOrder: knownIds(saved.paneOrder, INDICATOR_IDS) ?? [],
+    ...normaliseToolbarPreferences(saved),
   };
 }
 

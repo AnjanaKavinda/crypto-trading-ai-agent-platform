@@ -6,6 +6,8 @@
 import { mountJournal, snapshotDecisionEligibility } from "./decision-journal.mjs";
 import { markerAnchors, markerFieldDisplay, markersBindingError, MARKER_LABELS, sizingInputs, tradeDetails } from "./strategy-markers.mjs";
 import { toolbarPills } from "./indicator-toolbar.mjs";
+import { CHART_STYLES, closePath } from "./chart-display.mjs";
+import { mountChartToolbar } from "./chart-toolbar.mjs";
 import {
   createDrawing,
   DRAWING_LABEL,
@@ -20,7 +22,6 @@ import {
 } from "./chart-drawings.mjs";
 import {
   axisTimeLabel,
-  CHART_TIMEFRAME_PILLS,
   chartIndexAtPointer,
   candleInspectorText,
   displayDecimals,
@@ -59,7 +60,7 @@ import {
 } from "./workspace-state.mjs";
 import { DESK_TIMEFRAMES, timeframeLabel } from "./desk-state.mjs";
 import { change24h } from "./today-state.mjs";
-import { defaultMarkerStrategy, markerStrategyOptions, parseStrategyKey, verdictBanner } from "./strategy-studies.mjs";
+import { markerStrategyOptions, parseStrategyKey, verdictBanner } from "./strategy-studies.mjs";
 import { movePane, niceTicks, orderedPanes, PANE_DEFINITIONS, paneRange } from "./chart-panes.mjs";
 import { plainReading } from "./plain-reading.mjs";
 
@@ -221,7 +222,7 @@ function setStatus(snapshot, errorMessage) {
   const labels = snapshotLabels(snapshot);
   panel.dataset.state = labels.severity;
   panel.append(element("strong", `${labels.quality} · ${labels.temporal}`));
-  panel.append(element("span", `Binance Spot · snapshot ${String(snapshot.snapshot_id).slice(0, 8)} · ${snapshot.candles.length} candles`, "status-meta"));
+  panel.append(element("span", `Binance Spot · ${snapshot.candles.length} candles · source as of ${displayTime(snapshot.as_of)}`, "status-meta"));
   let detail;
   if (snapshot.temporal_context === "HISTORICAL") {
     detail = "This point-in-time research response is historical and is never represented as current.";
@@ -258,6 +259,9 @@ function analysisAvailability(snapshot, id) {
   if (!["AVAILABLE", "PARTIAL"].includes(analysis.status)) {
     return { available: false, reason: analysis.reason_code ?? analysis.status ?? "unavailable" };
   }
+  if (id === "vwap" && !analysis.result?.points?.some((point) => point.value?.status === "READY" && numberForPlot(point.value.value) !== null)) {
+    return { available: false, reason: "No verified VWAP points for this snapshot." };
+  }
   return { available: true };
 }
 
@@ -270,9 +274,10 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences, onSign
     enabled: shownIndicators(preferences),
     mode: preferences.mode,
     signalsOn: preferences.signals,
+    volumeOn: preferences.volume,
     availability: (kind, id) => kind === "indicator" ? indicatorAvailability(snapshot, id) : analysisAvailability(snapshot, id),
   });
-  for (const pill of pills) {
+  for (const pill of preferences.mode === "pro" ? [] : pills) {
     const button = element("button", pill.short, `indicator-pill${pill.live ? "" : " not-ready"}`);
     button.type = "button";
     button.style.setProperty("--pill-color", pill.color);
@@ -285,6 +290,10 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences, onSign
       else button.setAttribute("aria-disabled", "true");
     } else if (pill.action.type === "toggle") {
       button.addEventListener("click", () => {
+        if (pill.action.id === "volume") {
+          updatePreferences({ ...preferences, volume: !preferences.volume });
+          return;
+        }
         const visible = new Set(preferences.visible);
         if (visible.has(pill.action.id)) visible.delete(pill.action.id);
         else visible.add(pill.action.id);
@@ -309,12 +318,13 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences, onSign
   const hint = $("#pillbar-hint");
   if (hint) {
     hint.textContent = preferences.mode === "pro"
-      ? `Pro: all ${pills.length} · solid = live · dashed = not ready (hover for why)`
+      ? "Pro · display only"
       : `Beginner: ${pills.length} essentials · hover a pill for a plain explanation`;
   }
 }
 
 function renderIndicatorControls(snapshot, preferences, updatePreferences, onSignals) {
+  refreshChartMenus();
   renderIndicatorToolbar(snapshot, preferences, updatePreferences, onSignals);
   const details = $("#indicator-details");
   if (details) details.hidden = preferences.mode !== "pro";
@@ -796,6 +806,7 @@ function makeLine(values, candleIndexes, yOf, left, width) {
 // the snapshot changes.
 const chartView = { key: null, window: null, scale: "auto", width: 0 };
 const layoutState = { fullscreen: false };
+let refreshChartMenus = () => {};
 // Set by mountCharts: pane collapse/move actions.
 let chartHandlers = { onPane: () => {} };
 
@@ -873,6 +884,21 @@ function displayTime(value) {
 
 // SIGNALS controls (U5b): off by default; when on, the owner picks the
 // strategy and its recorded verdict is shown as a banner on the chart and here.
+function markerVerdictBanner(choice) {
+  const response = markerState.response;
+  const verdict = response?.study_verdict;
+  if (verdict && typeof verdict.strategy_sha256 === "string" && /^[a-f0-9]{64}$/.test(verdict.strategy_sha256) && verdict.strategy_sha256 === response.strategy?.content_sha256 && typeof verdict.status === "string") {
+    return {
+      tone: verdict.status === "FAIL" ? "fail" : "warning",
+      title: `${choice.strategy} v${choice.version} — imported ${verdict.status === "FAIL" ? "FAILED" : verdict.status} verdict (${verdict.report_created_at ?? "date unavailable"}). Illustration only, not a trade signal.`,
+      summary: `Imported record ${verdict.verdict_id ?? "unavailable"} · ${verdict.protocol_id ?? "protocol unavailable"} v${verdict.protocol_version ?? "?"} · imported ${verdict.recorded_at ?? "date unavailable"}`,
+      reasons: Array.isArray(verdict.reasons) ? verdict.reasons : [],
+    };
+  }
+  const recorded = verdictBanner(choice.strategy, choice.version);
+  return { ...recorded, summary: `Separately recorded study on #516; not an imported verdict. ${recorded.summary ?? ""} Imported status: ${verdict?.status ?? "awaiting marker response"}${verdict?.reason ? ` — ${verdict.reason}` : ""}.` };
+}
+
 function renderMarkerControls(snapshot, preferences, timeframe, { onSignals, onStrategy }) {
   const controls = $("#markers-controls");
   const banner = $("#markers-banner");
@@ -881,18 +907,16 @@ function renderMarkerControls(snapshot, preferences, timeframe, { onSignals, onS
   controls.replaceChildren();
   banner.replaceChildren();
   if (!preferences.signals) {
-    controls.append(element("p", "SIGNALS is off. Every recorded strategy FAILED its study, so no coin has a trade signal. Turn SIGNALS on only to see where a failed strategy would have traded — an illustration, not a signal.", "card-note"));
-    const on = element("button", "Show strategy markers");
-    on.type = "button";
-    on.id = "signals-on";
-    on.addEventListener("click", () => onSignals(true));
-    controls.append(on);
+    controls.append(element("p", "SIGNALS is off. Choose a strategy and version to inspect its replay and sourced study evidence. Illustration only, not a trade signal.", "card-note"));
     if (chartBanner) chartBanner.hidden = true;
     return;
   }
   const label = element("label", "Strategy");
   const select = element("select");
   select.id = "marker-strategy";
+  const prompt = element("option", "Choose strategy / version…");
+  prompt.value = "";
+  select.append(prompt);
   for (const option of markerStrategyOptions(timeframe)) {
     const node = element("option", option.usable ? option.label : `${option.label} — ${option.reason}`);
     node.value = option.value;
@@ -912,7 +936,7 @@ function renderMarkerControls(snapshot, preferences, timeframe, { onSignals, onS
     if (chartBanner) chartBanner.hidden = true;
     return;
   }
-  const info = verdictBanner(choice.strategy, choice.version);
+  const info = markerVerdictBanner(choice);
   const box = element("div", undefined, "verdict-banner");
   box.dataset.tone = info.tone;
   box.setAttribute("role", "note");
@@ -941,6 +965,10 @@ function renderMarkersPanel(snapshot, preferences) {
     return;
   }
   if (!preferences.signals) return;
+  if (!markerState.choice) {
+    body.append(element("p", "Choose a strategy and version to read its markers. No strategy is selected automatically.", "empty-state"));
+    return;
+  }
   if (markerState.error || !response) {
     body.append(element("p", markerState.error ?? "Loading strategy markers…", "empty-state"));
     return;
@@ -960,7 +988,10 @@ function renderMarkersPanel(snapshot, preferences) {
     return;
   }
   body.append(element("p", `${response.markers.length} markers · position ${response.position ?? "unknown"}.`, "markers-summary"));
-  if (!response.markers.length) return;
+  if (!response.markers.length) {
+    body.append(element("p", "No markers in this snapshot. An empty replay is not a recorded NO_TRADE decision.", "empty-state"));
+    return;
+  }
   const list = element("div", undefined, "marker-list");
   list.setAttribute("role", "group");
   list.setAttribute("aria-label", "Strategy markers");
@@ -1303,7 +1334,8 @@ function renderChart(snapshot, preferences) {
     return { definition, series, collapsed: preferences.collapsedPanes.includes(id) };
   }).filter((pane) => pane.series.length);
 
-  const { left, right, priceTop, volume: volumeHeight, pane: paneHeight, collapsed: collapsedHeight, gap, axis } = CHART_GEOMETRY;
+  const { left, right, priceTop, pane: paneHeight, collapsed: collapsedHeight, gap, axis } = CHART_GEOMETRY;
+  const volumeHeight = preferences.volume === false ? 0 : CHART_GEOMETRY.volume;
   const width = Math.max(480, Math.round(target.clientWidth || 960));
   chartView.width = width;
   const plotWidth = width - left - right;
@@ -1358,9 +1390,10 @@ function renderChart(snapshot, preferences) {
     "data-price-height": priceHeight,
     "data-price-min": priceMin,
     "data-price-max": priceMax,
+    "data-chart-style": preferences.chartStyle,
   });
   const title = svgNode("title", { id: "chart-svg-title" });
-  title.textContent = `${snapshot.symbol} ${snapshot.timeframe} exact API candles, volume${snapshot.data_quality?.status === "STALE" ? ", stale" : ""}`;
+  title.textContent = `${snapshot.symbol} ${snapshot.timeframe} ${CHART_STYLES.find((style) => style.id === preferences.chartStyle)?.label ?? "Candlesticks"} · exact API OHLC${snapshot.data_quality?.status === "STALE" ? ", stale" : ""}`;
   svg.append(title);
   const description = svgNode("desc", { id: "chart-svg-desc" });
   description.textContent = `${candles.length} returned finalized candles. Hover over a candle or focus the chart and use the arrow keys to inspect exact returned values.`;
@@ -1396,22 +1429,35 @@ function renderChart(snapshot, preferences) {
   const candleWidth = Math.max(1, Math.min(14, plotWidth / candles.length * 0.66));
   const volumeMax = Math.max(...candles.map((item) => item.values.volume.numeric));
   const volumeInner = volumeHeight - 18;
+  const style = preferences.chartStyle ?? "candles";
+  if (style === "line" || style === "step") {
+    svg.append(svgNode("path", { d: closePath(candles, xOf, priceY, style === "step"), class: "close-price-line" }));
+  }
   candles.forEach(({ values }, index) => {
     const x = xOf(index);
     const up = values.close.numeric >= values.open.numeric;
+    if (!["line", "step"].includes(style)) {
+    const previous = allCandles[view.start + index - 1]?.values.close.numeric ?? values.open.numeric;
+    const colorUp = style === "hollow" ? values.close.numeric >= previous : up;
     svg.append(svgNode("line", {
       x1: x, x2: x, y1: priceY(values.high.numeric), y2: priceY(values.low.numeric),
-      class: `candle-wick candle-${up ? "up" : "down"}`,
+      class: `candle-wick candle-${colorUp ? "up" : "down"}`,
     }));
-    svg.append(svgNode("rect", {
+    if (style === "bars") {
+      svg.append(svgNode("path", {
+        d: `M ${x - candleWidth / 2} ${priceY(values.open.numeric)} H ${x} M ${x} ${priceY(values.close.numeric)} H ${x + candleWidth / 2}`,
+        class: `ohlc-bar candle-${colorUp ? "up" : "down"}`,
+      }));
+    } else svg.append(svgNode("rect", {
       x: x - candleWidth / 2,
       y: Math.min(priceY(values.open.numeric), priceY(values.close.numeric)),
       width: candleWidth,
       height: Math.max(1, Math.abs(priceY(values.open.numeric) - priceY(values.close.numeric))),
-      class: `candle-body candle-${up ? "up" : "down"}`,
+      class: `candle-body candle-${colorUp ? "up" : "down"}${style === "hollow" && up ? " hollow-body" : ""}`,
     }));
+    }
     const barHeight = volumeMax > 0 ? (values.volume.numeric / volumeMax) * volumeInner : 0;
-    svg.append(svgNode("rect", {
+    if (volumeHeight) svg.append(svgNode("rect", {
       x: x - candleWidth / 2,
       y: volumeTop + volumeHeight - barHeight,
       width: candleWidth,
@@ -1421,12 +1467,12 @@ function renderChart(snapshot, preferences) {
   });
   for (const overlay of overlays) {
     const polyline = makeLine(overlay.points, candleIndexes, priceY, left, plotWidth);
-    if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${overlay.className}`, stroke: overlay.color }));
+    if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${overlay.className}`, stroke: overlay.color, style: `stroke-width:${preferences.studyWidths?.[overlay.id] ?? 2}` }));
   }
   const vwapLine = makeLine(vwapPoints, candleIndexes, priceY, left, plotWidth);
-  if (vwapLine) svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line", stroke: VWAP_COLOR }));
+  if (vwapLine) svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line", stroke: VWAP_COLOR, style: `stroke-width:${preferences.studyWidths?.vwap ?? 2}` }));
   const volumeY = (value) => volumeTop + volumeHeight - (value / volumeMax) * volumeInner;
-  const volumeLine = volumeReference && volumeMax > 0
+  const volumeLine = volumeHeight && volumeReference && volumeMax > 0
     ? makeLine(volumeReference.points, candleIndexes, volumeY, left, plotWidth)
     : "";
   if (volumeLine) svg.append(svgNode("polyline", { points: volumeLine, class: "volume-average-line", stroke: VOLUME_AVERAGE_COLOR }));
@@ -1444,7 +1490,7 @@ function renderChart(snapshot, preferences) {
     ] : []),
   ];
   if (overlayLegend.length) legendText(svg, left + 6, priceTop + 15, overlayLegend, "overlay-legend");
-  legendText(svg, left + 6, volumeTop + 13, [
+  if (volumeHeight) legendText(svg, left + 6, volumeTop + 13, [
     { text: `Vol (${volumeUnit}) `, className: "legend-label" },
     { text: "—", series: "volume", className: "legend-value" },
     ...(volumeLine ? [
@@ -1507,7 +1553,7 @@ function renderChart(snapshot, preferences) {
             }
           } else {
             const polyline = makeLine(series.points, candleIndexes, y, left, plotWidth);
-            if (polyline) group.append(svgNode("polyline", { points: polyline, class: `indicator-line ${series.className}`, stroke: series.color }));
+            if (polyline) group.append(svgNode("polyline", { points: polyline, class: `indicator-line ${series.className}`, stroke: series.color, style: `stroke-width:${preferences.studyWidths?.[definition.id] ?? 2}` }));
           }
         }
       }
@@ -1861,20 +1907,6 @@ function renderPlainReading(snapshot) {
   target.append(row, element("p", reading.note, "card-note"));
 }
 
-function renderTimeframePills(onChoose) {
-  const target = $("#timeframe-pills");
-  if (!target) return;
-  target.replaceChildren();
-  for (const pill of CHART_TIMEFRAME_PILLS) {
-    const button = element("button", pill.label, "timeframe-pill");
-    button.type = "button";
-    button.dataset.timeframe = pill.value;
-    button.setAttribute("aria-pressed", "false");
-    button.addEventListener("click", () => onChoose(pill.value));
-    target.append(button);
-  }
-}
-
 // Markets list: the five pairs with last price and 24h change from the shared
 // stored-snapshot read (UR1); a search box filters the rows.
 function renderMarketsList(symbols, selectedId, timeframe, watch, onChoose) {
@@ -1916,6 +1948,7 @@ export async function mountCharts({ desk }) {
   let symbols = [];
   let snapshot = null;
   let requestSequence = 0;
+  let markerRequestSequence = 0;
   let refreshInFlight = false;
   let preferences = loadPreferences(localStorage);
   let watch = null;
@@ -1944,7 +1977,7 @@ export async function mountCharts({ desk }) {
   const resolveChoice = (timeframe) => {
     const options = markerStrategyOptions(timeframe);
     const wanted = options.find((option) => option.value === preferences.strategy);
-    const key = wanted?.usable ? wanted.value : defaultMarkerStrategy(timeframe);
+    const key = wanted?.usable ? wanted.value : null;
     const option = options.find((item) => item.value === key);
     const parsed = parseStrategyKey(key);
     return option && parsed
@@ -1955,7 +1988,7 @@ export async function mountCharts({ desk }) {
     renderMarkerControls(loaded, preferences, selected.timeframe, { onSignals: setSignals, onStrategy: setStrategy });
     renderMarkersPanel(loaded, preferences);
   };
-  const renderPreferences = () => {
+  const renderPreferences = (redraw = true) => {
     $("#beginner-button").setAttribute("aria-pressed", String(preferences.mode === "beginner"));
     $("#pro-button").setAttribute("aria-pressed", String(preferences.mode === "pro"));
     workspace.dataset.mode = preferences.mode;
@@ -1964,12 +1997,12 @@ export async function mountCharts({ desk }) {
     renderDrawingTools(preferences.mode, redrawChart, clearDrawings);
     markerState.choice = resolveChoice(selected.timeframe);
     renderMarkerArea(snapshot);
-    if (snapshot) renderChart(snapshot, preferences);
+    if (snapshot && redraw) renderChart(snapshot, preferences);
   };
-  const setPreferences = (next) => {
+  const setPreferences = (next, redraw = true) => {
     preferences = next;
     savePreferences(localStorage, preferences);
-    renderPreferences();
+    renderPreferences(redraw);
     // Other tabs (the Signal Center) follow the Beginner|Pro choice.
     document.dispatchEvent(new CustomEvent("desk:preferences"));
   };
@@ -1981,6 +2014,7 @@ export async function mountCharts({ desk }) {
   let markerAsOf;
   const loadMarkers = async (loaded, { asOf } = {}) => {
     const sequence = requestSequence;
+    const markerSequence = ++markerRequestSequence;
     markerState.response = null;
     markerState.error = null;
     markerState.selected = 0;
@@ -2010,7 +2044,7 @@ export async function mountCharts({ desk }) {
         strategy: choice.strategy,
         version: choice.version,
       });
-      if (sequence !== requestSequence || snapshot !== loaded || !preferences.signals || markerState.choice?.key !== choice.key) return;
+      if (markerSequence !== markerRequestSequence || sequence !== requestSequence || snapshot !== loaded || !preferences.signals || markerState.choice?.key !== choice.key) return;
       let bindingError = markersBindingError(response, loaded);
       if (!bindingError && (response.strategy?.strategy_id !== choice.strategy || String(response.strategy?.version) !== String(choice.version))) {
         bindingError = "Strategy markers do not match the requested strategy and version.";
@@ -2018,7 +2052,7 @@ export async function mountCharts({ desk }) {
       markerState.response = bindingError ? null : response;
       markerState.error = bindingError;
     } catch (error) {
-      if (sequence !== requestSequence || snapshot !== loaded) return;
+      if (markerSequence !== markerRequestSequence || sequence !== requestSequence || snapshot !== loaded || !preferences.signals || markerState.choice?.key !== choice.key) return;
       markerState.error = `Strategy markers could not be loaded: ${error.message} No markers are shown.`;
     }
     renderMarkerArea(loaded);
@@ -2026,14 +2060,15 @@ export async function mountCharts({ desk }) {
     renderChart(loaded, preferences);
   };
   const setSignals = (on) => {
-    preferences = { ...preferences, signals: on, strategy: preferences.strategy ?? (on ? defaultMarkerStrategy(selected.timeframe) : null) };
+    preferences = { ...preferences, signals: on };
     savePreferences(localStorage, preferences);
     renderPreferences();
+    if (on) { setDrawer(true); $("#marker-strategy")?.focus({ preventScroll: true }); }
     if (snapshot) void loadMarkers(snapshot, { asOf: markerAsOf });
   };
   const setStrategy = (key) => {
-    if (!parseStrategyKey(key)) return;
-    preferences = { ...preferences, strategy: key };
+    if (key !== "" && !parseStrategyKey(key)) return;
+    preferences = { ...preferences, strategy: key || null };
     savePreferences(localStorage, preferences);
     if (snapshot) void loadMarkers(snapshot, { asOf: markerAsOf });
   };
@@ -2103,9 +2138,13 @@ export async function mountCharts({ desk }) {
 
   const loadSnapshot = async () => {
     const sequence = ++requestSequence;
+    ++markerRequestSequence;
     controlError.hidden = true;
     snapshot = null;
     updateRefreshAvailability();
+    markerState.response = null;
+    markerState.error = null;
+    renderMarkerArea(null);
     renderDecisionPanel(null);
     const statusPanel = $("#snapshot-status");
     statusPanel.dataset.state = "warning";
@@ -2183,6 +2222,7 @@ export async function mountCharts({ desk }) {
     }
     const symbol = symbols.find((item) => item.instrument_id === selected.instrumentId)?.symbol;
     $("#chart-heading").textContent = symbol ? pairLabel(symbol) : "Chart";
+    refreshChartMenus();
   };
   const loadMarketPrices = async () => {
     const timeframe = selected.timeframe;
@@ -2310,6 +2350,7 @@ export async function mountCharts({ desk }) {
     if (event.key !== "Escape" || !layoutState.fullscreen) return;
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     applyFullscreen(false);
+    $("#fullscreen-button").focus({ preventScroll: true });
   });
   if (typeof ResizeObserver === "function") {
     new ResizeObserver(() => {
@@ -2326,7 +2367,11 @@ export async function mountCharts({ desk }) {
     section.open = true;
     section.querySelector(".nested-details").open = true;
   });
-  renderTimeframePills((value) => desk.select({ timeframe: value }));
+  refreshChartMenus = mountChartToolbar({ document,
+    state: () => ({ snapshot, preferences, selected, symbols }),
+    update: setPreferences, select: (choice) => desk.select(choice), signals: setSignals,
+    availability: (kind, id) => kind === "analysis" ? analysisAvailability(snapshot, id) : indicatorAvailability(snapshot, id),
+  });
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });
   $("#beginner-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "beginner" }));
