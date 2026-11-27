@@ -54,13 +54,14 @@ export function priceAxisTicks(minimum, maximum, divisions = 4) {
 }
 
 // Display precision only. It is chosen from a reference value's magnitude
-// (for prices: the latest returned close), e.g. 2 for BTC, 4 for XRP. The
+// (for prices: the latest returned close), e.g. 2 for BTC, 4 for XRP
+// (including below 1.00). The
 // exact returned string is never rounded or replaced; it stays on hover.
 export function displayDecimals(reference) {
   const magnitude = Math.abs(Number(reference));
   if (!Number.isFinite(magnitude) || magnitude === 0) return 8;
   if (magnitude >= 100) return 2;
-  if (magnitude >= 1) return 4;
+  if (magnitude >= 0.1) return 4;
   if (magnitude >= 0.01) return 6;
   return 8;
 }
@@ -236,14 +237,12 @@ export function axisTimeLabel(isoTime, timeframe) {
   return timeframe === "1d" ? text.slice(0, 10) : `${text.slice(5, 10)} ${text.slice(11, 16)}`;
 }
 
-// Timeframe pills on the chart. Only timeframes the research protocol uses are
-// live; the others are shown disabled with the reason, never simulated.
+// The one timeframe control (UR1): only the timeframes the research protocol
+// uses. 1 minute and weekly/monthly candles are not offered.
 export const CHART_TIMEFRAME_PILLS = Object.freeze([
   Object.freeze({ value: "1h", label: "1h", live: true }),
   Object.freeze({ value: "4h", label: "4h", live: true }),
   Object.freeze({ value: "1d", label: "1D", live: true }),
-  Object.freeze({ value: "1w", label: "1W", live: false, reason: "Weekly candles are not served by the local research API." }),
-  Object.freeze({ value: "1M", label: "1M", live: false, reason: "Monthly candles are not served by the local research API." }),
 ]);
 
 const DECIMAL_TEXT = /^(?:\d+(?:\.\d*)?|\.\d+)$/;

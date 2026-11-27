@@ -21,6 +21,8 @@ function apiError(status, code, selector) {
         ? ", or explicitly refresh this same selector to collect a bounded snapshot."
         : ". This selection is read-only; provider refresh is not eligible."
     }`
+    : status === 422 && code === "STRATEGY_NOT_REGISTERED"
+    ? "The local API has no markers registered for this strategy version. The running API may be older than this page; rebuild the api service."
     : status === 404
     ? "No stored snapshot matches this instrument, timeframe, history bound, and cutoff."
     : status === 429
@@ -99,7 +101,7 @@ async function request(fetcher, path, options = {}, selector, policy = {}) {
       if (response.status === 422) {
         try {
           const problem = await response.json();
-          if (problem?.code === "SPOT_CANDLE_LIMIT_EXCEEDED") code = problem.code;
+          if (["SPOT_CANDLE_LIMIT_EXCEEDED", "STRATEGY_NOT_REGISTERED"].includes(problem?.code)) code = problem.code;
         } catch {
           // Unreadable or unrecognized problems retain the generic safe message.
         }
@@ -179,10 +181,15 @@ export function readSnapshot(fetcher, { instrumentId, timeframe, limit, asOf }) 
   });
 }
 
-export function readStrategyMarkers(fetcher, { instrumentId, timeframe, limit, asOf, accountSize, riskPct }) {
+// Markers always name the strategy and version explicitly (UR5): the API must
+// never fall back to a default strategy.
+export function readStrategyMarkers(fetcher, { instrumentId, timeframe, limit, asOf, accountSize, riskPct, strategy, version }) {
   if (!Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) throw new Error("Unsupported API timeframe.");
   if (!Number.isInteger(limit) || limit < 2 || limit > MAX_CANDLES) throw new Error("History bound is outside the API limit.");
-  const query = new URLSearchParams({ timeframe, limit: String(limit) });
+  if (!/^[a-z0-9-]{1,64}$/.test(String(strategy ?? "")) || !/^[1-9]d{0,5}$/.test(String(version ?? ""))) {
+    throw new Error("Choose a registered strategy and version for the markers.");
+  }
+  const query = new URLSearchParams({ timeframe, limit: String(limit), strategy, version: String(version) });
   if (asOf) query.set("as_of", asOf);
   if (accountSize && riskPct) {
     query.set("account_size", accountSize);

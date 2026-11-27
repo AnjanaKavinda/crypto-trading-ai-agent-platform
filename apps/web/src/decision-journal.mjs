@@ -72,26 +72,57 @@ function matches(entry, request, source, snapshot) {
   if (snapshot) return common && entry.schema_version === "2" && entry.source.artifact_id === snapshot.snapshot_id && entry.quality_report.artifact_id === snapshot.quality_report_id && entry.snapshot_observation.instrument_id === snapshot.instrument_id && entry.snapshot_observation.timeframe === snapshot.timeframe;
   return common && entry.schema_version === "1" && entry.source.artifact_id === source.artifact_id && entry.source.content_sha256 === source.content_sha256 && entry.source.artifact_type === source.contract_id && entry.source.version === source.schema_version;
 }
-export function renderJournalForm(document, parent, source, {fetcher = globalThis.fetch, previous = null, saved = () => {}, uuid = () => globalThis.crypto.randomUUID(), snapshot = null} = {}) {
+// Quick choice (prototype "Abstain | Trade intent"): two pressed-state buttons
+// that behave like the select of the full form. The declaration time is the
+// moment of the first save, so it is always prospective.
+function choiceButtons(document, form) {
+  const state = { value: "", disabled: false };
+  const group = el(document, "div"); group.className = "segmented decision-choice";
+  group.setAttribute("role", "group"); group.setAttribute("aria-label", "Declared action");
+  const buttons = [["ABSTAIN", "Abstain", "I am not trading this coin now (NO_TRADE)."], ["EXTERNAL_TRADE_INTENT", "Trade intent", "I intend to place this trade myself, outside the platform (no platform authority)."]].map(([v, t, hint]) => {
+    const b = el(document, "button", t); b.type = "button"; b.dataset.action = v; b.title = hint; b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => { if (state.disabled) return; state.value = v; buttons.forEach(x => x.setAttribute("aria-pressed", String(x === b))); });
+    return b;
+  });
+  group.append(...buttons); form.append(group);
+  return { get value() { return state.value; }, set disabled(d) { state.disabled = d; buttons.forEach(b => { b.disabled = d; }); } };
+}
+export function renderJournalForm(document, parent, source, {fetcher = globalThis.fetch, previous = null, saved = () => {}, uuid = () => globalThis.crypto.randomUUID(), snapshot = null, quick = false, subject = null} = {}) {
   const form = el(document, "form");
-  const title = el(document, "h3", previous ? "Append a correction" : snapshot ? "Record my decision on this snapshot" : "Record your research declaration");
-  const action = el(document, "select"); action.required = true;
-  for (const [v,t] of [["", "Choose your declared action"], ["ABSTAIN", "Abstain"], ["EXTERNAL_TRADE_INTENT", "External trade intention (no platform authority)"]]) { const n = el(document, "option", t); n.value = v; action.append(n); }
+  const compact = quick && !previous;
+  function label(text, input) { const n = el(document, "label", text); n.append(input); form.append(n); }
+  let action; let date;
   const note = el(document, "textarea"); note.maxLength = 2000;
-  const date = el(document, "input"); date.type = "text"; date.value = new Date().toISOString(); date.required = true;
   const reason = previous ? el(document, "textarea") : null;
   if (reason) { reason.required = true; reason.maxLength = 2000; }
-  function label(text, input) { const n = el(document, "label", text); n.append(input); form.append(n); }
-  form.append(title, el(document, "p", "Unverified local user declaration. Backend outcome remains separate. External intention is not a recommendation, approval or execution instruction. Backdating does not establish prospective recording. Do not enter credentials."));
-  label("Declared action", action); label("Declared at (UTC ISO timestamp)", date); label("Plain-text note (optional)", note);
-  if (reason) label("Correction reason", reason);
+  if (compact) {
+    form.className = "quick-decision";
+    form.append(el(document, "p", "Saved with a timestamp against " + (subject ?? "this coin") + "'s exact snapshot. Builds your prospective track record. Unverified local declaration — no trade authority. Do not enter credentials."));
+    action = choiceButtons(document, form);
+    date = { value: "", disabled: false };
+    note.placeholder = "What I see, what would change my mind";
+    label("Note (why)", note);
+  } else {
+    const title = el(document, "h3", previous ? "Append a correction" : snapshot ? "Record my decision on this snapshot" : "Record your research declaration");
+    action = el(document, "select"); action.required = true;
+    for (const [v,t] of [["", "Choose your declared action"], ["ABSTAIN", "Abstain"], ["EXTERNAL_TRADE_INTENT", "External trade intention (no platform authority)"]]) { const n = el(document, "option", t); n.value = v; action.append(n); }
+    date = el(document, "input"); date.type = "text"; date.value = new Date().toISOString(); date.required = true;
+    form.append(title, el(document, "p", "Unverified local user declaration. Backend outcome remains separate. External intention is not a recommendation, approval or execution instruction. Backdating does not establish prospective recording. Do not enter credentials."));
+    label("Declared action", action); label("Declared at (UTC ISO timestamp)", date); label("Plain-text note (optional)", note);
+    if (reason) label("Correction reason", reason);
+  }
   const status = el(document, "p"); status.setAttribute("role", "status");
   const key = el(document, "p"); const submit = el(document, "button", "Save declaration"); submit.type = "submit";
+  if (compact) { submit.className = "primary"; key.className = "card-note"; }
   form.append(key, submit, status); parent.append(form);
   let request = null; let busy = false;
   form.addEventListener("submit", async event => {
     event.preventDefault(); if (busy) return;
     if (!request) {
+      if (compact) {
+        if (!action.value) { status.textContent = "Choose Abstain or Trade intent first."; return; }
+        date.value = new Date().toISOString();
+      }
       if (!["ABSTAIN", "EXTERNAL_TRADE_INTENT"].includes(action.value) || !Number.isFinite(Date.parse(date.value)) || !/(?:Z|[+-]\d\d:\d\d)$/.test(date.value) || (reason && !reason.value.trim())) { status.textContent = "Choose an action and supply a valid timezone-aware declaration time and correction reason where applicable."; return; }
       const supersedes = previous ? apiRef({artifact_type:"C-107", artifact_id:previous.entry_id, version:previous.schema_version, content_sha256:previous.content_sha256}) : null;
       request = {request_id:uuid(), ...(snapshot ? {instrument_id:snapshot.instrument_id, timeframe:snapshot.timeframe, snapshot_id:snapshot.snapshot_id, quality_report_id:snapshot.quality_report_id} : {source}), declared_action:action.value, declared_at:new Date(date.value).toISOString(), note:note.value, supersedes, correction_reason:reason ? reason.value : null};
@@ -121,16 +152,18 @@ export function renderEntry(document, parent, entry) {
   card.append(el(document, "p", "LOCAL_SESSION_UNAUTHENTICATED · trade facts unverified · no qualification, approval or execution authority. Corrections are not independent performance samples."));
   parent.append(card); return card;
 }
-export function mountJournal(document, parent, source, fetcher = globalThis.fetch, {snapshot = null} = {}) {
-  const section = el(document, "section"); section.className = "panel";
+export function mountJournal(document, parent, source, fetcher = globalThis.fetch, {snapshot = null, quick = false, subject = null, history: withHistory = true, saved = () => {}} = {}) {
+  const section = el(document, "section"); section.className = quick ? "journal-quick" : "panel";
   parent.append(section);
   const savedBox = el(document, "div");
-  renderJournalForm(document, section, source, {fetcher, snapshot, saved: entry => { savedBox.replaceChildren(); renderEntry(document, savedBox, entry); }});
+  renderJournalForm(document, section, source, {fetcher, snapshot, quick, subject, saved: entry => { savedBox.replaceChildren(); renderEntry(document, savedBox, entry); saved(entry); }});
   section.append(savedBox);
+  if (!withHistory) return section;
   const history = el(document, "div"); const status = el(document, "p"); status.setAttribute("role", "status");
   const refresh = el(document, "button", "Read declaration history"); refresh.type = "button";
   const next = el(document, "button", "Next declarations"); next.type = "button"; next.disabled = true;
-  section.append(el(document, "h3", "Research declaration history"), refresh, next, status, history);
+  const heading = el(document, "h3", "Research declaration history"); if (quick) heading.className = "subhead";
+  section.append(heading, refresh, next, status, history);
   let cursor = null;
   async function load(after) {
     refresh.disabled = true; next.disabled = true; history.replaceChildren();
@@ -148,4 +181,5 @@ export function mountJournal(document, parent, source, fetcher = globalThis.fetc
     finally { refresh.disabled = false; }
   }
   refresh.addEventListener("click", () => { void load(null); }); next.addEventListener("click", () => { if (cursor) void load(cursor); });
+  return section;
 }

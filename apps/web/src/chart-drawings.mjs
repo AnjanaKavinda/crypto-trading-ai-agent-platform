@@ -19,6 +19,13 @@ export const DRAWING_TOOLS = Object.freeze([
   { id: "clear", glyph: "⌫", title: "Clear my drawings for this market and timeframe", clicks: 0 },
 ].map((tool) => Object.freeze(tool)));
 
+// Beginner shows the six basic tools (UR1); Pro shows all of them.
+export const BEGINNER_TOOLS = Object.freeze(["cursor", "cross", "hline", "trend", "note", "clear"]);
+
+export function toolsForMode(mode) {
+  return mode === "pro" ? DRAWING_TOOLS : DRAWING_TOOLS.filter((tool) => BEGINNER_TOOLS.includes(tool.id));
+}
+
 const DRAWING_TYPES = new Set(DRAWING_TOOLS.filter((tool) => tool.clicks > 0).map((tool) => tool.id));
 const CLICKS = Object.fromEntries(DRAWING_TOOLS.map((tool) => [tool.id, tool.clicks]));
 const STORAGE_PREFIX = "spot-research.drawings.v1";

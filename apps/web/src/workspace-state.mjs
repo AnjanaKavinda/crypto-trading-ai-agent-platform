@@ -1,4 +1,10 @@
-export const DEFAULT_VISIBILITY = Object.freeze(["ema-20", "ema-50", "atr-14"]);
+// Beginner default: the two trend averages and Bollinger Bands on the price
+// pane. Oscillator panes and SIGNALS are opt-in.
+export const DEFAULT_VISIBILITY = Object.freeze(["ema-20", "ema-50", "bollinger-bands-20"]);
+// Beginner shows only these indicators (pills SIGNALS, EMA20, EMA50, BB, RSI, ATR, VOL).
+export const BEGINNER_INDICATORS = Object.freeze(["ema-20", "ema-50", "bollinger-bands-20", "rsi-14", "atr-14"]);
+// Backend spot analyses that are drawn as a price-pane overlay when toggled.
+export const OVERLAY_ANALYSES = Object.freeze(["vwap"]);
 export const INDICATOR_IDS = Object.freeze([
   "ema-20",
   "ema-50",
@@ -19,54 +25,62 @@ export const SPOT_ANALYSIS_IDS = Object.freeze([
   "spot-market-structure",
 ]);
 
-const STORAGE_PREFIX = "spot-research.presentation.v1";
+// Display preferences are desk-wide and remembered per browser (UR1/UR3): one
+// Beginner|Pro mode, one set of shown overlays/panes, SIGNALS on/off with the
+// chosen strategy, and the sub-pane layout. They never change returned values.
+export const PREFERENCES_KEY = "spot-research.desk-preferences.v1";
+const TOGGLE_IDS = Object.freeze([...INDICATOR_IDS, ...OVERLAY_ANALYSES]);
+const STRATEGY_KEY = /^[a-z0-9-]{1,64}@[1-9]\d{0,5}$/;
 
-export function preferenceKey(instrumentId, timeframe) {
-  return `${STORAGE_PREFIX}:${instrumentId}:${timeframe}`;
+export function defaultPreferences() {
+  return {
+    mode: "beginner",
+    visible: [...DEFAULT_VISIBILITY],
+    signals: false,
+    strategy: null,
+    collapsedPanes: [],
+    paneOrder: [],
+  };
 }
 
-export function loadPreferences(storage, instrumentId, timeframe) {
-  const defaults = { mode: "beginner", visible: [...DEFAULT_VISIBILITY] };
+function knownIds(value, allowed) {
+  return Array.isArray(value) ? [...new Set(value.filter((id) => allowed.includes(id)))] : null;
+}
+
+export function normalisePreferences(saved) {
+  const defaults = defaultPreferences();
+  if (!saved || typeof saved !== "object") return defaults;
+  return {
+    mode: saved.mode === "pro" ? "pro" : "beginner",
+    visible: knownIds(saved.visible, TOGGLE_IDS) ?? defaults.visible,
+    signals: saved.signals === true,
+    strategy: typeof saved.strategy === "string" && STRATEGY_KEY.test(saved.strategy) ? saved.strategy : null,
+    collapsedPanes: knownIds(saved.collapsedPanes, INDICATOR_IDS) ?? [],
+    paneOrder: knownIds(saved.paneOrder, INDICATOR_IDS) ?? [],
+  };
+}
+
+export function loadPreferences(storage) {
   try {
-    const saved = JSON.parse(storage.getItem(preferenceKey(instrumentId, timeframe)));
-    if (!saved || typeof saved !== "object") return defaults;
-    return {
-      mode: saved.mode === "pro" ? "pro" : "beginner",
-      visible: Array.isArray(saved.visible)
-        ? [...new Set(saved.visible.filter((id) => INDICATOR_IDS.includes(id)))]
-        : [...DEFAULT_VISIBILITY],
-    };
+    return normalisePreferences(JSON.parse(storage.getItem(PREFERENCES_KEY)));
   } catch {
-    return defaults;
+    return defaultPreferences();
   }
 }
 
-export function savePreferences(storage, instrumentId, timeframe, preferences) {
-  const safe = {
-    mode: preferences.mode === "pro" ? "pro" : "beginner",
-    visible: [...new Set((preferences.visible ?? []).filter((id) => INDICATOR_IDS.includes(id)))],
-  };
+export function savePreferences(storage, preferences) {
   try {
-    storage.setItem(preferenceKey(instrumentId, timeframe), JSON.stringify(safe));
+    storage.setItem(PREFERENCES_KEY, JSON.stringify(normalisePreferences(preferences)));
   } catch {
     return false;
   }
   return true;
 }
 
-export function workspaceSelection(search, symbols, timeframes) {
-  const parameters = new URLSearchParams(search);
-  const instruments = parameters.getAll("instrument");
-  const selectedTimeframes = parameters.getAll("timeframe");
-  const instrumentId = instruments.length === 1 &&
-      symbols.some((item) => item.instrument_id === instruments[0])
-    ? instruments[0]
-    : symbols[0]?.instrument_id;
-  const timeframe = selectedTimeframes.length === 1 &&
-      timeframes.includes(selectedTimeframes[0])
-    ? selectedTimeframes[0]
-    : timeframes[0];
-  return { instrumentId, timeframe };
+// The overlays/panes actually drawn: Beginner limits the set to its essentials.
+export function shownIndicators(preferences) {
+  const visible = preferences?.visible ?? [];
+  return preferences?.mode === "pro" ? [...visible] : visible.filter((id) => BEGINNER_INDICATORS.includes(id));
 }
 
 export function snapshotLabels(snapshot) {

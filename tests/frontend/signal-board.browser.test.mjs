@@ -62,7 +62,7 @@ test("board shows NO_TRADE without invented evidence, safe history, selector cle
     assert.match(await page.locator("#record-detail").innerText(), /fixture-correlation/);
     assert.equal(await page.locator("#record-detail img").count(), 0);
     assert.equal(await page.evaluate(() => window.injected), undefined);
-    const bound = page.locator('#record-detail a[href*="evidence.html"]');
+    const bound = page.locator('#record-detail a[href*="#strategy-lab"]');
     assert.equal(await bound.count(), 1);
     assert.ok((await bound.getAttribute("href")).includes(evidence.artifact_id));
     const link = await page.getByRole("link", { name: "Link to this exact record" }).getAttribute("href");

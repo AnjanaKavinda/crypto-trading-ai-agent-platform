@@ -1,4 +1,4 @@
-import { listSupportedSymbols, readSnapshot, TIMEFRAME_SECONDS } from "./research-api.mjs";
+import { listSupportedSymbols, MAX_CANDLES, readSnapshot, TIMEFRAME_SECONDS } from "./research-api.mjs";
 import { validateSnapshot } from "./workspace-state.mjs";
 
 export const APPROVED_INSTRUMENTS = Object.freeze({
@@ -9,7 +9,19 @@ export const APPROVED_INSTRUMENTS = Object.freeze({
   "XRP-USDT-SPOT": "XRPUSDT",
 });
 
-export const WATCHLIST_LIMIT = 250;
+// Read with the largest allowed history bound: the daily check stores 501-candle
+// snapshots, and a smaller bound is rejected (422 SPOT_CANDLE_LIMIT_EXCEEDED)
+// rather than truncated (UR4, #516).
+export const WATCHLIST_LIMIT = MAX_CANDLES;
+
+// A failed read keeps the safe message and names the API code (or HTTP status).
+export function readErrorText(error) {
+  const message = error?.message ?? "Snapshot read failed.";
+  const code = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(error.code)
+    ? error.code
+    : Number.isInteger(error?.status) ? `HTTP ${error.status}` : null;
+  return code ? `${message} [${code}]` : message;
+}
 
 export function supportedWatchlistSymbols(response) {
   if (response?.provider !== "binance-spot-public" ||
@@ -82,28 +94,31 @@ export function watchlistRow(snapshot, symbol) {
   };
 }
 
-export async function readWatchlist(fetcher, timeframe, symbols) {
+// One coin's stored snapshot at the largest bound; never throws.
+export async function readWatchlistEntry(fetcher, timeframe, item) {
+  try {
+    const snapshot = await readSnapshot(fetcher, {
+      instrumentId: item.instrument_id,
+      timeframe,
+      limit: WATCHLIST_LIMIT,
+    });
+    const validationError = validateWatchlistSnapshot(snapshot, {
+      instrumentId: item.instrument_id,
+      symbol: item.symbol,
+      timeframe,
+    });
+    if (validationError) throw new Error(validationError);
+    return { symbol: item.symbol, snapshot, row: watchlistRow(snapshot, item.symbol), error: null };
+  } catch (error) {
+    return { symbol: item.symbol, snapshot: null, row: null, error: readErrorText(error) };
+  }
+}
+
+export async function readWatchlist(fetcher, timeframe, symbols, readEntry = (item) => readWatchlistEntry(fetcher, timeframe, item)) {
   if (!Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) {
     throw new Error("Select a timeframe supported by the local research API.");
   }
-  return Promise.all(symbols.map(async (item) => {
-    try {
-      const snapshot = await readSnapshot(fetcher, {
-        instrumentId: item.instrument_id,
-        timeframe,
-        limit: WATCHLIST_LIMIT,
-      });
-      const validationError = validateWatchlistSnapshot(snapshot, {
-        instrumentId: item.instrument_id,
-        symbol: item.symbol,
-        timeframe,
-      });
-      if (validationError) throw new Error(validationError);
-      return { symbol: item.symbol, snapshot, row: watchlistRow(snapshot, item.symbol), error: null };
-    } catch (error) {
-      return { symbol: item.symbol, snapshot: null, row: null, error: error.message };
-    }
-  }));
+  return Promise.all(symbols.map((item) => readEntry(item)));
 }
 
 export async function loadWatchlist(fetcher, timeframe) {
@@ -118,5 +133,5 @@ export function workspaceHref(instrumentId, timeframe, supportedSymbols) {
   if (!supportedSymbols.some((item) => item.instrument_id === instrumentId) ||
       !Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) return null;
   const query = new URLSearchParams({ instrument: instrumentId, timeframe });
-  return `./index.html?${query}`;
+  return `./index.html?${query}#charts`;
 }

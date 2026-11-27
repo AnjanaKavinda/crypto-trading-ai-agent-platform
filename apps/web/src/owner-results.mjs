@@ -173,8 +173,4 @@ export async function bootstrapResults({ document, fetcher = globalThis.fetch })
   }
 }
 
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
-    void bootstrapResults({ document });
-  }, { once: true });
-}
+// Mounted by the desk shell when its tab is first shown (desk-shell.mjs).
