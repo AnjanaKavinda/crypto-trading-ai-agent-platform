@@ -363,9 +363,8 @@ def forward_record(
 PAXG_SYMBOL = "PAXGUSDT"
 PAXG_START = datetime(2026, 11, 27, tzinfo=UTC)
 _PAXG_STRATEGY = EmaCross1d()
-_PAXG_APPROVED_DIGEST = (
-    "f0f80642028d59e360ed34f26cb287275c7665016524e08b12f3817be44fbfb2"
-)
+# Public SHA-256 of the approved C2 rule definition.
+_PAXG_APPROVED_DIGEST = "f0f80642028d59e360ed34f26cb287275c7665016524e08b12f3817be44fbfb2"  # pragma: allowlist secret
 PAXG_HISTORY_START = PAXG_START - timedelta(
     days=_PAXG_STRATEGY.signals(()).first_tradable_index
 )
