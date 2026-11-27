@@ -99,6 +99,16 @@ signal close; SELL markers explain the middle-band exit, the 12-bar time stop
 must equal the research formulas or no markers are returned; ADX14 is recomputed
 from the snapshot's validated candles.
 
+## Audit simulated Spot trades
+
+New study and tournament reports include a `trade_records` list in JSON and a
+simulated-trades table in Markdown. The rows identify the symbol and study
+period or tournament set, the UTC signal close, the simulated entry and exit
+prices, the exit candle and reason, net return as a fraction, and R based on
+the initial stop. For a strategy without a stop, stop and R are empty. The
+exit timestamp identifies the candle that contains the simulated exit. The
+fill model has candle resolution.
+
 ## Candidate tournament: `spot-candidate-tournament` v1 (E2t)
 
 Pre-registered on #516 (comment 7203109547, "tournament OK") with Amendment 1
