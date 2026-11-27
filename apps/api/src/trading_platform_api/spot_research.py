@@ -307,6 +307,18 @@ class SpotOrderFlowView(BaseModel):
     result: None
 
 
+class SpotServedWindowView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requested_limit: int
+    stored_candle_count: int
+    served_candle_count: int
+    first_open_time: datetime
+    last_open_time: datetime
+    indicator_scope: Literal["WHOLE_SNAPSHOT_SLICED_TO_WINDOW"]
+    analysis_scope: Literal["WHOLE_SNAPSHOT"]
+
+
 class SpotResearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -328,6 +340,7 @@ class SpotResearchResponse(BaseModel):
     spot_analysis: dict[str, SpotAnalysisView]
     analysis_fanout: dict[str, Any]
     order_flow: SpotOrderFlowView
+    served_window: SpotServedWindowView | None = None
 
 
 class SpotResearchError(RuntimeError):
