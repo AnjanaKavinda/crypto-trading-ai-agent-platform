@@ -889,7 +889,7 @@ for (const delayedAction of ["read", "refresh"]) {
         const selectedTimeframe = request.method() === "POST"
           ? request.postDataJSON().timeframe
           : url.searchParams.get("timeframe");
-        if (selectedTimeframe === "1m") {
+        if (selectedTimeframe === "1h") {
           markStarted();
           await responseGate;
         }
@@ -906,21 +906,21 @@ for (const delayedAction of ["read", "refresh"]) {
         await page.locator("#refresh-button").click();
       }
       await started;
-      await page.locator("#timeframe-select").selectOption("5m");
-      await page.waitForFunction(() => document.querySelector("#snapshot-metadata").innerText.includes("Timeframe\n5m"));
+      await page.locator('#timeframe-pills [data-timeframe="4h"]').click();
+      await page.waitForFunction(() => document.querySelector("#snapshot-metadata").innerText.includes("Timeframe\n4h"));
       const lateResponse = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return delayedAction === "read"
-          ? url.pathname.endsWith("/candles") && url.searchParams.get("timeframe") === "1m"
+          ? url.pathname.endsWith("/candles") && url.searchParams.get("timeframe") === "1h"
           : url.pathname.endsWith("/refresh");
       });
       releaseResponse();
       await (await lateResponse).finished();
       await page.evaluate(() => new Promise((resolveFrame) =>
         requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
-      assert.equal(await page.locator("#timeframe-select").inputValue(), "5m");
-      assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Timeframe\n5m"));
-      assert.match(await page.locator("#chart-container svg > title").textContent(), /5m/);
+      assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "true");
+      assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Timeframe\n4h"));
+      assert.match(await page.locator("#chart-container svg > title").textContent(), /4h/);
     } finally {
       releaseResponse();
       await page.close();
@@ -948,10 +948,10 @@ test("chart workspace zooms, pans, switches scale and shows the exact last close
     await page.keyboard.press("End");
     await page.keyboard.press("ArrowLeft");
     const inspector = page.locator("#chart-inspector");
-    assert.match(await inspector.textContent(), / C 100\.73 USDT/);
+    assert.match(await inspector.textContent(), /C\s*100\.73/);
     assert.match(await inspector.getAttribute("data-exact"), /Close: 100\.7300 USDT/);
     assert.match(await inspector.getAttribute("title"), /^Exact returned values: /);
-    assert.match(await page.locator("#market-trades").innerText(), /Market trades — unavailable[\s\S]*#355/);
+    assert.match(await page.locator("#market-trades").innerText(), /Market trades[\s\S]*Unavailable[\s\S]*#355/);
     const requestsBefore = apiRequests.length;
     await page.locator('[data-chart-action="zoom-in"]').click();
     assert.equal(await wicks(), 25);
@@ -986,22 +986,18 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
     assert.equal(points.length, 30);
     assert.match(await page.locator("#chart-container .legend-volume-average-line").textContent(), /Prior-20 average volume · backend/);
     // Markets list comes from the API allowlist and marks the selection.
-    const market = page.locator(`#markets-list [data-instrument-id="${instrumentId}"]`);
-    assert.equal(await market.textContent(), symbol);
+    const market = page.locator(`#markets-list-items [data-instrument-id="${instrumentId}"]`);
+    assert.match(await market.textContent(), /^BTC\/USDT/);
     assert.equal(await market.getAttribute("aria-pressed"), "true");
-    assert.match(await page.locator("#markets-list-count").textContent(), /Markets \(1\)/);
+    assert.match(await page.locator("#markets-list-count").textContent(), /1 approved Spot pair/);
     // Market trades are unavailable, never inferred.
-    assert.match(await page.locator("#market-trades").innerText(), /unavailable[\s\S]*#355/);
-    // Weekly/monthly pills are disabled with a reason; live pills load that timeframe.
-    for (const value of ["1w", "1M"]) {
-      const pill = page.locator(`#timeframe-pills [data-timeframe="${value}"]`);
-      assert.equal(await pill.isDisabled(), true);
-      assert.match(await pill.getAttribute("title"), /not served by the local research API/);
-    }
+    assert.match(await page.locator("#market-trades").innerText(), /Unavailable[\s\S]*#355/);
+    // One timeframe control: 1h / 4h / 1D only (1 minute and 1W/1M removed, UR1).
+    assert.deepEqual(await page.locator("#timeframe-pills button").allInnerTexts(), ["1h", "4h", "1D"]);
     assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "false");
     const before = apiRequests.length;
     await page.locator('#timeframe-pills [data-timeframe="4h"]').click();
-    await page.waitForFunction(() => document.querySelector("#timeframe-select").value === "4h");
+    await page.waitForFunction(() => document.querySelector('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed") === "true");
     assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "true");
     const loads4h = () => apiRequests.slice(before).some((item) => item.pathname.endsWith("/candles") && item.timeframe === "4h");
     for (let attempt = 0; attempt < 50 && !loads4h(); attempt += 1) await page.waitForTimeout(100);
@@ -1023,7 +1019,7 @@ test("indicator toolbar pills toggle backend overlays and disable not-ready indi
     await pill("RSI").click();
     assert.equal(await pill("RSI").getAttribute("aria-pressed"), "true");
     assert.ok((await readSeries(page)).some((line) => line.series === "rsi-line"));
-    assert.equal(await page.locator("#view-mode").textContent(), "Pro view");
+    assert.equal(await page.locator("#pro-button").getAttribute("aria-pressed"), "true");
     await pill("EMA20").click();
     assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "false");
     assert.ok(!(await readSeries(page)).some((line) => line.series === "ema-20"));
@@ -1031,9 +1027,9 @@ test("indicator toolbar pills toggle backend overlays and disable not-ready indi
       assert.equal(await pill(short).isDisabled(), true, short);
       assert.match(await pill(short).getAttribute("title"), /Connect|To build|Needs trades|Needs order book/);
     }
-    assert.equal(await pill("VWAP").isDisabled(), false);
-    await pill("VWAP").click();
-    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "vwap");
+    assert.equal(await pill("VPRO").isDisabled(), false);
+    await pill("VPRO").click();
+    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "volume-profile");
     assert.equal(apiRequests.length, before, "toolbar pills must not issue API requests");
   } finally {
     await page.close();
@@ -1048,8 +1044,8 @@ test("drawing tools place browser-only annotations that persist and clear withou
       const svg = page.locator("#chart-container svg");
       const box = await svg.boundingBox();
       const [, , viewWidth, viewHeight] = (await svg.getAttribute("viewBox")).split(/\s+/).map(Number);
-      const plotLeft = 150;
-      const plotWidth = viewWidth - 150 - 125;
+      const plotLeft = 8;
+      const plotWidth = viewWidth - 8 - 84;
       await page.mouse.click(
         box.x + ((plotLeft + xFraction * plotWidth) / viewWidth) * box.width,
         box.y + (viewY / viewHeight) * box.height,

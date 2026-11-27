@@ -1203,7 +1203,7 @@ function renderChartToolbar(snapshot, preferences, view, candleCount, scale) {
   );
   const range = element(
     "span",
-    `Candles ${view.start + 1}–${view.start + view.count} of ${candleCount} · scale: ${scale.mode === "percent" ? "%" : scale.mode === "log" ? "Log" : "Auto"}`,
+    `Showing candles ${view.start + 1}–${view.start + view.count} of ${candleCount} · scale: ${scale.mode === "percent" ? "%" : scale.mode === "log" ? "Log" : "Auto"}`,
     "chart-view-range",
   );
   range.id = "chart-view-range";
