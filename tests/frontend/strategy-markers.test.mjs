@@ -71,4 +71,10 @@ test("UR5: markers requests always name the strategy and version", async () => {
   assert.throws(() => readStrategyMarkers(fetcher, { instrumentId: "BTC-USDT-SPOT", timeframe: "4h", limit: 501 }), /registered strategy/);
   assert.throws(() => readStrategyMarkers(fetcher, { instrumentId: "BTC-USDT-SPOT", timeframe: "4h", limit: 501, strategy: "x&y", version: "1" }), /registered strategy/);
   assert.equal(urls.length, 1);
+  // An API without this strategy's markers says so (allowlisted code only).
+  const missing = async () => ({ ok: false, status: 422, json: async () => ({ code: "STRATEGY_NOT_REGISTERED", detail: "PRIVATE" }) });
+  await assert.rejects(
+    readStrategyMarkers(missing, { instrumentId: "BTC-USDT-SPOT", timeframe: "4h", limit: 501, strategy: "range-reversion-4h", version: "1" }),
+    (error) => /no markers registered for this strategy version/.test(error.message) && !/PRIVATE/.test(error.message),
+  );
 });

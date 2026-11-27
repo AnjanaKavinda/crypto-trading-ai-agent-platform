@@ -21,6 +21,8 @@ function apiError(status, code, selector) {
         ? ", or explicitly refresh this same selector to collect a bounded snapshot."
         : ". This selection is read-only; provider refresh is not eligible."
     }`
+    : status === 422 && code === "STRATEGY_NOT_REGISTERED"
+    ? "The local API has no markers registered for this strategy version. The running API may be older than this page; rebuild the api service."
     : status === 404
     ? "No stored snapshot matches this instrument, timeframe, history bound, and cutoff."
     : status === 429
@@ -99,7 +101,7 @@ async function request(fetcher, path, options = {}, selector, policy = {}) {
       if (response.status === 422) {
         try {
           const problem = await response.json();
-          if (problem?.code === "SPOT_CANDLE_LIMIT_EXCEEDED") code = problem.code;
+          if (["SPOT_CANDLE_LIMIT_EXCEEDED", "STRATEGY_NOT_REGISTERED"].includes(problem?.code)) code = problem.code;
         } catch {
           // Unreadable or unrecognized problems retain the generic safe message.
         }
