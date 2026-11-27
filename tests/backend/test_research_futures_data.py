@@ -56,6 +56,12 @@ def synthetic_client(*, bad=None):
             )
             if spot and bad == "alignment":
                 rows = rows[1:]
+            if spot and bad == "malformed-spot":
+                return httpx.Response(200, json=[[BASE]])
+            if not spot and bad == "csv-injection":
+                rows[0][1] = "100\n"
+            if not spot and bad == "timestamp-overflow":
+                rows[0][0] = "9" * 100
             if not spot and bad == "close":
                 rows[0][6] = str(BASE + HOUR_MS - 2)
             if not spot and bad == "open":
@@ -92,7 +98,18 @@ def test_fetch_provenance_digests_signed_premium_and_spot_alignment(symbol):
     assert APPROVED_SPOT_SYMBOLS == approved
 
 
-@pytest.mark.parametrize("bad", ["funding", "alignment", "close", "open"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "funding",
+        "alignment",
+        "close",
+        "open",
+        "malformed-spot",
+        "csv-injection",
+        "timestamp-overflow",
+    ],
+)
 def test_fetch_rejects_bad_provider_or_cross_market_coverage(bad):
     with synthetic_client(bad=bad) as client, pytest.raises(CandleDataError) as error:
         fetch_futures_data(
@@ -147,12 +164,26 @@ def test_synthetic_funding_grid_and_settled_boundary(offsets):
         )
 
 
+def test_submillisecond_start_is_not_silently_rounded():
+    with (
+        synthetic_client() as client,
+        pytest.raises(CandleDataError, match="invalid 1h"),
+    ):
+        fetch_futures_data(
+            symbol="BTCUSDT",
+            start=START + timedelta(microseconds=1),
+            now=START + timedelta(hours=16),
+            client=client,
+            pause_seconds=0,
+        )
+
+
 def test_cli_writes_nothing_for_bad_symbol_and_continues(tmp_path, monkeypatch, capsys):
     from trading_platform_api.research import __main__ as cli
 
     def fetch(**kwargs):
         with synthetic_client(
-            bad="close" if kwargs["symbol"] == "BTCUSDT" else None
+            bad="malformed-spot" if kwargs["symbol"] == "BTCUSDT" else None
         ) as client:
             return fetch_futures_data(
                 symbol=kwargs["symbol"],
@@ -181,4 +212,41 @@ def test_cli_writes_nothing_for_bad_symbol_and_continues(tmp_path, monkeypatch, 
     )
     files = list(tmp_path.rglob("*.csv"))
     assert len(files) == 4 and all("ETHUSDT" in path.name for path in files)
+    for path in files:
+        if path.parent.name == "um-futures":
+            raw = path.read_bytes()
+            assert b"\r\n" not in raw
+            header, body = raw.split(b"\n", 1)
+            prefix, digest = header.rsplit(b" content_sha256=", 1)
+            assert sha256(prefix + b"\n" + body).hexdigest().encode() == digest
     assert "BTCUSDT 2024-01-01T" in capsys.readouterr().err
+
+
+def test_futures_cli_preserves_start_offset_and_rejects_empty_symbols(
+    tmp_path, monkeypatch
+):
+    from trading_platform_api.research import __main__ as cli
+
+    captured = []
+
+    def fetch(**kwargs):
+        captured.append(kwargs["start"])
+        raise CandleDataError("SYNTHETIC unavailable response")
+
+    monkeypatch.setattr(cli, "fetch_futures_data", fetch)
+    args = [
+        "fetch",
+        "--market",
+        "um-futures",
+        "--timeframe",
+        "1h",
+        "--data",
+        str(tmp_path),
+    ]
+    assert (
+        main([*args, "--symbols", "BTCUSDT", "--start", "2024-01-01T05:00:00+05:00"])
+        == 1
+    )
+    assert captured == [START]
+    assert main([*args, "--symbols", ","]) == 2
+    assert not list(tmp_path.rglob("*.csv"))

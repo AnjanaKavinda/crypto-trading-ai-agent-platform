@@ -210,6 +210,9 @@ The first command validates all four files for each symbol before writing:
 semantics stay unchanged. Futures headers include `source`, `venue=BINANCE-USDM`,
 `symbol`, `dataset`, `interval`, `fetched_at` and `content_sha256` (hash of the
 UTF-8 document with the ` content_sha256=...` header field removed).
+Futures files use LF bytes on every operating system so the stored digest
+matches the saved bytes on Windows as well. Explicit timezone offsets in a
+Futures `--start` timestamp are converted to UTC, not discarded.
 
 The request ends at the latest fully closed UTC hour at fetch time; current
 open candles are outside the requested range. Missing/duplicate/off-grid rows,

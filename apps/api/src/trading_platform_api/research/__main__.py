@@ -205,6 +205,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fetch":
         start = datetime.fromisoformat(args.start).replace(tzinfo=UTC)
         if args.market == "um-futures":
+            supplied_start = datetime.fromisoformat(args.start)
+            start = (
+                supplied_start.replace(tzinfo=UTC)
+                if supplied_start.tzinfo is None
+                else supplied_start.astimezone(UTC)
+            )
+            if not chosen:
+                print("Futures research requires at least one symbol.", file=sys.stderr)
+                return 2
             if args.timeframe != "1h" or args.base_url != DEFAULT_BASE_URL:
                 print(
                     "Futures research requires --timeframe 1h and fixed public endpoints.",
@@ -231,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
                         directory.mkdir(parents=True, exist_ok=True)
                         interval = "8h" if dataset == "funding" else "1h"
                         path = directory / f"{symbol}_{dataset}_{interval}.csv"
-                        path.write_text(document, encoding="utf-8")
+                        path.write_text(document, encoding="utf-8", newline="\n")
                     print(f"wrote {path}")
             return 1 if failed else 0
         failed = 0

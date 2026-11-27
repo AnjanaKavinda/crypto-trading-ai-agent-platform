@@ -31,6 +31,8 @@ def _fail(symbol: str, at: int, reason: str) -> None:
 
 
 def _number(value: str) -> Decimal:
+    if any(char.isspace() for char in value) or "," in value:
+        raise ValueError("invalid numeric CSV field")
     try:
         number = Decimal(value)
     except InvalidOperation as exc:
@@ -136,7 +138,12 @@ def fetch_futures_data(
     fetched = (now or datetime.now(UTC)).astimezone(UTC)
     end_ms = int(fetched.timestamp()) // 3600 * HOUR_MS
     start_ms = int(start.timestamp() * 1000)
-    if symbol not in SYMBOLS or start_ms % HOUR_MS or start_ms >= end_ms:
+    if (
+        symbol not in SYMBOLS
+        or start.microsecond
+        or start_ms % HOUR_MS
+        or start_ms >= end_ms
+    ):
         _fail(symbol, start_ms, "unsupported symbol or invalid 1h research window")
     owned = client is None
     http = client or httpx.Client(timeout=20.0)
@@ -180,7 +187,7 @@ def fetch_futures_data(
                             f"{symbol} {_stamp(cursor)}: malformed provider row"
                         ) from exc
                     if at < cursor or at >= end_ms:
-                        _fail(symbol, at, "out-of-window or unclosed observation")
+                        _fail(symbol, cursor, "out-of-window or unclosed observation")
                     rows.append(row)
                     if len(rows) > MAX_ROWS:
                         _fail(symbol, at, "research dataset exceeds supported size")
@@ -196,14 +203,19 @@ def fetch_futures_data(
             documents[dataset] = format_dataset(
                 rows, symbol=symbol, dataset=dataset, fetched_at=fetched
             )
-        spot = fetch_klines(
-            symbol=symbol,
-            timeframe="1h",
-            start=start,
-            now=datetime.fromtimestamp(end_ms / 1000, UTC),
-            client=http,
-            pause_seconds=pause_seconds,
-        )
+        try:
+            spot = fetch_klines(
+                symbol=symbol,
+                timeframe="1h",
+                start=start,
+                now=datetime.fromtimestamp(end_ms / 1000, UTC),
+                client=http,
+                pause_seconds=pause_seconds,
+            )
+        except (TypeError, IndexError, KeyError, OverflowError, OSError) as exc:
+            raise CandleDataError(
+                f"{symbol} {_stamp(start_ms)}: malformed Spot provider response"
+            ) from exc
         spot_rows = list(csv.reader(io.StringIO("\n".join(spot.splitlines()[2:]))))
         validate_rows(
             spot_rows, symbol=symbol, dataset="spot", start_ms=start_ms, end_ms=end_ms
