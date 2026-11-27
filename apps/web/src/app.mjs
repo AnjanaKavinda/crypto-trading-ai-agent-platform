@@ -1970,6 +1970,8 @@ export async function mountCharts({ desk }) {
     preferences = next;
     savePreferences(localStorage, preferences);
     renderPreferences();
+    // Other tabs (the Signal Center) follow the Beginner|Pro choice.
+    document.dispatchEvent(new CustomEvent("desk:preferences"));
   };
   const redrawChart = () => { if (snapshot) renderChart(snapshot, preferences); };
   const clearDrawings = () => {
