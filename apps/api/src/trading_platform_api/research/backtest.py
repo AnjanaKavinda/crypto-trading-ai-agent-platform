@@ -11,7 +11,15 @@ signals carry ``max_bars_held``, a position held that many bars (entry bar
 included) at a close exits at the next open with reason ``TIME_EXIT``; a
 signal exit on the same close keeps reason ``SIGNAL_EXIT``.
 
-Sizing: the whole strategy equity is invested per trade (no leverage), so
+Stopless strategies (``StrategySignals.stopless``) have no protective stop:
+``Trade.stop_price`` is recorded as 0 and the R multiple is therefore relative
+to the whole invested notional. When the signals carry ``position_fraction``,
+only that fraction of equity (known at the signal close, held for the whole
+trade) is invested and the rest stays in cash; the trade's ``net_return`` and
+the equity curve are then on the whole strategy equity, so they include the
+cash part.
+
+Sizing: by default the whole strategy equity is invested per trade (no leverage), so
 results are growth of 1 unit of equity. Costs are applied on both sides:
 fill price moves against the trade by the slippage rate and a fee is charged
 on traded notional.
@@ -101,9 +109,16 @@ def run_segment(
     """Trade bars ``start <= i < end``; any open position closes at bar end-1."""
     if not signals.first_tradable_index <= start < end <= len(candles):
         raise ValueError("Segment must lie inside the tradable candle range.")
-    if len(signals.enter_long) != len(candles) or (
-        signals.trail_distance is not None
-        and len(signals.trail_distance) != len(candles)
+    if (
+        len(signals.enter_long) != len(candles)
+        or (
+            signals.trail_distance is not None
+            and len(signals.trail_distance) != len(candles)
+        )
+        or (
+            signals.position_fraction is not None
+            and len(signals.position_fraction) != len(candles)
+        )
     ):
         raise ValueError("Signals do not match the candle series.")
     cash = Decimal(1)
@@ -122,6 +137,8 @@ def run_segment(
         assert entry is not None
         entry_index, entry_fill, stop, basis = entry
         proceeds = _liquidation_value(units, raw_price, costs)
+        if cash:  # uninvested part of a fractional position
+            proceeds += cash
         raw_entry = candles[entry_index].open
         risk = units * (entry_fill - stop)
         trades.append(
@@ -143,27 +160,36 @@ def run_segment(
     for index in range(start, end):
         bar = candles[index]
         if pending_entry and entry is None:
-            distance = signals.stop_distance[index - 1]
-            assert distance is not None
             fill = _buy_fill(bar.open, costs)
-            stop = fill - distance
-            if stop > 0:
+            if signals.stopless:
+                stop = Decimal(0)
+            else:
+                distance = signals.stop_distance[index - 1]
+                assert distance is not None
+                stop = fill - distance
+            if stop > 0 or signals.stopless:
                 basis = cash
-                units = cash * (Decimal(1) - costs.fee_rate) / fill
+                invested = cash
+                if signals.position_fraction is not None:
+                    fraction = signals.position_fraction[index - 1]
+                    assert fraction is not None and 0 < fraction <= 1
+                    invested = cash * fraction
+                units = invested * (Decimal(1) - costs.fee_rate) / fill
                 entry = (index, fill, stop, basis)
                 stop_now, highest_close = stop, Decimal(0)
-                cash = Decimal(0)
+                cash = cash - invested if invested != cash else Decimal(0)
         elif pending_exit is not None and entry is not None:
             close_position(index, bar.open, pending_exit)
         pending_entry = False
         pending_exit = None
 
-        if entry is not None and bar.low <= stop_now:
+        if entry is not None and not signals.stopless and bar.low <= stop_now:
             close_position(index, min(bar.open, stop_now), "STOP")
 
         if entry is not None:
             in_market += 1
-            equity.append(_liquidation_value(units, bar.close, costs))
+            value = _liquidation_value(units, bar.close, costs)
+            equity.append(value + cash if cash else value)
             highest_close = max(highest_close, bar.close)
             trail = signals.trail_distance
             distance = trail[index] if trail is not None else None

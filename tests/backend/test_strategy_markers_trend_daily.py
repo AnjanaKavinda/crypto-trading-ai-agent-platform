@@ -196,3 +196,22 @@ def test_default_strategy_output_is_unchanged_by_the_registry() -> None:
     )
     assert result["strategy"]["strategy_id"] == "ema-trend-atr-stop"
     assert all("sma_200" not in m["indicators"] for m in result["markers"])
+
+
+@pytest.mark.parametrize(
+    ("length", "status"),
+    [(90, "WARMUP"), (201, "WARMUP"), (202, "AVAILABLE"), (501, "AVAILABLE")],
+)
+def test_one_day_snapshot_of_202_or_more_candles_is_past_warmup(
+    length: int, status: str
+) -> None:
+    # E2e2: the old 90-day 1d refresh stored ~90 candles, always WARMUP; a
+    # 501-candle 1d snapshot (now one refresh) gives SMA200 enough history.
+    result = markers(synthetic_daily(length))
+    assert result["status"] == status
+    if status == "WARMUP":
+        assert result["reason_code"] == "INSUFFICIENT_HISTORY"
+    else:
+        assert result["reason_code"] is None
+    if length == 501:
+        assert result["markers"]

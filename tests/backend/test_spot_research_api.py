@@ -94,6 +94,11 @@ from trading_platform_api.orchestration.spot_agent_producer import (
     ProducerReservation,
     SpotProducerRuntime,
 )
+from trading_platform_api.research.strategy import EmaTrendAtrStop, TrendDailyRegime
+from trading_platform_api.research.study_verdict import (
+    StudyDataset,
+    StudyVerdictRecord,
+)
 from trading_platform_api.risk import VersionReference as SafetyVersionReference
 from trading_platform_api.safety import AgentPermissionPolicy
 from trading_platform_api.spot_research import (
@@ -1847,7 +1852,7 @@ def persisted_service(database_url):
     [
         (timeframe, limit)
         for timeframe, limit in READ_PAIRS
-        if limit * TIMEFRAME_SECONDS[timeframe] <= 90 * 86400
+        if timeframe == "1d" or limit * TIMEFRAME_SECONDS[timeframe] <= 90 * 86400
     ],
 )
 def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit):
@@ -2244,12 +2249,16 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
 @pytest.mark.parametrize(
     ("timeframe", "limit", "expected_status"),
     [
+        # 1d is bounded by candle count only (E2e2): 501 daily candles give
+        # SMA200 and EMA500 enough history in one refresh.
         ("1d", 90, 200),
-        ("1d", 91, 422),
-        ("1d", 100, 422),
-        ("1d", 250, 422),
-        ("1d", 501, 422),
+        ("1d", 91, 200),
+        ("1d", 250, 200),
+        ("1d", 501, 200),
+        # Over 501 candles fails request validation before any provider call.
+        ("1d", 502, 422),
         ("4h", 501, 200),
+        ("1h", 501, 200),
     ],
 )
 def test_refresh_respects_provider_window_and_candle_bounds(
@@ -2260,10 +2269,8 @@ def test_refresh_respects_provider_window_and_candle_bounds(
     window = datetime.fromisoformat(body["coverage_end"]) - datetime.fromisoformat(
         body["coverage_start"]
     )
-    if expected_status == 200:
+    if timeframe != "1d":
         assert window <= timedelta(days=90)
-    else:
-        assert window > timedelta(days=90)
 
     with client_for(research) as client:
         response = client.post(
@@ -2276,8 +2283,28 @@ def test_refresh_respects_provider_window_and_candle_bounds(
         assert len(response.json()["candles"]) == limit
         assert calls == [1]
     else:
-        assert response.json()["code"] == "REFRESH_RANGE_INVALID"
+        assert response.json()["code"] == "REQUEST_VALIDATION_FAILED"
         assert calls == []
+
+
+def test_4h_refresh_over_90_days_is_still_rejected() -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+    end = datetime.fromtimestamp((int(NOW.timestamp()) // 14_400) * 14_400, tz=UTC)
+    body = {
+        "timeframe": "4h",
+        "coverage_start": (end - timedelta(days=91)).isoformat(),
+        "coverage_end": end.isoformat(),
+        "limit": 501,
+    }
+
+    with client_for(research) as client:
+        response = client.post(f"/api/research/spot/{INSTRUMENT}/refresh", json=body)
+
+    # 91 days of 4h candles exceed the 501-candle bound, so the request fails
+    # closed before the 90-day check or any provider call.
+    assert response.status_code == 422
+    assert response.json()["code"] == "REQUEST_VALIDATION_FAILED"
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -2985,7 +3012,7 @@ def test_strategy_markers_use_the_persisted_snapshot_and_fail_closed_when_stale(
 ):
     research, calls, _ = service(quality_policy=policy_template())
     research.provider_factory = lambda settings: WaveProvider(settings, calls)
-    params = {"timeframe": "1m", "limit": 400}
+    params: dict[str, str | int] = {"timeframe": "1m", "limit": 400}
     with client_for(research) as client:
         refreshed = client.post(
             f"/api/research/spot/{INSTRUMENT}/refresh",
@@ -2993,6 +3020,7 @@ def test_strategy_markers_use_the_persisted_snapshot_and_fail_closed_when_stale(
         )
         assert refreshed.status_code == 200, refreshed.text
         served = client.get(f"/api/research/spot/{INSTRUMENT}/candles", params=params)
+        params = {**params, "strategy": "ema-trend-atr-stop", "version": 1}
         markers = client.get(
             f"/api/research/spot/{INSTRUMENT}/strategy-markers",
             params={**params, "account_size": "1000", "risk_pct": "1"},
@@ -3058,3 +3086,80 @@ def test_strategy_markers_select_only_registered_strategies() -> None:
     assert payload["status"] == "UNAVAILABLE"
     assert payload["reason_code"] == "TIMEFRAME_NOT_PRE_REGISTERED"
     assert payload["markers"] == []
+
+
+class _FakeVerdicts:
+    """Synthetic stand-in for the E2f2 verdict store (labelled synthetic)."""
+
+    def __init__(self, records: list[StudyVerdictRecord]):
+        self.records = records
+        self.asked: list[str] = []
+
+    async def latest_verdict(self, strategy_sha256: str) -> StudyVerdictRecord | None:
+        self.asked.append(strategy_sha256)
+        matching = [
+            item for item in self.records if item.strategy_sha256 == strategy_sha256
+        ]
+        return max(matching, key=lambda item: item.recorded_at, default=None)
+
+
+def _synthetic_verdict(strategy: TrendDailyRegime) -> StudyVerdictRecord:
+    return StudyVerdictRecord(
+        report_sha256="a" * 64,
+        report_created_at=NOW,
+        strategy_id=strategy.strategy_id,
+        strategy_version=str(strategy.version),
+        strategy_sha256=strategy.content_sha256,
+        protocol_id="spot-walk-forward-prospective",
+        protocol_version="2",
+        protocol_sha256="b" * 64,
+        verdict_status="FAIL",
+        verdict_reasons=("SYNTHETIC: expectancy lower bound below zero",),
+        development_max_drawdown=Decimal("0.25"),
+        datasets=(StudyDataset("BTCUSDT", "1d", "c" * 64),),
+        recorded_at=NOW,
+    )
+
+
+def test_strategy_markers_require_a_strategy_and_carry_its_recorded_verdict() -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+    research.provider_factory = lambda settings: WaveProvider(settings, calls)
+    params: dict[str, str | int] = {"timeframe": "1m", "limit": 400}
+    path = f"/api/research/spot/{INSTRUMENT}/strategy-markers"
+    daily = TrendDailyRegime()
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=400),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        missing = client.get(path, params=params)
+        no_version = client.get(
+            path, params={**params, "strategy": "ema-trend-atr-stop"}
+        )
+        no_store = client.get(
+            path, params={**params, "strategy": "ema-trend-atr-stop", "version": 1}
+        )
+        store = _FakeVerdicts([_synthetic_verdict(daily)])
+        client.app.state.forward_service = store
+        unrecorded = client.get(
+            path, params={**params, "strategy": "ema-trend-atr-stop", "version": 1}
+        )
+        recorded = client.get(
+            path, params={**params, "strategy": "trend-daily-regime", "version": 1}
+        )
+
+    for response in (missing, no_version):
+        assert response.status_code == 422
+        assert response.json()["code"] == "STRATEGY_REQUIRED"
+    assert no_store.status_code == 200, no_store.text
+    assert no_store.json()["study_verdict"]["status"] == "UNAVAILABLE"
+    assert unrecorded.status_code == 200, unrecorded.text
+    assert unrecorded.json()["study_verdict"]["status"] == "NO_RESULT_RECORDED"
+    assert recorded.status_code == 200, recorded.text
+    verdict = recorded.json()["study_verdict"]
+    assert verdict["status"] == "FAIL"
+    assert verdict["reasons"] == ["SYNTHETIC: expectancy lower bound below zero"]
+    assert verdict["strategy_sha256"] == daily.content_sha256
+    assert verdict["protocol_id"] == "spot-walk-forward-prospective"
+    assert store.asked == [EmaTrendAtrStop().content_sha256, daily.content_sha256]

@@ -84,6 +84,9 @@ READ_ID = "00000000-0000-4000-8000-000000000001"
         "/api/research/owner-outcomes",
         f"/api/research/owner-outcomes/{READ_ID}",
         f"/api/research/owner-outcomes/requests/{READ_ID}",
+        "/api/research/forward/verdicts",
+        "/api/research/forward/trend-daily-regime",
+        "/api/research/forward/range-reversion-4h",
     ],
 )
 def test_research_record_reads_pass_without_origin(docker_environment, path):
@@ -109,7 +112,12 @@ def test_research_record_reads_pass_without_origin(docker_environment, path):
 
 
 @pytest.mark.parametrize(
-    "path", ["/api/research/decision-journal", "/api/research/owner-outcomes"]
+    "path",
+    [
+        "/api/research/decision-journal",
+        "/api/research/owner-outcomes",
+        "/api/research/forward/verdicts",
+    ],
 )
 def test_record_writes_without_origin_stay_rejected(docker_environment, path):
     headers = {PROXY_HEADER: docker_environment["LOCAL_PROXY_SECRET"]}

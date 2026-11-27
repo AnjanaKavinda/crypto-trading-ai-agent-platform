@@ -138,7 +138,8 @@ The provider `MarketDataRequest` uses `BTC-USDT-SPOT` or `ETH-USDT-SPOT`,
 `BINANCE-SPOT`, and `OHLCV` or `TRADE`. Its timeframe comes from
 `BinanceSpotSettings` (default `1m`), because the existing provider request
 does not carry a timeframe. A REST call is limited to ten pages of at most
-1000 rows; a single historical window is at most 90 days, and the requested
+1000 rows; a single historical window is at most 90 days (1d: at most one day
+per requested record, so 501 daily candles fit), and the requested
 range must fit its record budget. Recent `/api/v3/trades` has no historical
 cursor, so time-ranged raw trades use the separate checksummed daily archive
 reader. Archive data is available only after the daily publication. Archive
@@ -591,10 +592,11 @@ finalized OHLCV, `open`/`high`/`low`/`close`/`volume`, zero missing intervals fo
 volume bounds `[0, 1e18]`. Independent comparison is explicitly
 `NOT_ASSESSED_SINGLE_SOURCE`; there is no arbitrary environment or request
 override. Refresh requests supply timeframe, a 2–501 candle bound, and an aligned
-half-open coverage window that must not extend into the future or exceed the
-provider's 90-day OHLCV capability. The effective refresh limit is
-`min(501, floor(90 days / timeframe interval))`: 90 daily candles and 501
-four-hour candles are allowed; reads remain independently bounded at 501.
+half-open coverage window that must not extend into the future and, below 1d,
+must not exceed the provider's 90-day OHLCV window. Daily refreshes are bounded
+by candle count only, so the effective refresh limit is 501 for 1d and
+`min(501, floor(90 days / timeframe interval))` otherwise (501 four-hour
+candles); reads remain independently bounded at 501.
 The service rejects over-window requests before provider access. The exact
 resolved policy and hash are stored with the matching C-002 snapshot and C-003
 report.

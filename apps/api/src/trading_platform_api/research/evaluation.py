@@ -28,6 +28,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from hashlib import sha256
+from typing import Protocol
 
 from trading_platform_api.research.backtest import SegmentResult, Trade
 
@@ -182,8 +183,17 @@ def portfolio_curve(curves: Sequence[Sequence[Decimal]]) -> tuple[Decimal, ...]:
     return tuple(sum(values, Decimal(0)) / count for values in zip(*curves))
 
 
+class BootstrapSettings(Protocol):
+    @property
+    def bootstrap_seed(self) -> int: ...
+    @property
+    def bootstrap_resamples(self) -> int: ...
+    @property
+    def bootstrap_lower_quantile(self) -> Decimal: ...
+
+
 def bootstrap_lower_bound(
-    returns: Sequence[Decimal], protocol: EvaluationProtocol | WalkForwardProtocol
+    returns: Sequence[Decimal], protocol: BootstrapSettings
 ) -> Decimal | None:
     if len(returns) < 2:
         return None

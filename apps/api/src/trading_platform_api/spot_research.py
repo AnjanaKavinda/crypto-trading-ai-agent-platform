@@ -1314,7 +1314,12 @@ class SpotResearchService:
             slots < 2
             or slots > body.limit
             or body.coverage_end > now
-            or body.coverage_end - body.coverage_start > timedelta(days=90)
+            or (
+                # Daily candles are bounded by candle count (``limit``) only, so
+                # one refresh can hold enough history for SMA200 and EMA500.
+                body.timeframe != "1d"
+                and body.coverage_end - body.coverage_start > timedelta(days=90)
+            )
             or body.limit > MAX_REFRESH_CANDLES
         ):
             raise SpotResearchError(
@@ -1991,9 +1996,17 @@ def create_research_router() -> APIRouter:
         as_of: datetime | None = None,
         account_size: Decimal | None = Query(default=None, gt=0),
         risk_pct: Decimal | None = Query(default=None, gt=0, le=100),
-        strategy: str = Query(default="ema-trend-atr-stop", max_length=64),
-        version: int = Query(default=1, ge=1),
+        strategy: str | None = Query(default=None, max_length=64),
+        version: int | None = Query(default=None, ge=1),
     ) -> dict[str, Any]:
+        if strategy is None or version is None:
+            raise SpotResearchError(
+                status=422,
+                code="STRATEGY_REQUIRED",
+                title="Strategy markers unavailable",
+                detail="Name the strategy and version (strategy=...&version=...); "
+                "markers never fall back to a default strategy.",
+            )
         try:
             registered = registered_marker_strategy(strategy, version)
         except ValueError as exc:
@@ -2011,14 +2024,64 @@ def create_research_router() -> APIRouter:
             limit=limit,
             correlation_id=request.state.correlation_id,
         )
-        return strategy_markers_response(
+        response = strategy_markers_response(
             served,
             account_size=account_size,
             risk_pct=risk_pct,
             registered=registered,
         )
+        response["study_verdict"] = await recorded_study_verdict(
+            getattr(request.app.state, "forward_service", None), registered[0]
+        )
+        return response
 
     return router
+
+
+async def recorded_study_verdict(
+    forward: Any, strategy: MarkerStrategy
+) -> dict[str, Any]:
+    """The latest imported study verdict for this exact strategy version.
+
+    Matched by the strategy's content digest, so a verdict never carries over
+    to another version. ``NO_RESULT_RECORDED`` when no report was imported;
+    ``UNAVAILABLE`` (with reason) when the verdict store cannot be read.
+    """
+    if forward is None:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "The study verdict store is not configured for this API.",
+        }
+    try:
+        record = await forward.latest_verdict(strategy.content_sha256)
+    except Exception:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "The study verdict store could not be read.",
+        }
+    if (
+        record is None
+        or record.strategy_id != strategy.strategy_id
+        or record.strategy_version != str(strategy.version)
+    ):
+        return {
+            "status": "NO_RESULT_RECORDED",
+            "reason": "No study report has been imported for this exact "
+            "strategy version.",
+        }
+    return {
+        "status": record.verdict_status,
+        "reasons": list(record.verdict_reasons),
+        "verdict_id": str(record.verdict_id),
+        "strategy_sha256": record.strategy_sha256,
+        "protocol_id": record.protocol_id,
+        "protocol_version": record.protocol_version,
+        "report_sha256": record.report_sha256,
+        "report_created_at": record.report_created_at.isoformat().replace(
+            "+00:00", "Z"
+        ),
+        "recorded_at": record.recorded_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 def strategy_markers_response(
@@ -2026,12 +2089,10 @@ def strategy_markers_response(
     *,
     account_size: Decimal | None,
     risk_pct: Decimal | None,
-    registered: tuple[MarkerStrategy, str | None] | None = None,
+    registered: tuple[MarkerStrategy, str | None],
 ) -> dict[str, Any]:
     """Replay a registered strategy over one served, verified snapshot."""
-    strategy, required_timeframe = registered or registered_marker_strategy(
-        "ema-trend-atr-stop", 1
-    )
+    strategy, required_timeframe = registered
     candles = tuple(
         ResearchCandle(
             open_time=datetime.fromisoformat(item["open_time"].replace("Z", "+00:00")),

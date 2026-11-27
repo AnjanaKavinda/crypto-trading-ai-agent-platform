@@ -1211,3 +1211,27 @@ API (local research mode only): `/api/research/owner-outcomes` — POST saves
 (default 20/max 100), GET `/requests/{request_id}` recovers an uncertain save,
 GET `/{outcome_id}?schema_version=1&content_sha256=...` reads an exact record.
 The UI for this is queue item U8.
+
+## C-109 — Owner-imported protocol v2 study verdict (E2f2, #558)
+
+C-109 schema 1 `StudyVerdictRecord` stores the historical-stage verdict of one
+pre-registered protocol v2 study (`spot-walk-forward-prospective` v2) that the
+owner ran on his machine and imported (owner decision on #516: import the
+report). It keeps the SHA-256 of the exact report bytes, the report's creation
+time, strategy id/version/digest, protocol id/version/digest, the verdict
+(`HISTORICAL_PASS` / `FAIL` / `INCONCLUSIVE`) and reasons, the development-era
+portfolio max drawdown, and each dataset's symbol, timeframe and digest.
+
+The import fails closed unless the report is a HISTORICAL-stage walk-forward
+study of a registered candidate (`trend-daily-regime` v1 on 1d,
+`range-reversion-4h` v1 on 4h) whose strategy and protocol digests equal the
+current frozen definitions. Identity is UUIDv5 of the report digest, so an
+identical re-import returns the stored record. Records are append-only in the
+existing lineage store (migration 0015 only extends its contract allowlist).
+Qualification, approval and execution flags are fixed false.
+
+API (local research mode only): `/api/research/forward` — POST `/verdicts`
+imports a report (allowed Origin, JSON ≤ 4 MiB), GET `/verdicts` lists them, GET
+`/{strategy_id}?version=1` returns the SIMULATED forward record and stage
+status derived from the latest matching verdict and the persisted snapshots.
+CLI: `python -m trading_platform_api.research record-verdict <report.json>`.

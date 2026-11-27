@@ -82,6 +82,7 @@ from trading_platform_api.orchestration.spot_request_handoff import (
 from trading_platform_api.persistence.session import transactional_session
 
 MAX_READ_CANDLES = 501
+MAX_SNAPSHOT_WINDOWS = 5000
 APPROVED_POLICY_VERSION = "personal-binance-spot-ohlcv-v1"
 SUPPORTED_INSTRUMENTS = frozenset(
     {
@@ -865,6 +866,41 @@ class SqlAlchemySpotResearchStore:
                 raise SpotResearchStoreError(
                     "Producer request was not in a fail-able reserved state."
                 )
+
+    async def snapshot_windows(
+        self, *, instrument_id: str, timeframe: str, since: datetime
+    ) -> tuple[tuple[datetime, int], ...]:
+        """(as_of, candle_count) of accepted snapshots with as_of >= ``since``.
+
+        Newest first, bounded; used to stitch a long forward history from
+        several persisted snapshots (each holds at most 501 candles).
+        """
+        if (
+            instrument_id not in SUPPORTED_INSTRUMENTS
+            or timeframe not in SUPPORTED_TIMEFRAMES
+            or since.tzinfo is None
+            or since.utcoffset() is None
+        ):
+            raise SpotResearchStoreError("Invalid bounded Spot research selector.")
+        async with transactional_session(self._session_factory) as session:
+            if not isinstance(session, AsyncSession):
+                raise SpotResearchStoreError("A PostgreSQL async session is required.")
+            rows = (
+                await session.execute(
+                    select(
+                        spot_research_snapshots.c.as_of,
+                        spot_research_snapshots.c.candle_count,
+                    )
+                    .where(
+                        spot_research_snapshots.c.instrument_id == instrument_id,
+                        spot_research_snapshots.c.timeframe == timeframe,
+                        spot_research_snapshots.c.as_of >= since,
+                    )
+                    .order_by(spot_research_snapshots.c.as_of.desc())
+                    .limit(MAX_SNAPSHOT_WINDOWS)
+                )
+            ).all()
+        return tuple((row[0].astimezone(UTC), int(row[1])) for row in rows)
 
     async def read_latest(
         self,

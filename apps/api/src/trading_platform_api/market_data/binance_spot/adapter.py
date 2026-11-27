@@ -73,6 +73,14 @@ _MAX_BODY = 1_048_576
 _LOG = logging.getLogger(__name__)
 
 
+def _window_bound(timeframe: str, maximum_records: int) -> timedelta:
+    """One ranged request spans at most 90 days, except daily candles, which
+    are bounded by candle count (one day per requested record)."""
+    if timeframe == "1d":
+        return timedelta(seconds=_INTERVALS["1d"] * maximum_records)
+    return timedelta(days=90)
+
+
 @dataclass(frozen=True, slots=True)
 class BinanceSpotSettings:
     """A deliberate local opt-in; evidence references contain no credentials."""
@@ -286,10 +294,12 @@ class BinanceSpotProvider:
                 retryable=False,
             )
         if request.range_start is not None and request.range_end is not None:
-            if request.range_end - request.range_start > timedelta(days=90):
+            if request.range_end - request.range_start > _window_bound(
+                self.settings.timeframe, request.maximum_records
+            ):
                 raise ProviderError(
                     ProviderFailureCode.INVALID_REQUEST,
-                    "Historical window exceeds 90 days.",
+                    "Historical window exceeds its bound.",
                     retryable=False,
                 )
             if request.data_kind is ProviderDataKind.TRADE:
