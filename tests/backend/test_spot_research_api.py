@@ -1794,7 +1794,7 @@ def test_read_rejects_timezone_naive_as_of_without_store_access() -> None:
     assert repository.read_calls == 0
 
 
-def test_read_rejects_oversized_snapshot_without_another_provider_call() -> None:
+def test_read_serves_the_most_recent_window_of_the_same_snapshot() -> None:
     research, calls, repository = service(quality_policy=policy_template())
     with client_for(research) as client:
         refreshed = client.post(
@@ -1804,17 +1804,46 @@ def test_read_rejects_oversized_snapshot_without_another_provider_call() -> None
         assert refreshed.status_code == 200
         assert len(refreshed.json()["candles"]) == 501
         calls_after_refresh = list(calls)
-
-        rejected = client.get(
+        windows = {
+            limit: client.get(
+                f"/api/research/spot/{INSTRUMENT}/candles",
+                params={"timeframe": "1m", "limit": limit},
+            )
+            for limit in (250, 500, 501)
+        }
+        above = client.get(
             f"/api/research/spot/{INSTRUMENT}/candles",
-            params={"timeframe": "1m", "limit": 250},
+            params={"timeframe": "1m", "limit": 502},
         )
 
-    assert rejected.status_code == 422
-    assert rejected.headers["content-type"].startswith("application/problem+json")
-    assert rejected.json()["code"] == "SPOT_CANDLE_LIMIT_EXCEEDED"
-    assert "exceeds the requested candle limit" in rejected.json()["detail"]
-    assert repository.read_calls == 1
+    full = windows[501].json()
+    assert windows[501].status_code == 200, windows[501].text
+    assert full["served_window"]["served_candle_count"] == 501
+    for limit in (250, 500):
+        response = windows[limit]
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["snapshot_id"] == full["snapshot_id"]
+        assert payload["data_quality"]["report_id"] == full["data_quality"]["report_id"]
+        assert payload["lineage"] == full["lineage"]
+        assert payload["candles"] == full["candles"][-limit:]
+        assert payload["served_window"] == {
+            "requested_limit": limit,
+            "stored_candle_count": 501,
+            "served_candle_count": limit,
+            "first_open_time": full["candles"][-limit]["open_time"],
+            "last_open_time": full["candles"][-1]["open_time"],
+            "indicator_scope": "WHOLE_SNAPSHOT_SLICED_TO_WINDOW",
+            "analysis_scope": "WHOLE_SNAPSHOT",
+        }
+        for name, envelope in payload["indicators"].items():
+            expected = full["indicators"][name]
+            assert envelope["status"] == expected["status"]
+            if expected["result"] is not None:
+                points = expected["result"]["points"]
+                assert len(points) == 501
+                assert envelope["result"]["points"] == points[-limit:]
+    assert above.status_code == 422
     assert repository.persist_calls == 1
     assert calls == calls_after_refresh == [1]
 
@@ -2192,7 +2221,7 @@ def test_store_latest_oversized_never_falls_back(persisted_service, timeframe):
         persist_fixture(repository, timeframe=timeframe, limit=501, now=now)
     )
     with client_for(research) as client:
-        rejected = client.get(
+        window = client.get(
             f"/api/research/spot/{INSTRUMENT}/candles",
             params={"timeframe": timeframe, "limit": 50},
         )
@@ -2208,8 +2237,12 @@ def test_store_latest_oversized_never_falls_back(persisted_service, timeframe):
             f"/api/research/spot/{INSTRUMENT}/candles",
             params={"timeframe": timeframe, "limit": 501},
         )
-    assert rejected.status_code == 422
-    assert rejected.json()["code"] == "SPOT_CANDLE_LIMIT_EXCEEDED"
+    # A smaller limit serves the latest snapshot's most recent candles; it
+    # never falls back to the older 50-candle snapshot.
+    assert window.status_code == 200, window.text
+    assert window.json()["snapshot_id"] == str(latest.snapshots[0].snapshot_id)
+    assert len(window.json()["candles"]) == 50
+    assert window.json()["candles"] == full.json()["candles"][-50:]
     assert historical.status_code == 200
     assert historical.json()["snapshot_id"] == str(older.snapshots[0].snapshot_id)
     assert full.status_code == 200
@@ -3086,6 +3119,38 @@ def test_strategy_markers_select_only_registered_strategies() -> None:
     assert payload["status"] == "UNAVAILABLE"
     assert payload["reason_code"] == "TIMEFRAME_NOT_PRE_REGISTERED"
     assert payload["markers"] == []
+
+
+def test_strategy_markers_at_limit_500_on_a_501_candle_snapshot() -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+    research.provider_factory = lambda settings: WaveProvider(settings, calls)
+    path = f"/api/research/spot/{INSTRUMENT}/strategy-markers"
+    params: dict[str, str | int] = {
+        "timeframe": "1m",
+        "strategy": "ema-trend-atr-stop",
+        "version": 1,
+    }
+    with client_for(research) as client:
+        refreshed = client.post(
+            f"/api/research/spot/{INSTRUMENT}/refresh",
+            json=refresh_body(limit=501),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        full = client.get(path, params={**params, "limit": 501})
+        window = client.get(path, params={**params, "limit": 500})
+        short = client.get(path, params={**params, "limit": 100})
+
+    for response in (full, window, short):
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "AVAILABLE"
+    assert full.json()["markers"], "synthetic wave must produce markers"
+    assert window.json()["snapshot_id"] == full.json()["snapshot_id"]
+    assert window.json()["served_window"]["served_candle_count"] == 500
+    start = short.json()["served_window"]["first_open_time"]
+    assert short.json()["markers"] == [
+        item for item in full.json()["markers"] if item["time"]["value"] >= start
+    ]
+    assert len(short.json()["markers"]) < len(full.json()["markers"])
 
 
 class _FakeVerdicts:
