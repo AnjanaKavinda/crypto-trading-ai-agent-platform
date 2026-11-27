@@ -5,8 +5,10 @@ The formulas match ``analysis.moving_averages`` (EMA: SMA seed, alpha
 range starts at candle two, first value at index ``period``),
 ``analysis.momentum.calculate_rsi`` (Wilder RSI, arithmetic-mean seed) and
 ``analysis.volatility.calculate_bollinger_bands`` (per-window mean, population
-deviation, 2 sigma). ADX has no registered platform method yet; ``adx_wilder``
-is the standard Wilder definition, documented below. They are
+deviation, 2 sigma) and ``analysis.volatility.calculate_realized_volatility``
+(sample stdev of log returns, annualised). ADX and the prior-window Donchian
+channels have no registered platform method yet; ``adx_wilder``
+is the standard Wilder definition; both are documented below. They are
 restated here only because those functions are bound to bounded market
 snapshots (at most 10,000 candles); a long backtest needs the same arithmetic
 over a full history. Warm-up positions are ``None``.
@@ -200,4 +202,61 @@ def adx_wilder(candles: Sequence[Candle], period: int = 14) -> list[Decimal | No
         for k in range(period, len(dx)):
             adx = (adx * (size - 1) + dx[k]) / size
             out[period + k] = adx
+    return out
+
+
+def prior_highest_high(candles: Sequence[Candle], period: int) -> list[Decimal | None]:
+    """Highest high of the ``period`` candles before ``t`` (``t`` excluded).
+
+    Donchian upper channel as used by tournament candidate C3. First value at
+    index ``period``.
+    """
+    if period < 1:
+        raise ValueError("period must be positive.")
+    return [
+        None
+        if index < period
+        else max(item.high for item in candles[index - period : index])
+        for index in range(len(candles))
+    ]
+
+
+def prior_lowest_low(candles: Sequence[Candle], period: int) -> list[Decimal | None]:
+    """Lowest low of the ``period`` candles before ``t`` (``t`` excluded)."""
+    if period < 1:
+        raise ValueError("period must be positive.")
+    return [
+        None
+        if index < period
+        else min(item.low for item in candles[index - period : index])
+        for index in range(len(candles))
+    ]
+
+
+def realised_volatility(
+    values: Sequence[Decimal], period: int = 20, periods_per_year: int = 365
+) -> list[Decimal | None]:
+    """Annualised sample stdev of the last ``period`` close-to-close log returns.
+
+    Same arithmetic as ``analysis.volatility.calculate_realized_volatility``:
+    ``ln(c_t) - ln(c_{t-1})``, divisor ``period - 1``, times
+    ``sqrt(periods_per_year)``. First value at index ``period``.
+    """
+    if period < 2 or periods_per_year < 1:
+        raise ValueError("period must be at least 2 and periods_per_year positive.")
+    out: list[Decimal | None] = [None] * len(values)
+    with localcontext() as context:
+        context.prec = 34
+        returns = [
+            values[index].ln() - values[index - 1].ln()
+            for index in range(1, len(values))
+        ]
+        annualiser = Decimal(periods_per_year).sqrt()
+        for end in range(period, len(returns) + 1):
+            window = returns[end - period : end]
+            mean = sum(window, Decimal(0)) / Decimal(period)
+            variance = sum(
+                ((value - mean) ** 2 for value in window), Decimal(0)
+            ) / Decimal(period - 1)
+            out[end] = variance.sqrt() * annualiser
     return out
