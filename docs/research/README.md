@@ -229,6 +229,100 @@ These are research-only inputs; no Futures symbol is added to the UI approved
 list. No keys or exchange account are used. #570's carry simulation starts only
 after #569 is merged; the fetch does not run or evaluate that study.
 
+## Futures carry study (E11b, simulation only)
+
+`funding-carry-8h` v1 / `futures-carry-holdout` v1 implements the
+[binding preregistration](https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/issues/516#issuecomment-7219026152).
+CLI protocol name: `futures-carry-v1`. No tuning or extra coins are accepted.
+The owner approved adding public 1h mark prices, explicit starting capital,
+and a sourced, effective-dated margin-tier file for liquidation modelling.
+
+Owner commands (public market data only; no API keys):
+
+```powershell
+python -m trading_platform_api.research fetch --market um-futures --include-mark --timeframe 1h --start 2021-09-30 --symbols BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT --data research-data/futures
+$capital = Read-Host "Starting USDT capital per set"
+python -m trading_platform_api.research carry --protocol futures-carry-v1 --capital $capital --margin-tiers research-data/futures/margin-tiers.json --data research-data/futures --out research-output/carry
+```
+
+`--include-mark` adds `um-futures/<SYMBOL>_mark_1h.csv` using the public
+`/fapi/v1/markPriceKlines` endpoint, the same validation, LF bytes and digest
+as other Futures candles. Without the flag the existing E11a fetch is unchanged.
+Real historical data and the full study are run by the owner, not agent tests.
+
+The margin file is owner-supplied JSON. It must contain `source` (a public
+HTTPS reference without credentials), `retrieved_at` (UTC ISO timestamp), and
+`tiers` (a list). Each tier has these fields:
+
+| Field | Meaning |
+|---|---|
+| `symbol` | One of the five preregistered symbols |
+| `effective_from`, `effective_until` | UTC ISO timestamps, half-open historical validity |
+| `notional_floor`, `notional_cap` | USDT bracket, inclusive floor / exclusive cap |
+| `maintenance_rate`, `maintenance_amount` | Maintenance = notional × rate − amount |
+
+Financial fields are decimal **strings**. Supply actual sourced historical
+values; no example numbers here are implied to be Binance tiers. Gaps,
+overlapping brackets, invalid values or missing date/notional coverage make
+the relevant set `UNAVAILABLE`. A current tier table is not automatically a
+historical table. The runner records the file SHA256, source and retrieval
+time; it does not authenticate the owner's historical source claims.
+If the file or mark prices are missing, it writes an `UNAVAILABLE` verdict.
+
+Rules and accounting interpretations (recorded in the strategy digest):
+
+- At 00/08/16 UTC, funding is credited/debited only to an existing short using
+  settled rate × short units × settlement mark open. The last three settlements
+  **within the set** form the mean: enter at ≥ 0.0001, exit below zero. Until
+  three exist, remain in cash. Orders are not created: both simulated fills
+  use the next 1h open, shifted adversely by 0.05% per leg/side.
+- Capital is split equally across each set's symbols, never rebalanced between
+  symbols. Each episode reserves entry fees, then divides deployable capital
+  equally into Spot notional and 1× isolated perpetual margin. Both executed
+  entry notionals are equal. Spot costs 0.10%, perpetual 0.05% per traded side.
+  Slippage is already in fill prices and is reported, never deducted twice.
+- The basis stop uses the adverse change in quantity-weighted perpetual-minus-
+  Spot value from entry raw opens, strictly **greater than** 2% of entry leg
+  notional. Exit both at the next hourly open. Naive carry ignores this stop
+  and the funding signal, and holds from the first open to the final close.
+- Liquidation compares isolated balance to maintenance at each bar's **mark
+  high**, including the entry bar. Liquidation takes precedence over a
+  close-based stop on that bar. The short's entire margin balance, including
+  funding left there, is lost; the Spot leg closes next open (last close at
+  the boundary). The perpetual has no invented exit fill or extra taker fee
+  after its margin is lost. Naive carry does not restart after liquidation.
+- At each set boundary, open positions close at the last hourly close with
+  costs. These are completed episodes with reason `END_OF_SET`. Drawdown uses
+  hourly close equity marked using mark close; hourly OHLC cannot establish
+  intrabar drawdown or exact intrabar liquidation ordering.
+- Four windows divide development hours equally; the last takes any remainder.
+  Positions continue across windows. Window positivity is the change in pooled
+  equity, not a separate restart. Return/DD comparison uses cross-products
+  when drawdown is zero (no invented epsilon). Bootstrap uses 5,000 resamples,
+  seed 20261127 and the sorted index 250 for the 5% lower bound of episode means.
+
+Fixed sets: development BTC/ETH from 2021-09-30 through 2024-06-30 inclusive;
+holdout BTC/ETH from 2024-07-01 through 2026-11-25 inclusive; unseen BNB/SOL/XRP
+over development dates. Missing/bad series makes its **whole set** unavailable;
+no dates move and no symbol is dropped. Cash, naive carry and buy-and-hold
+Spot are reported for every available set. Development needs ≥20 episodes
+and ≥365 pooled position-days; holdout needs ≥10 episodes. Otherwise the
+verdict is `INCONCLUSIVE`. With sufficient data/sample, PASS requires every
+preregistered net, bootstrap, windows, return/DD and 10% drawdown criterion;
+any failed criterion gives FAIL. Required unavailable sets give `UNAVAILABLE`.
+
+The output is `futures-carry-v1.json` plus `.md`. The JSON is first written
+and flushed with development results and dataset/strategy/protocol digests;
+only then may holdout evaluation begin. An exclusive
+`research-data/futures/.futures-carry-v1-holdout.claim.json` prevents repeated
+holdout evaluation even with a different output folder. Final JSON retains
+the development result/digest and adds holdout, unseen, every baseline,
+per-episode records, windows and report digest. Existing reports are never
+overwritten by a new run. If development is unavailable, the holdout is not
+accessed and no claim is created. A failed/interrupted claimed holdout stays
+consumed; there is no automatic retry or claim deletion. Local owner-controlled
+files are not a tamper-proof external ledger. No PASS grants trading authority.
+
 ## Spot data integrity
 
 A candle file is rejected if it has a gap, a misaligned or unclosed candle,

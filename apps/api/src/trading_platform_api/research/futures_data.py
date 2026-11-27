@@ -103,6 +103,7 @@ def format_dataset(
         "funding": "fundingRate",
         "premium": "premiumIndexKlines",
         "klines": "klines",
+        "mark": "markPriceKlines",
     }[dataset]
     document = (
         f"# source=binance-usdm-rest-{source} venue=BINANCE-USDM symbol={symbol} "
@@ -126,6 +127,7 @@ def fetch_futures_data(
     now: datetime | None = None,
     client: httpx.Client | None = None,
     pause_seconds: float = 0.7,
+    include_mark: bool = False,
 ) -> dict[str, str]:
     """Validate Spot + all three Futures datasets before the caller writes any file.
 
@@ -149,11 +151,12 @@ def fetch_futures_data(
     http = client or httpx.Client(timeout=20.0)
     documents: dict[str, str] = {}
     try:
-        for dataset, endpoint in (
+        endpoints = (
             ("klines", "klines"),
             ("premium", "premiumIndexKlines"),
             ("funding", "fundingRate"),
-        ):
+        ) + ((("mark", "markPriceKlines"),) if include_mark else ())
+        for dataset, endpoint in endpoints:
             cursor = start_ms
             rows: list[list[str]] = []
             step = FUNDING_MS if dataset == "funding" else HOUR_MS
