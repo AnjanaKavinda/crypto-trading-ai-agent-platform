@@ -2316,6 +2316,14 @@ export async function mountCharts({ desk }) {
     }).observe($("#chart-container"));
   }
 
+  // Provenance links open the drawer section they point to.
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest?.("a[href=\"#snapshot-provenance\"]")) return;
+    setDrawer(true);
+    const section = $("#snapshot-provenance");
+    section.open = true;
+    section.querySelector(".nested-details").open = true;
+  });
   renderTimeframePills((value) => desk.select({ timeframe: value }));
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });

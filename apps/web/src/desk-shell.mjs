@@ -91,7 +91,11 @@ function init() {
     const current = DESK_TABS.find((tab) => $(`#tab-${tab.id}`).getAttribute("aria-selected") === "true");
     selectTab(adjacentTab(current?.id, event.key), { focus: true });
   });
-  window.addEventListener("hashchange", () => selectTab(tabFromHash(location.hash), { updateHash: false }));
+  // Only tab hashes switch tabs; other in-page anchors (e.g. #snapshot-provenance) do not.
+  window.addEventListener("hashchange", () => {
+    const id = location.hash.replace(/^#/, "");
+    if (DESK_TABS.some((tab) => tab.id === id)) selectTab(id, { updateHash: false });
+  });
   desk.onChange(() => { void showFreshness(desk); });
   selectTab(initialTab, { updateHash: false });
   void showFreshness(desk);
