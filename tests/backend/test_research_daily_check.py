@@ -25,12 +25,6 @@ def synthetic_snapshot(timeframe, *, quality="VALID", overrides=None):
         name: {"status": "AVAILABLE", "reason_code": None, "result": {}}
         for name in REQUIRED_INDICATORS
     }
-    if timeframe == "1d":
-        indicators["ema-500"] = {
-            "status": "WARMUP",
-            "reason_code": "INSUFFICIENT_WARMUP",
-            "result": None,
-        }
     indicators.update(overrides or {})
     return {
         "snapshot_id": "synthetic-snapshot",
@@ -127,7 +121,7 @@ def test_all_ready_refreshes_every_pair_and_only_reads_otherwise():
     one_day = next(
         item for item in results if item.name == "BTC-USDT-SPOT 1d indicators"
     )
-    assert "ema-500 WARMUP" in one_day.detail and "not required on 1d" in one_day.detail
+    assert one_day.ready and one_day.detail == "all required available"
 
 
 def test_refresh_window_is_aligned_to_closed_candles_and_bounded():
@@ -138,10 +132,15 @@ def test_refresh_window_is_aligned_to_closed_candles_and_bounded():
         "coverage_end": "2026-11-26T16:00:00Z",
         "limit": 501,
     }
+    # 1d is bounded by candle count: 501 daily candles (enough for SMA200 and
+    # EMA500), not the 90-day window used below 1d.
     one_day = refresh_body("1d", NOW)
-    assert one_day["coverage_end"] == "2026-11-26T00:00:00Z"
-    assert one_day["coverage_start"] == "2026-08-28T00:00:00Z"
-    assert one_day["limit"] == 90
+    assert one_day == {
+        "timeframe": "1d",
+        "coverage_start": "2025-07-13T00:00:00Z",
+        "coverage_end": "2026-11-26T00:00:00Z",
+        "limit": 501,
+    }
 
 
 @pytest.mark.parametrize(
@@ -203,7 +202,8 @@ def test_stale_quality_and_missing_indicator_are_problems():
     assert problems["ETH-USDT-SPOT 4h indicators"] == "rsi-14 UNAVAILABLE (X)"
 
 
-def test_ema_500_is_required_on_4h():
+def test_ema_500_is_required_on_4h_and_1d():
+    # A 501-candle refresh warms up EMA 500 on both timeframes (E2e2).
     cold = synthetic_snapshot(
         "4h",
         overrides={
@@ -216,7 +216,7 @@ def test_ema_500_is_required_on_4h():
     )
     results = run(FakeTransport({"XRP-USDT-SPOT/refresh": (200, cold)}))
     problems = [item.name for item in results if not item.ready]
-    assert problems == ["XRP-USDT-SPOT 4h indicators"]
+    assert problems == ["XRP-USDT-SPOT 4h indicators", "XRP-USDT-SPOT 1d indicators"]
 
 
 def test_unreachable_api_is_a_problem_not_a_crash():
@@ -261,13 +261,17 @@ def test_markdown_escapes_pipes():
 
 
 def test_backfill_windows_are_fixed_and_bounded():
-    # Strategy A (1d) warms up from 2026-05-10; the current 1d refresh covers
-    # the last 90 candles from 2026-08-28.
+    # Strategy A (1d) warms up from 2026-05-10, inside the current 501-candle
+    # 1d refresh (from 2025-07-13), so nothing needs backfilling.
+    assert (
+        daily_check.backfill_windows("1d", datetime(2026, 5, 10, tzinfo=UTC), NOW) == []
+    )
+    # An earlier start is backfilled in fixed 501-candle windows.
     assert daily_check.backfill_windows(
-        "1d", datetime(2026, 5, 10, tzinfo=UTC), NOW
+        "1d", datetime(2024, 1, 1, tzinfo=UTC), NOW
     ) == [
-        (datetime(2026, 5, 10, tzinfo=UTC), datetime(2026, 8, 8, tzinfo=UTC)),
-        (datetime(2026, 8, 8, tzinfo=UTC), datetime(2026, 8, 28, tzinfo=UTC)),
+        (datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 5, 16, tzinfo=UTC)),
+        (datetime(2025, 5, 16, tzinfo=UTC), datetime(2025, 7, 13, tzinfo=UTC)),
     ]
     # Strategy B (4h) is still inside the current 501-candle refresh.
     start_b = datetime(2026, 11, 21, 12, tzinfo=UTC)
@@ -279,7 +283,19 @@ def test_backfill_windows_are_fixed_and_bounded():
     assert all(a == b for (_, a), (b, _) in zip(windows, windows[1:]))
 
 
-def test_missing_history_is_backfilled_and_forward_stage_reported():
+def test_missing_history_is_backfilled_and_forward_stage_reported(monkeypatch):
+    # SYNTHETIC: pretend Strategy A warms up from 2024-01-01 so 1d history
+    # falls outside the current 501-candle refresh.
+    real_start = daily_check.history_start
+    monkeypatch.setattr(
+        daily_check,
+        "history_start",
+        lambda strategy: (
+            datetime(2024, 1, 1, tzinfo=UTC)
+            if strategy.strategy_id == "trend-daily-regime"
+            else real_start(strategy)
+        ),
+    )
     transport = FakeTransport(history_covered=False)
     results = run(transport)
     backfills = [
@@ -291,8 +307,8 @@ def test_missing_history_is_backfilled_and_forward_stage_reported():
     assert {
         (b["coverage_start"], b["coverage_end"], b["limit"]) for b in backfills
     } == {
-        ("2026-05-10T00:00:00Z", "2026-08-08T00:00:00Z", 90),
-        ("2026-08-08T00:00:00Z", "2026-08-28T00:00:00Z", 20),
+        ("2024-01-01T00:00:00Z", "2025-05-16T00:00:00Z", 501),
+        ("2025-05-16T00:00:00Z", "2025-07-13T00:00:00Z", 58),
     }
     stage = next(i for i in results if i.name == "forward stage trend-daily-regime v1")
     assert stage.ready and stage.detail.startswith("NOT_VALIDATED")

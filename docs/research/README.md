@@ -129,12 +129,12 @@ stage.
 **Forward history (E2f2 part 3).** Every forward replay starts at a fixed
 warm-up candle: the prospective start minus the strategy's warm-up bars
 (A: 2026-05-10 on 1d; B: 2026-11-21 12:00 UTC on 4h), so it is identical each
-time it is recomputed. One snapshot holds at most 501 candles and one refresh at
-most 90 days, so the API stitches the history from several persisted snapshots;
+time it is recomputed. One snapshot holds at most 501 candles (and one refresh
+below 1d at most 90 days), so the API stitches the history from several persisted snapshots;
 overlapping snapshots must agree exactly and any missing candle fails closed
 (`FORWARD_HISTORY_INSUFFICIENT`, naming the uncovered date). The daily check
 refreshes any missing historical window back to the warm-up start in fixed,
-aligned windows (1d: 90 candles, 4h: 480 candles), then reads both forward
+aligned windows (1d: 501 candles, 4h: 480 candles), then reads both forward
 stages and reports them.
 
 ## Calculation verification (E2d)
@@ -186,12 +186,12 @@ With the local stack running (`http://127.0.0.1:5173`):
 # or: powershell -ExecutionPolicy Bypass -File scripts\daily-research-check.ps1
 ```
 
-It explicitly refreshes 4h (501 candles) and 1d (90 candles, the API's 90-day
-refresh bound) for BTC, ETH, BNB, SOL and XRP through the same local web
+It explicitly refreshes 4h (501 candles) and 1d (501 candles; daily refreshes
+are bounded by candle count, not by the 90-day window used below 1d) for BTC, ETH, BNB, SOL and XRP through the same local web
 endpoint and headers the browser uses, then checks that each snapshot's quality
 is `VALID` and `CURRENT`, that EMA 20/50/500, ATR 14, Bollinger 20 and RSI 14
-are `AVAILABLE` (EMA 500 is reported but not required on 1d, because 90 daily
-candles cannot warm it up), and that the decision-journal and strategy-signal
+are `AVAILABLE` on both timeframes (501 candles warm up EMA 500 and give
+Strategy A's SMA200 enough history), and that the decision-journal and strategy-signal
 reads return 200. It writes `research-output/daily-check-<UTC date>.md` with
 READY/PROBLEM per check and exits `1` on any PROBLEM. It only refreshes and
 reads: it never records a decision, journal entry or outcome.

@@ -1847,7 +1847,7 @@ def persisted_service(database_url):
     [
         (timeframe, limit)
         for timeframe, limit in READ_PAIRS
-        if limit * TIMEFRAME_SECONDS[timeframe] <= 90 * 86400
+        if timeframe == "1d" or limit * TIMEFRAME_SECONDS[timeframe] <= 90 * 86400
     ],
 )
 def test_store_backed_refresh_read_roundtrip(persisted_service, timeframe, limit):
@@ -2244,12 +2244,15 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
 @pytest.mark.parametrize(
     ("timeframe", "limit", "expected_status"),
     [
+        # 1d is bounded by candle count only (E2e2): 501 daily candles give
+        # SMA200 and EMA500 enough history in one refresh.
         ("1d", 90, 200),
-        ("1d", 91, 422),
-        ("1d", 100, 422),
-        ("1d", 250, 422),
-        ("1d", 501, 422),
+        ("1d", 91, 200),
+        ("1d", 250, 200),
+        ("1d", 501, 200),
+        ("1d", 502, 422),
         ("4h", 501, 200),
+        ("1h", 501, 200),
     ],
 )
 def test_refresh_respects_provider_window_and_candle_bounds(
@@ -2260,10 +2263,8 @@ def test_refresh_respects_provider_window_and_candle_bounds(
     window = datetime.fromisoformat(body["coverage_end"]) - datetime.fromisoformat(
         body["coverage_start"]
     )
-    if expected_status == 200:
+    if timeframe != "1d":
         assert window <= timedelta(days=90)
-    else:
-        assert window > timedelta(days=90)
 
     with client_for(research) as client:
         response = client.post(
@@ -2278,6 +2279,24 @@ def test_refresh_respects_provider_window_and_candle_bounds(
     else:
         assert response.json()["code"] == "REFRESH_RANGE_INVALID"
         assert calls == []
+
+
+def test_4h_refresh_over_90_days_is_still_rejected() -> None:
+    research, calls, _ = service(quality_policy=policy_template())
+    end = datetime.fromtimestamp((int(NOW.timestamp()) // 14_400) * 14_400, tz=UTC)
+    body = {
+        "timeframe": "4h",
+        "coverage_start": (end - timedelta(days=91)).isoformat(),
+        "coverage_end": end.isoformat(),
+        "limit": 501,
+    }
+
+    with client_for(research) as client:
+        response = client.post(f"/api/research/spot/{INSTRUMENT}/refresh", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "REFRESH_RANGE_INVALID"
+    assert calls == []
 
 
 @pytest.mark.parametrize(
