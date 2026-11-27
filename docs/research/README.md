@@ -219,6 +219,16 @@ Add `account_size` (USDT) and `risk_pct` for a position size:
 leverage). Stale or invalid data, or any indicator mismatch, returns no
 markers. Markers cover one snapshot only and are not a strategy verdict.
 
+**`limit` is a window, not a guess of the stored size (E2w).** Any `limit`
+from 2 to 501 works on any stored snapshot. `/candles` serves the most recent
+`limit` closed candles of the latest snapshot (same `snapshot_id`, quality
+report and lineage); indicators are calculated over the whole snapshot and
+their points sliced to the same window, so EMA500 keeps its warm-up. Markers
+always replay the whole snapshot and return only the markers whose signal
+candle is inside the window. Both responses carry `served_window` (stored
+and served candle counts, first/last open time, scope). Only `limit` above
+501 is rejected (422).
+
 `strategy` and `version` are required (422 `STRATEGY_REQUIRED` otherwise);
 there is no default strategy. Every response carries `study_verdict`: the
 latest study report imported with `research record-verdict` for that exact
@@ -269,4 +279,5 @@ SMA200 at the signal and the previous close); STOP exits show the trailing
 stop in effect and the initial stop; an open position reports `current_stop`
 for the next candle. SMA200 is recomputed from the snapshot's validated
 candles. Any other strategy/version pair is refused with `422
-STRATEGY_NOT_REGISTERED`. Use `limit` ≥ 202 so SMA200 is warmed up and one candle can trade.
+STRATEGY_NOT_REGISTERED`. SMA200 needs a stored 1d snapshot of at least 202
+candles (the daily check stores 501).
