@@ -5,8 +5,9 @@ local web endpoint the browser uses, then checks data quality, the required
 indicators and the journal and strategy-signal reads. For the protocol v2
 forward stage it also refreshes any missing historical window back to each
 candidate's fixed warm-up start (fixed, aligned windows) and reads each
-candidate's forward stage. It writes a READY / PROBLEM report. It only refreshes and reads: it never records a decision,
-never writes a journal entry or outcome, and has no order path.
+candidate's forward stage. It separately reads public PAXG daily candles for
+the C2 paper tracker. The READY / PROBLEM report records check results and
+simulated research evidence. It has no decision, journal or order write path.
 """
 
 from __future__ import annotations
@@ -23,7 +24,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-from trading_platform_api.research.forward import FORWARD_STRATEGIES, history_start
+import httpx
+
+from trading_platform_api.research.candles import parse_candle_csv
+from trading_platform_api.research.fetch import fetch_klines
+from trading_platform_api.research.forward import (
+    FORWARD_STRATEGIES,
+    PAXG_HISTORY_START,
+    PAXG_SYMBOL,
+    history_start,
+    paxg_forward_record,
+)
+from trading_platform_api.research.report import _jsonable
 from trading_platform_api.research.walk_forward import V2_STRATEGIES
 
 DEFAULT_BASE_URL = "http://127.0.0.1:5173"
@@ -68,6 +80,7 @@ class CheckResult:
     name: str
     ready: bool
     detail: str
+    evidence: dict[str, Any] | None = None
 
 
 def urllib_transport(
@@ -202,6 +215,7 @@ def run_daily_check(
     transport: Transport = urllib_transport,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
+    paxg_fetch: Callable[..., str] = fetch_klines,
 ) -> list[CheckResult]:
     base = base_url.rstrip("/")
     parts = urlsplit(base)
@@ -261,8 +275,40 @@ def run_daily_check(
             continue
         detail = "HTTP 200" if status == 200 else _problem_text(status, payload)
         results.append(CheckResult(name, status == 200, detail))
-    results.extend(_forward_checks(base, origin, transport, now(), sleep))
+    as_of = now()
+    results.extend(_forward_checks(base, origin, transport, as_of, sleep))
+    results.append(_paxg_forward_check(as_of, paxg_fetch))
     return results
+
+
+def _paxg_forward_check(now: datetime, fetch: Callable[..., str]) -> CheckResult:
+    name = "forward stage PAXGUSDT ema-cross-1d v1 (research only)"
+    try:
+        document = fetch(
+            symbol=PAXG_SYMBOL,
+            timeframe="1d",
+            start=PAXG_HISTORY_START,
+            research_only=True,
+            now=now,
+        )
+        record = paxg_forward_record(parse_candle_csv(document, research_only=True))
+    except (
+        httpx.HTTPError,
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+        ArithmeticError,
+    ) as exc:
+        return CheckResult(
+            name, False, f"PAXG research data unavailable ({type(exc).__name__})"
+        )
+    detail = (
+        f"{record['stage']} ({record['reason']}), "
+        f"{record['closed_trades']} closed SIMULATED trades"
+    )
+    return CheckResult(name, True, detail, record)
 
 
 def _forward_checks(
@@ -364,6 +410,18 @@ def to_markdown(
         result = "READY" if item.ready else "PROBLEM"
         detail = item.detail.replace("|", "\\|")
         lines.append(f"| {item.name} | {result} | {detail} |")
+    for item in results:
+        if item.evidence is not None:
+            lines.extend(
+                [
+                    "",
+                    f"## {item.name} evidence",
+                    "",
+                    "```json",
+                    json.dumps(_jsonable(item.evidence), indent=2, sort_keys=True),
+                    "```",
+                ]
+            )
     return "\n".join(lines) + "\n"
 
 

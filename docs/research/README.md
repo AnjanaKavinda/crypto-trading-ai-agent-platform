@@ -99,6 +99,23 @@ signal close; SELL markers explain the middle-band exit, the 12-bar time stop
 must equal the research formulas or no markers are returned; ADX14 is recomputed
 from the snapshot's validated candles.
 
+## PAXG paper forward tracking (E2v)
+
+`research daily-check` fetches closed Binance Spot PAXGUSDT daily candles
+through the public research downloader. It uses the fixed C2
+`ema-cross-1d` v1 strategy, with fixed warm-up history and a prospective start
+of 27 November 2026 UTC. The daily Markdown report includes simulated signals
+and outcomes, the source dataset digest, the same-date PAXG buy-and-hold
+benchmark and the stage. The simulator uses 10 bps fees and 5 bps slippage
+per side; C2 exits on the opposite cross and has no stop.
+
+The review begins when both six calendar months and 10 completed simulated
+trades are available. It requires positive net expectancy and return/drawdown
+at least as high as buy-and-hold. A position still open on the last closed bar
+is marked to market and does not count as a completed trade. Missing or
+incomplete daily history makes the daily check report a problem. PAXG is a
+research-only dataset outside the standard Spot watchlist.
+
 ## Audit simulated Spot trades
 
 New study and tournament reports include a `trade_records` list in JSON and a

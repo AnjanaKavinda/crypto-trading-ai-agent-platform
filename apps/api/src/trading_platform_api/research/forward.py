@@ -17,6 +17,8 @@ Stage status uses only the pre-registered rules:
 - review point reached (A: 15 trades or 6 months; B: 30 trades or 3 months,
   whichever first): FORWARD_PASS if pooled expectancy after costs > 0 and the
   forward portfolio max drawdown <= historical max drawdown x 1.5, else FAIL.
+
+PAXGUSDT has its own C2 paper policy below and does not use the v2 review rules.
 """
 
 from __future__ import annotations
@@ -33,14 +35,24 @@ from trading_platform_api.research.backtest import (
     Trade,
     run_segment,
 )
-from trading_platform_api.research.candles import TIMEFRAME_SECONDS, Candle
+from trading_platform_api.research.candles import (
+    TIMEFRAME_SECONDS,
+    Candle,
+    CandleSeries,
+)
 from trading_platform_api.research.evaluation import (
     WalkForwardProtocol,
     curve_stats,
     portfolio_curve,
     trade_stats,
 )
-from trading_platform_api.research.strategy import RangeReversion4h, TrendDailyRegime
+from trading_platform_api.research.fetch import SOURCE_ID
+from trading_platform_api.research.strategy import (
+    EmaCross1d,
+    RangeReversion4h,
+    TrendDailyRegime,
+)
+from trading_platform_api.research.tournament import _beats_buy_and_hold
 from trading_platform_api.research.walk_forward import V2_STRATEGIES
 
 ForwardStrategy = TrendDailyRegime | RangeReversion4h
@@ -123,10 +135,11 @@ def _trade_signal(trade: Trade, candles: Sequence[Candle]) -> dict[str, Any]:
         "simulated_entry_fill": _simulated(
             trade.entry_price, "next open plus slippage"
         ),
-        "simulated_initial_stop": _simulated(
-            trade.stop_price, "entry fill minus pre-registered ATR stop distance"
-        ),
     }
+    if trade.stop_price > 0:
+        signal["simulated_initial_stop"] = _simulated(
+            trade.stop_price, "entry fill minus pre-registered ATR stop distance"
+        )
     if trade.exit_reason == "END_OF_SEGMENT":
         return {
             **signal,
@@ -142,7 +155,11 @@ def _trade_signal(trade: Trade, candles: Sequence[Candle]) -> dict[str, Any]:
         "exit_reason": trade.exit_reason,
         "simulated_exit_fill": _simulated(trade.exit_price, "after slippage"),
         "simulated_net_return": _simulated(trade.net_return, "after modelled costs"),
-        "simulated_r_multiple": _simulated(trade.r_multiple, "net result / risk"),
+        **(
+            {"simulated_r_multiple": _simulated(trade.r_multiple, "net result / risk")}
+            if trade.stop_price > 0
+            else {}
+        ),
     }
 
 
@@ -186,7 +203,7 @@ def historical_verdict_from_report(report: dict[str, Any]) -> HistoricalVerdict:
 
 
 def symbol_forward(
-    strategy: ForwardStrategy,
+    strategy: ForwardStrategy | EmaCross1d,
     symbol: str,
     candles: Sequence[Candle],
     *,
@@ -335,6 +352,119 @@ def forward_record(
             as_of=as_of,
             prospective_start=start,
         ),
+        "authority": {
+            "qualification_authorized": False,
+            "approval_authorized": False,
+            "execution_authorized": False,
+        },
+    }
+
+
+PAXG_SYMBOL = "PAXGUSDT"
+PAXG_START = datetime(2026, 11, 27, tzinfo=UTC)
+_PAXG_STRATEGY = EmaCross1d()
+# Public SHA-256 of the approved C2 rule definition.
+_PAXG_APPROVED_DIGEST = "f0f80642028d59e360ed34f26cb287275c7665016524e08b12f3817be44fbfb2"  # pragma: allowlist secret
+PAXG_HISTORY_START = PAXG_START - timedelta(
+    days=_PAXG_STRATEGY.signals(()).first_tradable_index
+)
+_PAXG_HISTORICAL_EVIDENCE = (
+    "https://github.com/AnjanaKavinda/crypto-trading-ai-agent-platform/"
+    "issues/516#issuecomment-7213649154"
+)
+
+
+def paxg_forward_record(series: CandleSeries) -> dict[str, Any]:
+    """Evaluate the owner-approved C2/PAXG S5 paper continuation."""
+    if _PAXG_STRATEGY.content_sha256 != _PAXG_APPROVED_DIGEST:
+        raise ValueError("PAXG forward strategy digest differs from approved C2 v1.")
+    if (series.symbol, series.timeframe, series.venue, series.source) != (
+        PAXG_SYMBOL,
+        "1d",
+        "BINANCE-SPOT",
+        SOURCE_ID,
+    ):
+        raise ValueError(
+            "PAXG forward tracking requires Binance Spot PAXGUSDT 1d data."
+        )
+    completed_through = series.fetched_at.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    if (
+        not series.candles
+        or series.first_open != PAXG_HISTORY_START
+        or series.last_open + timedelta(days=1) != completed_through
+        or any(
+            right.open_time - left.open_time != timedelta(days=1)
+            for left, right in zip(series.candles, series.candles[1:])
+        )
+    ):
+        raise ValueError(
+            "PAXG forward history must cover the fixed warm-up through the latest closed candle."
+        )
+    costs = CostAssumptions(
+        fee_bps_per_side=Decimal(10),
+        slippage_bps_per_side=Decimal(5),
+        basis="PAXG C2 forward study: 10 bps fee and 5 bps slippage per side",
+    )
+    record = symbol_forward(
+        _PAXG_STRATEGY,
+        PAXG_SYMBOL,
+        series.candles,
+        prospective_start=PAXG_START,
+        costs=costs,
+    )
+    segment = record.segment
+    closed = (
+        [trade for trade in segment.trades if trade.exit_reason != "END_OF_SEGMENT"]
+        if segment is not None
+        else []
+    )
+    stats = trade_stats(closed)
+    review_date = add_months(PAXG_START, 6)
+    reached = completed_through >= review_date and stats.trades >= 10
+    strategy = curve_stats(segment.equity) if segment is not None else None
+    holding = curve_stats(segment.buy_and_hold_equity) if segment is not None else None
+    stage, reason = "FORWARD_TESTING", "REVIEW_POINT_NOT_REACHED"
+    if reached:
+        assert strategy is not None and holding is not None
+        if stats.expectancy is None or stats.expectancy <= 0:
+            stage, reason = "FAIL", "FORWARD_EXPECTANCY_NOT_POSITIVE"
+        elif not _beats_buy_and_hold(strategy, holding):
+            stage, reason = "FAIL", "DOES_NOT_BEAT_BUY_AND_HOLD_RISK_ADJUSTED"
+        else:
+            stage, reason = "FORWARD_PASS", "PREREGISTERED_FORWARD_CRITERIA_MET"
+    return {
+        "label": SIMULATED,
+        "symbol": PAXG_SYMBOL,
+        "timeframe": "1d",
+        "strategy": {
+            **_PAXG_STRATEGY.describe(),
+            "content_sha256": _PAXG_APPROVED_DIGEST,
+        },
+        "historical_verdict": {
+            "status": "GOLD_PASS",
+            "reference": _PAXG_HISTORICAL_EVIDENCE,
+        },
+        "dataset": {
+            "source": series.source,
+            "venue": series.venue,
+            "content_sha256": series.content_sha256,
+            "first_open": series.first_open,
+            "last_open": series.last_open,
+            "fetched_at": series.fetched_at,
+        },
+        "prospective_start": PAXG_START,
+        "completed_through": completed_through,
+        "costs": costs,
+        "stage": stage,
+        "reason": reason,
+        "review_point": {"date": review_date, "closed_trades": 10, "reached": reached},
+        "closed_trades": stats.trades,
+        "expectancy": stats.expectancy,
+        "strategy_curve": strategy,
+        "buy_and_hold_curve": holding,
+        "signals": record.signals,
         "authority": {
             "qualification_authorized": False,
             "approval_authorized": False,

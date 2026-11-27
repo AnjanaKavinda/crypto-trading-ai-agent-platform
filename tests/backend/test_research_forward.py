@@ -6,18 +6,21 @@ deterministic behaviour; none of it represents real market history or results.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from trading_platform_api.research import forward
 from trading_platform_api.research.backtest import (
     CostAssumptions,
     SegmentResult,
     Trade,
     run_segment,
 )
-from trading_platform_api.research.candles import Candle
+from trading_platform_api.research.candles import Candle, CandleSeries
 from trading_platform_api.research.evaluation import WalkForwardProtocol
+from trading_platform_api.research.fetch import SOURCE_ID
 from trading_platform_api.research.forward import (
     FORWARD_REVIEWS,
     HistoricalVerdict,
@@ -239,3 +242,74 @@ def test_historical_verdict_is_read_from_a_matching_report_only() -> None:
     ):
         with pytest.raises(ValueError, match=match):
             historical_verdict_from_report(bad)
+
+
+def paxg_series(as_of: datetime) -> CandleSeries:
+    start = forward.PAXG_HISTORY_START
+    return CandleSeries(
+        SOURCE_ID,
+        "BINANCE-SPOT",
+        "PAXGUSDT",
+        "1d",
+        as_of,
+        daily(start, (as_of - start).days),
+        "synthetic",
+    )
+
+
+@pytest.mark.parametrize(
+    ("date_ready", "count", "net", "holding", "expected"),
+    [
+        (False, 10, "0.01", ("0.8", "1.05"), "REVIEW_POINT_NOT_REACHED"),
+        (True, 9, "0.01", ("0.8", "1.05"), "REVIEW_POINT_NOT_REACHED"),
+        (True, 10, "0", ("0.8", "1.05"), "FORWARD_EXPECTANCY_NOT_POSITIVE"),
+        (
+            True,
+            10,
+            "0.01",
+            ("0.99", "1.10"),
+            "DOES_NOT_BEAT_BUY_AND_HOLD_RISK_ADJUSTED",
+        ),
+        (True, 10, "0.01", ("0.8", "1.05"), "PREREGISTERED_FORWARD_CRITERIA_MET"),
+    ],
+)
+def test_paxg_review_requires_both_thresholds_and_both_hurdles(
+    monkeypatch, date_ready, count, net, holding, expected
+):
+    review = add_months(forward.PAXG_START, 6)
+    series = paxg_series(review if date_ready else review - DAY)
+    closed = [trade(net, index) for index in range(count)]
+    open_trade = replace(trade("0.50"), exit_reason="END_OF_SEGMENT")
+    simulated = replace(
+        segment([*closed, open_trade], ["0.9", "1.05"]),
+        buy_and_hold_equity=tuple(Decimal(value) for value in holding),
+    )
+    monkeypatch.setattr(
+        forward,
+        "symbol_forward",
+        lambda *a, **k: forward.SymbolForward("PAXGUSDT", simulated, ()),
+    )
+    result = forward.paxg_forward_record(series)
+    assert result["reason"] == expected
+    assert result["closed_trades"] == count
+    assert result["expectancy"] == Decimal(net)
+    assert result["review_point"]["reached"] == (date_ready and count >= 10)
+    assert result["costs"].fee_bps_per_side == Decimal(10)
+    assert result["costs"].slippage_bps_per_side == Decimal(5)
+    assert set(result["authority"].values()) == {False}
+
+
+def test_paxg_uses_only_complete_daily_history_and_simulates_stopless_signals():
+    series = paxg_series(forward.PAXG_START + 179 * DAY)
+    record = forward.paxg_forward_record(series)
+    assert record["stage"] == "FORWARD_TESTING"
+    assert record["signals"]
+    assert all("simulated_initial_stop" not in row for row in record["signals"])
+    with pytest.raises(ValueError, match="fixed warm-up"):
+        forward.paxg_forward_record(replace(series, candles=series.candles[:-1]))
+    with pytest.raises(ValueError, match="fixed warm-up"):
+        forward.paxg_forward_record(
+            replace(series, candles=series.candles[:2] + series.candles[3:])
+        )
+    with pytest.raises(ValueError, match="PAXGUSDT 1d"):
+        forward.paxg_forward_record(replace(series, symbol="BTCUSDT"))
