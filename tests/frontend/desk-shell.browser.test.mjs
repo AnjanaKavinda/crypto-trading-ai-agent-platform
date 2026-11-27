@@ -183,7 +183,7 @@ test("UR1/UR3/UR5: Today lists the coins and verdicts; coin and timeframe persis
     await page.locator("#chart-container svg").waitFor();
     assert.equal(await page.locator("#chart-heading").innerText(), "ETH/USDT");
     assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "true");
-    assert.deepEqual(await page.locator("#timeframe-pills button").allInnerTexts(), ["1h", "4h", "1D"]);
+    assert.deepEqual(await page.locator("#timeframe-pills .toolbar-shortcuts button").allInnerTexts(), ["1h", "4h", "1D"]);
     // One read per coin and timeframe: Charts reuses Today's stored snapshot.
     assert.equal(new Set(reads).size, reads.length, `duplicate reads: ${reads.join(", ")}`);
 

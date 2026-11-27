@@ -1,5 +1,59 @@
 # Local Spot research workspace
 
+## Charts toolbar
+
+Charts uses the existing browser-native SVG renderer (no external chart library).
+The Market selector reads the API's approved Spot instruments; Futures feeds are
+not exposed by this API. Timeframe offers only 1h, 4h and 1D. Stars independently
+save interval/style favorites in the existing desk preference key. Menus and
+stars do not read candles or reset the chart window.
+
+Chart Type supports OHLC bars, candlesticks, hollow candles, closing-price line
+and closing-price step line. Hollow bodies distinguish close versus open; their
+color compares the close with the preceding close. All styles keep original OHLC
+inspection, drawings, overlays and timestamp-bound markers. No transformed or
+footprint values are manufactured.
+
+Beginner retains SIGNALS, EMA20, EMA50, BB, RSI, ATR and VOL. Pro replaces the
+expanded pill catalog with search, category and Active filters, a compact study
+summary, and display-only line-width settings. Periods and calculations remain
+backend supplied. Volume visibility is now shared by its pill and picker.
+Reset display restores Beginner defaults; chart Reset still resets zoom/scale.
+
+Order-flow Tools shares the same VWAP instance as Indicators in Pro. This is
+the backend's snapshot-anchored candle approximation, not session/trade VWAP.
+Unavailable snapshot inputs keep it disabled with a reason. Candle volume
+profile remains a proxy in Details → Volume and candle structure. Trade CVD,
+footprint, tape/bubbles/imbalance, order-book DOM/heatmap and liquidation tools
+are not implemented in this chart; their source feeds are absent. No new feed
+or analytical engine is part of this toolbar bundle.
+
+SIGNALS starts off. Enabling it opens the existing evidence drawer and requires
+an explicit strategy/version choice before reading markers. Imported study
+verdicts come from that exact response/digest; separately recorded #516 studies
+are labeled separately. Empty replay, unavailable/warm-up, errors and a recorded
+NO_TRADE remain distinct. Selector changes clear evidence immediately; late
+marker responses cannot overwrite a newer request. The source timestamp and
+historical/current response context stay visible, including fullscreen.
+
+At narrow widths, More chart controls exposes the labeled overflow. Escape
+closes the active menu and returns focus before exiting fullscreen. The left
+drawing rail and the existing chart gestures are retained.
+
+For owner review against real stored data in the Docker deployment, run the
+GET-only browser script (no fixtures, refresh or journal writes):
+
+```powershell
+$env:UI_SCREENSHOT_DIR = "research-output/charts-toolbar"
+$env:TOOLBAR_PHASE = "before" # or "after" once the web service is rebuilt
+node tests/frontend/charts-toolbar.preview.mjs
+```
+
+It reuses the screenshot helper and writes screenshots plus a JSON record of
+served asset hashes, real request URLs and observed states. Backend and database
+containers need no rebuild. Deterministic synthetic fixtures are confined to
+the affected frontend tests.
+
 This is a dependency-free, browser-native presentation for the local Spot
 research API. It reads the API's supported symbols and exact snapshot payload;
 it has no provider client, credentials, indicator calculations, signal logic,

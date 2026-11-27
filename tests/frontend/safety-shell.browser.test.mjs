@@ -106,7 +106,8 @@ test("U9: no order or execution control exists on any tab and Live trading OFF i
       // Visible text and accessible name of every control. The SIGNALS pill is
       // exempt: it only shows or hides illustrated BUY/SELL markers on the chart.
       const controls = await page.locator("button, a, [role=button], input[type=submit]").evaluateAll((nodes) =>
-        nodes.filter((node) => node.dataset.pill !== "SIGNALS")
+        // The exact Order flow catalog filter selects a study category only.
+        nodes.filter((node) => node.dataset.pill !== "SIGNALS" && node.dataset.control !== "filter-Order flow")
           .map((node) => `${node.textContent} ${node.getAttribute("aria-label") ?? ""}`.trim()));
       const trading = controls.filter((text) => TRADING_CONTROL.test(text)
         && !/no order|not an order|never an order|without an order|no .*execution/i.test(text));

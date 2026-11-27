@@ -108,9 +108,16 @@
       <!-- CHARTS -->
       <section id="panel-charts" class="desk-panel charts-panel" role="tabpanel" aria-labelledby="tab-charts" hidden>
         <div id="charts-workspace" class="charts-workspace" data-drawer="open" data-markets="open">
-          <div class="pillbar-row">
-            <div id="indicator-toolbar" class="indicator-toolbar" role="toolbar" aria-label="Indicators"></div>
-            <div class="pillbar-side">
+          <div class="charts-toolbar" role="group" aria-label="Charts toolbar">
+            <label class="market-selector">Market <select id="chart-market" aria-label="Chart market" disabled></select></label>
+            <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
+            <div id="chart-style-control" class="toolbar-control"></div>
+            <details id="chart-overflow" class="chart-overflow" open>
+              <summary>More chart controls</summary>
+              <div class="chart-overflow-content">
+                <div id="chart-menu-controls" class="toolbar-control"></div>
+                <button id="pro-signals" type="button" aria-pressed="false" hidden>SIGNALS / evidence</button>
+                <div class="pillbar-side">
               <span class="status-chip chip-live fullscreen-only" title="This interface has no order, approval or execution path.">Live trading: OFF</span>
               <span id="pillbar-hint" class="card-note"></span>
               <div class="segmented" role="group" aria-label="View mode">
@@ -118,8 +125,19 @@
                 <button id="pro-button" type="button" aria-pressed="false">Pro</button>
               </div>
               <button id="drawer-toggle" class="ghost-button" type="button" aria-expanded="true" aria-controls="chart-drawer">Hide details ▸</button>
-            </div>
+              <button id="fullscreen-button" class="ghost-button" type="button" aria-pressed="false">⛶ Full screen</button>
+                </div>
+              </div>
+            </details>
           </div>
+          <div class="beginner-study-strip">
+            <div id="indicator-toolbar" class="indicator-toolbar" role="toolbar" aria-label="Indicators"></div>
+          </div>
+          <div class="chart-context-strip">
+            <span class="status-chip chip-mode">RESEARCH · Live trading OFF</span>
+            <span id="active-study-summary" class="card-note pro-only"></span>
+            <section id="snapshot-status" class="snapshot-status" aria-live="polite" aria-atomic="true"><strong>No snapshot loaded.</strong></section>
+            </div>
 
           <div class="charts-grid">
             <nav id="drawing-tools" class="drawing-tools card" aria-label="Drawing tools"></nav>
@@ -141,11 +159,6 @@
               <div class="chart-head">
                 <button id="markets-toggle" class="ghost-button" type="button" aria-expanded="true" aria-controls="markets-panel">◂ Markets</button>
                 <h2 id="chart-heading" class="chart-symbol">Chart</h2>
-                <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
-                <section id="snapshot-status" class="snapshot-status" aria-live="polite" aria-atomic="true">
-                  <strong>No snapshot loaded.</strong>
-                </section>
-                <button id="fullscreen-button" class="ghost-button" type="button" aria-pressed="false">⛶ Full screen</button>
               </div>
               <p id="control-error" class="error-text" role="alert" hidden></p>
               <p id="chart-signal-banner" class="chart-signal-banner" role="note" hidden></p>
