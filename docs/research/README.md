@@ -191,7 +191,42 @@ stages and reports them.
   open, a stop hit on the entry bar, 10 bps fees on both sides, net return,
   R multiple and final equity.
 
-## Data integrity
+## Futures data (E11a, research only)
+
+The owner-approved E11 slice fetches public USD-M perpetual 1h klines,
+settled funding rates and 1h premium-index klines, together with matching Spot
+1h candles. Run from the repository root, on the owner's machine:
+
+```powershell
+python -m trading_platform_api.research fetch --market um-futures --timeframe 1h --start 2021-09-30 --symbols BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT --data research-data/futures
+# Standalone Spot fetch also supports these five symbols at 1h:
+python -m trading_platform_api.research fetch --timeframe 1h --start 2021-09-30 --symbols BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT --data research-data/futures/spot
+```
+
+The first command validates all four files for each symbol before writing:
+`spot/<SYMBOL>_1h.csv`, `um-futures/<SYMBOL>_klines_1h.csv`,
+`um-futures/<SYMBOL>_premium_1h.csv`, and
+`um-futures/<SYMBOL>_funding_8h.csv`. Existing Spot CSV format and digest
+semantics stay unchanged. Futures headers include `source`, `venue=BINANCE-USDM`,
+`symbol`, `dataset`, `interval`, `fetched_at` and `content_sha256` (hash of the
+UTF-8 document with the ` content_sha256=...` header field removed).
+
+The request ends at the latest fully closed UTC hour at fetch time; current
+open candles are outside the requested range. Missing/duplicate/off-grid rows,
+unclosed candles, mismatched close times or Spot/perpetual alignment failures
+reject the symbol with a UTC diagnostic and write none of its files; other
+symbols continue. Funding must cover every 00/08/16 UTC settlement strictly
+before that boundary. Non-8h historical regimes are rejected, never resampled.
+Premium values are dimensionless rates and may be negative or zero.
+Provider access failures also fail closed. Existing files are preserved on a
+validation failure; remove or archive old files explicitly before an owner run
+if a clean output directory is needed. No data is repaired or date shifted.
+
+These are research-only inputs; no Futures symbol is added to the UI approved
+list. No keys or exchange account are used. #570's carry simulation starts only
+after #569 is merged; the fetch does not run or evaluate that study.
+
+## Spot data integrity
 
 A candle file is rejected if it has a gap, a misaligned or unclosed candle,
 inconsistent OHLC values, an unapproved symbol or a missing provenance header.

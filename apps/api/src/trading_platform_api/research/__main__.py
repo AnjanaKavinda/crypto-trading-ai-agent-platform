@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
+
 from trading_platform_api.research import daily_check
 from trading_platform_api.research.candles import (
     APPROVED_SPOT_SYMBOLS,
@@ -31,6 +33,7 @@ from trading_platform_api.research.fetch import (
     fetch_klines,
     write_dataset,
 )
+from trading_platform_api.research.futures_data import fetch_futures_data
 from trading_platform_api.research.report import (
     StudyError,
     run_study,
@@ -67,6 +70,7 @@ def _parser() -> argparse.ArgumentParser:
 
     fetch = commands.add_parser("fetch", help="Download closed public klines.")
     fetch.add_argument("--symbols", default=symbols)
+    fetch.add_argument("--market", choices=("spot", "um-futures"), default="spot")
     fetch.add_argument("--timeframe", default="4h")
     fetch.add_argument("--start", default="2019-01-01")
     fetch.add_argument("--data", default="research-data", type=Path)
@@ -200,6 +204,36 @@ def main(argv: list[str] | None = None) -> int:
     chosen = [item.strip() for item in args.symbols.split(",") if item.strip()]
     if args.command == "fetch":
         start = datetime.fromisoformat(args.start).replace(tzinfo=UTC)
+        if args.market == "um-futures":
+            if args.timeframe != "1h" or args.base_url != DEFAULT_BASE_URL:
+                print(
+                    "Futures research requires --timeframe 1h and fixed public endpoints.",
+                    file=sys.stderr,
+                )
+                return 2
+            failed = 0
+            now = datetime.now(UTC)
+            for symbol in chosen:
+                try:
+                    documents = fetch_futures_data(symbol=symbol, start=start, now=now)
+                except (CandleDataError, ValueError, httpx.HTTPError) as exc:
+                    failed += 1
+                    print(
+                        f"{symbol} {now.isoformat()} not written (fail closed): {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
+                for dataset, document in documents.items():
+                    if dataset == "spot":
+                        path = write_dataset(document, args.data / "spot", symbol, "1h")
+                    else:
+                        directory = args.data / "um-futures"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        interval = "8h" if dataset == "funding" else "1h"
+                        path = directory / f"{symbol}_{dataset}_{interval}.csv"
+                        path.write_text(document, encoding="utf-8")
+                    print(f"wrote {path}")
+            return 1 if failed else 0
         failed = 0
         for symbol in chosen:
             try:
