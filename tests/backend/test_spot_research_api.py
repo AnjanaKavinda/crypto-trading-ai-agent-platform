@@ -2250,6 +2250,7 @@ def test_refresh_limit_matches_append_only_lineage_source_bound() -> None:
         ("1d", 91, 200),
         ("1d", 250, 200),
         ("1d", 501, 200),
+        # Over 501 candles fails request validation before any provider call.
         ("1d", 502, 422),
         ("4h", 501, 200),
         ("1h", 501, 200),
@@ -2277,7 +2278,7 @@ def test_refresh_respects_provider_window_and_candle_bounds(
         assert len(response.json()["candles"]) == limit
         assert calls == [1]
     else:
-        assert response.json()["code"] == "REFRESH_RANGE_INVALID"
+        assert response.json()["code"] == "REQUEST_VALIDATION_FAILED"
         assert calls == []
 
 
@@ -2294,8 +2295,10 @@ def test_4h_refresh_over_90_days_is_still_rejected() -> None:
     with client_for(research) as client:
         response = client.post(f"/api/research/spot/{INSTRUMENT}/refresh", json=body)
 
+    # 91 days of 4h candles exceed the 501-candle bound, so the request fails
+    # closed before the 90-day check or any provider call.
     assert response.status_code == 422
-    assert response.json()["code"] == "REFRESH_RANGE_INVALID"
+    assert response.json()["code"] == "REQUEST_VALIDATION_FAILED"
     assert calls == []
 
 
