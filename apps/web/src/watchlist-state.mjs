@@ -94,28 +94,31 @@ export function watchlistRow(snapshot, symbol) {
   };
 }
 
-export async function readWatchlist(fetcher, timeframe, symbols) {
+// One coin's stored snapshot at the largest bound; never throws.
+export async function readWatchlistEntry(fetcher, timeframe, item) {
+  try {
+    const snapshot = await readSnapshot(fetcher, {
+      instrumentId: item.instrument_id,
+      timeframe,
+      limit: WATCHLIST_LIMIT,
+    });
+    const validationError = validateWatchlistSnapshot(snapshot, {
+      instrumentId: item.instrument_id,
+      symbol: item.symbol,
+      timeframe,
+    });
+    if (validationError) throw new Error(validationError);
+    return { symbol: item.symbol, snapshot, row: watchlistRow(snapshot, item.symbol), error: null };
+  } catch (error) {
+    return { symbol: item.symbol, snapshot: null, row: null, error: readErrorText(error) };
+  }
+}
+
+export async function readWatchlist(fetcher, timeframe, symbols, readEntry = (item) => readWatchlistEntry(fetcher, timeframe, item)) {
   if (!Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) {
     throw new Error("Select a timeframe supported by the local research API.");
   }
-  return Promise.all(symbols.map(async (item) => {
-    try {
-      const snapshot = await readSnapshot(fetcher, {
-        instrumentId: item.instrument_id,
-        timeframe,
-        limit: WATCHLIST_LIMIT,
-      });
-      const validationError = validateWatchlistSnapshot(snapshot, {
-        instrumentId: item.instrument_id,
-        symbol: item.symbol,
-        timeframe,
-      });
-      if (validationError) throw new Error(validationError);
-      return { symbol: item.symbol, snapshot, row: watchlistRow(snapshot, item.symbol), error: null };
-    } catch (error) {
-      return { symbol: item.symbol, snapshot: null, row: null, error: readErrorText(error) };
-    }
-  }));
+  return Promise.all(symbols.map((item) => readEntry(item)));
 }
 
 export async function loadWatchlist(fetcher, timeframe) {
@@ -130,5 +133,5 @@ export function workspaceHref(instrumentId, timeframe, supportedSymbols) {
   if (!supportedSymbols.some((item) => item.instrument_id === instrumentId) ||
       !Object.hasOwn(TIMEFRAME_SECONDS, timeframe)) return null;
   const query = new URLSearchParams({ instrument: instrumentId, timeframe });
-  return `./index.html?${query}`;
+  return `./index.html?${query}#charts`;
 }

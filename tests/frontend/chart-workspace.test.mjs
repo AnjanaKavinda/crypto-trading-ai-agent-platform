@@ -108,6 +108,7 @@ test("display decimals follow instrument price magnitude", () => {
   assert.equal(displayDecimals("87123.45000000"), 2);
   assert.equal(displayDecimals("612.30000000"), 2);
   assert.equal(displayDecimals("2.18340000"), 4);
+  assert.equal(displayDecimals("0.94770000"), 4, "XRP below 1.00 keeps 4 decimals");
   assert.equal(displayDecimals("0.05123000"), 6);
   assert.equal(displayDecimals("0.00001234"), 8);
   assert.equal(displayDecimals("not a number"), 8);

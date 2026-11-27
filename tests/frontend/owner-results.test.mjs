@@ -115,12 +115,13 @@ test("reads with one GET and reports API failure without showing a score", async
   await assert.rejects(readOwnerScore(async () => { throw new TypeError("offline"); }), /unavailable/);
 });
 
-test("My results page hosts the scorecard and the module stays read-only", async () => {
-  const [html, script] = await Promise.all([
-    readFile(new URL("../../apps/web/signals.html", import.meta.url), "utf8"),
+test("the My results tab hosts the scorecard and the module stays read-only", async () => {
+  const [html, script, shell] = await Promise.all([
+    readFile(new URL("../../apps/web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../../apps/web/src/owner-results.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../apps/web/src/desk-shell.mjs", import.meta.url), "utf8"),
   ]);
-  assert.match(html, /src="\.\/src\/owner-results\.mjs"/);
-  assert.match(html, /id="results-body"/);
+  assert.match(html, /id="panel-my-results"[\s\S]*id="results-body"/);
+  assert.match(shell, /import\("\.\/owner-results\.mjs"\)/);
   assert.doesNotMatch(script, /method:\s*["']POST|setInterval|WebSocket|localStorage|innerHTML/);
 });

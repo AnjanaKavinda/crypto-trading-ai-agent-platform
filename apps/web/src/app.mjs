@@ -1,10 +1,14 @@
+// Charts tab of the Trading desk (UR1/UR2/UR3/U5b): full-width chart with one
+// timeframe control, the indicator pill bar above it, drawing tools on the
+// left and a collapsible details drawer (markers + evidence, Record my
+// decision, snapshot provenance). Every value comes from the local research
+// API; the browser only draws and formats it.
 import { mountJournal, snapshotDecisionEligibility } from "./decision-journal.mjs";
-import { markerAnchors, markersBindingError, MARKER_LABELS, sizingInputs, tradeDetails } from "./strategy-markers.mjs";
+import { markerAnchors, markerFieldDisplay, markersBindingError, MARKER_LABELS, sizingInputs, tradeDetails } from "./strategy-markers.mjs";
 import { toolbarPills } from "./indicator-toolbar.mjs";
 import {
   createDrawing,
   DRAWING_LABEL,
-  DRAWING_TOOLS,
   drawingsKey,
   drawingTool,
   fibLevels,
@@ -12,13 +16,13 @@ import {
   positionSummary,
   priceRange,
   saveDrawings,
+  toolsForMode,
 } from "./chart-drawings.mjs";
 import {
   axisTimeLabel,
   CHART_TIMEFRAME_PILLS,
   chartIndexAtPointer,
   candleInspectorText,
-  candleReadoutText,
   displayDecimals,
   formatDisplayNumber,
   lastPriceTag,
@@ -31,7 +35,6 @@ import {
   zoomChartWindow,
 } from "./chart-interaction.mjs";
 import {
-  listSupportedSymbols,
   readSnapshot,
   readStrategyMarkers,
   refreshSnapshot,
@@ -41,20 +44,24 @@ import {
   TIMEFRAME_SECONDS,
 } from "./research-api.mjs";
 import {
-  DEFAULT_VISIBILITY,
   INDICATOR_IDS,
   indicatorBindingError,
   latestIndicatorValues,
   loadPreferences,
   plotValues,
   savePreferences,
+  shownIndicators,
   snapshotCandles,
   snapshotLabels,
   spotAnalysisBindingError,
   SPOT_ANALYSIS_IDS,
   validateSnapshot,
-  workspaceSelection,
 } from "./workspace-state.mjs";
+import { DESK_TIMEFRAMES, timeframeLabel } from "./desk-state.mjs";
+import { change24h } from "./today-state.mjs";
+import { defaultMarkerStrategy, markerStrategyOptions, parseStrategyKey, verdictBanner } from "./strategy-studies.mjs";
+import { movePane, niceTicks, orderedPanes, PANE_DEFINITIONS, paneRange } from "./chart-panes.mjs";
+import { plainReading } from "./plain-reading.mjs";
 
 const EDUCATION = Object.freeze({
   "ema-20": {
@@ -139,7 +146,7 @@ const EDUCATION = Object.freeze({
   },
 });
 
-const TIMEFRAMES = Object.keys(TIMEFRAME_SECONDS);
+const TIMEFRAMES = DESK_TIMEFRAMES;
 const PRICE_UNIT_INDICATORS = new Set([
   "ema-20", "ema-50", "ema-500", "bollinger-bands-20", "atr-14", "macd-12-26-9",
 ]);
@@ -151,6 +158,19 @@ const SPOT_ANALYSIS_LABELS = Object.freeze({
   "price-action-support-resistance": "Price-action candle geometry",
   "spot-market-structure": "Spot market structure",
 });
+// Overlay colours: one source for the line and its legend (UR2).
+const OVERLAY_SERIES = Object.freeze({
+  "ema-20": [{ className: "ema-20", field: "value", label: "EMA20", color: "#38bdf8" }],
+  "ema-50": [{ className: "ema-50", field: "value", label: "EMA50", color: "#e2e8f0" }],
+  "ema-500": [{ className: "ema-500", field: "value", label: "EMA500", color: "#facc15" }],
+  "bollinger-bands-20": [
+    { className: "bollinger-upper", field: "upper", label: "BB upper", color: "#fb923c" },
+    { className: "bollinger-middle", field: "middle", label: "BB mid", color: "#94a3b8" },
+    { className: "bollinger-lower", field: "lower", label: "BB lower", color: "#4ade80" },
+  ],
+});
+const VWAP_COLOR = "#f472b6";
+const VOLUME_AVERAGE_COLOR = "#38bdf8";
 const $ = (selector) => document.querySelector(selector);
 const element = (tag, text, className) => {
   const node = document.createElement(tag);
@@ -171,48 +191,50 @@ const isoText = (value) => {
   return Number.isNaN(instant.valueOf()) ? value : `${formatter.format(instant)} UTC · ${value}`;
 };
 const stringValue = (value) => typeof value === "string" ? value : value == null ? "Not reported" : String(value);
+const pairLabel = (symbol) => String(symbol ?? "").replace(/USDT$/, "/USDT");
 
-// U2j: "Record my decision" binds the journal (C-107v2) to the exact snapshot on screen.
+// U2j: "Record my decision" binds the journal (C-107v2) to the exact snapshot
+// on screen. The quick form is ready as soon as the snapshot is eligible.
 function renderDecisionPanel(snapshot) {
-  const button = $("#record-decision-button");
-  if (!button) return;
   const eligibility = snapshotDecisionEligibility(snapshot);
   $("#decision-body").replaceChildren();
-  button.disabled = !eligibility.ok;
-  button.onclick = null;
   $("#decision-note").textContent = eligibility.ok
-    ? `Declare ABSTAIN or an external trade intention against snapshot ${eligibility.target.snapshot_id} (${snapshot.symbol} · ${snapshot.timeframe}, quality VALID). Unverified local declaration; no trade authority.`
+    ? `For ${snapshot.symbol} · ${snapshot.timeframe} · snapshot ${eligibility.target.snapshot_id} (quality VALID).`
     : eligibility.reason;
+  $("#decision-note").dataset.state = eligibility.ok ? "valid" : "warning";
   if (!eligibility.ok) return;
-  button.onclick = () => {
-    button.disabled = true;
-    mountJournal(document, $("#decision-body"), null, globalThis.fetch, { snapshot: eligibility.target });
-  };
+  mountJournal(document, $("#decision-body"), null, globalThis.fetch, {
+    snapshot: eligibility.target, quick: true, subject: snapshot.symbol.replace(/USDT$/, ""),
+  });
 }
 
 function setStatus(snapshot, errorMessage) {
   const panel = $("#snapshot-status");
   panel.replaceChildren();
+  panel.title = "";
   if (errorMessage) {
     panel.dataset.state = "error";
-    panel.append(element("strong", "Research request failed."));
-    panel.append(element("span", errorMessage));
+    panel.append(element("strong", "Research request failed."), element("span", errorMessage, "status-detail"));
+    panel.title = errorMessage;
     return;
   }
   const labels = snapshotLabels(snapshot);
   panel.dataset.state = labels.severity;
-  const quality = element("strong", `${labels.quality} · ${labels.temporal}`);
-  panel.append(quality);
+  panel.append(element("strong", `${labels.quality} · ${labels.temporal}`));
+  panel.append(element("span", `Binance Spot · snapshot ${String(snapshot.snapshot_id).slice(0, 8)} · ${snapshot.candles.length} candles`, "status-meta"));
+  let detail;
   if (snapshot.temporal_context === "HISTORICAL") {
-    panel.append(element("span", "This point-in-time research response is historical and is never represented as current."));
+    detail = "This point-in-time research response is historical and is never represented as current.";
   } else if (labels.quality === "VALID") {
-    panel.append(element("span", "Quality is reported VALID for this exact snapshot; this does not establish trading readiness or execution authority."));
+    detail = "Quality is reported VALID for this exact snapshot; this does not establish trading readiness or execution authority.";
   } else {
-    panel.append(element("span", `The API reports ${labels.quality}; this is not promoted to valid or current evidence.`));
+    detail = `The API reports ${labels.quality}; this is not promoted to valid or current evidence.`;
   }
   if (snapshot.data_quality?.report_status && snapshot.data_quality.report_status !== labels.quality) {
-    panel.append(element("span", `Underlying report status: ${snapshot.data_quality.report_status}.`));
+    detail += ` Underlying report status: ${snapshot.data_quality.report_status}.`;
   }
+  panel.append(element("span", detail, "status-detail"));
+  panel.title = `Snapshot ${snapshot.snapshot_id}. ${detail}`;
 }
 
 function indicatorAvailability(snapshot, id) {
@@ -239,32 +261,23 @@ function analysisAvailability(snapshot, id) {
   return { available: true };
 }
 
-function markersAvailability(snapshot) {
-  if (markerState.error) return { available: false, reason: markerState.error };
-  const response = markerState.response;
-  if (!response) return { available: false, reason: "strategy markers not loaded" };
-  if (response.status !== "AVAILABLE") return { available: false, reason: `${response.status} ${response.reason_code ?? ""}`.trim() };
-  return markersBindingError(response, snapshot) ? { available: false, reason: "markers do not match the snapshot" } : { available: true };
-}
-
-function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
+function renderIndicatorToolbar(snapshot, preferences, updatePreferences, onSignals) {
   const toolbar = $("#indicator-toolbar");
   if (!toolbar) return;
   toolbar.replaceChildren();
-  const enabled = preferences.mode === "beginner" ? [...DEFAULT_VISIBILITY] : preferences.visible;
   const pills = toolbarPills({
     snapshotLoaded: Boolean(snapshot),
-    enabled,
-    availability: (kind, id) => kind === "indicator"
-      ? indicatorAvailability(snapshot, id)
-      : kind === "markers" ? markersAvailability(snapshot) : analysisAvailability(snapshot, id),
+    enabled: shownIndicators(preferences),
+    mode: preferences.mode,
+    signalsOn: preferences.signals,
+    availability: (kind, id) => kind === "indicator" ? indicatorAvailability(snapshot, id) : analysisAvailability(snapshot, id),
   });
   for (const pill of pills) {
     const button = element("button", pill.short, `indicator-pill${pill.live ? "" : " not-ready"}`);
     button.type = "button";
     button.style.setProperty("--pill-color", pill.color);
     button.dataset.pill = pill.short;
-    button.title = `${pill.label} — ${pill.group} · ${pill.badge}: ${pill.reason}`;
+    button.title = `${pill.label}${pill.hint ? ` — ${pill.hint}` : ""}\n${pill.group} · ${pill.badge}: ${pill.reason}`;
     button.setAttribute("aria-label", `${pill.label} (${pill.group}), ${pill.badge}. ${pill.reason}`);
     if (pill.pressed !== null) button.setAttribute("aria-pressed", pill.pressed);
     if (!pill.action) {
@@ -272,16 +285,18 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
       else button.setAttribute("aria-disabled", "true");
     } else if (pill.action.type === "toggle") {
       button.addEventListener("click", () => {
-        const visible = new Set(enabled);
+        const visible = new Set(preferences.visible);
         if (visible.has(pill.action.id)) visible.delete(pill.action.id);
         else visible.add(pill.action.id);
-        updatePreferences({ mode: "pro", visible: [...visible] });
+        updatePreferences({ ...preferences, visible: [...visible] });
       });
+    } else if (pill.action.type === "signals") {
+      button.addEventListener("click", () => onSignals(!preferences.signals));
     } else {
       button.addEventListener("click", () => {
-        const card = pill.action.id === "strategy-markers"
-          ? $("#strategy-markers-panel")
-          : document.querySelector(`[data-analysis-key="${pill.action.id}"]`);
+        const card = document.querySelector(`[data-analysis-key="${pill.action.id}"]`);
+        const section = $("#analysis-section");
+        if (section) section.open = true;
         if (card) {
           card.tabIndex = -1;
           card.scrollIntoView({ block: "start" });
@@ -291,11 +306,18 @@ function renderIndicatorToolbar(snapshot, preferences, updatePreferences) {
     }
     toolbar.append(button);
   }
-  toolbar.append(element("span", "Solid = live · dashed = not ready (hover for why)", "indicator-toolbar-legend"));
+  const hint = $("#pillbar-hint");
+  if (hint) {
+    hint.textContent = preferences.mode === "pro"
+      ? `Pro: all ${pills.length} · solid = live · dashed = not ready (hover for why)`
+      : `Beginner: ${pills.length} essentials · hover a pill for a plain explanation`;
+  }
 }
 
-function renderIndicatorControls(snapshot, preferences, updatePreferences) {
-  renderIndicatorToolbar(snapshot, preferences, updatePreferences);
+function renderIndicatorControls(snapshot, preferences, updatePreferences, onSignals) {
+  renderIndicatorToolbar(snapshot, preferences, updatePreferences, onSignals);
+  const details = $("#indicator-details");
+  if (details) details.hidden = preferences.mode !== "pro";
   const controls = $("#indicator-controls");
   controls.hidden = preferences.mode !== "pro";
   controls.replaceChildren();
@@ -316,15 +338,7 @@ function renderIndicatorControls(snapshot, preferences, updatePreferences) {
   };
   for (const id of INDICATOR_IDS) {
     const descriptor = EDUCATION[id];
-    const supplied = Object.hasOwn(snapshot?.indicators ?? {}, id);
-    const indicator = snapshot?.indicators?.[id];
-    const bindingError = supplied ? indicatorBindingError(snapshot, id, indicator) : null;
-    const available = supplied && indicator?.status === "AVAILABLE" && !bindingError;
-    const unavailableReason = !supplied
-      ? "not supplied in response"
-      : indicator?.status === "UNAVAILABLE" && indicator?.reason_code
-        ? indicator.reason_code
-        : bindingError ?? indicator?.reason_code ?? indicator?.status ?? "unavailable";
+    const { available, reason: unavailableReason } = indicatorAvailability(snapshot, id);
     const toggle = element("label", undefined, `indicator-toggle${available ? "" : " unavailable"}`);
     toggle.hidden = !queryMatches(id);
     const checkbox = element("input");
@@ -428,11 +442,8 @@ function addIndicatorCard(container, id, snapshot) {
 function renderIndicators(snapshot, preferences) {
   const groups = $("#indicator-groups");
   groups.replaceChildren();
-  const visible = preferences.mode === "beginner"
-    ? DEFAULT_VISIBILITY
-    : preferences.visible;
   const grouped = new Map();
-  for (const id of visible) {
+  for (const id of shownIndicators(preferences)) {
     if (!EDUCATION[id]) continue;
     const group = EDUCATION[id].group;
     if (!grouped.has(group)) grouped.set(group, []);
@@ -766,11 +777,6 @@ function numberForPlot(exact) {
   return Number.isFinite(value) ? value : null;
 }
 
-function linearY(min, max, top, height) {
-  const span = max === min ? Math.max(Math.abs(max) * 0.02, 1) : max - min;
-  return (value) => top + height - ((value - min) / span) * height;
-}
-
 function makeLine(values, candleIndexes, yOf, left, width) {
   const positions = [];
   for (const item of values) {
@@ -785,23 +791,32 @@ function makeLine(values, candleIndexes, yOf, left, width) {
   return positions.length > 1 ? positions.join(" ") : "";
 }
 
-// Display-only chart view state (visible window and price scale). It never
-// changes which values are returned; it resets when the snapshot changes.
-const chartView = { key: null, window: null, scale: "auto" };
+// Display-only chart view state (visible window, price scale, rendered
+// width). It never changes which values are returned; the window resets when
+// the snapshot changes.
+const chartView = { key: null, window: null, scale: "auto", width: 0 };
+const layoutState = { fullscreen: false };
+// Set by mountCharts: pane collapse/move actions.
+let chartHandlers = { onPane: () => {} };
 
 // U4: the owner's own annotations (browser-only, never evidence or API data).
 const drawingState = { tool: "cursor", pending: [] };
-const markerState = { response: null, error: null, selected: 0, accountSize: null, riskPct: null, onSelect: null };
+const markerState = { response: null, error: null, selected: 0, accountSize: null, riskPct: null, onSelect: null, choice: null };
 
-function currentMarkers(snapshot) {
+function currentMarkers(snapshot, preferences) {
+  if (!preferences?.signals) return null;
   const response = markerState.response;
   return response && !markersBindingError(response, snapshot) && response.status === "AVAILABLE"
     ? response
     : null;
 }
 
-function renderStrategyMarkers(svg, snapshot, candles, xOf, priceY) {
-  const response = currentMarkers(snapshot);
+function priceDecimalsFor(snapshot) {
+  return displayDecimals(snapshot?.candles?.at(-1)?.metrics?.close?.value);
+}
+
+function renderStrategyMarkers(svg, snapshot, candles, xOf, priceY, preferences) {
+  const response = currentMarkers(snapshot, preferences);
   if (!response) return;
   const group = svgNode("g", { class: "strategy-markers", "clip-path": "url(#price-pane-clip)" });
   for (const anchor of markerAnchors(response.markers, candles.map(({ source }) => source.open_time))) {
@@ -818,7 +833,7 @@ function renderStrategyMarkers(svg, snapshot, candles, xOf, priceY) {
       "data-marker-index": String(anchor.markerIndex),
       tabindex: "0",
       role: "button",
-      "aria-label": `${anchor.side} marker${anchor.pending ? " (pending fill)" : ""} — open its evidence`,
+      "aria-label": `${anchor.side} marker${anchor.pending ? " (pending fill)" : ""} of a FAILED strategy, illustration only — open its evidence`,
     });
     const select = (event) => {
       event.stopPropagation();
@@ -833,17 +848,90 @@ function renderStrategyMarkers(svg, snapshot, candles, xOf, priceY) {
   svg.append(group);
 }
 
-function labelledValue(field) {
+// A labelled marker value at display precision; the exact backend string is
+// kept on hover (U5b).
+function labelledValue(field, key, priceDecimals) {
   const wrapper = element("span", undefined, "labelled-value");
+  const shown = markerFieldDisplay(key, field.value, priceDecimals);
+  const text = element("span", shown.text, "labelled-value-text");
+  if (shown.exact !== null) {
+    text.title = `Exact value: ${shown.exact}`;
+    text.dataset.exact = shown.exact;
+  }
   wrapper.append(
-    element("span", field.value === null || field.value === undefined ? "—" : String(field.value), "labelled-value-text"),
+    text,
     element("span", MARKER_LABELS[field.label] ?? "Unlabelled", `label-badge label-${String(field.label).toLowerCase()}`),
   );
   if (field.reason) wrapper.append(element("span", field.reason, "labelled-value-reason"));
   return wrapper;
 }
 
-function renderMarkersPanel(snapshot) {
+function displayTime(value) {
+  const shown = markerFieldDisplay("time", value);
+  return shown.text;
+}
+
+// SIGNALS controls (U5b): off by default; when on, the owner picks the
+// strategy and its recorded verdict is shown as a banner on the chart and here.
+function renderMarkerControls(snapshot, preferences, timeframe, { onSignals, onStrategy }) {
+  const controls = $("#markers-controls");
+  const banner = $("#markers-banner");
+  const chartBanner = $("#chart-signal-banner");
+  if (!controls || !banner) return;
+  controls.replaceChildren();
+  banner.replaceChildren();
+  if (!preferences.signals) {
+    controls.append(element("p", "SIGNALS is off. Every recorded strategy FAILED its study, so no coin has a trade signal. Turn SIGNALS on only to see where a failed strategy would have traded — an illustration, not a signal.", "card-note"));
+    const on = element("button", "Show strategy markers");
+    on.type = "button";
+    on.id = "signals-on";
+    on.addEventListener("click", () => onSignals(true));
+    controls.append(on);
+    if (chartBanner) chartBanner.hidden = true;
+    return;
+  }
+  const label = element("label", "Strategy");
+  const select = element("select");
+  select.id = "marker-strategy";
+  for (const option of markerStrategyOptions(timeframe)) {
+    const node = element("option", option.usable ? option.label : `${option.label} — ${option.reason}`);
+    node.value = option.value;
+    node.disabled = !option.usable;
+    select.append(node);
+  }
+  select.value = markerState.choice?.key ?? "";
+  select.addEventListener("change", () => onStrategy(select.value));
+  label.append(select);
+  const off = element("button", "Hide markers");
+  off.type = "button";
+  off.id = "signals-off";
+  off.addEventListener("click", () => onSignals(false));
+  controls.append(label, off);
+  const choice = markerState.choice;
+  if (!choice) {
+    if (chartBanner) chartBanner.hidden = true;
+    return;
+  }
+  const info = verdictBanner(choice.strategy, choice.version);
+  const box = element("div", undefined, "verdict-banner");
+  box.dataset.tone = info.tone;
+  box.setAttribute("role", "note");
+  box.append(element("strong", info.title));
+  if (info.summary) box.append(element("p", info.summary));
+  if (info.reasons.length) {
+    const reasons = element("ul");
+    for (const reason of info.reasons) reasons.append(element("li", reason));
+    box.append(reasons);
+  }
+  banner.append(box);
+  if (chartBanner) {
+    chartBanner.hidden = false;
+    chartBanner.dataset.tone = info.tone;
+    chartBanner.textContent = info.title;
+  }
+}
+
+function renderMarkersPanel(snapshot, preferences) {
   const body = $("#markers-body");
   if (!body) return;
   body.replaceChildren();
@@ -852,6 +940,7 @@ function renderMarkersPanel(snapshot) {
     body.append(element("p", "No snapshot is loaded; no strategy markers are shown.", "empty-state"));
     return;
   }
+  if (!preferences.signals) return;
   if (markerState.error || !response) {
     body.append(element("p", markerState.error ?? "Loading strategy markers…", "empty-state"));
     return;
@@ -861,8 +950,11 @@ function renderMarkersPanel(snapshot) {
     body.append(element("p", `${bindingError} No markers are shown.`, "empty-state"));
     return;
   }
+  const decimals = priceDecimalsFor(snapshot);
   const strategy = response.strategy ?? {};
-  body.append(element("p", `${strategy.strategy_id ?? "strategy"} v${strategy.version ?? "?"} · strategy sha256 ${String(strategy.content_sha256 ?? "").slice(0, 12)}… · ${response.evidence_scope ?? ""}`, "muted"));
+  const scope = element("p", `${strategy.strategy_id ?? "strategy"} v${strategy.version ?? "?"} · strategy sha256 ${String(strategy.content_sha256 ?? "").slice(0, 12)}… · ${response.evidence_scope ?? ""}`, "card-note");
+  scope.title = `Strategy sha256 ${strategy.content_sha256 ?? "not reported"}`;
+  body.append(scope);
   if (response.status !== "AVAILABLE") {
     body.append(element("p", `Strategy markers ${response.status}: ${response.reason_code ?? "no reason given"}. No markers are shown.`, "empty-state"));
     return;
@@ -874,9 +966,10 @@ function renderMarkersPanel(snapshot) {
   list.setAttribute("aria-label", "Strategy markers");
   response.markers.forEach((marker, index) => {
     const when = marker.status === "FILLED" ? marker.fill_time?.value : marker.time?.value;
-    const button = element("button", `${marker.side === "BUY" ? "▲ BUY" : "▼ SELL"} ${when ?? ""}${marker.status === "FILLED" ? "" : " · pending"}`, `marker-item marker-item-${String(marker.side).toLowerCase()}`);
+    const button = element("button", `${marker.side === "BUY" ? "▲ BUY" : "▼ SELL"} ${when ? displayTime(when) : ""}${marker.status === "FILLED" ? "" : " · pending"}`, `marker-item marker-item-${String(marker.side).toLowerCase()}`);
     button.type = "button";
     button.dataset.markerIndex = String(index);
+    if (when) button.title = `Exact time: ${when}`;
     button.setAttribute("aria-pressed", String(index === markerState.selected));
     button.addEventListener("click", () => markerState.onSelect?.(index));
     list.append(button);
@@ -885,44 +978,53 @@ function renderMarkersPanel(snapshot) {
   const marker = response.markers[Math.min(markerState.selected, response.markers.length - 1)];
   const detail = element("div", undefined, "marker-detail");
   detail.id = "marker-detail";
-  const conditions = element("section", undefined, "marker-section");
-  conditions.append(element("h3", "Conditions"));
-  const conditionList = element("ul");
+  const section = (title, open) => {
+    const node = element("details", undefined, "marker-section");
+    node.open = open;
+    node.append(element("summary", title));
+    return node;
+  };
+  const conditions = section("Conditions", true);
+  const conditionList = element("ul", undefined, "condition-list");
   for (const condition of marker.conditions ?? []) {
     const item = element("li");
     item.append(element("strong", `${condition.met ? "✓" : "✗"} ${condition.condition ?? ""}`));
     for (const [key, value] of Object.entries(condition)) {
       if (value && typeof value === "object" && "label" in value) {
         const row = element("div", undefined, "marker-field");
-        row.append(element("span", key.replaceAll("_", " "), "marker-field-name"), labelledValue(value));
+        row.append(element("span", key.replaceAll("_", " "), "marker-field-name"), labelledValue(value, key, decimals));
         item.append(row);
       }
     }
     conditionList.append(item);
   }
   conditions.append(conditionList);
-  const trade = element("section", undefined, "marker-section");
-  trade.append(element("h3", "Trade details"));
+  const trade = section("Trade details", true);
   const table = element("dl", undefined, "marker-fields");
   for (const row of tradeDetails(marker)) {
-    const term = element("dt", row.name);
     const value = element("dd");
-    value.append(labelledValue(row));
-    table.append(term, value);
+    value.append(labelledValue(row, row.key, decimals));
+    table.append(element("dt", row.name), value);
   }
   if (marker.position_size?.capped) table.append(element("dt", "Size cap"), element("dd", "Capped at account ÷ entry (Spot, no leverage)."));
   trade.append(table);
-  const evidence = element("section", undefined, "marker-section");
-  evidence.append(element("h3", "Evidence"));
+  const evidence = section("Evidence", false);
   const facts = element("dl", undefined, "marker-fields");
-  for (const [name, value] of [
-    ["Snapshot", response.snapshot_id], ["Quality report", response.quality_report_id],
-    ["Data quality", response.data_quality_status], ["As of", response.as_of],
-    ["Costs", `${response.costs?.fee_bps_per_side ?? "?"} bps fee + ${response.costs?.slippage_bps_per_side ?? "?"} bps slippage per side (${response.costs?.label ?? "unlabelled"})`],
-  ]) facts.append(element("dt", name), element("dd", String(value ?? "—")));
+  const costs = response.costs ?? {};
+  for (const [name, value, exact] of [
+    ["Snapshot", String(response.snapshot_id ?? "—").slice(0, 8), response.snapshot_id],
+    ["Quality report", String(response.quality_report_id ?? "—").slice(0, 8), response.quality_report_id],
+    ["Data quality", response.data_quality_status ?? "—", null],
+    ["As of", response.as_of ? displayTime(response.as_of) : "—", response.as_of],
+    ["Costs", `${markerFieldDisplay("fee_bps_per_side", costs.fee_bps_per_side).text} bps fee + ${markerFieldDisplay("slippage_bps_per_side", costs.slippage_bps_per_side).text} bps slippage per side (${costs.label ?? "unlabelled"})`, costs.basis],
+  ]) {
+    const dd = element("dd", value);
+    if (exact) dd.title = String(exact);
+    facts.append(element("dt", name), dd);
+  }
   for (const [name, field] of Object.entries(response.not_applicable ?? {})) {
     const value = element("dd");
-    value.append(labelledValue(field));
+    value.append(labelledValue(field, name, decimals));
     facts.append(element("dt", name.replaceAll("_", " ")), value);
   }
   evidence.append(facts);
@@ -1020,11 +1122,16 @@ function renderDrawings(svg, ctx) {
   svg.append(group);
 }
 
-function renderDrawingTools(onChange, onClear) {
+function renderDrawingTools(mode, onChange, onClear) {
   const nav = $("#drawing-tools");
   if (!nav) return;
   nav.replaceChildren();
-  for (const tool of DRAWING_TOOLS) {
+  const tools = toolsForMode(mode);
+  if (!tools.some((tool) => tool.id === drawingState.tool)) {
+    drawingState.tool = "cursor";
+    drawingState.pending = [];
+  }
+  for (const tool of tools) {
     const button = element("button", tool.glyph, "drawing-tool");
     button.type = "button";
     button.dataset.drawingTool = tool.id;
@@ -1035,13 +1142,15 @@ function renderDrawingTools(onChange, onClear) {
       drawingState.pending = [];
       if (tool.id === "clear") onClear();
       else drawingState.tool = tool.id;
-      renderDrawingTools(onChange, onClear);
+      renderDrawingTools(mode, onChange, onClear);
       onChange();
     });
     nav.append(button);
   }
   const status = $("#drawing-status");
   if (status) status.textContent = drawingStatusText();
+  const note = $("#drawing-note-label");
+  if (note) note.hidden = drawingState.tool !== "note";
 }
 
 function syncChartView(snapshot, candleCount) {
@@ -1070,16 +1179,6 @@ function renderChartToolbar(snapshot, preferences, view, candleCount, scale) {
     node.addEventListener("click", () => { onClick(); rerender(action); });
     return node;
   };
-  const scaleGroup = element("span", undefined, "chart-tool-group");
-  scaleGroup.setAttribute("role", "group");
-  scaleGroup.setAttribute("aria-label", "Price scale");
-  for (const [mode, label, title] of [
-    ["auto", "Auto", "Linear price scale fitted to the visible candles"],
-    ["log", "Log", "Logarithmic price scale"],
-    ["percent", "%", "Percent change from the first visible close"],
-  ]) {
-    scaleGroup.append(button(`scale-${mode}`, label, title, () => { chartView.scale = mode; }, chartView.scale === mode));
-  }
   const zoomGroup = element("span", undefined, "chart-tool-group");
   zoomGroup.setAttribute("role", "group");
   zoomGroup.setAttribute("aria-label", "Zoom and pan");
@@ -1104,22 +1203,57 @@ function renderChartToolbar(snapshot, preferences, view, candleCount, scale) {
   );
   const range = element(
     "span",
-    `Showing candles ${view.start + 1}–${view.start + view.count} of ${candleCount} · scale: ${scale.mode === "percent" ? "%" : scale.mode === "log" ? "Log" : "Auto"}`,
+    `Candles ${view.start + 1}–${view.start + view.count} of ${candleCount} · scale: ${scale.mode === "percent" ? "%" : scale.mode === "log" ? "Log" : "Auto"}`,
     "chart-view-range",
   );
   range.id = "chart-view-range";
   range.setAttribute("role", "status");
-  toolbar.append(scaleGroup, zoomGroup, range);
+  const scaleGroup = element("span", undefined, "chart-tool-group");
+  scaleGroup.setAttribute("role", "group");
+  scaleGroup.setAttribute("aria-label", "Price scale");
+  for (const [mode, label, title] of [
+    ["auto", "Auto", "Linear price scale fitted to the visible candles"],
+    ["log", "Log", "Logarithmic price scale"],
+    ["percent", "%", "Percent change from the first visible close"],
+  ]) {
+    scaleGroup.append(button(`scale-${mode}`, label, title, () => { chartView.scale = mode; }, chartView.scale === mode));
+  }
+  toolbar.append(zoomGroup, range);
   if (scale.reason) toolbar.append(element("span", scale.reason, "chart-view-note"));
+  toolbar.append(scaleGroup);
   return toolbar;
+}
+
+const CHART_GEOMETRY = Object.freeze({ left: 8, right: 84, priceTop: 6, volume: 76, pane: 112, collapsed: 24, gap: 6, axis: 24 });
+
+// Height of the price pane: the price + volume viewport is at least 60% of the
+// window (UR1); in full screen the whole chart fits the window.
+function pricePaneHeight(panesHeight) {
+  const { volume, gap, axis, priceTop } = CHART_GEOMETRY;
+  const viewport = layoutState.fullscreen
+    ? window.innerHeight - 230 - panesHeight
+    : Math.round(window.innerHeight * 0.6);
+  return Math.max(240, viewport - volume - gap - axis - priceTop);
+}
+
+function legendText(svg, x, y, parts, className) {
+  const node = svgNode("text", { x, y, class: `chart-legend ${className ?? ""}`.trim() });
+  for (const part of parts) {
+    const span = svgNode("tspan", { class: part.className ?? "" });
+    if (part.color) span.setAttribute("fill", part.color);
+    if (part.series) span.dataset.series = part.series;
+    span.textContent = part.text;
+    node.append(span);
+  }
+  svg.append(node);
+  return node;
 }
 
 function renderChart(snapshot, preferences) {
   const target = $("#chart-container");
-  target.replaceChildren();
   const response = snapshotCandles(snapshot);
   if (response.error) {
-    target.append(element("p", response.error, "empty-state"));
+    target.replaceChildren(element("p", response.error, "empty-state"));
     return;
   }
   const allCandles = response.candles;
@@ -1127,12 +1261,12 @@ function renderChart(snapshot, preferences) {
   const candles = allCandles.slice(view.start, view.start + view.count);
   const candleIndexes = new Map(candles.map(({ source }, index) => [Date.parse(source.close_time), index]));
   const inView = (point) => candleIndexes.has(Date.parse(point.candleEnd));
+  const enabled = shownIndicators(preferences);
+  const qualityValid = snapshot.data_quality?.status === "VALID" && snapshot.data_quality?.report_status === "VALID";
   const vwapAnalysis = snapshot.spot_analysis?.vwap;
-  const vwapBindingError = spotAnalysisBindingError(snapshot, "vwap", vwapAnalysis);
-  const vwapPoints = snapshot.data_quality?.status === "VALID" &&
-      snapshot.data_quality?.report_status === "VALID" &&
+  const vwapPoints = enabled.includes("vwap") && qualityValid &&
       ["AVAILABLE", "PARTIAL"].includes(vwapAnalysis?.status) &&
-      !vwapBindingError && Array.isArray(vwapAnalysis.result?.points)
+      !spotAnalysisBindingError(snapshot, "vwap", vwapAnalysis) && Array.isArray(vwapAnalysis.result?.points)
     ? vwapAnalysis.result.points.flatMap((point) =>
       point?.value?.status === "READY" &&
         typeof point.value.value === "string" &&
@@ -1145,79 +1279,55 @@ function renderChart(snapshot, preferences) {
     )
     : [];
   const volumeAnalysis = snapshot.spot_analysis?.["volume-confirmation"];
-  const volumeReference = snapshot.data_quality?.status === "VALID" &&
-      snapshot.data_quality?.report_status === "VALID" &&
-      !spotAnalysisBindingError(snapshot, "volume-confirmation", volumeAnalysis)
+  const volumeReference = qualityValid && !spotAnalysisBindingError(snapshot, "volume-confirmation", volumeAnalysis)
     ? volumeReferenceLine(volumeAnalysis)
     : null;
-  const width = 1000;
-  const left = 150;
-  const right = 125;
+  const available = (id) => {
+    const indicator = snapshot.indicators?.[id];
+    return indicator?.status === "AVAILABLE" && !indicatorBindingError(snapshot, id, indicator) && indicator.result;
+  };
+
+  // Overlays on the price pane and sub-panes (UR2), each with one colour.
+  const overlays = [];
+  for (const id of Object.keys(OVERLAY_SERIES)) {
+    if (!enabled.includes(id) || !available(id)) continue;
+    for (const series of OVERLAY_SERIES[id]) overlays.push({ ...series, id, points: plotValues(snapshot.indicators[id].result, series.field) });
+  }
+  const paneIds = orderedPanes(PANE_DEFINITIONS.map((definition) => definition.id)
+    .filter((id) => enabled.includes(id) && available(id)), preferences.paneOrder);
+  const panes = paneIds.map((id) => {
+    const definition = PANE_DEFINITIONS.find((item) => item.id === id);
+    const series = definition.series
+      .map((item) => ({ ...item, points: plotValues(snapshot.indicators[id].result, item.field) }))
+      .filter((item) => item.points.length > 1);
+    return { definition, series, collapsed: preferences.collapsedPanes.includes(id) };
+  }).filter((pane) => pane.series.length);
+
+  const { left, right, priceTop, volume: volumeHeight, pane: paneHeight, collapsed: collapsedHeight, gap, axis } = CHART_GEOMETRY;
+  const width = Math.max(480, Math.round(target.clientWidth || 960));
+  chartView.width = width;
   const plotWidth = width - left - right;
-  const priceTop = 20;
-  const priceHeight = 260;
-  const panelsTop = 320;
-  const panelHeight = 95;
-  const panelGap = 25;
-  const volumeHeight = 55;
-  const volumeMax = Math.max(...candles.map((item) => item.values.volume.numeric));
+  const panesHeight = panes.reduce((sum, pane) => sum + gap + (pane.collapsed ? collapsedHeight : paneHeight), 0);
+  const priceHeight = pricePaneHeight(panesHeight);
+  const volumeTop = priceTop + priceHeight + gap;
+  let cursor = volumeTop + volumeHeight;
+  for (const pane of panes) {
+    cursor += gap;
+    pane.top = cursor;
+    pane.height = pane.collapsed ? collapsedHeight : paneHeight;
+    cursor += pane.height;
+  }
+  const plotBottom = cursor;
+  const height = plotBottom + axis;
+
   const lows = candles.map(({ values }) => values.low.numeric);
   const highs = candles.map(({ values }) => values.high.numeric);
-  const enabled = preferences.mode === "beginner" ? DEFAULT_VISIBILITY : preferences.visible;
-  const emaSeries = [];
-  const bands = [];
-  const fieldsByIndicator = {
-    "ema-20": [["EMA 20", "value"]],
-    "ema-50": [["EMA 50", "value"]],
-    "ema-500": [["EMA 500", "value"]],
-    "bollinger-bands-20": [["BB upper", "upper"], ["BB middle", "middle"], ["BB lower", "lower"]],
-    "atr-14": [["ATR 14", "value"]],
-    "realized-volatility-20": [["Realized volatility 20", "value"]],
-    "rsi-14": [["RSI 14", "value"]],
-    "macd-12-26-9": [["MACD", "line"], ["MACD signal", "signal"], ["MACD histogram", "histogram"]],
-    "stochastic-14-3": [["Stochastic K", "k"], ["Stochastic D", "d"]],
-    "cci-20": [["CCI 20", "value"]],
-  };
-  const panelDefinitions = [
-    ["atr-14", "ATR", [["atr-line", "value"]]],
-    ["realized-volatility-20", "REALIZED VOL", [["realized-volatility-line", "value"]]],
-    ["rsi-14", "RSI", [["rsi-line", "value"]]],
-    ["macd-12-26-9", "MACD", [["macd-line", "line"], ["macd-signal", "signal"], ["macd-histogram", "histogram"]]],
-    ["stochastic-14-3", "STOCHASTIC", [["stochastic-k", "k"], ["stochastic-d", "d"]]],
-    ["cci-20", "CCI", [["cci-line", "value"]]],
-  ];
-  const separatePanels = [];
-  for (const id of enabled) {
-    const result = snapshot.indicators?.[id]?.result;
-    if (snapshot.indicators?.[id]?.status !== "AVAILABLE" ||
-        indicatorBindingError(snapshot, id, snapshot.indicators?.[id]) ||
-        !result) continue;
-    if (id === "ema-20" || id === "ema-50" || id === "ema-500") {
-      emaSeries.push([id, plotValues(result)]);
-    } else if (id === "bollinger-bands-20") {
-      bands.push(...["upper", "middle", "lower"].map((field) => [field, plotValues(result, field)]));
-    }
-  }
-  for (const [id, label, fields] of panelDefinitions) {
-    const indicator = snapshot.indicators?.[id];
-    if (!enabled.includes(id) || indicator?.status !== "AVAILABLE" ||
-        indicatorBindingError(snapshot, id, indicator) || !indicator.result) continue;
-    const series = fields.map(([className, field]) => [className, plotValues(indicator.result, field)])
-      .filter(([, points]) => points.length > 1);
-    if (series.length) separatePanels.push({ label, series });
-  }
-  const volumeTop = panelsTop + separatePanels.length * (panelHeight + panelGap) + 5;
-  const height = volumeTop + volumeHeight + 20;
   const visiblePriceValues = [...lows, ...highs];
   for (const point of vwapPoints.filter(inView)) {
     const number = numberForPlot(point.value);
     if (number !== null) visiblePriceValues.push(number);
   }
-  for (const [, points] of emaSeries) for (const point of points.filter(inView)) {
-    const number = numberForPlot(point.value);
-    if (number !== null) visiblePriceValues.push(number);
-  }
-  for (const [, points] of bands) for (const point of points.filter(inView)) {
+  for (const overlay of overlays) for (const point of overlay.points.filter(inView)) {
     const number = numberForPlot(point.value);
     if (number !== null) visiblePriceValues.push(number);
   }
@@ -1232,15 +1342,22 @@ function renderChart(snapshot, preferences) {
     maximum: priceMax,
     mode: chartView.scale,
     base: candles[0].values.close.numeric,
+    divisions: Math.max(4, Math.min(10, Math.round(priceHeight / 64))),
   });
   const svg = svgNode("svg", {
     viewBox: `0 0 ${width} ${height}`,
+    width,
+    height,
     role: "group",
     "aria-labelledby": "chart-svg-title chart-svg-desc",
     "aria-describedby": "chart-inspector",
     "aria-label": `${snapshot.symbol} ${snapshot.timeframe} candle chart. Use left and right arrow keys to inspect candles, plus and minus to zoom.`,
     tabindex: "0",
     focusable: "true",
+    "data-price-top": priceTop,
+    "data-price-height": priceHeight,
+    "data-price-min": priceMin,
+    "data-price-max": priceMax,
   });
   const title = svgNode("title", { id: "chart-svg-title" });
   title.textContent = `${snapshot.symbol} ${snapshot.timeframe} exact API candles, volume${snapshot.data_quality?.status === "STALE" ? ", stale" : ""}`;
@@ -1249,102 +1366,188 @@ function renderChart(snapshot, preferences) {
   description.textContent = `${candles.length} returned finalized candles. Hover over a candle or focus the chart and use the arrow keys to inspect exact returned values.`;
   svg.append(description);
   const priceUnit = candles.at(-1).values.close.unit;
+  const volumeUnit = candles.at(-1).values.volume.unit;
   const priceDecimals = displayDecimals(allCandles.at(-1).values.close.exact);
   const formatPrice = (value) => formatDisplayNumber(value, priceDecimals);
   const priceY = (value) => {
     const fraction = scale.fractionOf(value);
     return fraction === null ? null : priceTop + fraction * priceHeight;
   };
+  const xOf = (index) => left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
+
+  // Pane frames and the shared time axis.
+  svg.append(svgNode("line", { x1: width - right, x2: width - right, y1: priceTop, y2: plotBottom, class: "axis-line" }));
+  for (const y of [volumeTop - gap / 2, ...panes.map((pane) => pane.top - gap / 2)]) {
+    svg.append(svgNode("line", { x1: 0, x2: width, y1: y, y2: y, class: "pane-separator" }));
+  }
   for (const { fraction, value, label } of scale.ticks) {
     const y = priceTop + fraction * priceHeight;
     svg.append(svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "gridline" }));
     const tick = svgText(svg, width - right + 8, y + 4, label ?? formatPrice(value), "axis-label price-axis-tick");
     tick.setAttribute("text-anchor", "start");
   }
-  const xOf = (index) => left + (candles.length <= 1 ? plotWidth / 2 : index * plotWidth / (candles.length - 1));
-  for (const index of timeAxisIndexes(candles.length, 5)) {
+  for (const index of timeAxisIndexes(candles.length, Math.max(3, Math.min(10, Math.round(plotWidth / 150))))) {
     const x = xOf(index);
-    svg.append(svgNode("line", {
-      x1: x, x2: x, y1: priceTop, y2: volumeTop + volumeHeight, class: "gridline gridline-time",
-    }));
-    const label = svgText(svg, x, height - 4, axisTimeLabel(candles[index].source.open_time, snapshot.timeframe), "axis-label time-axis-tick");
+    svg.append(svgNode("line", { x1: x, x2: x, y1: priceTop, y2: plotBottom, class: "gridline gridline-time" }));
+    const label = svgText(svg, x, height - 7, axisTimeLabel(candles[index].source.open_time, snapshot.timeframe), "axis-label time-axis-tick");
     label.setAttribute("text-anchor", index === 0 ? "start" : index === candles.length - 1 ? "end" : "middle");
   }
-  svgText(svg, 8, 16, `PRICE · ${priceUnit}${scale.mode === "log" ? " · log" : scale.mode === "percent" ? " · % from first visible close" : ""}`);
-  svgText(svg, 8, volumeTop - 6, "VOLUME");
-  const candleWidth = Math.max(1, Math.min(8, plotWidth / candles.length * 0.62));
+
+  const candleWidth = Math.max(1, Math.min(14, plotWidth / candles.length * 0.66));
+  const volumeMax = Math.max(...candles.map((item) => item.values.volume.numeric));
+  const volumeInner = volumeHeight - 18;
   candles.forEach(({ values }, index) => {
     const x = xOf(index);
-    const y = priceY;
     const up = values.close.numeric >= values.open.numeric;
     svg.append(svgNode("line", {
-      x1: x, x2: x, y1: y(values.high.numeric), y2: y(values.low.numeric),
+      x1: x, x2: x, y1: priceY(values.high.numeric), y2: priceY(values.low.numeric),
       class: `candle-wick candle-${up ? "up" : "down"}`,
     }));
     svg.append(svgNode("rect", {
       x: x - candleWidth / 2,
-      y: Math.min(y(values.open.numeric), y(values.close.numeric)),
+      y: Math.min(priceY(values.open.numeric), priceY(values.close.numeric)),
       width: candleWidth,
-      height: Math.max(1, Math.abs(y(values.open.numeric) - y(values.close.numeric))),
+      height: Math.max(1, Math.abs(priceY(values.open.numeric) - priceY(values.close.numeric))),
       class: `candle-body candle-${up ? "up" : "down"}`,
     }));
-    const volumeBarHeight = volumeMax > 0 ? (values.volume.numeric / volumeMax) * volumeHeight : 0;
+    const barHeight = volumeMax > 0 ? (values.volume.numeric / volumeMax) * volumeInner : 0;
     svg.append(svgNode("rect", {
       x: x - candleWidth / 2,
-      y: volumeTop + volumeHeight - volumeBarHeight,
+      y: volumeTop + volumeHeight - barHeight,
       width: candleWidth,
-      height: volumeBarHeight,
-      class: "volume-bar",
+      height: barHeight,
+      class: `volume-bar volume-${up ? "up" : "down"}`,
     }));
   });
-  for (const [id, points] of [...emaSeries, ...bands]) {
-    const polyline = makeLine(points, candleIndexes, priceY, left, plotWidth);
-    const lineClass = ["upper", "middle", "lower"].includes(id) ? `bollinger-${id}` : id;
-    if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${lineClass}` }));
+  for (const overlay of overlays) {
+    const polyline = makeLine(overlay.points, candleIndexes, priceY, left, plotWidth);
+    if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${overlay.className}`, stroke: overlay.color }));
   }
   const vwapLine = makeLine(vwapPoints, candleIndexes, priceY, left, plotWidth);
-  if (vwapLine) {
-    svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line" }));
-  }
-  for (const [panelIndex, panel] of separatePanels.entries()) {
-    const top = panelsTop + panelIndex * (panelHeight + panelGap);
-    const numbers = panel.series.flatMap(([, points]) =>
-      points.filter(inView).map((point) => numberForPlot(point.value)),
-    ).filter((value) => value !== null);
-    if (!numbers.length) continue;
-    let min = Math.min(...numbers);
-    let max = Math.max(...numbers);
-    if (min >= 0) min = 0;
-    if (max <= 0) max = 0;
-    if (min === max) max = min + Math.max(Math.abs(min) * 0.02, 1);
-    svgText(svg, 8, top - 6, panel.label);
-    panel.series.forEach(([className, points], seriesIndex) => {
-      const polyline = makeLine(points, candleIndexes, linearY(min, max, top, panelHeight), left, plotWidth);
-      if (polyline) svg.append(svgNode("polyline", { points: polyline, class: `indicator-line ${className}` }));
-      svgText(svg, left + seriesIndex * 150, top - 6, className.replaceAll("-", " "), "legend-text");
-    });
-  }
-  const overlayLegend = [
-    ...emaSeries.map(([id]) => ({ label: id.toUpperCase().replace("-", " "), className: id })),
-    ...bands.map(([field]) => ({ label: `BB ${field}`, className: `bollinger-${field}` })),
-    ...(vwapLine ? [{ label: "VWAP", className: "spot-vwap-line" }] : []),
-  ];
-  const legendStep = overlayLegend.length ? plotWidth / overlayLegend.length : 0;
-  overlayLegend.forEach((item, index) => {
-    const label = svgText(svg, left + index * legendStep, 18, item.label, "legend-text");
-    label.setAttribute("class", `legend-text legend-${item.className}`);
-  });
-  svgText(svg, left, volumeTop - 6, "Volume · backend values", "legend-text");
+  if (vwapLine) svg.append(svgNode("polyline", { points: vwapLine, class: "indicator-line spot-vwap-line", stroke: VWAP_COLOR }));
+  const volumeY = (value) => volumeTop + volumeHeight - (value / volumeMax) * volumeInner;
   const volumeLine = volumeReference && volumeMax > 0
-    ? makeLine(volumeReference.points, candleIndexes,
-      (value) => volumeTop + volumeHeight - (value / volumeMax) * volumeHeight, left, plotWidth)
+    ? makeLine(volumeReference.points, candleIndexes, volumeY, left, plotWidth)
     : "";
-  if (volumeLine) {
-    svg.append(svgNode("polyline", { points: volumeLine, class: "volume-average-line" }));
-    const label = svgText(svg, left + 220, volumeTop - 6,
-      `Prior-${volumeReference.lookback} average volume · backend`, "legend-text");
-    label.setAttribute("class", "legend-text legend-volume-average-line");
+  if (volumeLine) svg.append(svgNode("polyline", { points: volumeLine, class: "volume-average-line", stroke: VOLUME_AVERAGE_COLOR }));
+
+  // Legends: colour-matched to their lines, values follow the crosshair.
+  const overlayLegend = [
+    ...overlays.flatMap((overlay) => [
+      { text: `${overlay.label} `, color: overlay.color, className: `legend-label legend-${overlay.className}` },
+      { text: "—", color: overlay.color, series: overlay.className, className: "legend-value" },
+      { text: "   " },
+    ]),
+    ...(vwapLine ? [
+      { text: "VWAP ", color: VWAP_COLOR, className: "legend-label legend-spot-vwap-line" },
+      { text: "—", color: VWAP_COLOR, series: "spot-vwap-line", className: "legend-value" },
+    ] : []),
+  ];
+  if (overlayLegend.length) legendText(svg, left + 6, priceTop + 15, overlayLegend, "overlay-legend");
+  legendText(svg, left + 6, volumeTop + 13, [
+    { text: `Vol (${volumeUnit}) `, className: "legend-label" },
+    { text: "—", series: "volume", className: "legend-value" },
+    ...(volumeLine ? [
+      { text: `   Prior-${volumeReference.lookback} average volume · backend `, color: VOLUME_AVERAGE_COLOR, className: "legend-label legend-volume-average-line" },
+      { text: "—", color: VOLUME_AVERAGE_COLOR, series: "volume-average", className: "legend-value" },
+    ] : []),
+  ], "volume-legend");
+
+  const stage = element("div", undefined, "chart-stage");
+  const paneTools = [];
+  for (const pane of panes) {
+    const { definition } = pane;
+    const group = svgNode("g", {
+      class: `indicator-pane pane-${definition.key}${pane.collapsed ? " collapsed" : ""}`,
+      "data-pane": definition.id,
+      "data-pane-key": definition.key,
+      "data-top": pane.top,
+      "data-height": pane.height,
+      "data-collapsed": String(pane.collapsed),
+    });
+    const decimals = definition.priceUnit ? priceDecimals : 2;
+    if (!pane.collapsed) {
+      const numbers = pane.series.flatMap((series) => series.points.filter(inView).map((point) => numberForPlot(point.value)))
+        .filter((value) => value !== null);
+      const range = paneRange(definition, numbers);
+      if (range) {
+        group.setAttribute("data-min", range.min);
+        group.setAttribute("data-max", range.max);
+        const inner = pane.height - 4;
+        const y = (value) => pane.top + 2 + inner - ((value - range.min) / (range.max - range.min)) * inner;
+        const ticks = niceTicks(range.min, range.max, 3);
+        for (const tick of ticks) {
+          group.append(svgNode("line", { x1: left, x2: width - right, y1: y(tick), y2: y(tick), class: "gridline pane-gridline" }));
+          const label = svgNode("text", { x: width - right + 8, y: y(tick) + 4, class: "axis-label pane-axis-tick" });
+          label.textContent = formatDisplayNumber(tick, Math.abs(tick) < 10 && !Number.isInteger(tick) ? decimals : 0);
+          group.append(label);
+        }
+        for (const reference of definition.reference) {
+          if (reference < range.min || reference > range.max) continue;
+          group.append(svgNode("line", { x1: left, x2: width - right, y1: y(reference), y2: y(reference), class: "pane-reference", "data-reference": reference }));
+          if (ticks.includes(reference)) continue;
+          const label = svgNode("text", { x: width - right + 8, y: y(reference) + 4, class: "axis-label pane-reference-label" });
+          label.textContent = String(reference);
+          group.append(label);
+        }
+        for (const series of pane.series) {
+          if (series.kind === "bars") {
+            const zero = y(Math.max(range.min, Math.min(range.max, 0)));
+            const barWidth = Math.max(1, candleWidth * 0.8);
+            for (const point of series.points) {
+              const index = candleIndexes.get(Date.parse(point.candleEnd));
+              const value = numberForPlot(point.value);
+              if (index === undefined || value === null) continue;
+              const top = y(value);
+              group.append(svgNode("rect", {
+                x: xOf(index) - barWidth / 2, y: Math.min(top, zero), width: barWidth, height: Math.max(1, Math.abs(zero - top)),
+                class: `${series.className}-bar ${value >= 0 ? "hist-up" : "hist-down"}`,
+                "data-candle-end": point.candleEnd, "data-value": point.value,
+              }));
+            }
+          } else {
+            const polyline = makeLine(series.points, candleIndexes, y, left, plotWidth);
+            if (polyline) group.append(svgNode("polyline", { points: polyline, class: `indicator-line ${series.className}`, stroke: series.color }));
+          }
+        }
+      }
+    }
+    const legend = svgNode("text", { x: left + 6, y: pane.top + 15, class: "chart-legend pane-legend" });
+    const titleSpan = svgNode("tspan", { class: "legend-title" });
+    titleSpan.textContent = `${definition.title}  `;
+    legend.append(titleSpan);
+    for (const series of pane.series) {
+      const name = svgNode("tspan", { fill: series.color, class: `legend-label legend-${series.className}` });
+      name.textContent = `${series.label} `;
+      const value = svgNode("tspan", { fill: series.color, class: "legend-value", "data-series": series.className, "data-decimals": decimals });
+      value.textContent = "—";
+      const spacer = svgNode("tspan");
+      spacer.textContent = "   ";
+      legend.append(name, value, spacer);
+    }
+    group.append(legend);
+    svg.append(group);
+    const tools = element("div", undefined, "pane-tools");
+    tools.style.top = `${pane.top + 2}px`;
+    tools.style.right = `${right + 4}px`;
+    for (const [action, glyph, label] of [
+      ["collapse", pane.collapsed ? "▸" : "▾", `${pane.collapsed ? "Expand" : "Collapse"} the ${definition.title} pane`],
+      ["up", "↑", `Move the ${definition.title} pane up`],
+      ["down", "↓", `Move the ${definition.title} pane down`],
+    ]) {
+      const button = element("button", glyph, "pane-tool");
+      button.type = "button";
+      button.dataset.paneAction = action;
+      button.dataset.pane = definition.id;
+      button.title = label;
+      button.setAttribute("aria-label", label);
+      if (action === "collapse") button.setAttribute("aria-expanded", String(!pane.collapsed));
+      button.addEventListener("click", () => chartHandlers.onPane(action, definition.id, panes.map((item) => item.definition.id)));
+      tools.append(button);
+    }
+    paneTools.push(tools);
   }
+
   const tag = lastPriceTag(allCandles.at(-1), allCandles.at(-2));
   const tagY = tag ? priceY(tag.value) : null;
   if (tag && tagY !== null) {
@@ -1352,7 +1555,7 @@ function renderChart(snapshot, preferences) {
     const group = svgNode("g", { class: `last-price-tag last-price-${tag.direction}`, "data-last-price": tag.text });
     group.append(
       svgNode("line", { x1: left, x2: width - right, y1: y, y2: y, class: "last-price-line" }),
-      svgNode("rect", { x: width - right + 2, y: y - 10, width: right - 6, height: 20, rx: 3, class: "last-price-box" }),
+      svgNode("rect", { x: width - right + 2, y: y - 10, width: right - 4, height: 20, rx: 3, class: "last-price-box" }),
     );
     const text = svgNode("text", { x: width - right + 8, y: y + 4, class: "last-price-text" });
     text.textContent = formatDisplayNumber(tag.text, priceDecimals);
@@ -1379,10 +1582,10 @@ function renderChart(snapshot, preferences) {
     pending: drawingState.pending,
     timeX, priceY, formatPrice, left, right: width - right,
   });
-  renderStrategyMarkers(svg, snapshot, candles, xOf, priceY);
+  renderStrategyMarkers(svg, snapshot, candles, xOf, priceY, preferences);
 
   const crosshair = svgNode("line", {
-    x1: 0, x2: 0, y1: priceTop, y2: volumeTop + volumeHeight,
+    x1: 0, x2: 0, y1: priceTop, y2: plotBottom,
     class: "chart-crosshair", "pointer-events": "none",
   });
   const marker = svgNode("circle", { cx: 0, cy: 0, r: 4, class: "chart-inspection-marker", "pointer-events": "none" });
@@ -1392,6 +1595,18 @@ function renderChart(snapshot, preferences) {
   inspector.id = "chart-inspector";
   inspector.setAttribute("aria-live", "polite");
   inspector.setAttribute("aria-atomic", "true");
+  const legendValues = [...svg.querySelectorAll(".legend-value[data-series]")];
+  const seriesValue = new Map();
+  for (const overlay of overlays) seriesValue.set(overlay.className, { points: overlay.points, decimals: priceDecimals, label: overlay.label, priceUnit: true });
+  if (vwapLine) seriesValue.set("spot-vwap-line", { points: vwapPoints, decimals: priceDecimals, label: "Spot VWAP", priceUnit: true });
+  for (const pane of panes) {
+    for (const series of pane.series) {
+      seriesValue.set(series.className, {
+        points: series.points, decimals: pane.definition.priceUnit ? priceDecimals : 2,
+        label: `${pane.definition.title} ${series.label}`, priceUnit: Boolean(pane.definition.priceUnit),
+      });
+    }
+  }
   const inspectCandle = (requestedIndex) => {
     const index = Math.max(0, Math.min(candles.length - 1, requestedIndex));
     const candle = candles[index];
@@ -1402,30 +1617,36 @@ function renderChart(snapshot, preferences) {
     marker.setAttribute("cx", String(x));
     marker.setAttribute("cy", String(priceY(candle.values.close.numeric)));
     marker.setAttribute("visibility", "visible");
-    const indicatorReadouts = [];
-    const indicatorDisplay = [];
     const candleEnd = Date.parse(candle.source.close_time);
-    for (const id of enabled) {
-      const indicator = snapshot.indicators?.[id];
-      if (indicator?.status !== "AVAILABLE" ||
-          indicatorBindingError(snapshot, id, indicator) ||
-          !indicator.result) continue;
-      for (const [label, field] of fieldsByIndicator[id] ?? []) {
-        const point = plotValues(indicator.result, field)
-          .find((item) => Date.parse(item.candleEnd) === candleEnd);
-        if (point) {
-          indicatorReadouts.push(`${label}: ${point.value}`);
-          indicatorDisplay.push({ label, value: point.value, priceUnit: PRICE_UNIT_INDICATORS.has(id) });
-        }
+    const exactReadouts = [];
+    for (const node of legendValues) {
+      const key = node.dataset.series;
+      if (key === "volume") {
+        node.textContent = formatDisplayNumber(candle.values.volume.exact, displayDecimals(candle.values.volume.exact));
+        continue;
       }
+      if (key === "volume-average") {
+        const point = volumeReference?.points.find((item) => Date.parse(item.candleEnd) === candleEnd);
+        node.textContent = point ? formatDisplayNumber(point.value, displayDecimals(point.value)) : "—";
+        continue;
+      }
+      const series = seriesValue.get(key);
+      const point = series?.points.find((item) => Date.parse(item.candleEnd) === candleEnd);
+      node.textContent = point ? formatDisplayNumber(point.value, series.decimals) : "—";
+      if (point) exactReadouts.push(`${series.label}: ${point.value}`);
     }
-    const vwapPoint = vwapPoints.find((point) => Date.parse(point.candleEnd) === candleEnd);
-    if (vwapPoint) {
-      indicatorReadouts.push(`Spot VWAP: ${vwapPoint.value}`);
-      indicatorDisplay.push({ label: "Spot VWAP", value: vwapPoint.value, priceUnit: true });
-    }
-    const exact = candleInspectorText(candle, indicatorReadouts);
-    inspector.textContent = candleReadoutText(candle, indicatorDisplay, priceDecimals);
+    const values = candle.values;
+    const previous = index > 0 ? candles[index - 1].values.close.numeric : null;
+    const change = previous ? ((values.close.numeric - previous) / previous) * 100 : null;
+    inspector.replaceChildren(
+      element("span", `${candle.source.open_time.slice(0, 16).replace("T", " ")} UTC`, "readout-time"),
+      ...[["O", values.open], ["H", values.high], ["L", values.low], ["C", values.close]].flatMap(([label, metric]) => [
+        element("span", label, "readout-key"), element("span", formatDisplayNumber(metric.exact, priceDecimals), "readout-value"),
+      ]),
+      ...(change === null ? [] : [element("span", `${change >= 0 ? "+" : "−"}${Math.abs(change).toFixed(2)}%`, `readout-change change-${change >= 0 ? "up" : "down"}`)]),
+      element("span", `Vol ${formatDisplayNumber(values.volume.exact, displayDecimals(values.volume.exact))} ${values.volume.unit}`, "readout-volume"),
+    );
+    const exact = candleInspectorText(candle, exactReadouts);
     inspector.title = `Exact returned values: ${exact}`;
     inspector.dataset.exact = exact;
     svg.dataset.inspectedIndex = String(index);
@@ -1504,7 +1725,8 @@ function renderChart(snapshot, preferences) {
     }
   });
   inspectCandle(candles.length - 1);
-  target.append(renderChartToolbar(snapshot, preferences, view, allCandles.length, scale), svg, inspector);
+  stage.append(svg, ...paneTools);
+  target.replaceChildren(inspector, stage, renderChartToolbar(snapshot, preferences, view, allCandles.length, scale));
 }
 
 function renderCandles(snapshot) {
@@ -1540,7 +1762,7 @@ function renderMetadata(snapshot) {
   sources.replaceChildren();
   if (!snapshot) {
     metadata.append(element("div"));
-    metadata.firstChild.append(element("dt", "Instrument / venue"), element("dd", "Not yet available"));
+    metadata.firstChild.append(element("dt", "Instrument / venue"), element("dd", "No snapshot loaded"));
     return;
   }
   const entries = [
@@ -1576,9 +1798,24 @@ function renderMetadata(snapshot) {
       metadata.append(cell);
     }
   }
+  // Raw source-record IDs: count in view, list and copy on demand (UR1).
   const sourceIds = Array.isArray(snapshot.lineage?.source_record_ids) ? snapshot.lineage.source_record_ids : [];
-  sources.append(element("h3", `Source records (${sourceIds.length})`));
-  sources.append(element("p", sourceIds.length ? sourceIds.map(stringValue).join(" · ") : "No source record IDs were supplied."));
+  const details = element("details", undefined, "nested-details source-records");
+  details.append(element("summary", `Source records (${sourceIds.length})`));
+  const copy = element("button", "Copy source record IDs", "ghost-button");
+  copy.type = "button";
+  copy.disabled = !sourceIds.length;
+  const copied = element("span", "", "card-note");
+  copied.setAttribute("role", "status");
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(sourceIds.map(stringValue).join("\n"));
+      copied.textContent = `Copied ${sourceIds.length} IDs.`;
+    } catch {
+      copied.textContent = "Copy is not available here; select the IDs below instead.";
+    }
+  });
+  details.append(copy, copied, element("p", sourceIds.length ? sourceIds.map(stringValue).join(" · ") : "No source record IDs were supplied.", "id-list"));
   for (const source of snapshot.lineage?.sources ?? []) {
     const item = element("div", undefined, "source-item");
     item.append(element("strong", stringValue(source.provider_id ?? source.source_record_id ?? "Source record")));
@@ -1598,8 +1835,30 @@ function renderMetadata(snapshot) {
       if (source[key] === undefined || source[key] === null) continue;
       item.append(element("div", `${key}: ${stringValue(source[key])}`));
     }
-    sources.append(item);
+    details.append(item);
   }
+  sources.append(details);
+}
+
+function renderPlainReading(snapshot) {
+  const target = $("#plain-reading");
+  if (!target) return;
+  target.replaceChildren();
+  const reading = plainReading(snapshot);
+  if (!reading.items.length) {
+    target.hidden = true;
+    return;
+  }
+  target.hidden = false;
+  const row = element("div", undefined, "plain-reading-row");
+  row.append(element("strong", "Plain reading", "plain-reading-title"));
+  for (const item of reading.items) {
+    const chip = element("span", item.text, "reading-chip");
+    chip.dataset.tone = item.tone;
+    if (item.exact) chip.title = `Exact backend values: ${item.exact}`;
+    row.append(chip);
+  }
+  target.append(row, element("p", reading.note, "card-note"));
 }
 
 function renderTimeframePills(onChoose) {
@@ -1610,47 +1869,57 @@ function renderTimeframePills(onChoose) {
     const button = element("button", pill.label, "timeframe-pill");
     button.type = "button";
     button.dataset.timeframe = pill.value;
-    if (pill.live) {
-      button.setAttribute("aria-pressed", "false");
-      button.addEventListener("click", () => onChoose(pill.value));
-    } else {
-      button.disabled = true;
-      button.title = pill.reason;
-      button.setAttribute("aria-label", `${pill.label} unavailable: ${pill.reason}`);
-    }
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => onChoose(pill.value));
     target.append(button);
   }
 }
 
-function renderMarketsList(symbols, onChoose) {
+// Markets list: the five pairs with last price and 24h change from the shared
+// stored-snapshot read (UR1); a search box filters the rows.
+function renderMarketsList(symbols, selectedId, timeframe, watch, onChoose) {
   const list = $("#markets-list-items");
   if (!list) return;
+  const query = ($("#markets-search")?.value ?? "").trim().toUpperCase().replace("/", "");
   list.replaceChildren();
   for (const item of symbols) {
-    const button = element("button", item.symbol, "market-item");
+    const entry = watch?.find((candidate) => candidate.symbol === item.symbol);
+    const button = element("button", undefined, "market-item");
     button.type = "button";
     button.dataset.instrumentId = item.instrument_id;
-    button.title = `${item.symbol} · ${item.instrument_id}`;
+    button.setAttribute("aria-pressed", String(item.instrument_id === selectedId));
+    const price = entry?.row ? formatDisplayNumber(entry.row.close, displayDecimals(entry.row.close)) : "—";
+    const change = entry?.snapshot ? change24h(entry.snapshot) : null;
+    button.append(
+      element("span", pairLabel(item.symbol), "market-pair"),
+      element("span", price, "market-last"),
+      element("span", change?.text ?? "—", `market-change${change ? ` change-${change.direction}` : ""}`),
+    );
+    button.title = entry?.row
+      ? `${item.symbol} · ${item.instrument_id} · exact close ${entry.row.close} ${entry.row.priceUnit} (${entry.row.quality})${change ? ` · 24h ${change.exact}` : ""}`
+      : `${item.symbol} · ${item.instrument_id}${entry?.error ? ` · ${entry.error}` : ""}`;
     button.addEventListener("click", () => onChoose(item.instrument_id));
     const row = element("li");
+    row.hidden = Boolean(query) && !item.symbol.includes(query);
     row.append(button);
     list.append(row);
   }
-  $("#markets-list-count").textContent = `Markets (${symbols.length})`;
+  $("#markets-list-count").textContent = `${symbols.length} approved Spot pair${symbols.length === 1 ? "" : "s"} · ${timeframeLabel(timeframe)} stored snapshots.`;
 }
 
-async function bootstrap() {
-  const instrument = $("#instrument-select");
-  const timeframe = $("#timeframe-select");
+export async function mountCharts({ desk }) {
   const history = $("#history-select");
   const cutoff = $("#as-of-input");
   const refreshButton = $("#refresh-button");
   const controlError = $("#control-error");
+  const workspace = $("#charts-workspace");
   let symbols = [];
   let snapshot = null;
   let requestSequence = 0;
   let refreshInFlight = false;
-  let preferences = { mode: "beginner", visible: [...DEFAULT_VISIBILITY] };
+  let preferences = loadPreferences(localStorage);
+  let watch = null;
+  const selected = { instrumentId: null, timeframe: null };
 
   const selectedHistory = () => {
     const limit = Number(history.value);
@@ -1658,42 +1927,76 @@ async function bootstrap() {
   };
   const updateRefreshAvailability = () => {
     const limit = selectedHistory();
-    const timeframeSeconds = TIMEFRAME_SECONDS[timeframe.value];
+    const timeframeSeconds = TIMEFRAME_SECONDS[selected.timeframe];
     const maxRefreshCandles = timeframeSeconds
       ? Math.min(MAX_CANDLES, Math.floor(MAX_REFRESH_SECONDS / timeframeSeconds))
       : 0;
-    const outsideBounds = !refreshRequestWithinBounds(timeframe.value, limit);
+    const outsideBounds = !refreshRequestWithinBounds(selected.timeframe, limit);
     refreshButton.disabled = refreshInFlight || Boolean(cutoff.value) || outsideBounds ||
-      !symbols.some((item) => item.instrument_id === instrument.value);
+      !symbols.some((item) => item.instrument_id === selected.instrumentId);
     $("#refresh-note").textContent = cutoff.value
       ? "Historical cutoffs are read-only. Clear the cutoff before requesting a current explicit refresh."
       : outsideBounds
-        ? `The 90-day provider-window policy limits refresh to 2–${maxRefreshCandles} candles for ${timeframe.value}. Stored historical reads remain available up to 501 candles.`
+        ? `The 90-day provider-window policy limits refresh to 2–${maxRefreshCandles} candles for ${selected.timeframe}. Stored historical reads remain available up to 501 candles.`
         : "Refresh is never automatic. This action requests a bounded public Spot update.";
   };
+
+  const resolveChoice = (timeframe) => {
+    const options = markerStrategyOptions(timeframe);
+    const wanted = options.find((option) => option.value === preferences.strategy);
+    const key = wanted?.usable ? wanted.value : defaultMarkerStrategy(timeframe);
+    const option = options.find((item) => item.value === key);
+    const parsed = parseStrategyKey(key);
+    return option && parsed
+      ? { key, strategy: parsed.strategy, version: parsed.version, usable: option.usable, reason: option.reason }
+      : null;
+  };
+  const renderMarkerArea = (loaded) => {
+    renderMarkerControls(loaded, preferences, selected.timeframe, { onSignals: setSignals, onStrategy: setStrategy });
+    renderMarkersPanel(loaded, preferences);
+  };
   const renderPreferences = () => {
-    $("#view-mode").textContent = preferences.mode === "pro" ? "Pro view" : "Beginner view";
     $("#beginner-button").setAttribute("aria-pressed", String(preferences.mode === "beginner"));
     $("#pro-button").setAttribute("aria-pressed", String(preferences.mode === "pro"));
-    renderIndicatorControls(snapshot, preferences, setPreferences);
+    workspace.dataset.mode = preferences.mode;
+    renderIndicatorControls(snapshot, preferences, setPreferences, setSignals);
     renderIndicators(snapshot, preferences);
+    renderDrawingTools(preferences.mode, redrawChart, clearDrawings);
+    markerState.choice = resolveChoice(selected.timeframe);
+    renderMarkerArea(snapshot);
     if (snapshot) renderChart(snapshot, preferences);
   };
   const setPreferences = (next) => {
     preferences = next;
-    savePreferences(localStorage, instrument.value, timeframe.value, preferences);
+    savePreferences(localStorage, preferences);
     renderPreferences();
   };
-  const loadSelectedPreferences = () => {
-    preferences = loadPreferences(localStorage, instrument.value, timeframe.value);
-    renderPreferences();
+  const redrawChart = () => { if (snapshot) renderChart(snapshot, preferences); };
+  const clearDrawings = () => {
+    if (snapshot) saveDrawings(localStorage, drawingsKey(snapshot.instrument_id, snapshot.timeframe), []);
   };
 
+  let markerAsOf;
   const loadMarkers = async (loaded, { asOf } = {}) => {
     const sequence = requestSequence;
     markerState.response = null;
     markerState.error = null;
-    renderMarkersPanel(loaded);
+    markerState.selected = 0;
+    markerState.choice = resolveChoice(loaded.timeframe);
+    if (!preferences.signals) {
+      renderMarkerArea(loaded);
+      renderIndicatorControls(loaded, preferences, setPreferences, setSignals);
+      renderChart(loaded, preferences);
+      return;
+    }
+    const choice = markerState.choice;
+    if (!choice?.usable) {
+      markerState.error = choice?.reason ?? "No strategy is registered for markers on this timeframe.";
+      renderMarkerArea(loaded);
+      renderChart(loaded, preferences);
+      return;
+    }
+    renderMarkerArea(loaded);
     try {
       const response = await readStrategyMarkers(globalThis.fetch, {
         instrumentId: loaded.instrument_id,
@@ -1702,27 +2005,55 @@ async function bootstrap() {
         asOf,
         accountSize: markerState.accountSize,
         riskPct: markerState.riskPct,
+        strategy: choice.strategy,
+        version: choice.version,
       });
-      if (sequence !== requestSequence || snapshot !== loaded) return;
-      const bindingError = markersBindingError(response, loaded);
+      if (sequence !== requestSequence || snapshot !== loaded || !preferences.signals || markerState.choice?.key !== choice.key) return;
+      let bindingError = markersBindingError(response, loaded);
+      if (!bindingError && (response.strategy?.strategy_id !== choice.strategy || String(response.strategy?.version) !== String(choice.version))) {
+        bindingError = "Strategy markers do not match the requested strategy and version.";
+      }
       markerState.response = bindingError ? null : response;
       markerState.error = bindingError;
-      markerState.selected = 0;
     } catch (error) {
       if (sequence !== requestSequence || snapshot !== loaded) return;
       markerState.error = `Strategy markers could not be loaded: ${error.message} No markers are shown.`;
     }
-    renderMarkersPanel(loaded);
-    renderIndicatorControls(loaded, preferences, setPreferences);
+    renderMarkerArea(loaded);
+    renderIndicatorControls(loaded, preferences, setPreferences, setSignals);
     renderChart(loaded, preferences);
   };
-  let markerAsOf;
+  const setSignals = (on) => {
+    preferences = { ...preferences, signals: on, strategy: preferences.strategy ?? (on ? defaultMarkerStrategy(selected.timeframe) : null) };
+    savePreferences(localStorage, preferences);
+    renderPreferences();
+    if (snapshot) void loadMarkers(snapshot, { asOf: markerAsOf });
+  };
+  const setStrategy = (key) => {
+    if (!parseStrategyKey(key)) return;
+    preferences = { ...preferences, strategy: key };
+    savePreferences(localStorage, preferences);
+    if (snapshot) void loadMarkers(snapshot, { asOf: markerAsOf });
+  };
   markerState.onSelect = (index) => {
     markerState.selected = index;
-    renderMarkersPanel(snapshot);
+    renderMarkersPanel(snapshot, preferences);
     if (snapshot) renderChart(snapshot, preferences);
-    $("#strategy-markers-panel details").open = true;
+    setDrawer(true);
     $("#marker-detail")?.scrollIntoView({ block: "nearest" });
+  };
+  chartHandlers = {
+    onPane: (action, id, shownIds) => {
+      if (action === "collapse") {
+        const collapsed = new Set(preferences.collapsedPanes);
+        if (collapsed.has(id)) collapsed.delete(id);
+        else collapsed.add(id);
+        setPreferences({ ...preferences, collapsedPanes: [...collapsed] });
+      } else {
+        setPreferences({ ...preferences, paneOrder: movePane(shownIds, preferences.paneOrder, id, action === "up" ? -1 : 1) });
+      }
+      $(`#chart-container [data-pane-action="${action}"][data-pane="${id}"]`)?.focus();
+    },
   };
   $("#sizing-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1737,6 +2068,19 @@ async function bootstrap() {
     if (snapshot) void loadMarkers(snapshot, { asOf: markerAsOf });
   });
 
+  const renderLoaded = (loaded) => {
+    setStatus(loaded);
+    renderDecisionPanel(loaded);
+    renderChart(loaded, preferences);
+    renderPlainReading(loaded);
+    renderCandles(loaded);
+    renderMetadata(loaded);
+    renderIndicatorControls(loaded, preferences, setPreferences, setSignals);
+    renderIndicators(loaded, preferences);
+    renderOrderFlow(loaded);
+    renderSpotAnalyses(loaded);
+  };
+
   const showFailure = (error, sequence) => {
     if (sequence !== requestSequence) return;
     snapshot = null;
@@ -1744,11 +2088,12 @@ async function bootstrap() {
     renderDecisionPanel(null);
     markerState.response = null;
     markerState.error = null;
-    renderMarkersPanel(null);
+    renderMarkerArea(null);
     $("#chart-container").replaceChildren(element("p", error.message, "empty-state"));
+    renderPlainReading(null);
     renderCandles(null);
     renderMetadata(null);
-    renderIndicatorControls(null, preferences, setPreferences);
+    renderIndicatorControls(null, preferences, setPreferences, setSignals);
     renderIndicators(null, preferences);
     renderOrderFlow(null);
     renderSpotAnalyses(null);
@@ -1763,18 +2108,19 @@ async function bootstrap() {
     const statusPanel = $("#snapshot-status");
     statusPanel.dataset.state = "warning";
     statusPanel.replaceChildren(
-      element("strong", `Loading ${instrument.value} · ${timeframe.value}.`),
-      element("span", "Previous snapshot cleared; this read cannot trigger provider collection."),
+      element("strong", `Loading ${selected.instrumentId} · ${selected.timeframe}.`),
+      element("span", "Previous snapshot cleared; this read cannot trigger provider collection.", "status-detail"),
     );
     $("#chart-container").replaceChildren(element("p", "Loading exact API candle data…", "empty-state"));
+    renderPlainReading(null);
     renderCandles(null);
     renderMetadata(null);
-    renderIndicatorControls(null, preferences, setPreferences);
+    renderIndicatorControls(null, preferences, setPreferences, setSignals);
     $("#indicator-groups").replaceChildren(element("p", "Loading backend indicator results…", "empty-state"));
     renderOrderFlow(null);
     renderSpotAnalyses(null);
-    const instrumentId = instrument.value;
-    const selectedTimeframe = timeframe.value;
+    const instrumentId = selected.instrumentId;
+    const selectedTimeframe = selected.timeframe;
     const limit = selectedHistory();
     if (!symbols.some((item) => item.instrument_id === instrumentId)) {
       showFailure(new Error("Select an instrument returned by the local API allowlist."), sequence);
@@ -1797,7 +2143,15 @@ async function bootstrap() {
     }
     updateRefreshAvailability();
     try {
-      const response = await readSnapshot(globalThis.fetch, {
+      // The default current read (501 candles) is shared with Today, the
+      // header and the markets list; other bounds and cutoffs read directly.
+      let response = null;
+      if (limit === MAX_CANDLES && !asOf) {
+        const cached = await desk.entry({ instrument_id: instrumentId, symbol: selectedSymbol }, selectedTimeframe);
+        if (sequence !== requestSequence) return;
+        response = cached.snapshot;
+      }
+      response ??= await readSnapshot(globalThis.fetch, {
         instrumentId, timeframe: selectedTimeframe, limit, asOf,
       });
       if (sequence !== requestSequence) return;
@@ -1810,15 +2164,7 @@ async function bootstrap() {
       if (validationError) throw new Error(validationError);
       snapshot = response;
       markerState.response = null;
-      setStatus(snapshot);
-      renderDecisionPanel(snapshot);
-      renderChart(snapshot, preferences);
-      renderCandles(snapshot);
-      renderMetadata(snapshot);
-      renderIndicatorControls(snapshot, preferences, setPreferences);
-      renderIndicators(snapshot, preferences);
-      renderOrderFlow(snapshot);
-      renderSpotAnalyses(snapshot);
+      renderLoaded(snapshot);
       markerAsOf = asOf;
       void loadMarkers(snapshot, { asOf });
     } catch (error) {
@@ -1826,12 +2172,35 @@ async function bootstrap() {
     }
   };
 
+  const syncSelectionLists = () => {
+    for (const button of document.querySelectorAll("#markets-list-items [data-instrument-id]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.instrumentId === selected.instrumentId));
+    }
+    for (const button of document.querySelectorAll("#timeframe-pills [data-timeframe]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.timeframe === selected.timeframe));
+    }
+    const symbol = symbols.find((item) => item.instrument_id === selected.instrumentId)?.symbol;
+    $("#chart-heading").textContent = symbol ? pairLabel(symbol) : "Chart";
+  };
+  const loadMarketPrices = async () => {
+    const timeframe = selected.timeframe;
+    renderMarketsList(symbols, selected.instrumentId, timeframe, watch, (value) => desk.select({ instrumentId: value }));
+    try {
+      const results = await desk.watchlist(timeframe);
+      if (timeframe !== selected.timeframe) return;
+      watch = results;
+    } catch {
+      watch = null;
+    }
+    renderMarketsList(symbols, selected.instrumentId, timeframe, watch, (value) => desk.select({ instrumentId: value }));
+  };
+
   const loadSymbols = async () => {
     document.querySelector(".retry-symbols")?.remove();
     $("#snapshot-status").dataset.state = "warning";
-    $("#snapshot-status").replaceChildren(element("strong", "Loading supported instruments."), element("span", "Read-only local symbol-list request."));
+    $("#snapshot-status").replaceChildren(element("strong", "Loading supported instruments."), element("span", "Read-only local symbol-list request.", "status-detail"));
     try {
-      const response = await listSupportedSymbols(globalThis.fetch);
+      const response = await desk.symbolsResponse();
       if (response?.provider !== "binance-spot-public" || response?.redistribution !== "NOT_AUTHORIZED") {
         throw new Error("The API did not return the approved local Spot symbol contract.");
       }
@@ -1840,64 +2209,126 @@ async function bootstrap() {
         item?.venue_id === "BINANCE-SPOT" && item?.eligibility === "CHECKED_ON_EACH_REFRESH",
       ) : [];
       if (!symbols.length) throw new Error("The API returned no supported instruments.");
-      instrument.replaceChildren();
-      for (const item of symbols) {
-        const option = element("option", `${item.symbol} · ${item.instrument_id}`);
-        option.value = item.instrument_id;
-        instrument.append(option);
-      }
-      instrument.disabled = false;
-      const selection = workspaceSelection(window.location.search, symbols, TIMEFRAMES);
-      instrument.value = selection.instrumentId;
-      timeframe.value = selection.timeframe;
-      renderMarketsList(symbols, (value) => choose(instrument, value));
+      const selection = await desk.selection();
+      selected.instrumentId = symbols.some((item) => item.instrument_id === selection.instrumentId)
+        ? selection.instrumentId : symbols[0].instrument_id;
+      selected.timeframe = TIMEFRAMES.includes(selection.timeframe) ? selection.timeframe : TIMEFRAMES[0];
       syncSelectionLists();
       updateRefreshAvailability();
-      loadSelectedPreferences();
-      await loadSnapshot();
+      renderPreferences();
+      const loading = loadSnapshot();
+      void loadMarketPrices();
+      await loading;
     } catch {
       setStatus(null, "The supported-instrument list could not be loaded from the local research API.");
-      $("#instrument-note").textContent = "Retry the safe read-only symbol-list request; no provider refresh has occurred.";
       const retry = element("button", "Retry supported-symbol read", "retry-symbols");
       retry.type = "button";
       retry.addEventListener("click", loadSymbols);
-      $("#instrument-note").append(retry);
+      $("#chart-container").replaceChildren(element("p", "Supported instruments could not be read; no chart values are shown.", "empty-state"), retry);
     }
   };
 
-  const syncSelectionLists = () => {
-    for (const button of document.querySelectorAll("#markets-list [data-instrument-id]")) {
-      button.setAttribute("aria-pressed", String(button.dataset.instrumentId === instrument.value));
+  // Shared coin/timeframe (UR3): every tab and reload agrees.
+  desk.onChange((selection, change) => {
+    if (change.invalidated) {
+      void loadMarketPrices();
+      return;
     }
-    for (const button of document.querySelectorAll("#timeframe-pills [data-timeframe]")) {
-      if (!button.disabled) button.setAttribute("aria-pressed", String(button.dataset.timeframe === timeframe.value));
+    if (!symbols.length) return;
+    const timeframeChanged = selection.timeframe !== selected.timeframe;
+    const changed = timeframeChanged || selection.instrumentId !== selected.instrumentId;
+    if (!changed) return;
+    selected.instrumentId = selection.instrumentId;
+    selected.timeframe = selection.timeframe;
+    syncSelectionLists();
+    snapshot = null;
+    void loadSnapshot();
+    if (timeframeChanged) {
+      watch = null;
+      void loadMarketPrices();
     }
+  });
+
+  // Layout controls: markets list, details drawer, full screen.
+  const setDrawer = (open) => {
+    workspace.dataset.drawer = open ? "open" : "closed";
+    const toggle = $("#drawer-toggle");
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "Hide details ▸" : "◂ Show details";
   };
-  const choose = (select, value) => {
-    if (select.disabled || select.value === value) return;
-    select.value = value;
-    select.dispatchEvent(new Event("change"));
+  $("#drawer-toggle").addEventListener("click", () => {
+    setDrawer(workspace.dataset.drawer !== "open");
+    redrawChart();
+  });
+  $("#markets-toggle").addEventListener("click", () => {
+    const open = workspace.dataset.markets !== "open";
+    workspace.dataset.markets = open ? "open" : "closed";
+    $("#markets-toggle").setAttribute("aria-expanded", String(open));
+    $("#markets-toggle").textContent = open ? "◂ Markets" : "▸ Markets";
+    redrawChart();
+  });
+  $("#markets-search").addEventListener("input", () => {
+    renderMarketsList(symbols, selected.instrumentId, selected.timeframe, watch, (value) => desk.select({ instrumentId: value }));
+  });
+  let drawerBeforeFullscreen = "open";
+  const applyFullscreen = (on) => {
+    if (layoutState.fullscreen === on) return;
+    layoutState.fullscreen = on;
+    workspace.classList.toggle("is-fullscreen", on);
+    document.body.classList.toggle("chart-fullscreen", on);
+    const button = $("#fullscreen-button");
+    button.setAttribute("aria-pressed", String(on));
+    button.textContent = on ? "✕ Exit full screen" : "⛶ Full screen";
+    if (on) {
+      drawerBeforeFullscreen = workspace.dataset.drawer;
+      setDrawer(false);
+    } else {
+      setDrawer(drawerBeforeFullscreen === "open");
+    }
+    redrawChart();
   };
-  renderTimeframePills((value) => choose(timeframe, value));
-  renderDrawingTools(
-    () => { if (snapshot) renderChart(snapshot, preferences); },
-    () => { if (snapshot) saveDrawings(localStorage, drawingsKey(snapshot.instrument_id, snapshot.timeframe), []); },
-  );
-  instrument.addEventListener("change", () => { syncSelectionLists(); snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
-  timeframe.addEventListener("change", () => { syncSelectionLists(); snapshot = null; loadSelectedPreferences(); void loadSnapshot(); });
+  $("#fullscreen-button").addEventListener("click", async () => {
+    if (layoutState.fullscreen) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+      applyFullscreen(false);
+      return;
+    }
+    applyFullscreen(true);
+    try {
+      if (workspace.requestFullscreen) await workspace.requestFullscreen();
+    } catch {
+      // The fixed-overlay fallback (.is-fullscreen) stays in place.
+    }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && layoutState.fullscreen) applyFullscreen(false);
+    else redrawChart();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !layoutState.fullscreen) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    applyFullscreen(false);
+  });
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      const width = Math.round($("#chart-container").clientWidth);
+      if (snapshot && width > 0 && Math.abs(width - chartView.width) > 2) renderChart(snapshot, preferences);
+    }).observe($("#chart-container"));
+  }
+
+  renderTimeframePills((value) => desk.select({ timeframe: value }));
   history.addEventListener("change", () => { void loadSnapshot(); });
   cutoff.addEventListener("change", () => { void loadSnapshot(); });
   $("#beginner-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "beginner" }));
   $("#pro-button").addEventListener("click", () => setPreferences({ ...preferences, mode: "pro" }));
-  $("#reset-button").addEventListener("click", () => setPreferences({ mode: "beginner", visible: [...DEFAULT_VISIBILITY] }));
   refreshButton.addEventListener("click", async () => {
-    if (refreshInFlight || !instrument.value || cutoff.value) return;
-    const selectedInstrument = symbols.find((item) => item.instrument_id === instrument.value);
+    if (refreshInFlight || !selected.instrumentId || cutoff.value) return;
+    const selectedInstrument = symbols.find((item) => item.instrument_id === selected.instrumentId);
     if (!selectedInstrument) return;
     const sequence = ++requestSequence;
-    const instrumentId = instrument.value;
+    const instrumentId = selected.instrumentId;
     const symbol = selectedInstrument.symbol;
-    const selectedTimeframe = timeframe.value;
+    const selectedTimeframe = selected.timeframe;
     refreshInFlight = true;
     updateRefreshAvailability();
     refreshButton.disabled = true;
@@ -1914,17 +2345,10 @@ async function bootstrap() {
       if (validationError) throw new Error(validationError);
       snapshot = response;
       markerState.response = null;
-      setStatus(snapshot);
-      renderDecisionPanel(snapshot);
-      renderChart(snapshot, preferences);
-      renderCandles(snapshot);
-      renderMetadata(snapshot);
-      renderIndicatorControls(snapshot, preferences, setPreferences);
-      renderIndicators(snapshot, preferences);
-      renderOrderFlow(snapshot);
-      renderSpotAnalyses(snapshot);
+      renderLoaded(snapshot);
       markerAsOf = undefined;
       void loadMarkers(snapshot);
+      desk.seed(selectedInstrument, selectedTimeframe, response);
     } catch (error) {
       showFailure(error, sequence);
     } finally {
@@ -1933,9 +2357,6 @@ async function bootstrap() {
       updateRefreshAvailability();
     }
   });
+  renderPreferences();
   await loadSymbols();
-}
-
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => { void bootstrap(); }, { once: true });
 }

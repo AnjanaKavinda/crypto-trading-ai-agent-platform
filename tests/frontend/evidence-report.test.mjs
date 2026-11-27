@@ -34,10 +34,11 @@ test("exact report GET and manual cursor pagination keep loopback/no-store bound
 
 test("exact deep links round trip and reject duplicate or unsupported identities", () => {
   const selected = evidenceFixture().artifact.reference;
-  assert.deepEqual(referenceFromQuery(evidenceLink(selected).split("?")[1]), selected);
+  assert.deepEqual(referenceFromQuery(new URL(evidenceLink(selected), "http://desk.invalid/").search), selected);
   assert.equal(referenceFromQuery(""), null);
+  assert.equal(new URL(evidenceLink(selected), "http://desk.invalid/").hash, "#strategy-lab");
   assert.throws(() => referenceFromQuery("package_id=bad&schema_version=2&content_sha256=bad"));
-  assert.throws(() => referenceFromQuery(`${evidenceLink(selected).split("?")[1]}&schema_version=2`));
+  assert.throws(() => referenceFromQuery(`${new URL(evidenceLink(selected), "http://desk.invalid/").search}&schema_version=2`));
   assert.throws(() => packageReference({ ...selected, schema_version: "3" }));
 });
 

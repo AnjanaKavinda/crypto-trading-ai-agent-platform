@@ -1,77 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-desk-tab="my-results">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>Spot Research Records and NO_TRADE</title>
+    <title>Trading desk — My results</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2314b8a6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='%23fff' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./styles.css">
-    <script type="module" src="./src/signal-board.mjs"></script>
-    <script type="module" src="./src/owner-results.mjs"></script>
+    <script type="module" src="./src/legacy-redirect.mjs"></script>
   </head>
-  <body>
-    <header class="app-header">
-      <div>
-        <p class="eyebrow">LOCAL RESEARCH — DECISION JOURNAL</p>
-        <h1>Research records and NO_TRADE</h1>
-        <p class="muted">Recorded candidate, signal and abstention outcomes. No trade action is available.</p>
-      </div>
-      <nav class="header-navigation" aria-label="Research navigation">
-        <a class="mode-pill" href="./desk.html" target="_top">Trading desk</a>
-        <a class="mode-pill" href="./index.html">Asset workspace</a>
-        <a class="mode-pill" href="./watchlist.html">Market overview</a>
-        <a class="mode-pill" href="./evidence.html">Evidence reports</a>
-      </nav>
-    </header>
-    <main>
-      <section class="panel" aria-labelledby="results-heading">
-        <h2 id="results-heading">My results vs baselines</h2>
-        <p class="education-note"><strong>Your own results, scored by the pre-registered owner-results protocol.</strong> Recorded trades (net of fees) are compared with cash and buy-and-hold; NO_TRADE decisions are compared with holding over a fixed horizon. Kept separate from strategy evidence.</p>
-        <p id="results-status" role="status" aria-live="polite">Loading your results…</p>
-        <div id="results-body" class="source-list"></div>
-      </section>
-      <section class="panel" aria-labelledby="records-heading">
-        <h2 id="records-heading">Persisted research records</h2>
-        <p class="education-note"><strong>Recorded state is not a current trade instruction.</strong> Qualification, present validity, current trade-risk acceptance, human approval and execution are separate. This page does not create or promote a signal.</p>
-        <p class="muted">The current summary API does not supply asset/timeframe, full source content or validation metrics. Use exact lineage references and linked evidence reports; those missing details are not inferred.</p>
-        <div class="control-grid">
-          <label>Record kind
-            <select id="record-kind">
-              <option value="NO_TRADE">NO_TRADE decisions</option>
-              <option value="CANDIDATE">Candidate records</option>
-              <option value="SIGNAL">Signal records</option>
-            </select>
-          </label>
-          <label>Recorded backend projection
-            <select id="record-state">
-              <option value="">All reported states</option>
-              <option value="DRAFT">DRAFT</option>
-              <option value="CANDIDATE">CANDIDATE</option>
-              <option value="QUALIFIED">QUALIFIED</option>
-              <option value="WATCH">WATCH</option>
-              <option value="REJECTED">REJECTED</option>
-              <option value="NO_TRADE">NO_TRADE</option>
-              <option value="EXPIRED">EXPIRED</option>
-              <option value="SUPERSEDED">SUPERSEDED</option>
-            </select>
-          </label>
-        </div>
-        <p id="board-status" role="status" aria-live="polite">Loading stored records…</p>
-        <p id="watch-status" class="muted">WATCH availability not yet supplied.</p>
-        <div class="button-row">
-          <button id="read-records" type="button">Read first page</button>
-          <button id="next-records" type="button" disabled>Read next page</button>
-        </div>
-        <p class="muted">20 records per page. Browsing performs explicit reads. Saving a declaration requires a separate action; no polling or provider refresh.</p>
-        <div id="record-list" class="source-list"></div>
-      </section>
-      <section class="panel" aria-labelledby="detail-heading">
-        <h2 id="detail-heading">Exact record detail</h2>
-        <p id="detail-status" role="status" aria-live="polite">Select a record. No detail is displayed.</p>
-        <div id="record-detail" class="source-list"></div>
-      </section>
+  <body class="desk">
+    <main class="desk-main">
+      <p class="card">This page is now the <a href="./index.html#my-results">My results tab of the Trading desk</a>.</p>
     </main>
-    <footer><strong>LOCAL RESEARCH — DECISION JOURNAL</strong><span>User declarations are unverified research notes. No risk editing, approval or execution action is provided.</span></footer>
   </body>
 </html>

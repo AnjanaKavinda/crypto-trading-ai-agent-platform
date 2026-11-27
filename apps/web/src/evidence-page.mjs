@@ -166,8 +166,4 @@ export async function bootstrapEvidence({ document, fetcher = globalThis.fetch, 
   await page(null);
 }
 
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
-    void bootstrapEvidence({ document, search: globalThis.location.search });
-  }, { once: true });
-}
+// Mounted by the desk shell when its tab is first shown (desk-shell.mjs).
