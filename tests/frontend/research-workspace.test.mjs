@@ -23,8 +23,9 @@ import {
   latestIndicatorValues,
   loadPreferences,
   plotValues,
-  preferenceKey,
+  PREFERENCES_KEY,
   savePreferences,
+  shownIndicators,
   snapshotCandles,
   snapshotLabels,
   validateSnapshot,
@@ -637,28 +638,37 @@ test("indicator charts use only returned, non-null backend points", () => {
   ] }), [{ candleEnd: "2026-10-09T15:01:00Z", value: "51.25" }]);
 });
 
-test("preferences are display-only, reset to beginner defaults, and scope by instrument and timeframe", () => {
+test("UR1/UR3: preferences are display-only, desk-wide and default to Beginner with SIGNALS off", () => {
   const values = new Map();
   const storage = {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
   };
-  assert.deepEqual(loadPreferences(storage, instrumentId, timeframe), {
-    mode: "beginner",
-    visible: [...DEFAULT_VISIBILITY],
+  const defaults = loadPreferences(storage);
+  assert.deepEqual(defaults, {
+    mode: "beginner", visible: [...DEFAULT_VISIBILITY], signals: false, strategy: null, collapsedPanes: [], paneOrder: [],
   });
-  savePreferences(storage, instrumentId, timeframe, {
+  savePreferences(storage, {
     mode: "pro",
-    visible: ["ema-20", "rsi-14", "unsupported-input"],
+    visible: ["ema-20", "rsi-14", "macd-12-26-9", "vwap", "unsupported-input"],
+    signals: true,
+    strategy: "range-reversion-4h@1",
+    collapsedPanes: ["rsi-14", "nope"],
+    paneOrder: ["macd-12-26-9", "rsi-14"],
   });
-  assert.deepEqual(loadPreferences(storage, instrumentId, timeframe), {
-    mode: "pro",
-    visible: ["ema-20", "rsi-14"],
+  const saved = loadPreferences(storage);
+  assert.deepEqual(saved, {
+    mode: "pro", visible: ["ema-20", "rsi-14", "macd-12-26-9", "vwap"], signals: true,
+    strategy: "range-reversion-4h@1", collapsedPanes: ["rsi-14"], paneOrder: ["macd-12-26-9", "rsi-14"],
   });
-  assert.notEqual(preferenceKey(instrumentId, timeframe), preferenceKey(instrumentId, "5m"));
-  assert.notEqual(preferenceKey(instrumentId, timeframe), preferenceKey("ETH-USDT-SPOT", timeframe));
-  savePreferences(storage, instrumentId, timeframe, { mode: "beginner", visible: [...DEFAULT_VISIBILITY] });
-  assert.deepEqual(loadPreferences(storage, instrumentId, timeframe).visible, [...DEFAULT_VISIBILITY]);
+  assert.equal([...values.keys()].join(), PREFERENCES_KEY, "one desk-wide key, not per coin or timeframe");
+  // Beginner draws only its essentials; Pro draws everything chosen.
+  assert.deepEqual(shownIndicators(saved), ["ema-20", "rsi-14", "macd-12-26-9", "vwap"]);
+  assert.deepEqual(shownIndicators({ ...saved, mode: "beginner" }), ["ema-20", "rsi-14"]);
+  savePreferences(storage, { ...saved, strategy: "../evil@1" });
+  assert.equal(loadPreferences(storage).strategy, null);
+  values.set(PREFERENCES_KEY, "{broken");
+  assert.deepEqual(loadPreferences(storage), defaults);
 });
 
 test("workspace source contains no polling or external provider path", async () => {
@@ -666,6 +676,7 @@ test("workspace source contains no polling or external provider path", async () 
   const html = await readFile(new URL("../../apps/web/index.html", import.meta.url), "utf8");
   assert.doesNotMatch(source, /setInterval|WebSocket|binance\.com|api\.binance/i);
   assert.match(html, /<option value="90">90 candles<\/option>/);
+  assert.match(html, /<option value="501" selected>/);
   assert.match(source, /refreshButton\.addEventListener\("click"/);
   assert.equal((source.match(/refreshSnapshot\(/g) ?? []).length, 1);
   assert.match(source, /snapshot = null;\s*updateRefreshAvailability\(\)/);
@@ -673,7 +684,7 @@ test("workspace source contains no polling or external provider path", async () 
   const staleGuard = source.indexOf("if (sequence !== requestSequence) return;", refreshStart);
   const responseAssignment = source.indexOf("snapshot = response;", refreshStart);
   assert.ok(refreshStart < staleGuard && staleGuard < responseAssignment);
-  assert.match(source, /refreshInFlight \|\| !instrument\.value \|\| cutoff\.value/);
+  assert.match(source, /refreshInFlight \|\| !selected\.instrumentId \|\| cutoff\.value/);
   assert.match(source, /Historical cutoffs are read-only/);
   assert.match(source, /MAX_REFRESH_SECONDS/);
   assert.match(source, /90-day provider-window policy limits refresh to 2–\$\{maxRefreshCandles\} candles/);

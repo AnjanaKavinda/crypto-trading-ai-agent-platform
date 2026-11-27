@@ -1,5 +1,4 @@
-import { listSupportedSymbols, TIMEFRAME_SECONDS } from "./research-api.mjs";
-import { readWatchlist, supportedWatchlistSymbols, workspaceHref } from "./watchlist-state.mjs";
+import { workspaceHref } from "./watchlist-state.mjs";
 
 const $ = (selector) => document.querySelector(selector);
 const display = (value) => typeof value === "string" && value ? value : "Not reported";
@@ -85,70 +84,34 @@ function renderRow(result, timeframe, symbols) {
   return row;
 }
 
-async function bootstrap() {
-  const timeframe = $("#timeframe-select");
+// The snapshot table lives in Today's "All five stored snapshots" section and
+// follows the desk's shared timeframe (UR1/UR3); it never refreshes providers.
+export function renderWatchlistTable(results, timeframe, symbols) {
+  const rows = $("#watchlist-rows");
+  const status = $("#overview-status");
+  if (!rows || !status) return;
+  rows.replaceChildren(...results.map((result) => renderRow(result, timeframe, symbols)));
+  const failed = results.filter((result) => result.error).length;
+  const nonCurrent = results.filter(({ row }) =>
+    row && (row.quality !== "VALID" || row.reportQuality !== "VALID" || row.temporalContext !== "CURRENT"),
+  ).length;
+  status.dataset.state = failed === 0 && nonCurrent === 0 && results.length > 0 ? "valid" : "warning";
+  status.replaceChildren(
+    Object.assign(document.createElement("strong"), { textContent: `${results.length} supported instrument${results.length === 1 ? "" : "s"} · ${timeframe} · ${failed} unavailable · ${nonCurrent} non-VALID or non-current` }),
+    Object.assign(document.createElement("span"), { textContent: "Snapshot quality and temporal context are shown per instrument; no analysis status is inferred." }),
+  );
+}
+
+export function renderWatchlistFailure(message) {
   const rows = $("#watchlist-rows");
   const status = $("#overview-status");
   const error = $("#overview-error");
-  let symbols = [];
-  let symbolsPromise;
-  let sequence = 0;
-
-  const load = async () => {
-    const requestSequence = ++sequence;
-    error.hidden = true;
-    rows.replaceChildren();
-    status.dataset.state = "warning";
-    status.replaceChildren(
-      Object.assign(document.createElement("strong"), { textContent: `Reading stored ${timeframe.value} snapshots.` }),
-      Object.assign(document.createElement("span"), { textContent: "Read-only local API requests; provider collection is not triggered." }),
-    );
-    if (!Object.hasOwn(TIMEFRAME_SECONDS, timeframe.value)) {
-      error.textContent = "Select a timeframe supported by the local research API.";
-      error.hidden = false;
-      return;
-    }
-    try {
-      if (!symbols.length) {
-        symbolsPromise ??= listSupportedSymbols(globalThis.fetch)
-          .then(supportedWatchlistSymbols)
-          .then((supported) => {
-            symbols = supported;
-            return supported;
-          });
-        await symbolsPromise;
-      }
-      if (requestSequence !== sequence) return;
-      const results = await readWatchlist(globalThis.fetch, timeframe.value, symbols);
-      if (requestSequence !== sequence) return;
-      rows.replaceChildren(...results.map((result) => renderRow(result, timeframe.value, symbols)));
-      const failed = results.filter((result) => result.error).length;
-      const nonCurrent = results.filter(({ row }) =>
-        row && (row.quality !== "VALID" || row.reportQuality !== "VALID" || row.temporalContext !== "CURRENT"),
-      ).length;
-      status.dataset.state = failed === 0 && nonCurrent === 0 && results.length > 0 ? "valid" : "warning";
-      status.replaceChildren(
-        Object.assign(document.createElement("strong"), { textContent: `${results.length} supported instrument${results.length === 1 ? "" : "s"} · ${failed} unavailable · ${nonCurrent} non-VALID or non-current` }),
-        Object.assign(document.createElement("span"), { textContent: "Snapshot quality and temporal context are shown per instrument; no analysis status is inferred." }),
-      );
-    } catch (loadError) {
-      if (requestSequence !== sequence) return;
-      if (!symbols.length) symbolsPromise = undefined;
-      rows.replaceChildren();
-      status.dataset.state = "error";
-      status.replaceChildren(
-        Object.assign(document.createElement("strong"), { textContent: "Supported instruments unavailable." }),
-        Object.assign(document.createElement("span"), { textContent: "The watchlist failed closed; no unsupported symbols are shown." }),
-      );
-      error.textContent = loadError.message;
-      error.hidden = false;
-    }
-  };
-
-  timeframe.addEventListener("change", () => { void load(); });
-  await load();
-}
-
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => { void bootstrap(); }, { once: true });
+  if (!rows || !status) return;
+  rows.replaceChildren();
+  status.dataset.state = "error";
+  status.replaceChildren(
+    Object.assign(document.createElement("strong"), { textContent: "Supported instruments unavailable." }),
+    Object.assign(document.createElement("span"), { textContent: "The watchlist failed closed; no unsupported symbols are shown." }),
+  );
+  if (error) { error.textContent = message; error.hidden = false; }
 }

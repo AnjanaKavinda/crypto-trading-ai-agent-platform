@@ -23,27 +23,42 @@ export const PILL_STATUS_LABELS = Object.freeze({
   CONNECT: "Connect", BUILD: "To build", TRADES: "Needs trades", BOOK: "Needs order book",
 });
 
-// kind: "indicator" toggles a chart overlay/panel; "analysis" jumps to its
-// backend analysis card; "fixed" is always drawn; status marks not-ready pills.
+// kind: "indicator" toggles a chart overlay/pane; "overlay" toggles a backend
+// analysis drawn on the price pane; "analysis" jumps to its analysis card;
+// "signals" turns replayed strategy markers on/off; "fixed" is always drawn;
+// status marks not-ready pills. hint = plain-language hover text.
 export const TOOLBAR_PILLS = Object.freeze([
-  { short: "SIGNALS", label: "BUY / SELL markers", group: "strategy", kind: "markers", id: "strategy-markers" },
-  { short: "EMA20", label: "EMA 20", group: "trend", kind: "indicator", id: "ema-20" },
-  { short: "EMA50", label: "EMA 50", group: "trend", kind: "indicator", id: "ema-50" },
-  { short: "EMA500", label: "EMA 500", group: "trend", kind: "indicator", id: "ema-500" },
-  { short: "BB", label: "Bollinger Bands 20", group: "trend", kind: "indicator", id: "bollinger-bands-20" },
-  { short: "VWAP", label: "VWAP", group: "trend", kind: "analysis", id: "vwap" },
+  { short: "SIGNALS", label: "BUY / SELL markers", group: "strategy", kind: "signals", id: "strategy-markers",
+    hint: "Replays a strategy's BUY/SELL points on this chart. Every strategy so far FAILED its study, so markers are an illustration only." },
+  { short: "EMA20", label: "EMA 20", group: "trend", kind: "indicator", id: "ema-20",
+    hint: "Average of the last 20 closes, recent ones weighted more — the short-term trend." },
+  { short: "EMA50", label: "EMA 50", group: "trend", kind: "indicator", id: "ema-50",
+    hint: "Average of the last 50 closes — the slower trend. Price above it is often called an uptrend." },
+  { short: "EMA500", label: "EMA 500", group: "trend", kind: "indicator", id: "ema-500",
+    hint: "Very long average (500 closes) — broad context; needs 500 candles to warm up." },
+  { short: "BB", label: "Bollinger Bands 20", group: "trend", kind: "indicator", id: "bollinger-bands-20",
+    hint: "A band two standard deviations around the 20-close average — wide bands mean a jumpy market." },
+  { short: "VWAP", label: "VWAP", group: "trend", kind: "overlay", id: "vwap",
+    hint: "Volume-weighted average price from the first candle of this snapshot (candle approximation)." },
   { short: "SMA", label: "SMA", group: "trend", status: "CONNECT" },
   { short: "WMA", label: "WMA", group: "trend", status: "CONNECT" },
   { short: "ICHI", label: "Ichimoku", group: "trend", status: "BUILD" },
-  { short: "RSI", label: "RSI 14", group: "momentum", kind: "indicator", id: "rsi-14" },
-  { short: "MACD", label: "MACD 12/26/9", group: "momentum", kind: "indicator", id: "macd-12-26-9" },
-  { short: "STOCH", label: "Stochastic 14/3", group: "momentum", kind: "indicator", id: "stochastic-14-3" },
-  { short: "CCI", label: "CCI 20", group: "momentum", kind: "indicator", id: "cci-20" },
+  { short: "RSI", label: "RSI 14", group: "momentum", kind: "indicator", id: "rsi-14",
+    hint: "Momentum from 0 to 100: above 70 = strong run-up, below 30 = strong sell-off. Not a reversal signal." },
+  { short: "MACD", label: "MACD 12/26/9", group: "momentum", kind: "indicator", id: "macd-12-26-9",
+    hint: "Gap between a fast and a slow average, its signal line and the histogram of their difference." },
+  { short: "STOCH", label: "Stochastic 14/3", group: "momentum", kind: "indicator", id: "stochastic-14-3",
+    hint: "Where the close sits in the last 14 candles' range, 0 to 100." },
+  { short: "CCI", label: "CCI 20", group: "momentum", kind: "indicator", id: "cci-20",
+    hint: "How far the typical price is from its 20-candle average; ±100 marks unusual moves." },
   { short: "ADX", label: "ADX", group: "momentum", status: "BUILD" },
-  { short: "ATR", label: "ATR 14", group: "volatility", kind: "indicator", id: "atr-14" },
-  { short: "RVOL", label: "Realized volatility 20", group: "volatility", kind: "indicator", id: "realized-volatility-20" },
+  { short: "ATR", label: "ATR 14", group: "volatility", kind: "indicator", id: "atr-14",
+    hint: "Average true range — how far price typically moves in one candle, in USDT." },
+  { short: "RVOL", label: "Realized volatility 20", group: "volatility", kind: "indicator", id: "realized-volatility-20",
+    hint: "How much returns varied over the last 20 candles (annualised), not a forecast." },
   { short: "BBW", label: "Bollinger bandwidth", group: "volatility", status: "CONNECT" },
-  { short: "VOL", label: "Volume", group: "volume", kind: "fixed" },
+  { short: "VOL", label: "Volume", group: "volume", kind: "fixed",
+    hint: "How much of the coin traded in each candle, with its prior-20 average." },
   { short: "VPRO", label: "Volume profile (POC/VAH/VAL)", group: "volume", kind: "analysis", id: "volume-profile" },
   { short: "VCONF", label: "Volume confirmation", group: "volume", kind: "analysis", id: "volume-confirmation" },
   { short: "OBV", label: "OBV", group: "volume", status: "BUILD" },
@@ -60,12 +75,16 @@ export const TOOLBAR_PILLS = Object.freeze([
   { short: "ABS", label: "Absorption levels", group: "orderFlow", status: "BOOK" },
 ].map((pill) => Object.freeze(pill)));
 
+// Beginner shows the seven essentials only (UR1).
+export const BEGINNER_PILLS = Object.freeze(["SIGNALS", "EMA20", "EMA50", "BB", "RSI", "ATR", "VOL"]);
+
 // availability(kind, id) -> { available: boolean, reason?: string } for the
-// loaded snapshot; enabled = currently shown indicator ids.
-export function toolbarPills({ availability, enabled = [], snapshotLoaded = false }) {
-  return TOOLBAR_PILLS.map((pill) => {
+// loaded snapshot; enabled = currently shown overlay/pane ids.
+export function toolbarPills({ availability, enabled = [], snapshotLoaded = false, mode = "pro", signalsOn = false }) {
+  const pills = mode === "beginner" ? TOOLBAR_PILLS.filter((pill) => BEGINNER_PILLS.includes(pill.short)) : TOOLBAR_PILLS;
+  return pills.map((pill) => {
     const group = PILL_GROUPS[pill.group];
-    const base = { short: pill.short, label: pill.label, group: group.name, color: group.color };
+    const base = { short: pill.short, label: pill.label, group: group.name, color: group.color, hint: pill.hint ?? null };
     if (pill.status) {
       return { ...base, live: false, action: null, pressed: null,
         badge: PILL_STATUS_LABELS[pill.status], reason: pill.reason ?? PILL_STATUS_REASONS[pill.status] };
@@ -74,17 +93,19 @@ export function toolbarPills({ availability, enabled = [], snapshotLoaded = fals
       return { ...base, live: false, action: null, pressed: null, badge: "Live",
         reason: "Load a snapshot to use this backend result." };
     }
+    if (pill.kind === "signals") {
+      return { ...base, live: true, action: { type: "signals" }, pressed: String(signalsOn), badge: "Live",
+        reason: signalsOn
+          ? "On — replayed markers of a FAILED strategy, illustration only. Click to hide."
+          : "Off — click to replay a strategy's markers (all recorded strategies failed their study)." };
+    }
     if (pill.kind === "fixed") {
       return { ...base, live: true, action: null, pressed: "true", badge: "Live", reason: "Always shown from the returned candles." };
     }
-    const state = availability(pill.kind, pill.id);
+    const state = availability(pill.kind === "overlay" ? "analysis" : pill.kind, pill.id);
     if (!state.available) {
       return { ...base, live: false, action: null, pressed: null, badge: "Live",
         reason: `Unavailable for this snapshot: ${state.reason ?? "not supplied in response"}.` };
-    }
-    if (pill.kind === "markers") {
-      return { ...base, live: true, action: { type: "jump", id: pill.id }, pressed: "true", badge: "Live",
-        reason: "Strategy markers are on the chart — click to open their evidence." };
     }
     if (pill.kind === "analysis") {
       return { ...base, live: true, action: { type: "jump", id: pill.id }, pressed: null, badge: "Live",

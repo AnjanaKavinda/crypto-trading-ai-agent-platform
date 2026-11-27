@@ -108,8 +108,8 @@ export async function readRecord(fetcher, reference) {
 }
 export function recordLink(r) {
   validateReference(r, true);
-  return "./signals.html?" + new URLSearchParams({ contract_id: r.contract_id, artifact_id: r.artifact_id,
-    schema_version: r.schema_version, content_sha256: r.content_sha256 });
+  return "./index.html?" + new URLSearchParams({ contract_id: r.contract_id, artifact_id: r.artifact_id,
+    schema_version: r.schema_version, content_sha256: r.content_sha256 }) + "#my-results";
 }
 export function recordFromQuery(search) {
   const query = new URLSearchParams(search);
@@ -257,8 +257,4 @@ export async function bootstrapBoard({ document, fetcher = globalThis.fetch, sea
   } catch (error) { summary.textContent = "Invalid exact-record link."; detailStatus.textContent = error.message; return; }
   await page(null);
 }
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
-    void bootstrapBoard({ document, search: globalThis.location.search });
-  }, { once: true });
-}
+// Mounted by the desk shell when its tab is first shown (desk-shell.mjs).

@@ -154,8 +154,8 @@ export function referenceFromQuery(search) {
 
 export function evidenceLink(selected) {
   packageReference(selected);
-  return `./evidence.html?${new URLSearchParams({ package_id: selected.artifact_id,
-    schema_version: selected.schema_version, content_sha256: selected.content_sha256 })}`;
+  return `./index.html?${new URLSearchParams({ package_id: selected.artifact_id,
+    schema_version: selected.schema_version, content_sha256: selected.content_sha256 })}#strategy-lab`;
 }
 
 export function validityLabel(start, end, now = Date.now()) {

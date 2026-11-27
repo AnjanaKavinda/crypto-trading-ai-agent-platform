@@ -7,308 +7,13 @@ import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import test from "node:test";
 import { TIMEFRAME_SECONDS } from "../../apps/web/src/research-api.mjs";
-import { DEFAULT_VISIBILITY, INDICATOR_IDS } from "../../apps/web/src/workspace-state.mjs";
+import { DEFAULT_VISIBILITY, INDICATOR_IDS, PREFERENCES_KEY } from "../../apps/web/src/workspace-state.mjs";
 
 const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { chromium } = require("playwright");
 const webRoot = resolve(fileURLToPath(new URL("../../apps/web/", import.meta.url)));
-const instrumentId = "BTC-USDT-SPOT";
-const symbol = "BTCUSDT";
-const candleCount = 501;
-const qualityReportId = "fixture-report-btc-1m";
-const snapshotId = "fixture-snapshot-btc-1m";
-
-function decimal(value) {
-  return value.toFixed(4);
-}
-
-function createSnapshot({ timeframe = "1m", count = candleCount } = {}) {
-  const candleCount = count;
-  const intervalMs = TIMEFRAME_SECONDS[timeframe] * 1000;
-  const firstOpen = Date.UTC(2026, 9, 16, 0, 0, 0) - candleCount * intervalMs;
-  const candles = Array.from({ length: candleCount }, (_, index) => {
-    const openTime = new Date(firstOpen + index * intervalMs).toISOString();
-    const closeTime = new Date(firstOpen + (index + 1) * intervalMs).toISOString();
-    const open = 100 + index * 0.01;
-    return {
-      market_data_id: `fixture-market-${index}`,
-      source_record_id: "fixture-source-btc",
-      open_time: openTime,
-      close_time: closeTime,
-      finalization: "FINAL",
-      metrics: {
-        open: { value: decimal(open), unit: "USDT" },
-        high: { value: decimal(open + 1), unit: "USDT" },
-        low: { value: decimal(open - 1), unit: "USDT" },
-        close: { value: decimal(open + 0.25), unit: "USDT" },
-        volume: { value: decimal(1 + index / 10), unit: "BTC" },
-      },
-    };
-  });
-  const marketDataIds = candles.map((candle) => candle.market_data_id);
-  const asOf = candles.at(-1).close_time;
-  const points = (valueFor) => candles.map((candle, index) => ({
-    candle_end: candle.close_time,
-    ...valueFor(index),
-  }));
-  const result = (indicatorId, parameters, indicatorPoints, fields = {}) => ({
-    indicator_id: indicatorId,
-    ...fields,
-    parameters,
-    snapshot_id: snapshotId,
-    quality_report_id: qualityReportId,
-    instrument_id: instrumentId,
-    venue_id: "BINANCE-SPOT",
-    timeframe,
-    as_of: asOf,
-    metadata_version: "1",
-    calculation_version: "fixture-calculation-v1",
-    input_market_data_ids: marketDataIds,
-    points: indicatorPoints,
-  });
-  const ema20 = points((index) => ({ value: decimal(100.2 + index * 0.01) }));
-  const ema50 = points((index) => ({ value: decimal(100.1 + index * 0.009) }));
-  const bollinger = points((index) => {
-    const middle = 100 + index * 0.01;
-    return {
-      middle: decimal(middle),
-      upper: decimal(middle + 1.5),
-      lower: decimal(middle - 1.5),
-      bandwidth: "0.0300",
-    };
-  });
-  const atr = points((index) => ({ value: decimal(0.2 + index * 0.0005) }));
-  const realizedVolatility = points((index) => ({ value: decimal(0.1 + index * 0.0002) }));
-  const ready = (value) => ({ status: "READY", value: decimal(value), reason: null });
-  const rsi = points((index) => ({ value: ready(40 + index * 0.02) }));
-  const macd = points((index) => ({
-    line: ready(-0.5 + index * 0.002),
-    signal: ready(-0.4 + index * 0.0015),
-    histogram: ready(-0.1 + index * 0.0005),
-  }));
-  const stochastic = points((index) => ({
-    k: ready(30 + index * 0.03),
-    d: ready(35 + index * 0.02),
-  }));
-  const cci = points((index) => ({ value: ready(-100 + index * 0.4) }));
-  const analysisResult = (indicatorId, fields) => ({
-    indicator_id: indicatorId,
-    metadata_version: "1",
-    calculation_version: `${indicatorId}-fixture-v1`,
-    method_label: `${indicatorId} backend fixture method`,
-    timeframe,
-    instrument_id: instrumentId,
-    venue_id: "BINANCE-SPOT",
-    snapshot_id: snapshotId,
-    quality_report_id: qualityReportId,
-    as_of: asOf,
-    window_start: candles[0].open_time,
-    window_end: asOf,
-    input_market_data_ids: marketDataIds,
-    ...fields,
-  });
-  const volumeProfileBins = Array.from({ length: 24 }, (_, index) => ({
-    index,
-    lower_bound: decimal(99 + index),
-    upper_bound: decimal(100 + index),
-    includes_upper_bound: index === 23,
-    assigned_volume: decimal(index + 1),
-  }));
-  const spotAnalysis = {
-    vwap: {
-      status: "AVAILABLE",
-      reason_code: null,
-      result: analysisResult("vwap", {
-        parameters: [["anchor-mode", "snapshot-start"]],
-        price_unit: "USDT",
-        volume_unit: "BTC",
-        anchor_mode: "first-candle",
-        anchor_time: candles[0].open_time,
-        points: candles.map((candle, index) => ({
-          candle_end: candle.close_time,
-          value: { value: decimal(100 + index * 0.01), status: "READY", reason: null },
-        })),
-      }),
-    },
-    "volume-profile": {
-      status: "AVAILABLE",
-      reason_code: null,
-      result: analysisResult("volume-profile", {
-        parameters: [["bin-count", 24], ["value-area-percent", 70]],
-        price_unit: "USDT",
-        volume_unit: "BTC",
-        status: "READY",
-        reason: null,
-        bins: volumeProfileBins,
-        poc_bin_index: 12,
-        value_area_bin_indices: [8, 9, 10, 11, 12, 13, 14],
-        value_area_low: "107.0000",
-        value_area_high: "114.0000",
-        value_area_volume: "84.0000",
-        value_area_share: "0.7000",
-        high_volume_node_bin_indices: [12],
-        low_volume_node_bin_indices: [0, 23],
-      }),
-    },
-    "volume-confirmation": {
-      status: "PARTIAL",
-      reason_code: "CONTEXTUAL_ASSESSMENTS_NOT_CONFIGURED",
-      result: analysisResult("volume-confirmation", {
-        parameters: [["lookback", 20]],
-        price_unit: "USDT",
-        volume_unit: "BTC",
-        lookback: 20,
-        points: candles.map((candle, index) => ({
-          candle_end: candle.close_time,
-          raw_volume: decimal(1 + index / 10),
-          prior_volume_sum: index < 20 ? null : "20.0000",
-          trailing_average: index < 20 ? null : "1.0000",
-          relative_volume: index < 20 ? null : "1.1000",
-          status: index < 20 ? "UNAVAILABLE" : "READY",
-          reason: index < 20 ? "INSUFFICIENT_PRIOR_CANDLES" : null,
-        })),
-        assessment: { status: "INDETERMINATE", reason: "MISSING_EVENT_CONTEXT" },
-        price_volume_comparison: { status: "INDETERMINATE", reason: "MISSING_COMPARISON_CONTEXT" },
-        exhaustion_assessment: {
-          status: "DATA_UNAVAILABLE",
-          reason: "RELIABLE_ORDER_FLOW_NOT_SUPPLIED",
-        },
-        limitations: ["Caller context is not configured."],
-      }),
-    },
-    "price-action-support-resistance": {
-      status: "PARTIAL",
-      reason_code: "CALLER_POLICIES_NOT_SUPPLIED",
-      result: analysisResult("price-action-support-resistance", {
-        method_version: "spot-price-action-geometry-fixture-v1",
-        price_unit: "USDT",
-        source_record_ids: ["fixture-source-btc"],
-        range_baseline_policy: null,
-        pattern_policy: null,
-        support_resistance_policy: null,
-        geometry: candles.map((candle, index) => ({
-          market_data_id: candle.market_data_id,
-          candle_time: candle.open_time,
-          candle_end: candle.close_time,
-          signed_body: "0.2500",
-          range: "2.0000",
-          upper_wick: "0.7500",
-          lower_wick: "1.0000",
-          close_location: "0.6250",
-          close_location_reason: null,
-          range_direction: null,
-          range_comparison_reason: "NO_CALLER_BASELINE",
-          patterns: [],
-        })),
-        pivots: [],
-        zones: [],
-        limitations: ["Caller policies were not supplied."],
-      }),
-    },
-    "spot-market-structure": {
-      status: "UNAVAILABLE",
-      reason_code: "CALLER_PIVOT_AND_BREAK_POLICIES_NOT_SUPPLIED",
-      result: null,
-    },
-  };
-
-  return {
-    instrument_id: instrumentId,
-    symbol,
-    venue_id: "BINANCE-SPOT",
-    timeframe,
-    as_of: asOf,
-    freshness_cutoff: asOf,
-    temporal_context: "CURRENT",
-    snapshot_id: snapshotId,
-    data_quality: {
-      report_id: qualityReportId,
-      status: "VALID",
-      report_status: "VALID",
-      policy_version: "personal-binance-spot-ohlcv-v1",
-      policy_sha256: "a".repeat(64),
-      report: {
-        report_id: qualityReportId,
-        snapshot_id: snapshotId,
-        status: "VALID",
-      },
-    },
-    lineage: {
-      source_record_ids: ["fixture-source-btc"],
-      market_data_ids: marketDataIds,
-      adapter_version: "binance-spot-adapter-v1",
-      sources: [{
-        source_record_id: "fixture-source-btc",
-        provider_id: "fixture-public-spot",
-        retrieval_time: asOf,
-      }],
-    },
-    persisted: true,
-    candles,
-    indicators: {
-      "ema-20": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("ema", [["period", 20]], ema20, { period: 20 }),
-      },
-      "ema-50": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("ema", [["period", 50]], ema50, { period: 50 }),
-      },
-      "ema-500": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("ema", [["period", 500]], ema50, { period: 500 }),
-      },
-      "bollinger-bands-20": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("bollinger-bands", [
-          ["period", 20],
-          ["standard_deviation_multiplier", "2"],
-        ], bollinger, { period: 20, standard_deviation_multiplier: "2" }),
-      },
-      "atr-14": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("atr-14", [["period", 14]], atr, { period: 14 }),
-      },
-      "realized-volatility-20": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("realized-volatility", [["period", 20]], realizedVolatility, { period: 20 }),
-      },
-      "rsi-14": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("rsi", [["period", 14]], rsi, { period: 14 }),
-      },
-      "macd-12-26-9": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("macd", [["fast-period", 12], ["slow-period", 26], ["signal-period", 9]], macd),
-      },
-      "stochastic-14-3": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("stochastic", [["k-period", 14], ["d-period", 3]], stochastic),
-      },
-      "cci-20": {
-        status: "AVAILABLE",
-        reason_code: null,
-        result: result("cci", [["period", 20]], cci, { period: 20 }),
-      },
-    },
-    spot_analysis: spotAnalysis,
-    order_flow: {
-      status: "UNAVAILABLE",
-      reason_code: "REQUIRED_TRADE_AND_BOOK_INPUTS_NOT_AVAILABLE",
-      result: null,
-    },
-  };
-}
-
+import { DESK_TIMEFRAMES } from "../../apps/web/src/desk-state.mjs";
+import { candleCount, createSnapshot, instrumentId, qualityReportId, snapshotId, symbol } from "./spot-fixture.mjs";
 const snapshot = createSnapshot();
 let browser;
 let server;
@@ -351,14 +56,22 @@ test.after(async () => {
   if (server?.listening) await new Promise((resolveClose) => server.close(resolveClose));
 });
 
-async function openWorkspace({ storedSnapshot, allowRefresh = false, visible, markers } = {}) {
+async function openWorkspace({ storedSnapshot, allowRefresh = false, visible, markers, preferences } = {}) {
   const page = await browser.newPage();
+  page.setDefaultTimeout(10_000);
   const apiRequests = [];
   let stored = storedSnapshot ?? snapshot;
-  if (visible) {
-    await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
-      key: `spot-research.presentation.v1:${instrumentId}:${stored.timeframe}`,
-      value: JSON.stringify({ mode: "pro", visible }),
+  {
+    // Desk-wide display preferences (UR1/UR3), seeded once per new page:
+    // Pro with VWAP on unless a test asks otherwise.
+    await page.addInitScript(({ key, value }) => {
+      if (!sessionStorage.getItem("seeded")) {
+        localStorage.setItem(key, value);
+        sessionStorage.setItem("seeded", "1");
+      }
+    }, {
+      key: PREFERENCES_KEY,
+      value: JSON.stringify({ mode: "pro", visible: visible ?? [...DEFAULT_VISIBILITY, "vwap"], ...preferences }),
     });
   }
   await page.route("http://127.0.0.1:8000/api/research/spot/**", async (route) => {
@@ -421,7 +134,7 @@ async function openWorkspace({ storedSnapshot, allowRefresh = false, visible, ma
     }
     await route.fulfill({ status: 405, contentType: "application/json", headers, body: "{}" });
   });
-  await page.goto(`${origin}/index.html?instrument=${instrumentId}&timeframe=${stored.timeframe}`);
+  await page.goto(`${origin}/index.html?instrument=${instrumentId}&timeframe=${stored.timeframe}#charts`);
   return { page, apiRequests };
 }
 
@@ -446,19 +159,43 @@ function expectedPriceRange() {
 }
 
 async function readSeries(page) {
-  return page.locator("#chart-container polyline.indicator-line").evaluateAll((lines) =>
-    lines.map((line) => ({
+  const lines = await page.locator("#chart-container polyline.indicator-line").evaluateAll((nodes) =>
+    nodes.map((line) => ({
       series: [...line.classList].filter((name) => name !== "indicator-line").join(" "),
       points: (line.getAttribute("points") ?? "").trim().split(/\s+/).filter(Boolean).map((pair) =>
         pair.split(",").map(Number),
       ),
     })),
   );
+  const bars = await page.locator("#chart-container rect.macd-histogram-bar").evaluateAll((nodes) => nodes.map((bar) => {
+    const y = Number(bar.getAttribute("y"));
+    const end = Number(bar.dataset.value) >= 0 ? y : y + Number(bar.getAttribute("height"));
+    // Third value: tolerance — a near-zero bar is drawn at the 1 px minimum height.
+    return [Number(bar.getAttribute("x")) + Number(bar.getAttribute("width")) / 2, end, Number(bar.getAttribute("height")) <= 1 ? 1 : 0.02];
+  }));
+  return bars.length ? [...lines, { series: "macd-histogram", points: bars }] : lines;
+}
+
+// Pane geometry is responsive (UR1/UR2); the chart exposes it as data attributes.
+async function chartGeometry(page) {
+  return page.locator("#chart-container svg").evaluate((svg) => ({
+    price: { top: Number(svg.dataset.priceTop), height: Number(svg.dataset.priceHeight), min: Number(svg.dataset.priceMin), max: Number(svg.dataset.priceMax) },
+    panes: Object.fromEntries([...svg.querySelectorAll("g.indicator-pane")].map((pane) => [pane.dataset.paneKey, {
+      top: Number(pane.dataset.top), height: Number(pane.dataset.height), min: Number(pane.dataset.min), max: Number(pane.dataset.max),
+    }])),
+  }));
 }
 
 async function waitForLoadedSnapshot(page) {
   await page.locator("#chart-container svg").waitFor({ state: "visible" });
   await page.locator("#snapshot-status").waitFor();
+  await openDrawer(page);
+}
+
+// The relocated details (analyses, OHLCV, provenance, indicator details) sit
+// in collapsed drawer sections; open them as the owner would.
+async function openDrawer(page) {
+  await page.evaluate(() => document.querySelectorAll("#chart-drawer details").forEach((details) => { details.open = true; }));
 }
 
 test("spot analyses render backend results bound to the exact snapshot and candle timestamps", async () => {
@@ -683,18 +420,28 @@ test("volume-profile withholds levels when its nested result is not READY", asyn
   }
 });
 
-test("VWAP overlay remains isolated from indicator visibility preferences without refresh", async () => {
+test("VWAP overlay has its own pill, independent of indicator toggles, without refresh", async () => {
   const { page, apiRequests } = await openWorkspace({
     storedSnapshot: createSnapshot({ count: 50 }),
-    visible: ["ema-20"],
+    visible: ["ema-20", "vwap"],
   });
   try {
     await waitForLoadedSnapshot(page);
     assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
-    await page.getByRole("button", { name: "Pro", exact: true }).click();
+    assert.equal(await page.locator('#indicator-toolbar [data-pill="VWAP"]').getAttribute("aria-pressed"), "true");
     await page.getByRole("checkbox", { name: "EMA 20", exact: true }).uncheck();
     assert.equal(await page.locator("#chart-container polyline.ema-20").count(), 0);
     assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
+    // UR3: the pill and the checkbox always agree.
+    assert.equal(await page.locator('#indicator-toolbar [data-pill="EMA20"]').getAttribute("aria-pressed"), "false");
+    await page.locator('#indicator-toolbar [data-pill="VWAP"]').click();
+    assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 0);
+    await page.locator('#indicator-toolbar [data-pill="VWAP"]').click();
+    assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 1);
+    // VWAP is not one of the Beginner essentials.
+    await page.getByRole("button", { name: "Beginner", exact: true }).click();
+    assert.equal(await page.locator("#chart-container polyline.spot-vwap-line").count(), 0);
+    assert.equal(await page.locator('#indicator-toolbar [data-pill="VWAP"]').count(), 0);
     assert.equal(apiRequests.filter((request) => request.method === "POST").length, 0);
   } finally {
     await page.close();
@@ -704,8 +451,7 @@ test("VWAP overlay remains isolated from indicator visibility preferences withou
 test("indicator provenance links use the loaded response and the synthetic example stays separate", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
-    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
-    await page.locator("#history-select").selectOption("501");
+    // U5b: the 501-candle default reads the stored snapshot on first load.
     await waitForLoadedSnapshot(page);
 
     const provenanceText = await page.locator("#snapshot-metadata").innerText();
@@ -713,7 +459,7 @@ test("indicator provenance links use the loaded response and the synthetic examp
     for (const identity of [
       symbol,
       instrumentId,
-      "1m",
+      "1h",
       snapshotId,
       qualityReportId,
       "fixture-source-btc",
@@ -727,7 +473,7 @@ test("indicator provenance links use the loaded response and the synthetic examp
     assert.equal(await firstLink.getAttribute("href"), "#snapshot-provenance");
     assert.equal(await firstLink.getAttribute("tabindex"), null);
     assert.match(await firstLink.getAttribute("aria-label"), new RegExp(
-      `${symbol}.*${instrumentId}.*1m.*${snapshotId}.*${qualityReportId}`,
+      `${symbol}.*${instrumentId}.*1h.*${snapshotId}.*${qualityReportId}`,
     ));
     await firstLink.focus();
     await page.keyboard.press("Shift+Tab");
@@ -736,6 +482,9 @@ test("indicator provenance links use the loaded response and the synthetic examp
     assert.equal(await firstLink.evaluate((link) => link.matches(":focus-visible")), true);
     await firstLink.click();
     assert.equal(new URL(page.url()).hash, "#snapshot-provenance");
+    // An in-page anchor never switches the desk tab.
+    assert.equal(await page.getByRole("tab", { name: "Charts" }).getAttribute("aria-selected"), "true");
+    assert.equal(await page.locator("#snapshot-provenance").getAttribute("open"), "");
 
     await page.getByRole("button", { name: "Pro", exact: true }).click();
     for (const id of INDICATOR_IDS) {
@@ -765,11 +514,10 @@ test("indicator provenance links use the loaded response and the synthetic examp
       const link = card.locator(".indicator-provenance-link a");
       assert.equal(await link.getAttribute("href"), "#snapshot-provenance");
       assert.match(await link.getAttribute("aria-label"), new RegExp(
-        `${symbol}.*${instrumentId}.*1m.*${snapshotId}.*${qualityReportId}`,
+        `${symbol}.*${instrumentId}.*1h.*${snapshotId}.*${qualityReportId}`,
       ));
     }
 
-    await page.locator("#synthetic-example summary").click();
     assert.equal(await page.locator("#synthetic-example tbody tr").count(), INDICATOR_IDS.length);
     assert.match(await page.locator("#synthetic-example").innerText(), /synthetic \/ educational only/i);
     assert.match(await page.locator("#synthetic-example").innerText(), /not provider data.*not market evidence.*not a signal/s);
@@ -787,8 +535,7 @@ test("indicator provenance links use the loaded response and the synthetic examp
 test("browser chart toggles preserve series isolation and bind every point to its candle timestamp", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
-    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
-    await page.locator("#history-select").selectOption("501");
+    // U5b: the 501-candle default reads the stored snapshot on first load.
     await waitForLoadedSnapshot(page);
     await page.getByRole("button", { name: "Pro", exact: true }).click();
     for (const name of [
@@ -838,23 +585,9 @@ test("browser chart toggles preserve series isolation and bind every point to it
       "cci-line": snapshot.indicators["cci-20"].result.points.map((point) => [point.candle_end, point.value.value, "cci"]),
       "spot-vwap-line": snapshot.spot_analysis.vwap.result.points.map((point) => [point.candle_end, point.value.value, "price"]),
     };
-    const panelAxes = [
-      ["atr", ["atr-line"]],
-      ["realized-volatility", ["realized-volatility-line"]],
-      ["rsi", ["rsi-line"]],
-      ["macd", ["macd-line", "macd-signal", "macd-histogram"]],
-      ["stochastic", ["stochastic-k", "stochastic-d"]],
-      ["cci", ["cci-line"]],
-    ];
-    const panelScales = new Map(panelAxes.map(([axis, classes], panelIndex) => {
-      const values = classes.flatMap((className) => seriesResults[className].map(([, value]) => Number(value)));
-      let min = Math.min(...values);
-      let max = Math.max(...values);
-      if (min >= 0) min = 0;
-      if (max <= 0) max = 0;
-      if (min === max) max = min + Math.max(Math.abs(min) * 0.02, 1);
-      return [axis, { min, span: max - min, top: 320 + panelIndex * 120 }];
-    }));
+    const geometry = await chartGeometry(page);
+    assert.ok(Math.abs(geometry.price.min - priceRange.min) < 1e-9 && Math.abs(geometry.price.max - priceRange.min - priceRange.span) < 1e-9);
+    assert.deepEqual(Object.keys(geometry.panes), ["atr", "realized-volatility", "rsi", "macd", "stochastic", "cci"]);
     for (const line of rendered) {
       const className = line.series;
       const expected = seriesResults[className];
@@ -864,12 +597,14 @@ test("browser chart toggles preserve series isolation and bind every point to it
         assert.equal(candle, index, `${className} point timestamp must match its candle`);
         const expectedX = candleXs[candle];
         const value = Number(exactValue);
-        const panel = panelScales.get(axis);
+        const { price } = geometry;
+        const panel = geometry.panes[axis];
+        const inner = panel ? panel.height - 4 : 0;
         const expectedY = axis === "price"
-          ? 20 + 260 - (value - priceRange.min) / priceRange.span * 260
-          : panel.top + 95 - (value - panel.min) / panel.span * 95;
+          ? price.top + price.height - (value - price.min) / (price.max - price.min) * price.height
+          : panel.top + 2 + inner - (value - panel.min) / (panel.max - panel.min) * inner;
         assert.ok(Math.abs(line.points[index][0] - expectedX) < 0.02, `${className} x alignment at candle ${index}`);
-        assert.ok(Math.abs(line.points[index][1] - expectedY) < 0.02, `${className} value at candle ${index}`);
+        assert.ok(Math.abs(line.points[index][1] - expectedY) <= (line.points[index][2] ?? 0.02), `${className} value at candle ${index}`);
       });
     }
 
@@ -881,16 +616,11 @@ test("browser chart toggles preserve series isolation and bind every point to it
       await checkbox.check();
       assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), expectedClasses);
     }
-    const beginnerClasses = ["atr-line", "ema-20", "ema-50", "spot-vwap-line"].sort();
+    const beginnerClasses = ["atr-line", "bollinger-lower", "bollinger-middle", "bollinger-upper", "ema-20", "ema-50", "rsi-line"].sort();
     await page.getByRole("button", { name: "Beginner", exact: true }).click();
     assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
     await page.getByRole("button", { name: "Pro", exact: true }).click();
     assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), expectedClasses);
-
-    await page.locator("#reset-button").click();
-    assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
-    await page.getByRole("button", { name: "Pro", exact: true }).click();
-    assert.deepEqual((await readSeries(page)).map((line) => line.series).sort(), beginnerClasses);
     assert.equal(apiRequests.filter((request) => request.pathname.endsWith("/refresh")).length, 0);
   } finally {
     await page.close();
@@ -956,18 +686,17 @@ for (const scenario of [
 test("browser clears the previous chart after a 501-candle snapshot rejects a 250-candle read", { timeout: 60_000 }, async () => {
   const { page, apiRequests } = await openWorkspace();
   try {
-    await page.waitForFunction(() => document.querySelector("#snapshot-status")?.dataset.state === "error");
-    await page.locator("#history-select").selectOption("501");
+    // U5b: the 501-candle default reads the stored snapshot on first load.
     await waitForLoadedSnapshot(page);
     assert.equal(await page.locator("#chart-container svg").count(), 1);
 
     await page.locator("#history-select").selectOption("250");
     await page.getByText("Research request failed.", { exact: true }).waitFor();
     assert.equal(await page.locator("#chart-container svg").count(), 0);
-    assert.match(await page.locator("#chart-container").innerText(), /stored 1m snapshot.*maximum of 250/);
+    assert.match(await page.locator("#chart-container").innerText(), /stored 1h snapshot.*maximum of 250/);
     assert.match(await page.locator("#chart-container").innerText(), /larger history bound.*explicitly refresh this same selector/);
     assert.doesNotMatch(await page.locator("body").innerText(), /PRIVATE|must not appear/);
-    assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNot yet available");
+    assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNo snapshot loaded");
     assert.equal(await page.locator("#indicator-groups .indicator-provenance-link").count(), 0);
     assert.ok(apiRequests.some((request) => request.pathname.endsWith("/candles") && request.limit === "250"));
     assert.equal(apiRequests.filter((request) => request.pathname.endsWith("/refresh")).length, 0);
@@ -976,7 +705,7 @@ test("browser clears the previous chart after a 501-candle snapshot rejects a 25
   }
 });
 
-for (const timeframe of Object.keys(TIMEFRAME_SECONDS)) {
+for (const timeframe of DESK_TIMEFRAMES) {
   for (const limit of [50, 90, 100, 250, 501]) {
     test(`browser ${timeframe}/${limit}: stored read, explicit refresh eligibility, exact readback`, { timeout: 60_000 }, async () => {
       const { page, apiRequests } = await openWorkspace({
@@ -988,7 +717,7 @@ for (const timeframe of Object.keys(TIMEFRAME_SECONDS)) {
           document.querySelector("#snapshot-status")?.dataset.state !== "warning");
         await page.locator("#history-select").selectOption(String(limit));
         await waitForLoadedSnapshot(page);
-        assert.equal(await page.locator("#timeframe-select").inputValue(), timeframe);
+        assert.equal(await page.locator(`#timeframe-pills [data-timeframe="${timeframe}"]`).getAttribute("aria-pressed"), "true");
         const metadata = await page.locator("#snapshot-metadata").innerText();
         assert.ok(metadata.includes(`Timeframe\n${timeframe}`));
         assert.ok(metadata.includes(`Returned candles\n${limit}`));
@@ -1032,7 +761,7 @@ for (const [state, status, expected] of [
     const { page, apiRequests } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 50 }) });
     try {
       await waitForLoadedSnapshot(page);
-      assert.equal(await page.locator("#history-select").inputValue(), "250");
+      assert.equal(await page.locator("#history-select").inputValue(), "501");
       assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Returned candles\n50"));
       const corrupt = createSnapshot({ count: 50 });
       corrupt.lineage.market_data_ids[0] = "mismatched-source";
@@ -1047,7 +776,7 @@ for (const [state, status, expected] of [
       assert.match(await page.locator("#chart-container").innerText(), expected);
       assert.doesNotMatch(await page.locator("body").innerText(), /PRIVATE/);
       assert.equal(await page.locator("#chart-container svg").count(), 0);
-      assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNot yet available");
+      assert.equal(await page.locator("#snapshot-metadata").innerText(), "Instrument / venue\nNo snapshot loaded");
       assert.equal(await page.locator("#source-list").innerText(), "");
       assert.equal(await page.locator("#candle-rows td").count(), 1);
       assert.equal(await page.locator("#indicator-groups .indicator-value").count(), 0);
@@ -1160,7 +889,7 @@ for (const delayedAction of ["read", "refresh"]) {
         const selectedTimeframe = request.method() === "POST"
           ? request.postDataJSON().timeframe
           : url.searchParams.get("timeframe");
-        if (selectedTimeframe === "1m") {
+        if (selectedTimeframe === "1h") {
           markStarted();
           await responseGate;
         }
@@ -1177,21 +906,21 @@ for (const delayedAction of ["read", "refresh"]) {
         await page.locator("#refresh-button").click();
       }
       await started;
-      await page.locator("#timeframe-select").selectOption("5m");
-      await page.waitForFunction(() => document.querySelector("#snapshot-metadata").innerText.includes("Timeframe\n5m"));
+      await page.locator('#timeframe-pills [data-timeframe="4h"]').click();
+      await page.waitForFunction(() => document.querySelector("#snapshot-metadata").innerText.includes("Timeframe\n4h"));
       const lateResponse = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return delayedAction === "read"
-          ? url.pathname.endsWith("/candles") && url.searchParams.get("timeframe") === "1m"
+          ? url.pathname.endsWith("/candles") && url.searchParams.get("timeframe") === "1h"
           : url.pathname.endsWith("/refresh");
       });
       releaseResponse();
       await (await lateResponse).finished();
       await page.evaluate(() => new Promise((resolveFrame) =>
         requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
-      assert.equal(await page.locator("#timeframe-select").inputValue(), "5m");
-      assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Timeframe\n5m"));
-      assert.match(await page.locator("#chart-container svg > title").textContent(), /5m/);
+      assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "true");
+      assert.ok((await page.locator("#snapshot-metadata").innerText()).includes("Timeframe\n4h"));
+      assert.match(await page.locator("#chart-container svg > title").textContent(), /4h/);
     } finally {
       releaseResponse();
       await page.close();
@@ -1219,10 +948,10 @@ test("chart workspace zooms, pans, switches scale and shows the exact last close
     await page.keyboard.press("End");
     await page.keyboard.press("ArrowLeft");
     const inspector = page.locator("#chart-inspector");
-    assert.match(await inspector.textContent(), / C 100\.73 USDT/);
+    assert.match(await inspector.textContent(), /C\s*100\.73/);
     assert.match(await inspector.getAttribute("data-exact"), /Close: 100\.7300 USDT/);
     assert.match(await inspector.getAttribute("title"), /^Exact returned values: /);
-    assert.match(await page.locator("#market-trades").innerText(), /Market trades — unavailable[\s\S]*#355/);
+    assert.match(await page.locator("#market-trades").innerText(), /Market trades[\s\S]*Unavailable[\s\S]*#355/);
     const requestsBefore = apiRequests.length;
     await page.locator('[data-chart-action="zoom-in"]').click();
     assert.equal(await wicks(), 25);
@@ -1257,22 +986,18 @@ test("chart workspace timeframe pills, markets list, volume average and market-t
     assert.equal(points.length, 30);
     assert.match(await page.locator("#chart-container .legend-volume-average-line").textContent(), /Prior-20 average volume · backend/);
     // Markets list comes from the API allowlist and marks the selection.
-    const market = page.locator(`#markets-list [data-instrument-id="${instrumentId}"]`);
-    assert.equal(await market.textContent(), symbol);
+    const market = page.locator(`#markets-list-items [data-instrument-id="${instrumentId}"]`);
+    assert.match(await market.textContent(), /^BTC\/USDT/);
     assert.equal(await market.getAttribute("aria-pressed"), "true");
-    assert.match(await page.locator("#markets-list-count").textContent(), /Markets \(1\)/);
+    assert.match(await page.locator("#markets-list-count").textContent(), /1 approved Spot pair/);
     // Market trades are unavailable, never inferred.
-    assert.match(await page.locator("#market-trades").innerText(), /unavailable[\s\S]*#355/);
-    // Weekly/monthly pills are disabled with a reason; live pills load that timeframe.
-    for (const value of ["1w", "1M"]) {
-      const pill = page.locator(`#timeframe-pills [data-timeframe="${value}"]`);
-      assert.equal(await pill.isDisabled(), true);
-      assert.match(await pill.getAttribute("title"), /not served by the local research API/);
-    }
+    assert.match(await page.locator("#market-trades").innerText(), /Unavailable[\s\S]*#355/);
+    // One timeframe control: 1h / 4h / 1D only (1 minute and 1W/1M removed, UR1).
+    assert.deepEqual(await page.locator("#timeframe-pills button").allInnerTexts(), ["1h", "4h", "1D"]);
     assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "false");
     const before = apiRequests.length;
     await page.locator('#timeframe-pills [data-timeframe="4h"]').click();
-    await page.waitForFunction(() => document.querySelector("#timeframe-select").value === "4h");
+    await page.waitForFunction(() => document.querySelector('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed") === "true");
     assert.equal(await page.locator('#timeframe-pills [data-timeframe="4h"]').getAttribute("aria-pressed"), "true");
     const loads4h = () => apiRequests.slice(before).some((item) => item.pathname.endsWith("/candles") && item.timeframe === "4h");
     for (let attempt = 0; attempt < 50 && !loads4h(); attempt += 1) await page.waitForTimeout(100);
@@ -1294,7 +1019,7 @@ test("indicator toolbar pills toggle backend overlays and disable not-ready indi
     await pill("RSI").click();
     assert.equal(await pill("RSI").getAttribute("aria-pressed"), "true");
     assert.ok((await readSeries(page)).some((line) => line.series === "rsi-line"));
-    assert.equal(await page.locator("#view-mode").textContent(), "Pro view");
+    assert.equal(await page.locator("#pro-button").getAttribute("aria-pressed"), "true");
     await pill("EMA20").click();
     assert.equal(await pill("EMA20").getAttribute("aria-pressed"), "false");
     assert.ok(!(await readSeries(page)).some((line) => line.series === "ema-20"));
@@ -1302,9 +1027,9 @@ test("indicator toolbar pills toggle backend overlays and disable not-ready indi
       assert.equal(await pill(short).isDisabled(), true, short);
       assert.match(await pill(short).getAttribute("title"), /Connect|To build|Needs trades|Needs order book/);
     }
-    assert.equal(await pill("VWAP").isDisabled(), false);
-    await pill("VWAP").click();
-    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "vwap");
+    assert.equal(await pill("VPRO").isDisabled(), false);
+    await pill("VPRO").click();
+    await page.waitForFunction(() => document.activeElement?.dataset?.analysisKey === "volume-profile");
     assert.equal(apiRequests.length, before, "toolbar pills must not issue API requests");
   } finally {
     await page.close();
@@ -1319,8 +1044,8 @@ test("drawing tools place browser-only annotations that persist and clear withou
       const svg = page.locator("#chart-container svg");
       const box = await svg.boundingBox();
       const [, , viewWidth, viewHeight] = (await svg.getAttribute("viewBox")).split(/\s+/).map(Number);
-      const plotLeft = 150;
-      const plotWidth = viewWidth - 150 - 125;
+      const plotLeft = 8;
+      const plotWidth = viewWidth - 8 - 84;
       await page.mouse.click(
         box.x + ((plotLeft + xFraction * plotWidth) / viewWidth) * box.width,
         box.y + (viewY / viewHeight) * box.height,
@@ -1401,17 +1126,34 @@ function syntheticMarkers(stored, params) {
 test("strategy markers draw on the chart and the evidence panel shows labelled values and sizing", async () => {
   const fixture = createSnapshot({ count: 50 });
   const { page, apiRequests } = await openWorkspace({ storedSnapshot: fixture, markers: syntheticMarkers });
+  const markerUrls = [];
+  page.on("request", (request) => { if (request.url().includes("/api/research/spot/") && request.url().includes("/strategy-markers?")) markerUrls.push(new URL(request.url())); });
   try {
     await waitForLoadedSnapshot(page);
+    // U5b: SIGNALS is off by default — no markers are read or drawn.
+    const signals = page.locator('#indicator-toolbar [data-pill="SIGNALS"]');
+    assert.equal(await signals.getAttribute("aria-pressed"), "false");
+    assert.equal(await page.locator("#chart-container polygon.strategy-marker").count(), 0);
+    assert.equal(markerUrls.length, 0, markerUrls.map(String).join(" "));
+    assert.equal(await page.locator("#chart-signal-banner").isHidden(), true);
+    // Turned on: the strategy for this timeframe is named explicitly and its FAILED verdict is shown.
+    await signals.click();
     await page.locator("#chart-container polygon.strategy-marker-buy").waitFor();
+    assert.equal(markerUrls[0].searchParams.get("strategy"), "ema-trend-atr-stop");
+    assert.equal(markerUrls[0].searchParams.get("version"), "1");
+    assert.equal(await page.locator("#marker-strategy").inputValue(), "ema-trend-atr-stop@1");
+    assert.equal(await page.locator("#chart-signal-banner").innerText(),
+      "ema-trend-atr-stop v1 — FAILED verdict (2026-11-26). Illustration only, not a trade signal.");
+    assert.match(await page.locator("#markers-banner").innerText(), /FAILED verdict \(2026-11-26\)[\s\S]*did not beat simply holding cash/);
     assert.equal(await page.locator("#chart-container polygon.strategy-marker-sell").count(), 1);
     const body = page.locator("#markers-body");
     assert.match(await body.innerText(), /2 markers · position FLAT/);
     assert.match(await page.locator("#marker-detail").innerText(), /Modelled entry fill[\s\S]*101\.05[\s\S]*Research proposal/);
     assert.match(await page.locator("#marker-detail").innerText(), /enter account size and risk %/);
-    assert.equal(await page.locator('#indicator-toolbar [data-pill="SIGNALS"]').isDisabled(), false);
     await page.locator("#chart-container polygon.strategy-marker-sell").click();
-    assert.match(await page.locator("#marker-detail").innerText(), /Net return[\s\S]*-0\.012/);
+    // Display precision with the exact backend value kept on hover.
+    assert.match(await page.locator("#marker-detail").innerText(), /Net return[\s\S]*−1\.20%/);
+    assert.equal(await page.locator('#marker-detail [data-exact="-0.012"]').getAttribute("title"), "Exact value: -0.012");
     await page.locator("#sizing-account").fill("abc");
     await page.locator("#sizing-form button").click();
     assert.match(await page.locator("#sizing-error").innerText(), /positive USDT amount/);
@@ -1419,7 +1161,7 @@ test("strategy markers draw on the chart and the evidence panel shows labelled v
     await page.locator("#sizing-risk").fill("1");
     await page.locator("#sizing-form button").click();
     await page.locator('#markers-body [data-marker-index="0"]').click();
-    await page.waitForFunction(() => document.querySelector("#marker-detail")?.innerText.includes("2.50000000"));
+    await page.locator('#marker-detail [data-exact="2.50000000"]').waitFor();
     const markerReads = apiRequests.filter((item) => item.pathname.endsWith("/strategy-markers"));
     assert.equal(markerReads.length, 2);
     assert.ok(apiRequests.every((item) => item.method === "GET"));
@@ -1459,19 +1201,18 @@ test("record my decision binds the journal to the exact current VALID snapshot o
   });
   try {
     await waitForLoadedSnapshot(page);
-    const button = page.getByRole("button", { name: "Record my decision", exact: true });
-    await page.waitForFunction(() => !document.querySelector("#record-decision-button").disabled);
+    // The drawer's quick form (Abstain | Trade intent + note) is ready for the snapshot on screen.
+    await page.locator('#decision-body [data-action="ABSTAIN"]').waitFor();
     assert.match(await page.locator("#decision-note").innerText(), new RegExp(snapshotUuid));
     assert.equal(posts.length, 0);
-    await button.click();
-    await page.locator("#decision-body select").first().selectOption("ABSTAIN");
+    await page.locator('#decision-body [data-action="ABSTAIN"]').click();
     await page.locator("#decision-body textarea").first().fill("No clear trend; staying out.");
     await page.getByRole("button", { name: "Save declaration", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#decision-body")?.innerText.includes("Saved unverified research declaration"));
     assert.equal(posts.length, 1);
     assert.deepEqual(
       { instrument_id: posts[0].instrument_id, timeframe: posts[0].timeframe, snapshot_id: posts[0].snapshot_id, quality_report_id: posts[0].quality_report_id, declared_action: posts[0].declared_action },
-      { instrument_id: instrumentId, timeframe: "1m", snapshot_id: snapshotUuid, quality_report_id: reportUuid, declared_action: "ABSTAIN" },
+      { instrument_id: instrumentId, timeframe: "1h", snapshot_id: snapshotUuid, quality_report_id: reportUuid, declared_action: "ABSTAIN" },
     );
     assert.equal(Object.hasOwn(posts[0], "source"), false);
     const text = await page.locator("#decision-body").innerText();
@@ -1479,6 +1220,55 @@ test("record my decision binds the journal to the exact current VALID snapshot o
     assert.match(text, /Quality report: 00000000-0000-4000-8000-00000000c003 · VALID/);
     await page.getByRole("button", { name: "Read declaration history", exact: true }).click();
     await page.getByRole("button", { name: "Append correction", exact: true }).waitFor();
+  } finally {
+    await page.close();
+  }
+});
+
+test("UR1: Beginner|Pro switch — 7 pills, 6 tools and a plain reading in Beginner; everything in Pro; remembered", async () => {
+  const { page } = await openWorkspace({
+    storedSnapshot: createSnapshot({ count: 60 }),
+    preferences: { mode: "beginner", visible: [...DEFAULT_VISIBILITY] },
+  });
+  try {
+    await waitForLoadedSnapshot(page);
+    assert.equal(await page.locator("#beginner-button").getAttribute("aria-pressed"), "true");
+    assert.deepEqual(await page.locator("#indicator-toolbar .indicator-pill").allInnerTexts(), ["SIGNALS", "EMA20", "EMA50", "BB", "RSI", "ATR", "VOL"]);
+    assert.equal(await page.locator("#drawing-tools .drawing-tool").count(), 6);
+    assert.match(await page.locator("#plain-reading").innerText(), /Trend: [\s\S]*Momentum: RSI[\s\S]*Volatility: ATR[\s\S]*Not a signal/);
+    assert.equal(await page.locator("#indicator-details").isHidden(), true);
+    await page.getByRole("button", { name: "Pro", exact: true }).click();
+    assert.equal(await page.locator("#indicator-toolbar .indicator-pill").count(), 32);
+    assert.equal(await page.locator("#drawing-tools .drawing-tool").count(), 11);
+    assert.equal(await page.locator("#indicator-details").isHidden(), false);
+    await page.reload();
+    await waitForLoadedSnapshot(page);
+    assert.equal(await page.locator("#pro-button").getAttribute("aria-pressed"), "true");
+    assert.equal(await page.locator("#indicator-toolbar .indicator-pill").count(), 32);
+  } finally {
+    await page.close();
+  }
+});
+
+test("UR1: full screen keeps pills, mode, timeframe and tools; the drawer opens as an overlay; Esc exits", async () => {
+  const { page } = await openWorkspace({ storedSnapshot: createSnapshot({ count: 60 }) });
+  try {
+    await waitForLoadedSnapshot(page);
+    const button = page.locator("#fullscreen-button");
+    await button.click();
+    assert.equal(await button.innerText(), "✕ Exit full screen");
+    assert.match(await page.locator("#charts-workspace").getAttribute("class"), /is-fullscreen/);
+    for (const selector of ["#indicator-toolbar", "#pro-button", "#timeframe-pills", "#drawing-tools", "#chart-container svg"]) {
+      assert.equal(await page.locator(selector).isVisible(), true, selector);
+    }
+    assert.equal(await page.locator("#chart-drawer").isVisible(), false);
+    await page.locator("#drawer-toggle").click();
+    assert.equal(await page.locator("#chart-drawer").isVisible(), true);
+    assert.equal(await page.locator("#chart-drawer").evaluate((node) => getComputedStyle(node).position), "fixed");
+    await page.keyboard.press("Escape");
+    assert.equal(await button.innerText(), "⛶ Full screen");
+    assert.doesNotMatch(await page.locator("#charts-workspace").getAttribute("class"), /is-fullscreen/);
+    assert.equal(await page.locator("#chart-drawer").isVisible(), true, "the drawer state from before full screen is restored");
   } finally {
     await page.close();
   }

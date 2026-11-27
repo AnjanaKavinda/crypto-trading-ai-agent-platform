@@ -32,9 +32,10 @@ test("board requests pin kind/schema/state/cursor and perform only local no-stor
 });
 test("exact links and detail identity do not permit unsupported versions or swapped records", async () => {
   const value = record(); const ref = value.reference;
-  assert.deepEqual(recordFromQuery(recordLink(ref).split("?")[1]), ref);
+  assert.deepEqual(recordFromQuery(new URL(recordLink(ref), "http://desk.invalid/").search), ref);
   assert.equal(recordFromQuery(""), null);
-  assert.throws(() => recordFromQuery(recordLink(ref).split("?")[1] + "&schema_version=3"));
+  assert.equal(new URL(recordLink(ref), "http://desk.invalid/").hash, "#my-results");
+  assert.throws(() => recordFromQuery(new URL(recordLink(ref), "http://desk.invalid/").search + "&schema_version=3"));
   assert.throws(() => validateReference({ ...ref, schema_version: "3" }, true));
   assert.throws(() => validateReference({ ...ref, artifact_id: "../evaluate" }, true));
   let calls = 0;

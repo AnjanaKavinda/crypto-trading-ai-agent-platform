@@ -4,227 +4,339 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>Local Spot Research Workspace</title>
+    <title>Trading desk — Local Spot Research</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2314b8a6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='%23fff' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./styles.css">
-    <script type="module" src="./src/app.mjs"></script>
+    <script type="module" src="./src/desk-shell.mjs"></script>
   </head>
-  <body>
-    <header class="app-header">
-      <div>
-        <p class="eyebrow">LOCAL RESEARCH — READ ONLY</p>
-        <h1>Asset analysis workspace</h1>
-        <p class="muted">Trading and execution are unavailable in this phase.</p>
+  <body class="desk">
+    <header class="desk-header">
+      <h1 class="desk-brand">Trading desk</h1>
+      <div id="desk-tabs" class="desk-tabs" role="tablist" aria-label="Desk sections">
+        <button type="button" role="tab" id="tab-today" aria-controls="panel-today" aria-selected="true">Today</button>
+        <button type="button" role="tab" id="tab-charts" aria-controls="panel-charts" aria-selected="false" tabindex="-1">Charts</button>
+        <button type="button" role="tab" id="tab-strategy-lab" aria-controls="panel-strategy-lab" aria-selected="false" tabindex="-1">Strategy lab</button>
+        <button type="button" role="tab" id="tab-my-results" aria-controls="panel-my-results" aria-selected="false" tabindex="-1">My results</button>
       </div>
-      <nav class="header-navigation" aria-label="Research navigation">
-        <a class="mode-pill" href="./desk.html" target="_top">Trading desk</a>
-        <a class="mode-pill" href="./watchlist.html">Spot market overview</a>
-        <a class="mode-pill" href="./evidence.html">Evidence reports</a>
-        <div class="mode-pill" role="status">LOCAL RESEARCH · READ ONLY</div>
-        <a class="mode-pill" href="./signals.html">Research records / NO_TRADE</a>
-      </nav>
+      <div class="desk-status" role="group" aria-label="Desk status">
+        <span id="desk-mode" class="status-chip chip-mode">Mode: RESEARCH</span>
+        <span id="desk-live" class="status-chip chip-live" title="This interface has no order, approval or execution path.">Live trading: OFF</span>
+        <span id="desk-freshness" class="status-chip" role="status" aria-live="polite" data-state="pending">Data: reading stored snapshots…</span>
+      </div>
     </header>
 
-    <main>
-      <section class="panel controls" aria-labelledby="selection-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">RESEARCH SELECTOR</p>
-            <h2 id="selection-heading">Asset and time context</h2>
-          </div>
-          <button id="refresh-button" class="primary" type="button" disabled>
-            Explicitly refresh from provider
-          </button>
-        </div>
-        <p id="refresh-note" class="muted">Refresh is never automatic. This action requests a bounded public Spot update.</p>
-        <div class="control-grid">
-          <label>Supported instrument
-            <select id="instrument-select" disabled aria-describedby="instrument-note"></select>
-          </label>
-          <label>Timeframe
-            <select id="timeframe-select">
-              <option value="1m">1 minute</option>
-              <option value="5m">5 minutes</option>
-              <option value="15m">15 minutes</option>
-              <option value="1h">1 hour</option>
-              <option value="4h">4 hours</option>
-              <option value="1d">1 day</option>
-            </select>
-          </label>
-          <label>Maximum requested history
-            <select id="history-select">
-              <option value="50">50 candles</option>
-              <option value="90">90 candles</option>
-              <option value="100">100 candles</option>
-              <option value="250" selected>250 candles</option>
-              <option value="501">501 candles (API maximum)</option>
-            </select>
-          </label>
-          <label>Historical as-of cutoff (optional, local time)
-            <input id="as-of-input" type="datetime-local" step="1">
-          </label>
-        </div>
-        <p id="instrument-note" class="muted">Instrument options come only from the local research API allowlist.</p>
-        <details id="markets-list" class="markets-list" open>
-          <summary id="markets-list-count">Markets</summary>
-          <ul id="markets-list-items" class="markets-list-items" aria-label="Supported markets"></ul>
-        </details>
-        <p id="control-error" class="error-text" role="alert" hidden></p>
-      </section>
+    <main class="desk-main">
+      <!-- TODAY -->
+      <section id="panel-today" class="desk-panel today-panel" role="tabpanel" aria-labelledby="tab-today">
+        <div class="today-grid">
+          <section class="card" aria-labelledby="today-heading">
+            <h2 id="today-heading" class="card-title">Five coins · <span id="today-timeframe">4h</span></h2>
+            <ul id="today-rows" class="coin-list" aria-label="Today state per coin"></ul>
+            <p id="today-status" class="card-note" role="status">Reading stored snapshots…</p>
+          </section>
 
-      <section id="snapshot-status" class="status-panel" aria-live="polite" aria-atomic="true">
-        <strong>No snapshot loaded.</strong>
-        <span>Only read-only local API requests run on initial load and selector changes.</span>
-      </section>
+          <section id="today-focus" class="card today-focus" aria-labelledby="today-focus-heading">
+            <div class="focus-head">
+              <h2 id="today-focus-heading" class="card-title focus-symbol">Selected coin</h2>
+              <span id="today-focus-chip" class="state-chip" hidden></span>
+              <span id="today-focus-meta" class="card-note"></span>
+            </div>
+            <button id="today-chart" class="mini-chart" type="button" aria-label="Open the selected coin in Charts">
+              <span class="empty-state">Reading the stored snapshot…</span>
+            </button>
+            <h3 class="subhead">Why</h3>
+            <ul id="today-why" class="why-list"></ul>
+            <h3 class="subhead">Strategy status</h3>
+            <ul id="today-verdicts" class="verdict-list" aria-label="Recorded strategy verdicts"></ul>
+          </section>
 
-      <section id="decision-panel" class="panel" aria-labelledby="decision-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">MY DECISION</p>
-            <h2 id="decision-heading">Record my decision</h2>
-          </div>
-          <button id="record-decision-button" class="primary" type="button" disabled>Record my decision</button>
+          <section id="today-decision" class="card" aria-labelledby="today-decision-heading">
+            <h2 id="today-decision-heading" class="card-title">Record my decision</h2>
+            <p id="today-decision-note" class="card-note" role="status">Select a coin with a current, VALID snapshot.</p>
+            <div id="today-decision-body"></div>
+          </section>
         </div>
-        <p id="decision-note" class="muted" role="status">No snapshot is loaded. Load a chart first.</p>
-        <div id="decision-body"></div>
-      </section>
 
-      <section class="panel chart-panel" aria-labelledby="chart-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">EXACT API CANDLES</p>
-            <h2 id="chart-heading">Price and volume</h2>
-          </div>
-          <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
-          <div id="view-mode" class="mode-pill">Beginner view</div>
-        </div>
-        <div id="indicator-toolbar" class="indicator-toolbar" role="toolbar" aria-label="Indicators"></div>
-        <p id="chart-note" class="muted">Chart geometry is display-only. Values and indicators come from the exact response.</p>
-        <div class="chart-workspace">
-          <nav id="drawing-tools" class="drawing-tools" aria-label="Drawing tools"></nav>
-          <div id="chart-container" class="chart-container">
-            <p class="empty-state">Waiting for a local Spot research snapshot.</p>
-          </div>
-        </div>
-        <div class="drawing-bar">
-          <label>Note text <input id="drawing-note-text" type="text" maxlength="200" placeholder="Text for the T tool"></label>
-          <p id="drawing-status" class="muted" role="status">Select / pan · Your annotation — not evidence.</p>
-        </div>
-        <p class="muted">Drawings are your own annotations, kept only in this browser for this market and timeframe. They are never sent to the API and are not evidence.</p>
-        <p class="muted">Prices are shown at display precision for the instrument; hover the readout or last-price tag, or open the table below, for the exact returned values.</p>
-        <section id="market-trades" class="unavailable-panel" aria-labelledby="market-trades-heading">
-          <h3 id="market-trades-heading">Market trades — unavailable</h3>
-          <p id="market-trades-reason">This API stores OHLCV candles only; no trade-by-trade feed is connected. A trade-history data source is an open decision (#355). Individual trades are never inferred from candles.</p>
-        </section>
-        <details class="data-table">
-          <summary>Inspect exact OHLCV values returned by the API</summary>
+        <details id="today-snapshots" class="card collapsible">
+          <summary>All five stored snapshots — quality and lineage</summary>
+          <section class="status-panel" id="overview-status" aria-live="polite" aria-atomic="true">
+            <strong>Reading stored snapshots.</strong>
+            <span>Read-only local API requests; provider collection is never triggered.</span>
+          </section>
+          <p id="overview-error" class="error-text" role="alert" hidden></p>
           <div class="table-scroll">
-            <table>
+            <table class="watchlist-table">
               <thead>
-                <tr><th scope="col">Open time</th><th scope="col">Open</th><th scope="col">High</th><th scope="col">Low</th><th scope="col">Close</th><th scope="col">Volume</th><th scope="col">Market data ID</th></tr>
+                <tr>
+                  <th scope="col">Instrument</th>
+                  <th scope="col">Latest finalized close</th>
+                  <th scope="col">Change</th>
+                  <th scope="col">Candle time</th>
+                  <th scope="col">Volume</th>
+                  <th scope="col">Quality / temporal status</th>
+                  <th scope="col">Freshness cutoff</th>
+                  <th scope="col">Source and lineage</th>
+                  <th scope="col">Analysis</th>
+                  <th scope="col">Workspace</th>
+                </tr>
               </thead>
-              <tbody id="candle-rows"><tr><td colspan="7">No candle response.</td></tr></tbody>
+              <tbody id="watchlist-rows"></tbody>
             </table>
           </div>
         </details>
       </section>
 
-      <section id="strategy-markers-panel" class="panel" tabindex="-1" aria-labelledby="markers-heading">
-        <details open>
-          <summary><h2 id="markers-heading">Strategy markers and evidence</h2></summary>
-          <p class="education-note"><strong>Research evidence only.</strong> BUY ▲ / SELL ▼ replay ema-trend-atr-stop v1 over this snapshot. Not a verdict, not a recommendation and not an order. Every value carries the backend's label.</p>
-          <form id="sizing-form" class="sizing-form" novalidate>
-            <label>Account size (USDT)
-              <input id="sizing-account" inputmode="decimal" autocomplete="off" placeholder="e.g. 1000">
-            </label>
-            <label>Risk per trade (%)
-              <input id="sizing-risk" inputmode="decimal" autocomplete="off" placeholder="e.g. 1">
-            </label>
-            <button type="submit">Update position sizes</button>
-          </form>
-          <p id="sizing-error" class="error-text" role="alert" hidden></p>
-          <div id="markers-body" aria-live="polite">
-            <p class="empty-state">No snapshot is loaded; no strategy markers are shown.</p>
+      <!-- CHARTS -->
+      <section id="panel-charts" class="desk-panel charts-panel" role="tabpanel" aria-labelledby="tab-charts" hidden>
+        <div id="charts-workspace" class="charts-workspace" data-drawer="open" data-markets="open">
+          <div class="pillbar-row">
+            <div id="indicator-toolbar" class="indicator-toolbar" role="toolbar" aria-label="Indicators"></div>
+            <div class="pillbar-side">
+              <span id="pillbar-hint" class="card-note"></span>
+              <div class="segmented" role="group" aria-label="View mode">
+                <button id="beginner-button" type="button" aria-pressed="true">Beginner</button>
+                <button id="pro-button" type="button" aria-pressed="false">Pro</button>
+              </div>
+              <button id="drawer-toggle" class="ghost-button" type="button" aria-expanded="true" aria-controls="chart-drawer">Hide details ▸</button>
+            </div>
           </div>
-        </details>
+
+          <div class="charts-grid">
+            <nav id="drawing-tools" class="drawing-tools card" aria-label="Drawing tools"></nav>
+
+            <aside id="markets-panel" class="markets-panel" aria-label="Markets">
+              <div class="card markets-card">
+                <input id="markets-search" type="search" placeholder="Search" aria-label="Search markets" autocomplete="off">
+                <div class="markets-head"><span>Pair</span><span>Last · 24h</span></div>
+                <ul id="markets-list-items" class="markets-list-items" aria-label="Supported markets"></ul>
+                <p id="markets-list-count" class="card-note">Markets</p>
+              </div>
+              <section id="market-trades" class="card unavailable-card" aria-labelledby="market-trades-heading">
+                <h3 id="market-trades-heading">Market trades</h3>
+                <p id="market-trades-reason">Unavailable — this API stores OHLCV candles only; no trade-by-trade feed is connected (data decision #355). Individual trades are never inferred from candles.</p>
+              </section>
+            </aside>
+
+            <section class="card chart-card" aria-labelledby="chart-heading">
+              <div class="chart-head">
+                <button id="markets-toggle" class="ghost-button" type="button" aria-expanded="true" aria-controls="markets-panel">◂ Markets</button>
+                <h2 id="chart-heading" class="chart-symbol">Chart</h2>
+                <div id="timeframe-pills" class="timeframe-pills" role="group" aria-label="Chart timeframe"></div>
+                <section id="snapshot-status" class="snapshot-status" aria-live="polite" aria-atomic="true">
+                  <strong>No snapshot loaded.</strong>
+                </section>
+                <button id="fullscreen-button" class="ghost-button" type="button" aria-pressed="false">⛶ Full screen</button>
+              </div>
+              <p id="control-error" class="error-text" role="alert" hidden></p>
+              <p id="chart-signal-banner" class="chart-signal-banner" role="note" hidden></p>
+              <div id="chart-container" class="chart-container">
+                <p class="empty-state">Waiting for a local Spot research snapshot.</p>
+              </div>
+              <div class="drawing-bar">
+                <p id="drawing-status" class="card-note" role="status">Select / pan · Your annotation — not evidence.</p>
+                <label id="drawing-note-label" hidden>Note text <input id="drawing-note-text" type="text" maxlength="200" placeholder="Text for the note tool"></label>
+              </div>
+              <section id="plain-reading" class="plain-reading" aria-label="Plain reading"></section>
+            </section>
+
+            <aside id="chart-drawer" class="chart-drawer" aria-label="Chart details">
+              <section id="strategy-markers-panel" class="card drawer-section" tabindex="-1" aria-labelledby="markers-heading">
+                <h2 id="markers-heading" class="card-title">Strategy markers and evidence</h2>
+                <div id="markers-controls" class="markers-controls"></div>
+                <div id="markers-banner"></div>
+                <div id="markers-body" aria-live="polite">
+                  <p class="empty-state">No snapshot is loaded; no strategy markers are shown.</p>
+                </div>
+              </section>
+
+              <details id="sizing-section" class="card drawer-section">
+                <summary>Position sizing (research)</summary>
+                <form id="sizing-form" class="sizing-form" novalidate>
+                  <label>Account size (USDT)
+                    <input id="sizing-account" inputmode="decimal" autocomplete="off" placeholder="e.g. 1000">
+                  </label>
+                  <label>Risk per trade (%)
+                    <input id="sizing-risk" inputmode="decimal" autocomplete="off" placeholder="e.g. 1">
+                  </label>
+                  <button type="submit">Update position sizes</button>
+                </form>
+                <p id="sizing-error" class="error-text" role="alert" hidden></p>
+                <p class="card-note">Size = account × risk% ÷ (entry − stop), capped at what the account can buy (Spot, no leverage). Every marker updates.</p>
+              </details>
+
+              <section id="decision-panel" class="card drawer-section" aria-labelledby="decision-heading">
+                <h2 id="decision-heading" class="card-title">Record my decision</h2>
+                <p id="decision-note" class="card-note" role="status">No snapshot is loaded. Load a chart first.</p>
+                <div id="decision-body"></div>
+              </section>
+
+              <details id="snapshot-provenance" class="card drawer-section" open>
+                <summary>Snapshot and data</summary>
+                <div class="data-controls">
+                  <button id="refresh-button" class="primary" type="button" disabled>Explicitly refresh from provider</button>
+                  <p id="refresh-note" class="card-note">Refresh is never automatic. This action requests a bounded public Spot update.</p>
+                  <label>Maximum requested history
+                    <select id="history-select">
+                      <option value="50">50 candles</option>
+                      <option value="90">90 candles</option>
+                      <option value="100">100 candles</option>
+                      <option value="250">250 candles</option>
+                      <option value="501" selected>501 candles (API maximum)</option>
+                    </select>
+                  </label>
+                  <label>Historical as-of cutoff (optional, local time)
+                    <input id="as-of-input" type="datetime-local" step="1">
+                  </label>
+                </div>
+                <details class="nested-details">
+                  <summary>Snapshot identity and quality</summary>
+                  <dl id="snapshot-metadata" class="metadata-grid">
+                    <div><dt>Instrument / venue</dt><dd>No snapshot loaded</dd></div>
+                  </dl>
+                </details>
+                <div id="source-list" class="source-list"></div>
+              </details>
+
+              <details id="analysis-section" class="card drawer-section">
+                <summary>Volume and candle structure</summary>
+                <p class="education-note"><strong>Descriptive research output only.</strong> Supplied by the API with this exact snapshot; not signals or trading instructions.</p>
+                <p id="spot-analysis-status" class="card-note" role="status">No snapshot is loaded; no Spot analyses are displayed.</p>
+                <div id="spot-analysis-cards" class="analysis-cards"></div>
+              </details>
+
+              <details class="card drawer-section data-table">
+                <summary>Exact OHLCV values</summary>
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr><th scope="col">Open time</th><th scope="col">Open</th><th scope="col">High</th><th scope="col">Low</th><th scope="col">Close</th><th scope="col">Volume</th><th scope="col">Market data ID</th></tr>
+                    </thead>
+                    <tbody id="candle-rows"><tr><td colspan="7">No candle response.</td></tr></tbody>
+                  </table>
+                </div>
+              </details>
+
+              <details id="indicator-details" class="card drawer-section pro-only">
+                <summary>Indicator details</summary>
+                <p class="education-note"><strong>Educational context — not validated statistical evidence.</strong> Indicator displays are descriptive research outputs, not probabilities, guarantees, signals, or trade instructions.</p>
+                <div id="indicator-controls" class="indicator-controls" aria-label="Indicator visibility"></div>
+                <div id="indicator-groups" class="indicator-groups"></div>
+                <section class="unavailable-panel" aria-labelledby="order-flow-heading">
+                  <h3 id="order-flow-heading">Order flow and advanced layers — unavailable</h3>
+                  <p id="order-flow-reason">Trade and book inputs are not available from this API. Footprint, bid/ask delta, CVD, depth and liquidity are never inferred from OHLCV candles.</p>
+                </section>
+                <details id="synthetic-example" class="synthetic-example">
+                  <summary>Static worked example — synthetic / educational only</summary>
+                  <p class="education-note"><strong>Synthetic inputs and illustrative outputs only.</strong> This fixed teaching example is not provider data, not market evidence, not a validated calculation, not a signal, and not a trade instruction. It is separate from the live chart, API response, history, and research configuration.</p>
+                  <div class="table-scroll">
+                    <table>
+                      <thead>
+                        <tr><th scope="col">Supported indicator</th><th scope="col">Synthetic input (fictional)</th><th scope="col">Synthetic illustrative output (fictional)</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr><th scope="row">EMA 20</th><td>Synthetic closes rise across 20 made-up candles.</td><td>A synthetic EMA line rises more smoothly and lags those closes.</td></tr>
+                        <tr><th scope="row">EMA 50</th><td>Synthetic closes rise across 50 made-up candles.</td><td>A slower synthetic EMA follows the broad rise with more lag.</td></tr>
+                        <tr><th scope="row">EMA 500</th><td>Synthetic closes rise across 500 made-up candles.</td><td>A long-window synthetic EMA changes slowly; it is not short-term timing.</td></tr>
+                        <tr><th scope="row">ATR 14</th><td>Synthetic candle ranges and prior closes vary across 14 made-up candles.</td><td>A synthetic ATR summarizes absolute range size, not direction or a risk limit.</td></tr>
+                        <tr><th scope="row">Bollinger Bands 20</th><td>Synthetic closes are more dispersed in a made-up 20-candle window.</td><td>Synthetic bands widen around their moving mean; a touch predicts no reversal.</td></tr>
+                        <tr><th scope="row">Realized volatility 20</th><td>Synthetic close-to-close returns vary in a made-up 20-candle window.</td><td>A synthetic realized-volatility value summarizes past return variation, not a forecast.</td></tr>
+                        <tr><th scope="row">RSI 14</th><td>Synthetic gains outweigh losses over a made-up 14-candle window.</td><td>A synthetic RSI reading moves higher; it is not a probability or standalone reversal signal.</td></tr>
+                        <tr><th scope="row">MACD 12/26/9</th><td>A synthetic faster average rises relative to a slower made-up average.</td><td>The synthetic MACD line can move above its signal line; this is descriptive, not a trade cue.</td></tr>
+                        <tr><th scope="row">Stochastic 14/3</th><td>A synthetic close sits near the high of a made-up 14-candle range.</td><td>Synthetic %K may be high within that range; trending markets can remain extreme.</td></tr>
+                        <tr><th scope="row">CCI 20</th><td>A synthetic typical price is above its made-up 20-candle baseline.</td><td>A synthetic CCI reading is positive relative to that baseline, not independent confirmation.</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </details>
+            </aside>
+          </div>
+        </div>
       </section>
 
-      <section class="panel" aria-labelledby="indicator-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">BACKEND CALCULATIONS ONLY</p>
-            <h2 id="indicator-heading">Indicators and display preferences</h2>
-          </div>
-          <div class="button-row">
-            <button id="beginner-button" type="button" aria-pressed="true">Beginner</button>
-            <button id="pro-button" type="button" aria-pressed="false">Pro</button>
-            <button id="reset-button" type="button">Reset to beginner defaults</button>
-          </div>
-        </div>
-        <p class="education-note"><strong>Educational context — not validated statistical evidence.</strong> Indicator displays are descriptive research outputs, not probabilities, guarantees, signals, or trade instructions.</p>
-        <div id="indicator-controls" class="indicator-controls" aria-label="Indicator visibility"></div>
-        <div id="indicator-groups" class="indicator-groups">
-          <p class="empty-state">Indicator results are supplied by the API with the snapshot.</p>
-        </div>
-        <details id="synthetic-example" class="synthetic-example">
-          <summary>Static worked example — synthetic / educational only</summary>
-          <p class="education-note"><strong>Synthetic inputs and illustrative outputs only.</strong> This fixed teaching example is not provider data, not market evidence, not a validated calculation, not a signal, and not a trade instruction. It is separate from the live chart, API response, history, and research configuration.</p>
-          <div class="table-scroll">
-            <table>
-              <thead>
-                <tr><th scope="col">Supported indicator</th><th scope="col">Synthetic input (fictional)</th><th scope="col">Synthetic illustrative output (fictional)</th></tr>
-              </thead>
-              <tbody>
-                <tr><th scope="row">EMA 20</th><td>Synthetic closes rise across 20 made-up candles.</td><td>A synthetic EMA line rises more smoothly and lags those closes.</td></tr>
-                <tr><th scope="row">EMA 50</th><td>Synthetic closes rise across 50 made-up candles.</td><td>A slower synthetic EMA follows the broad rise with more lag.</td></tr>
-                <tr><th scope="row">EMA 500</th><td>Synthetic closes rise across 500 made-up candles.</td><td>A long-window synthetic EMA changes slowly; it is not short-term timing.</td></tr>
-                <tr><th scope="row">ATR 14</th><td>Synthetic candle ranges and prior closes vary across 14 made-up candles.</td><td>A synthetic ATR summarizes absolute range size, not direction or a risk limit.</td></tr>
-                <tr><th scope="row">Bollinger Bands 20</th><td>Synthetic closes are more dispersed in a made-up 20-candle window.</td><td>Synthetic bands widen around their moving mean; a touch predicts no reversal.</td></tr>
-                <tr><th scope="row">Realized volatility 20</th><td>Synthetic close-to-close returns vary in a made-up 20-candle window.</td><td>A synthetic realized-volatility value summarizes past return variation, not a forecast.</td></tr>
-                <tr><th scope="row">RSI 14</th><td>Synthetic gains outweigh losses over a made-up 14-candle window.</td><td>A synthetic RSI reading moves higher; it is not a probability or standalone reversal signal.</td></tr>
-                <tr><th scope="row">MACD 12/26/9</th><td>A synthetic faster average rises relative to a slower made-up average.</td><td>The synthetic MACD line can move above its signal line; this is descriptive, not a trade cue.</td></tr>
-                <tr><th scope="row">Stochastic 14/3</th><td>A synthetic close sits near the high of a made-up 14-candle range.</td><td>Synthetic %K may be high within that range; trending markets can remain extreme.</td></tr>
-                <tr><th scope="row">CCI 20</th><td>A synthetic typical price is above its made-up 20-candle baseline.</td><td>A synthetic CCI reading is positive relative to that baseline, not independent confirmation.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </details>
-        <section class="unavailable-panel" aria-labelledby="order-flow-heading">
-          <h3 id="order-flow-heading">Order flow and advanced layers — unavailable</h3>
-          <p id="order-flow-reason">Trade and book inputs are not available from this API. Footprint, bid/ask delta, CVD, depth and liquidity are never inferred from OHLCV candles.</p>
+      <!-- STRATEGY LAB -->
+      <section id="panel-strategy-lab" class="desk-panel lab-panel" role="tabpanel" aria-labelledby="tab-strategy-lab" hidden>
+        <section class="card" aria-labelledby="lab-verdicts-heading">
+          <h2 id="lab-verdicts-heading" class="card-title">Recorded study verdicts</h2>
+          <p class="card-note">Pre-registered studies run on real Binance Spot history by the owner. Research evidence only — a historical result, not the odds of the next trade.</p>
+          <div id="lab-verdicts" class="verdict-cards"></div>
         </section>
+        <div class="lab-grid">
+          <section class="card" aria-labelledby="packages-heading">
+            <h2 id="packages-heading" class="card-title">Stored evidence packages</h2>
+            <p class="card-note">These reads do not evaluate strategies, collect data or create signals. No polling or automatic refresh.</p>
+            <p id="package-status" role="status" aria-live="polite">Loading stored packages…</p>
+            <div id="package-list" class="source-list"></div>
+            <div class="button-row">
+              <button id="reload-packages" type="button">Read first page</button>
+              <button id="next-packages" type="button" disabled>Read next page</button>
+            </div>
+          </section>
+          <section class="card" aria-labelledby="report-heading">
+            <h2 id="report-heading" class="card-title">Selected report</h2>
+            <p class="education-note"><strong>Statistical qualification is not established by this report.</strong> Supporting evidence is not a probability forecast. This page does not assess current trade risk, approve or execute trades.</p>
+            <p id="report-status" role="status" aria-live="polite">Select a stored package. No report is displayed.</p>
+            <div id="evidence-report"></div>
+          </section>
+        </div>
       </section>
 
-      <section class="panel" aria-labelledby="spot-analysis-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">BACKEND SPOT ANALYSES ONLY</p>
-            <h2 id="spot-analysis-heading">Volume and candle structure</h2>
-          </div>
+      <!-- MY RESULTS -->
+      <section id="panel-my-results" class="desk-panel results-panel" role="tabpanel" aria-labelledby="tab-my-results" hidden>
+        <section class="card" aria-labelledby="results-heading">
+          <h2 id="results-heading" class="card-title">My results vs baselines</h2>
+          <p class="card-note">Your own results, scored by the pre-registered owner-results protocol. Recorded trades (net of fees) are compared with cash and buy-and-hold; NO_TRADE decisions with holding over a fixed horizon. Kept separate from strategy evidence.</p>
+          <p id="results-status" role="status" aria-live="polite">Loading your results…</p>
+          <div id="results-body" class="source-list"></div>
+        </section>
+        <div class="lab-grid">
+          <section class="card" aria-labelledby="records-heading">
+            <h2 id="records-heading" class="card-title">Persisted research records</h2>
+            <p class="education-note"><strong>Recorded state is not a current trade instruction.</strong> Qualification, present validity, current trade-risk acceptance, human approval and execution are separate. This view does not create or promote a signal.</p>
+            <p class="card-note">The current summary API does not supply asset/timeframe, full source content or validation metrics. Use exact lineage references and linked evidence reports; those missing details are not inferred.</p>
+            <div class="control-grid">
+              <label>Record kind
+                <select id="record-kind">
+                  <option value="NO_TRADE">NO_TRADE decisions</option>
+                  <option value="CANDIDATE">Candidate records</option>
+                  <option value="SIGNAL">Signal records</option>
+                </select>
+              </label>
+              <label>Recorded backend projection
+                <select id="record-state">
+                  <option value="">All reported states</option>
+                  <option value="DRAFT">DRAFT</option>
+                  <option value="CANDIDATE">CANDIDATE</option>
+                  <option value="QUALIFIED">QUALIFIED</option>
+                  <option value="WATCH">WATCH</option>
+                  <option value="REJECTED">REJECTED</option>
+                  <option value="NO_TRADE">NO_TRADE</option>
+                  <option value="EXPIRED">EXPIRED</option>
+                  <option value="SUPERSEDED">SUPERSEDED</option>
+                </select>
+              </label>
+            </div>
+            <p id="board-status" role="status" aria-live="polite">Loading stored records…</p>
+            <p id="watch-status" class="card-note">WATCH availability not yet supplied.</p>
+            <div class="button-row">
+              <button id="read-records" type="button">Read first page</button>
+              <button id="next-records" type="button" disabled>Read next page</button>
+            </div>
+            <p class="card-note">20 records per page. Browsing performs explicit reads. Saving a declaration requires a separate action; no polling or provider refresh.</p>
+            <div id="record-list" class="source-list"></div>
+          </section>
+          <section class="card" aria-labelledby="detail-heading">
+            <h2 id="detail-heading" class="card-title">Exact record detail</h2>
+            <p id="detail-status" role="status" aria-live="polite">Select a record. No detail is displayed.</p>
+            <div id="record-detail" class="source-list"></div>
+          </section>
         </div>
-        <p class="education-note"><strong>Descriptive research output only.</strong> These results are supplied by the API with the exact selected candle snapshot. The browser does not calculate or infer analysis, and these observations are not signals or trading instructions.</p>
-        <p id="spot-analysis-status" class="muted" role="status">No snapshot is loaded; no Spot analyses are displayed.</p>
-        <div id="spot-analysis-cards" class="analysis-cards">
-          <p class="empty-state">Spot analysis results are supplied by the API with the exact snapshot.</p>
-        </div>
-      </section>
-
-      <section id="snapshot-provenance" class="panel" aria-labelledby="provenance-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">PROVENANCE AND FRESHNESS</p>
-            <h2 id="provenance-heading">Snapshot identity</h2>
-          </div>
-        </div>
-        <dl id="snapshot-metadata" class="metadata-grid">
-          <div><dt>Instrument / venue</dt><dd>Not yet available</dd></div>
-        </dl>
-        <div id="source-list" class="source-list"></div>
       </section>
     </main>
 
-    <footer>
-      <strong>LOCAL RESEARCH — READ ONLY</strong>
-      <span>No account, approval, risk, order, execution, exchange-health, or trading-readiness capability is provided here.</span>
+    <footer class="desk-footer">
+      <strong>Local research only.</strong>
+      <span>Values come only from the local research API. Nothing here places, approves or executes trades; live trading is off.</span>
     </footer>
   </body>
 </html>

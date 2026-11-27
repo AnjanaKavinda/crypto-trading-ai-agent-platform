@@ -11,7 +11,6 @@ import {
   watchlistRow,
   workspaceHref,
 } from "../../apps/web/src/watchlist-state.mjs";
-import { workspaceSelection } from "../../apps/web/src/workspace-state.mjs";
 
 const symbols = Object.entries(APPROVED_INSTRUMENTS).map(([instrument_id, symbol]) => ({
   instrument_id,
@@ -197,37 +196,21 @@ test("timeframes and workspace links are restricted to validated supported value
   assert.ok(Object.hasOwn(TIMEFRAME_SECONDS, "1h"));
   assert.equal(
     workspaceHref("BTC-USDT-SPOT", "1h", symbols),
-    "./index.html?instrument=BTC-USDT-SPOT&timeframe=1h",
+    "./index.html?instrument=BTC-USDT-SPOT&timeframe=1h#charts",
   );
   assert.equal(workspaceHref("https://example.invalid", "1h", symbols), null);
   assert.equal(workspaceHref("BTC-USDT-SPOT", "2m", symbols), null);
-  assert.deepEqual(workspaceSelection(
-    "?instrument=BTC-USDT-SPOT&timeframe=4h&redirect=https%3A%2F%2Fexample.invalid",
-    symbols,
-    Object.keys(TIMEFRAME_SECONDS),
-  ), { instrumentId: "BTC-USDT-SPOT", timeframe: "4h" });
-  assert.deepEqual(workspaceSelection(
-    "?instrument=https%3A%2F%2Fexample.invalid&timeframe=2m",
-    symbols,
-    Object.keys(TIMEFRAME_SECONDS),
-  ), { instrumentId: "BTC-USDT-SPOT", timeframe: "1m" });
-  assert.deepEqual(workspaceSelection(
-    "?instrument=BTC-USDT-SPOT&instrument=ETH-USDT-SPOT&timeframe=1h",
-    symbols,
-    Object.keys(TIMEFRAME_SECONDS),
-  ), { instrumentId: "BTC-USDT-SPOT", timeframe: "1h" });
 });
 
 test("overview navigation and controls cannot issue refresh or external requests", async () => {
   const [page, script] = await Promise.all([
-    readFile(new URL("../../apps/web/watchlist.html", import.meta.url), "utf8"),
+    readFile(new URL("../../apps/web/index.html", import.meta.url), "utf8"),
     readFile(new URL("../../apps/web/src/watchlist.mjs", import.meta.url), "utf8"),
   ]);
-  assert.match(page, /<select id="timeframe-select"/);
-  assert.match(page, /<th scope="col">Quality \/ temporal status<\/th>/);
-  assert.match(page, /href="\.\/index\.html"/);
-  assert.match(page, /<label>Timeframe\s*<select/);
-  assert.match(script, /if \(!symbols\.length\) symbolsPromise = undefined/);
+  // The snapshot table now sits in Today and follows the shared timeframe (UR1/UR3).
+  assert.match(page, /id="panel-today"[\s\S]*<th scope="col">Quality \/ temporal status<\/th>[\s\S]*id="watchlist-rows"/);
+  assert.doesNotMatch(page, /id="timeframe-select"/);
+  assert.match(script, /export function renderWatchlistTable/);
   assert.doesNotMatch(script, /refreshSnapshot|addEventListener\(["']focus|setInterval|WebSocket/);
   const styles = await readFile(new URL("../../apps/web/styles.css", import.meta.url), "utf8");
   assert.match(styles, /:focus-visible/);

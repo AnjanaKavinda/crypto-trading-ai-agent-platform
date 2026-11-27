@@ -1,32 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-desk-tab="today">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>Trading Desk — Local Research</title>
+    <title>Trading desk — Trading desk</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2314b8a6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='%23fff' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./styles.css">
-    <script type="module" src="./src/desk-shell.mjs"></script>
+    <script type="module" src="./src/legacy-redirect.mjs"></script>
   </head>
   <body class="desk">
-    <header class="app-header desk-header">
-      <div>
-        <p class="eyebrow">LOCAL RESEARCH — TRADING DESK</p>
-        <h1>Trading desk</h1>
-      </div>
-      <div class="desk-status" role="group" aria-label="Desk status">
-        <span id="desk-mode" class="mode-pill">Mode: RESEARCH</span>
-        <span id="desk-live" class="mode-pill desk-live-off" title="This interface has no order, approval or execution path.">Live trading: OFF</span>
-        <span id="desk-freshness" class="mode-pill" role="status" aria-live="polite" data-state="pending">Data freshness (1h): reading stored snapshots…</span>
-      </div>
-    </header>
-    <nav class="desk-tabs-wrap" aria-label="Desk sections">
-      <div id="desk-tabs" class="desk-tabs" role="tablist" aria-label="Desk sections"></div>
-    </nav>
-    <main id="desk-panels"></main>
-    <footer>
-      <strong>LOCAL RESEARCH — READ ONLY</strong>
-      <span>Each tab shows an existing research page with all of its features. Values come only from the local research API; nothing here places, approves or executes trades.</span>
-    </footer>
+    <main class="desk-main">
+      <p class="card">This page is now the <a href="./index.html#today">Trading desk tab of the Trading desk</a>.</p>
+    </main>
   </body>
 </html>

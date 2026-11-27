@@ -1,92 +1,107 @@
-import {
-  adjacentTab,
-  DESK_TABS,
-  FRESHNESS_TIMEFRAME,
-  summariseFreshness,
-  tabFromHash,
-} from "./desk-state.mjs";
-import { loadWatchlist } from "./watchlist-state.mjs";
+// One-page Trading desk (UR1): header status, tabs Today · Charts · Strategy
+// lab · My results. Each tab mounts the first time it is shown, so its
+// read-only API calls only run when needed. No refresh, polling or writes here.
+import { adjacentTab, DESK_TABS, summariseFreshness, tabFromHash, timeframeLabel } from "./desk-state.mjs";
+import { createDesk } from "./desk-data.mjs";
 
 const $ = (selector) => document.querySelector(selector);
 
-function fitFrame(frame) {
-  // Same-origin pages only; the frame grows with its content so the desk has
-  // one scroll area. Cross-origin content is never embedded.
-  try {
-    const doc = frame.contentDocument;
-    if (!doc?.documentElement) return;
-    const resize = () => {
-      frame.style.height = `${Math.max(480, doc.documentElement.scrollHeight)}px`;
-    };
-    resize();
-    new ResizeObserver(resize).observe(doc.documentElement);
-  } catch {
-    frame.style.height = "80vh";
+// The query string is a deep link for exactly one tab (an evidence package or
+// an exact record); the other tabs never see it.
+const DEEP_LINK_TABS = new Set(["strategy-lab", "my-results"]);
+
+async function mountTab(id, desk, initialTab, search) {
+  const linked = id === initialTab ? search : "";
+  if (id === "today") {
+    const { mountToday } = await import("./today.mjs");
+    await mountToday({ document, desk, fetcher: globalThis.fetch, selectTab });
+  } else if (id === "charts") {
+    const { mountCharts } = await import("./app.mjs");
+    await mountCharts({ desk });
+  } else if (id === "strategy-lab") {
+    const [{ bootstrapEvidence }, { renderVerdictCards }] = await Promise.all([
+      import("./evidence-page.mjs"), import("./today.mjs"),
+    ]);
+    renderVerdictCards(document, $("#lab-verdicts"));
+    await bootstrapEvidence({ document, search: DEEP_LINK_TABS.has(id) ? linked : "" });
+  } else if (id === "my-results") {
+    const [{ bootstrapBoard }, { bootstrapResults }] = await Promise.all([
+      import("./signal-board.mjs"), import("./owner-results.mjs"),
+    ]);
+    await Promise.all([
+      bootstrapResults({ document }),
+      bootstrapBoard({ document, search: DEEP_LINK_TABS.has(id) ? linked : "" }),
+    ]);
   }
 }
 
-function selectTab(id, { focus = false, updateHash = true } = {}) {
-  for (const tab of DESK_TABS) {
-    const button = $(`#tab-${tab.id}`);
-    const panel = $(`#panel-${tab.id}`);
-    const selected = tab.id === id;
-    button.setAttribute("aria-selected", String(selected));
-    button.tabIndex = selected ? 0 : -1;
-    panel.hidden = !selected;
-    if (selected && !panel.querySelector("iframe")) {
-      // Lazy: a tab's page (and its read-only API calls) loads on first view.
-      const frame = document.createElement("iframe");
-      frame.src = tab.page;
-      frame.title = tab.title;
-      frame.className = "desk-frame";
-      frame.addEventListener("load", () => fitFrame(frame));
-      panel.append(frame);
-    }
-    if (selected && focus) button.focus();
-  }
-  if (updateHash && location.hash !== `#${id}`) history.replaceState(null, "", `#${id}`);
-}
+let selectTab = () => {};
 
-async function showFreshness() {
+async function showFreshness(desk) {
   const status = $("#desk-freshness");
+  const selection = await desk.selection();
+  const timeframe = selection.timeframe;
   try {
-    const summary = summariseFreshness(await loadWatchlist(globalThis.fetch, FRESHNESS_TIMEFRAME));
+    const summary = summariseFreshness(await desk.watchlist(timeframe), timeframe);
+    if (desk.current()?.timeframe !== timeframe) return;
     status.textContent = summary.text;
+    status.title = summary.title;
     status.dataset.state = summary.state;
   } catch (error) {
-    status.textContent = `Data freshness (${FRESHNESS_TIMEFRAME}): unavailable — ${error.message}`;
+    status.textContent = `Data: unavailable · ${timeframeLabel(timeframe)}`;
+    status.title = error.message;
     status.dataset.state = "error";
   }
 }
 
 function init() {
-  const list = $("#desk-tabs");
+  const search = location.search;
+  const initialTab = tabFromHash(location.hash);
+  const desk = createDesk({ fetcher: globalThis.fetch, storage: globalThis.localStorage, search });
+  const mounted = new Map();
+  selectTab = (id, { focus = false, updateHash = true } = {}) => {
+    for (const tab of DESK_TABS) {
+      const button = $(`#tab-${tab.id}`);
+      const panel = $(`#panel-${tab.id}`);
+      const selected = tab.id === id;
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      panel.hidden = !selected;
+      if (selected && focus) button.focus();
+    }
+    document.body.dataset.tab = id;
+    if (!mounted.has(id)) {
+      mounted.set(id, mountTab(id, desk, initialTab, search).catch((error) => {
+        mounted.delete(id);
+        const panel = $(`#panel-${id}`);
+        panel.prepend(Object.assign(document.createElement("p"), {
+          className: "error-text", role: "alert", textContent: `This tab could not start: ${error.message}`,
+        }));
+      }));
+    }
+    if (updateHash && location.hash !== `#${id}`) history.replaceState(null, "", `${location.pathname}${location.search}#${id}`);
+    document.dispatchEvent(new CustomEvent("desk:tab", { detail: { id } }));
+  };
   for (const tab of DESK_TABS) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.id = `tab-${tab.id}`;
-    button.setAttribute("role", "tab");
-    button.setAttribute("aria-controls", `panel-${tab.id}`);
-    button.textContent = tab.label;
-    button.addEventListener("click", () => selectTab(tab.id));
-    list.append(button);
-    const panel = document.createElement("section");
-    panel.id = `panel-${tab.id}`;
-    panel.setAttribute("role", "tabpanel");
-    panel.setAttribute("aria-labelledby", `tab-${tab.id}`);
-    panel.className = "desk-panel";
-    panel.hidden = true;
-    $("#desk-panels").append(panel);
+    $(`#tab-${tab.id}`).addEventListener("click", () => selectTab(tab.id));
   }
-  list.addEventListener("keydown", (event) => {
+  $("#desk-tabs").addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const current = DESK_TABS.find((tab) => $(`#tab-${tab.id}`).getAttribute("aria-selected") === "true");
     selectTab(adjacentTab(current?.id, event.key), { focus: true });
   });
-  window.addEventListener("hashchange", () => selectTab(tabFromHash(location.hash), { updateHash: false }));
-  selectTab(tabFromHash(location.hash), { updateHash: false });
-  showFreshness();
+  // Only tab hashes switch tabs; other in-page anchors (e.g. #snapshot-provenance) do not.
+  window.addEventListener("hashchange", () => {
+    const id = location.hash.replace(/^#/, "");
+    if (DESK_TABS.some((tab) => tab.id === id)) selectTab(id, { updateHash: false });
+  });
+  desk.onChange(() => { void showFreshness(desk); });
+  selectTab(initialTab, { updateHash: false });
+  void showFreshness(desk);
 }
 
-init();
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });
+  else init();
+}
