@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { markerAnchors, markersBindingError, sizingInputs, tradeDetails } from "../../apps/web/src/strategy-markers.mjs";
+import { markerAnchors, markersBindingError, sizingInputs, tradeDetails, markerFieldDisplay } from "../../apps/web/src/strategy-markers.mjs";
+import { readStrategyMarkers } from "../../apps/web/src/research-api.mjs";
 
 const snapshot = { instrument_id: "BTC-USDT-SPOT", timeframe: "4h", snapshot_id: "s1" };
 
@@ -40,7 +41,34 @@ test("trade details keep every backend label and reason", () => {
     stop: { label: "INVENTED", value: "1" },
   });
   assert.deepEqual(rows, [
-    { name: "Modelled entry fill", label: "RESEARCH_PROPOSAL", value: "101.05", reason: "slippage" },
-    { name: "Position size (quantity)", label: "UNAVAILABLE", value: null, reason: "enter account size and risk %" },
+    { name: "Modelled entry fill", key: "modelled_entry_fill", label: "RESEARCH_PROPOSAL", value: "101.05", reason: "slippage" },
+    { name: "Position size (quantity)", key: "quantity", label: "UNAVAILABLE", value: null, reason: "enter account size and risk %" },
   ]);
+});
+
+test("U5b: marker and evidence numbers use display precision and keep the exact value", () => {
+  // Synthetic values; not market data.
+  assert.deepEqual(markerFieldDisplay("modelled_entry_fill", "60618.7912345", 2), { text: "60,618.79", exact: "60618.7912345" });
+  assert.deepEqual(markerFieldDisplay("stop", "0.94771234", 4), { text: "0.9477", exact: "0.94771234" });
+  assert.deepEqual(markerFieldDisplay("net_return", "-0.012"), { text: "−1.20%", exact: "-0.012" });
+  assert.deepEqual(markerFieldDisplay("net_return", "0.0345"), { text: "+3.45%", exact: "0.0345" });
+  assert.deepEqual(markerFieldDisplay("r_multiple", "1.210131"), { text: "1.21 R", exact: "1.210131" });
+  assert.deepEqual(markerFieldDisplay("quantity", "2.50000000"), { text: "2.5", exact: "2.50000000" });
+  assert.deepEqual(markerFieldDisplay("notional_usdt", "261.1712"), { text: "261.17", exact: "261.1712" });
+  assert.deepEqual(markerFieldDisplay("rsi_14", "28.0712", 2), { text: "28.07", exact: "28.0712" });
+  assert.deepEqual(markerFieldDisplay("time", "2026-10-15T08:00:00Z"), { text: "2026-10-15 08:00 UTC", exact: "2026-10-15T08:00:00Z" });
+  assert.deepEqual(markerFieldDisplay("stop", null), { text: "—", exact: null });
+  assert.deepEqual(markerFieldDisplay("reason", "SIGNAL_EXIT"), { text: "SIGNAL_EXIT", exact: null });
+});
+
+test("UR5: markers requests always name the strategy and version", async () => {
+  const urls = [];
+  const fetcher = async (url) => { urls.push(url); return { ok: true, json: async () => ({}) }; };
+  await readStrategyMarkers(fetcher, { instrumentId: "BTC-USDT-SPOT", timeframe: "4h", limit: 501, strategy: "range-reversion-4h", version: "1" });
+  const query = new URL(urls[0]).searchParams;
+  assert.equal(query.get("strategy"), "range-reversion-4h");
+  assert.equal(query.get("version"), "1");
+  assert.throws(() => readStrategyMarkers(fetcher, { instrumentId: "BTC-USDT-SPOT", timeframe: "4h", limit: 501 }), /registered strategy/);
+  assert.throws(() => readStrategyMarkers(fetcher, { instrumentId: "BTC-USDT-SPOT", timeframe: "4h", limit: 501, strategy: "x&y", version: "1" }), /registered strategy/);
+  assert.equal(urls.length, 1);
 });
