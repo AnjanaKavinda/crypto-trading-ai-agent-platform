@@ -34,9 +34,9 @@ INSTRUMENTS = (
     "SOL-USDT-SPOT",
     "XRP-USDT-SPOT",
 )
-# Candles per explicit refresh: the API bounds one refresh to 501 candles and
-# 90 days, so 4h gets 501 (EMA 500 warms up) and 1d gets 90.
-REFRESH_LIMITS = {"4h": 501, "1d": 90}
+# Candles per explicit refresh: the API bounds one refresh to 501 candles (and
+# 90 days below 1d), so both 4h and 1d get 501 and EMA 500 warms up on both.
+REFRESH_LIMITS = {"4h": 501, "1d": 501}
 TIMEFRAME_SECONDS = {"4h": 14_400, "1d": 86_400}
 REQUIRED_INDICATORS = (
     "ema-20",
@@ -46,9 +46,9 @@ REQUIRED_INDICATORS = (
     "bollinger-bands-20",
     "rsi-14",
 )
-# EMA 500 cannot warm up inside a 90-candle 1d refresh, so it is reported but
-# not required on 1d.
-NOT_REQUIRED = {"1d": frozenset({"ema-500"})}
+# Indicators reported but not required, per timeframe (none: a 501-candle
+# refresh warms up EMA 500 on 4h and 1d).
+NOT_REQUIRED: dict[str, frozenset[str]] = {}
 READ_PATHS = (
     ("decision journal read", "/api/research/decision-journal?limit=20"),
     (
@@ -106,8 +106,9 @@ def _problem_text(status: int, payload: bytes) -> str:
     return f"HTTP {status}" + (f" ({'; '.join(parts)})" if parts else "")
 
 
-# Candles per historical backfill window (each refresh is bounded to 90 days).
-BACKFILL_CANDLES = {"4h": 480, "1d": 90}
+# Candles per historical backfill window (each refresh is bounded to 501
+# candles, and to 90 days below 1d).
+BACKFILL_CANDLES = {"4h": 480, "1d": 501}
 
 
 def _iso(moment: datetime) -> str:

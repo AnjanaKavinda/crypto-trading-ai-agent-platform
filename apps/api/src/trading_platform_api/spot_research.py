@@ -1314,7 +1314,12 @@ class SpotResearchService:
             slots < 2
             or slots > body.limit
             or body.coverage_end > now
-            or body.coverage_end - body.coverage_start > timedelta(days=90)
+            or (
+                # Daily candles are bounded by candle count (``limit``) only, so
+                # one refresh can hold enough history for SMA200 and EMA500.
+                body.timeframe != "1d"
+                and body.coverage_end - body.coverage_start > timedelta(days=90)
+            )
             or body.limit > MAX_REFRESH_CANDLES
         ):
             raise SpotResearchError(

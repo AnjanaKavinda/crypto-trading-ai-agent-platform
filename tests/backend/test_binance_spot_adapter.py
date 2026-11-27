@@ -184,6 +184,29 @@ def test_disabled_and_scope_rejected_before_network() -> None:
         BinanceSpotSettings(rest_origin="https://api.binance.com")
 
 
+@pytest.mark.parametrize(
+    ("timeframe", "span", "records", "accepted"),
+    [
+        ("1d", timedelta(days=501), 501, True),
+        ("1d", timedelta(days=502), 501, False),
+        ("4h", timedelta(days=90), 501, True),
+        ("4h", timedelta(days=91), 501, False),
+        ("1h", timedelta(days=91), 501, False),
+    ],
+)
+def test_ranged_window_bound_by_days_below_1d_and_by_count_on_1d(
+    timeframe: str, span: timedelta, records: int, accepted: bool
+) -> None:
+    provider = BinanceSpotProvider(settings(timeframe=timeframe), clock=lambda: NOW)
+    ranged = request(maximum_records=records, range_start=NOW - span, range_end=NOW)
+    if accepted:
+        assert provider._validate(ranged) == ("BTCUSDT", "BTC")
+    else:
+        with pytest.raises(ProviderError) as rejected:
+            provider._validate(ranged)
+        assert rejected.value.code is ProviderFailureCode.INVALID_REQUEST
+
+
 def test_paginated_candles_preserve_provenance_and_explicit_gap() -> None:
     paths: list[str] = []
     raw = json.dumps([candle(OPEN)]).encode()
