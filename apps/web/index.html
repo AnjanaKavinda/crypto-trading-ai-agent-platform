@@ -57,6 +57,25 @@
           </section>
         </div>
 
+        <section id="signal-center" class="card signal-center" aria-labelledby="signal-center-heading">
+          <div class="signal-head">
+            <h2 id="signal-center-heading" class="card-title">Signal Center</h2>
+            <p class="card-note">Research only — never an order. A coin's state comes only from the forward-stage API: 🔴 no signal, 🟡 forward-testing (paper only), 🟢 validated.</p>
+          </div>
+          <form id="signal-sizing" class="signal-sizing" novalidate>
+            <label>Account size (USDT)
+              <input id="signal-account" inputmode="decimal" autocomplete="off" placeholder="e.g. 1000">
+            </label>
+            <label>Risk per trade (%)
+              <input id="signal-risk" inputmode="decimal" autocomplete="off" value="1">
+            </label>
+            <button id="signal-reload" type="button" class="ghost-button">Read forward records again</button>
+          </form>
+          <p id="signal-status" class="card-note" role="status" data-state="pending">Waiting for the coin list…</p>
+          <ul id="signal-cards" class="signal-cards" aria-label="Signal per coin"></ul>
+          <div id="signal-failed" class="signal-failed"></div>
+        </section>
+
         <details id="today-snapshots" class="card collapsible">
           <summary>All five stored snapshots — quality and lineage</summary>
           <section class="status-panel" id="overview-status" aria-live="polite" aria-atomic="true">
@@ -92,6 +111,7 @@
           <div class="pillbar-row">
             <div id="indicator-toolbar" class="indicator-toolbar" role="toolbar" aria-label="Indicators"></div>
             <div class="pillbar-side">
+              <span class="status-chip chip-live fullscreen-only" title="This interface has no order, approval or execution path.">Live trading: OFF</span>
               <span id="pillbar-hint" class="card-note"></span>
               <div class="segmented" role="group" aria-label="View mode">
                 <button id="beginner-button" type="button" aria-pressed="true">Beginner</button>
@@ -256,9 +276,15 @@
 
       <!-- STRATEGY LAB -->
       <section id="panel-strategy-lab" class="desk-panel lab-panel" role="tabpanel" aria-labelledby="tab-strategy-lab" hidden>
+        <section class="card" aria-labelledby="lab-imported-heading">
+          <h2 id="lab-imported-heading" class="card-title">Imported study verdicts</h2>
+          <p class="card-note">Study reports the owner imported into the local research API. Research evidence only — a historical result, not the odds of the next trade.</p>
+          <p id="lab-imported-status" class="card-note" role="status" data-state="pending">Waiting to read imported verdicts…</p>
+          <div id="lab-imported" class="verdict-cards" aria-label="Imported study verdicts"></div>
+        </section>
         <section class="card" aria-labelledby="lab-verdicts-heading">
-          <h2 id="lab-verdicts-heading" class="card-title">Recorded study verdicts</h2>
-          <p class="card-note">Pre-registered studies run on real Binance Spot history by the owner. Research evidence only — a historical result, not the odds of the next trade.</p>
+          <h2 id="lab-verdicts-heading" class="card-title">Recorded on #516, not imported</h2>
+          <p class="card-note">Verdicts the owner recorded on the work-queue issue that are not in the API (for example studies that predate protocol v2).</p>
           <div id="lab-verdicts" class="verdict-cards"></div>
         </section>
         <div class="lab-grid">

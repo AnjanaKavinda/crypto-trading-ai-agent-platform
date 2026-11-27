@@ -13,17 +13,24 @@ const DEEP_LINK_TABS = new Set(["strategy-lab", "my-results"]);
 async function mountTab(id, desk, initialTab, search) {
   const linked = id === initialTab ? search : "";
   if (id === "today") {
-    const { mountToday } = await import("./today.mjs");
+    const [{ mountToday }, { mountSignalCenter }] = await Promise.all([
+      import("./today.mjs"), import("./signal-center.mjs"),
+    ]);
     await mountToday({ document, desk, fetcher: globalThis.fetch, selectTab });
+    // The forward records are slow to build, so they are read after the coins.
+    await mountSignalCenter({ document, desk, fetcher: globalThis.fetch });
   } else if (id === "charts") {
     const { mountCharts } = await import("./app.mjs");
     await mountCharts({ desk });
   } else if (id === "strategy-lab") {
-    const [{ bootstrapEvidence }, { renderVerdictCards }] = await Promise.all([
-      import("./evidence-page.mjs"), import("./today.mjs"),
+    const [{ bootstrapEvidence }, { renderVerdictCards }, { mountStrategyLab }] = await Promise.all([
+      import("./evidence-page.mjs"), import("./today.mjs"), import("./forward-verdicts.mjs"),
     ]);
     renderVerdictCards(document, $("#lab-verdicts"));
-    await bootstrapEvidence({ document, search: DEEP_LINK_TABS.has(id) ? linked : "" });
+    await Promise.all([
+      mountStrategyLab({ document, fetcher: globalThis.fetch, renderRecorded: renderVerdictCards }),
+      bootstrapEvidence({ document, search: DEEP_LINK_TABS.has(id) ? linked : "" }),
+    ]);
   } else if (id === "my-results") {
     const [{ bootstrapBoard }, { bootstrapResults }] = await Promise.all([
       import("./signal-board.mjs"), import("./owner-results.mjs"),

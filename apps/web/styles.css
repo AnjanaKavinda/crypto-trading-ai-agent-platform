@@ -411,3 +411,35 @@ th { position: sticky; top: 0; background: var(--surface-raised); color: #cfe3ff
   .drawing-tools { flex-direction: row; flex-wrap: wrap; }
   .desk-main, .desk-footer { width: calc(100% - 1.2rem); }
 }
+
+/* ---------- Signal Center (U5c) ---------- */
+.signal-head { display: flex; flex-wrap: wrap; gap: .3rem 1rem; align-items: baseline; }
+.signal-head .card-title { margin: 0; }
+.signal-sizing { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; margin: .6rem 0; }
+.signal-sizing input { width: 9rem; }
+#signal-status[data-state="error"], #lab-imported-status[data-state="error"] { color: #ff9b9b; }
+#signal-status[data-state="warning"] { color: #e9c46a; }
+.signal-cards { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .7rem; }
+.signal-card { height: 100%; border: 1px solid var(--border); border-left: 4px solid #6e7681; border-radius: .5rem; background: #10161e; padding: .75rem .85rem; display: grid; gap: .45rem; align-content: start; }
+.signal-card[data-state="red"] { border-left-color: var(--negative); }
+.signal-card[data-state="yellow"] { border-left-color: var(--warning); }
+.signal-card[data-state="green"] { border-left-color: var(--positive); }
+.signal-card:focus-visible, .failed-strategy:focus-visible, .imported-verdict:focus-visible, .term:focus-visible { outline: 3px solid #ffdc72; outline-offset: 2px; }
+.signal-card-head { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; }
+.signal-card-head h3 { margin: 0; font-size: 1.05rem; }
+.signal-state { font-weight: 700; font-size: .88rem; }
+.signal-reasons { margin: 0; padding-left: 1.1rem; font-size: .84rem; line-height: 1.45; color: var(--text); }
+.signal-todo h4, .signal-record h4 { margin: .2rem 0; font-size: .8rem; color: #cfe3ff; }
+.signal-line { margin: .15rem 0; font-size: .82rem; line-height: 1.45; color: var(--muted); }
+.signal-record { display: grid; gap: .4rem; border-top: 1px solid var(--border); padding-top: .4rem; }
+.signal-record ul { margin: .2rem 0; padding-left: 1.1rem; font-size: .8rem; }
+.signal-risks summary { font-size: .82rem; }
+.signal-risks ul { margin: .3rem 0 0; padding-left: 1.1rem; font-size: .8rem; line-height: 1.45; }
+.term { font-style: normal; border-bottom: 1px dotted var(--muted); cursor: help; color: var(--text); }
+.signal-failed { display: grid; gap: .6rem; margin-top: .6rem; }
+.failed-strategy { border: 1px solid var(--border); border-radius: .5rem; padding: .6rem .7rem; background: #10161e; }
+.tab-badge { margin-left: .4rem; font-size: .65rem; font-weight: 800; padding: .05rem .4rem; border-radius: 999px; background: var(--warning); color: #0b0f14; }
+.per-coin td, .per-coin th { white-space: normal; }
+.imported-verdict h4 { margin: .6rem 0 .2rem; font-size: .82rem; color: #cfe3ff; }
+.fullscreen-only { display: none; }
+.charts-workspace.is-fullscreen .fullscreen-only, .charts-workspace:fullscreen .fullscreen-only { display: inline-block; }
